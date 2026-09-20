@@ -1,7 +1,7 @@
 {
   "schema": "pod-scenario-coverage/v1",
   "authority": "docs/pod-spec.md",
-  "note": "A test path identifies a deterministic fixture slice, not complete scenario proof. The local suite currently passes 61 tests; frozen candidate, hosted, live, conversation behavior and external evidence remain separate. Document ID checks prove inventory only.",
+  "note": "An offline_test path maps a scenario to a deterministic fixture slice, not complete scenario proof or an executed test result. Frozen candidate, hosted, live, conversation behavior and external evidence remain separate. Document ID checks prove inventory only.",
   "scenarios": [
     {
       "id": "A01",

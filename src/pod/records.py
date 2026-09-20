@@ -25,13 +25,40 @@ def _list(value: Any, name: str, limit: int = 64) -> list:
     return value
 
 
+_CREDENTIAL_COMPONENTS = frozenset({
+    ".ssh", ".secrets", "secrets", "credentials", ".credentials",
+    ".aws", ".azure", ".kube", ".docker", ".gnupg", ".password-store",
+    ".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials",
+    ".authinfo", ".authinfo.gpg", ".pgpass", "pgpass.conf", ".my.cnf",
+    ".dockercfg", "auth.json", "auth.yaml", "auth.yml",
+    "credential.json", "credentials.json", "credentials.yaml", "credentials.yml",
+    "token.json", "tokens.json",
+})
+_CREDENTIAL_DIRECTORIES = frozenset({(".config", "gcloud"), (".config", "gh"),
+                                     (".local", "share", "keyrings")})
+_PRIVATE_KEY_BASES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
+
+
+def _excluded_source_path(value: str) -> bool:
+    """Conservative conventional credential names, not general secret detection."""
+    parts = tuple(part.casefold() for part in value.replace("\\", "/").split("/") if part)
+    for part in parts:
+        if (part in _CREDENTIAL_COMPONENTS or part.startswith(".env")
+                or part.endswith((".key", ".pem", ".p12", ".pfx"))):
+            return True
+        if not part.endswith(".pub") and any(
+                part == base or part.startswith((base + "_", base + "-", base + "."))
+                for base in _PRIVATE_KEY_BASES):
+            return True
+    return any(parts[index:index + len(directory)] == directory
+               for directory in _CREDENTIAL_DIRECTORIES
+               for index in range(len(parts) - len(directory) + 1))
+
+
 def _safe_relative(value: str) -> bool:
     return (isinstance(value, str) and bool(value) and len(value) <= 512
             and not Path(value).is_absolute() and ".." not in Path(value).parts
-            and not any(part.lower() in (".ssh", ".secrets", "secrets", "credentials")
-                        or part.lower().startswith(".env")
-                        or part.lower().endswith((".key", ".pem", ".p12"))
-                        for part in Path(value).parts))
+            and not _excluded_source_path(value))
 
 
 def _strings(value: Any, name: str) -> None:

@@ -19,6 +19,49 @@ def packet_body():
 
 
 class RecordTests(unittest.TestCase):
+    def test_conventional_credential_paths_rejected_before_open_and_packet_admission(self):
+        excluded = (
+            ".env", ".env.production", "nested/.netrc", "nested/_netrc", "nested\\_netrc",
+            "id_rsa", "id_dsa.old", "id_ecdsa_sk", "id_ed25519-work",
+            "nested/.npmrc", ".pypirc", ".git-credentials", "certs/client.pfx",
+            "certs/client.p12", "certs/client.pem", "certs/client.key",
+            ".aws/credentials", ".azure/accessTokens.json", ".kube/config",
+            ".docker/config.json", ".config/gcloud/application_default_credentials.json",
+            ".config/gh/hosts.yml", ".gnupg/private-keys-v1.d/key",
+            ".local/share/keyrings/login.keyring", ".authinfo", ".pgpass",
+            "credentials.json", "auth.json", "tokens.json",
+        )
+        with fixture() as root:
+            for path in excluded:
+                with self.subTest(path=path):
+                    with patch("pod.records.os.open", side_effect=AssertionError("source opened")) as opened:
+                        with self.assertRaises(PodError) as rejected:
+                            source_identity(root, path)
+                    self.assertEqual(rejected.exception.code, "secret_source")
+                    opened.assert_not_called()
+                    for field, reference in (
+                        ("sources", {"path": path, "state": "absent"}),
+                        ("context", {"kind": "source", "path": path, "sha256": "a" * 64}),
+                        ("context", {"kind": "instruction", "path": path, "sha256": "a" * 64}),
+                    ):
+                        with self.subTest(field=field, kind=reference.get("kind")):
+                            with self.assertRaises(PodError):
+                                packet({**packet_body(), field: [reference]})
+
+    def test_ordinary_sources_and_public_key_files_remain_admissible(self):
+        with fixture() as root:
+            for path in ("src/ordinary.py", "keys/id_rsa.pub", "keys/id_ed25519_sk.pub"):
+                with self.subTest(path=path):
+                    file = root / path
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_bytes(b"harmless fixture")
+                    bound = source_identity(root, path)
+                    self.assertEqual(bound["state"], "present")
+                    self.assertEqual(bound["sha256"], hashlib.sha256(b"harmless fixture").hexdigest())
+                    self.assertEqual(packet({**packet_body(), "sources": [bound]})["body"]["sources"], [bound])
+                    context = {"kind": "source", "path": path, "sha256": bound["sha256"]}
+                    self.assertEqual(packet({**packet_body(), "context": [context]})["body"]["context"], [context])
+
     def test_packet_report_scope_and_binding(self):
         frozen = packet(packet_body())
         row = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": "dispatch",
