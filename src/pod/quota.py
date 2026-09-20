@@ -21,9 +21,20 @@ def validate_snapshot(value: Any) -> dict:
         bounded_text(s[key], name=key, limit=256)
     if not isinstance(s["windows"], list) or len(s["windows"]) > 16:
         raise PodError("invalid_quota", "Quota windows must be bounded")
+    names = set()
     for window in s["windows"]:
         exact(window, {"name", "remaining_percent", "reset_at", "consumed"},
               {"name"}, name="quota_window")
+        bounded_text(window["name"], name="quota window", limit=128)
+        if window["name"] in names:
+            raise PodError("invalid_quota", "Duplicate quota window")
+        names.add(window["name"])
+        if "remaining_percent" in window and (type(window["remaining_percent"]) not in (int, float)
+                or not 0 <= window["remaining_percent"] <= 100):
+            raise PodError("invalid_quota", "Invalid window remainder")
+    if "remaining_percent" in s and (type(s["remaining_percent"]) not in (int, float)
+            or not 0 <= s["remaining_percent"] <= 100):
+        raise PodError("invalid_quota", "Invalid aggregate remainder")
     if not isinstance(s["unknowns"], list) or len(s["unknowns"]) > 32:
         raise PodError("invalid_quota", "Quota unknowns must be bounded")
     return s

@@ -12,9 +12,13 @@ from .records import packet, report, source_identity, verify_sources, acceptance
 from .routing import preview, replay
 from .release import release_gate
 from .util import bounded_json, exact
+from .context import execution_brief
 
 
 def run(operation: str, request: dict) -> dict:
+    if operation == "brief":
+        exact(request, {"criteria", "coverage"}, {"criteria", "coverage"}, name="request")
+        return execution_brief(request["criteria"], request["coverage"])
     if operation == "preview":
         exact(request, {"project", "assessment", "capabilities", "quotas", "occupancy", "strict_pin",
                         "safety_refusal", "objective", "task_policy"},
@@ -29,8 +33,18 @@ def run(operation: str, request: dict) -> dict:
     if operation == "packet":
         return packet(request)
     if operation == "report":
-        exact(request, {"report", "packet"}, {"report", "packet"}, name="request")
-        return report(request["report"], request["packet"])
+        exact(request, {"report", "packet", "project", "objective", "operation_id"},
+              {"report", "packet", "project", "objective", "operation_id"}, name="request")
+        if not isinstance(request["packet"], dict):
+            raise PodError("invalid_packet", "Report needs a frozen packet")
+        from .ledger import read
+        state = read(Path(request["project"]), request["objective"])
+        effect = state.get("effects", {}).get(request["operation_id"]) if state else None
+        if (not effect or effect.get("state") != "confirmed" or not effect.get("native_binding")
+                or effect.get("packet_id") != request["packet"].get("packet_id")):
+            raise PodError("report_attempt_unverified", "No confirmed native attempt binding")
+        return report(request["report"], request["packet"],
+                      {"runtime": effect["runtime"], **effect["native_binding"]})
     if operation == "source":
         exact(request, {"project", "path"}, {"project", "path"}, name="request")
         return source_identity(Path(request["project"]), request["path"])
@@ -51,9 +65,9 @@ def run(operation: str, request: dict) -> dict:
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task", "operation_id",
                         "assessment", "capabilities", "quotas", "occupancy", "plan_revision",
-                        "capacity", "capacity_reason", "exceptional_grant"},
+                        "capacity", "capacity_reason", "exceptional_grant", "packet"},
               {"project", "objective", "owner", "run", "task", "operation_id",
-               "assessment", "capabilities", "quotas", "occupancy", "plan_revision"}, name="request")
+               "assessment", "capabilities", "quotas", "occupancy", "plan_revision", "packet"}, name="request")
         from .operations import guarded_start
         # The production port verifies installed controls itself; request JSON
         # can supply assessment snapshots but cannot assert native assurance.
@@ -64,7 +78,8 @@ def run(operation: str, request: dict) -> dict:
                              occupancy=request["occupancy"], plan_revision=request["plan_revision"],
                              capacity=request.get("capacity", 2),
                              capacity_reason=request.get("capacity_reason"),
-                             exceptional_grant=request.get("exceptional_grant"))
+                             exceptional_grant=request.get("exceptional_grant"),
+                             frozen_packet=request["packet"])
     if operation == "release":
         exact(request, {"project", "objective", "owner", "dispatch"},
               {"project", "objective", "owner", "dispatch"}, name="request")
@@ -82,7 +97,7 @@ def run(operation: str, request: dict) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
-    parser.add_argument("operation", choices=("preview", "replay", "packet", "report", "source",
+    parser.add_argument("operation", choices=("brief", "preview", "replay", "packet", "report", "source",
                                                "verify-sources", "acceptance", "admission", "release",
                                                "reconcile-release", "release-gate"))
     parser.add_argument("--input", required=True, type=Path)

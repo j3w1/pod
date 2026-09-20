@@ -8,6 +8,31 @@ from .errors import PodError
 from .util import digest, exact
 
 
+def execution_brief(criteria: list[str], coverage: list[dict]) -> dict:
+    """Keep each original criterion tied to a check or explicit dependency."""
+    if (not isinstance(criteria, list) or not criteria or len(criteria) > 64
+            or any(not isinstance(c, str) or not c or len(c) > 256 for c in criteria)
+            or len(set(criteria)) != len(criteria) or not isinstance(coverage, list)
+            or len(coverage) != len(criteria)):
+        raise PodError("invalid_brief", "Original criteria must be bounded and unique")
+    rows = {}
+    for raw in coverage:
+        row = exact(raw, {"criterion", "check", "dependency"}, {"criterion"}, name="coverage")
+        if row["criterion"] not in criteria or row["criterion"] in rows:
+            raise PodError("invalid_brief", "Coverage must bind one original criterion")
+        for field in ("check", "dependency"):
+            if field in row and (not isinstance(row[field], str) or not row[field].strip()
+                                 or len(row[field]) > 512):
+                raise PodError("invalid_brief", "Coverage description is invalid")
+        if not row.get("check") and not row.get("dependency"):
+            raise PodError("invalid_brief", "Criterion needs a check or explicit dependency")
+        rows[row["criterion"]] = row
+    if set(rows) != set(criteria):
+        raise PodError("invalid_brief", "Original criterion is missing")
+    return {"schema": "pod-execution-brief/v1", "criteria": list(criteria),
+            "coverage": [rows[c] for c in criteria], "digest": digest([rows[c] for c in criteria])}
+
+
 def bind_context(*, candidate: str, instructions: list[dict], requirements: str,
                  sources: list[dict], policy_revision: str, summary: str) -> dict:
     if not isinstance(summary, str) or len(summary) > 8192:

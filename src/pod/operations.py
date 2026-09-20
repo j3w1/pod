@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 from typing import Protocol
 
-from .config import effective
+from .config import DEFAULT_WORKER_CAPACITY, effective
 from .errors import PodError
 from .ledger import reconcile, reserve
 from .orca import contract, executable, worker_rows, worker_show
@@ -32,6 +32,7 @@ class OrcaPort:
         observed = contract()
         # No installed-version guarantee yet proves these for the account route.
         return {"runtime": None, "billing_preflight": False, "fanout_control": False,
+                "account_binding": None,
                 "reason": "installed runtime controls unverified", "version": observed.get("version")}
 
     def read_native(self, owner: str) -> dict:
@@ -80,8 +81,9 @@ class OrcaPort:
 
 def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
                   operation_id: str, assessment: dict, capabilities: dict, quotas: dict,
-                  occupancy: dict, plan_revision: str, capacity: int = 2,
+                  occupancy: dict, plan_revision: str, capacity: int = DEFAULT_WORKER_CAPACITY,
                   capacity_reason: str | None = None, exceptional_grant: dict | None = None,
+                  frozen_packet: dict | None = None,
                   port: NativePort | None = None, now: datetime | None = None) -> dict:
     """Execute at most one authorized native start, preserving uncertain effects."""
     bounded_text(owner, name="owner")
@@ -102,7 +104,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                      route_decision=decision, capability_contract=assurance,
                      native_reader=lambda: native_port.read_native(owner), capacity=capacity,
                      run_id=run, plan_revision=plan_revision, exceptional_grant=exceptional_grant,
-                     quota_rules=policy["policy"]["policy"], now=now)
+                     capacity_reason=capacity_reason, frozen_packet=frozen_packet, now=now)
     if intent["existing"]:
         raise PodError("operation_already_recorded", "Recorded operation must be reconciled, never relaunched")
     try:

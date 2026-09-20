@@ -148,9 +148,13 @@ def account_metadata() -> dict:
     return {"runtime": response["runtime"], "providers": out}
 
 
-def require_prelaunch_assurance(contract_snapshot: dict) -> None:
+def require_prelaunch_assurance(contract_snapshot: dict, route: dict) -> None:
     if contract_snapshot.get("billing_preflight") is not True or contract_snapshot.get("fanout_control") is not True:
         raise PodError("prelaunch_assurance_unverified", "Native billing or hidden fan-out control is unverified")
+    expected = {"provider": route.get("agent"), "account": route.get("account"), "bucket": route.get("bucket")}
+    if (not isinstance(expected["provider"], str) or not isinstance(expected["account"], str)
+            or contract_snapshot.get("account_binding") != expected):
+        raise PodError("account_binding_unverified", "Native route account/bucket binding is unverified")
 
 
 def effective_launch(requested: dict, observed: dict) -> None:

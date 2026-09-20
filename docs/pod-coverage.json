@@ -1,7 +1,7 @@
 {
   "schema": "pod-scenario-coverage/v1",
   "authority": "docs/pod-spec.md",
-  "note": "A test path identifies intended fixture coverage only. Candidate-bound, hosted, live and external evidence remain separate; document text is never behavioral proof.",
+  "note": "A test path identifies a deterministic fixture slice, not complete scenario proof. The local suite currently passes 61 tests; frozen candidate, hosted, live, conversation behavior and external evidence remain separate. Document ID checks prove inventory only.",
   "scenarios": [
     {
       "id": "A01",
@@ -89,7 +89,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_scenarios.ScenarioFixtureTests.test_preference_change_only_changes_later_route_and_revocation_blocks",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -97,7 +97,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_scenarios.ScenarioFixtureTests.test_preference_change_only_changes_later_route_and_revocation_blocks",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -191,7 +191,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_ledger.LedgerTests.test_delivery_requires_every_item_and_replays",
+      "offline_test": "tests.test_ledger.LedgerTests.test_delivery_survives_process_exit_between_items",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -199,7 +199,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_records.RecordTests.test_nested_context_and_report_scope_deviations",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -306,7 +306,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_records.RecordTests.test_nested_context_and_report_scope_deviations",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -370,7 +370,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_scenarios.ScenarioFixtureTests.test_execution_brief_keeps_every_original_criterion",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -570,7 +570,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_scenarios.ScenarioFixtureTests.test_unusable_route_stops_before_native_read_or_start",
       "candidate_status": "NOT_RUN"
     },
     {

@@ -8,7 +8,7 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | --- | --- | --- |
 | Unit and incident suite | `PYTHONPATH=src python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
 | Explicit incident discovery | `PYTHONPATH=src:. python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
-| Compile and diff | `python -m compileall -q src tests`; `git diff --check` | Local syntax/format |
+| Compile and diff | `python -m compileall -q src tests`; `git diff --check 474a84a6d5a1f7947abc1e38d232c379adf7ff93 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
 | Skill validation | Skill creator `quick_validate.py src/pod/skill` | Frontmatter and scaffold only |
 | Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel there | Exact committed candidate |
 | Fresh isolated install | Install wheel into new disposable venv; smoke `pod --help`, each family help, `pod config --check --json`, `pod doctor --json` | No model/Orca mutation |

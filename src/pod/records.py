@@ -23,30 +23,93 @@ def _list(value: Any, name: str, limit: int = 64) -> list:
     return value
 
 
+def _safe_relative(value: str) -> bool:
+    return (isinstance(value, str) and bool(value) and len(value) <= 512
+            and not Path(value).is_absolute() and ".." not in Path(value).parts
+            and not any(part.lower() in (".ssh", ".secrets", "secrets", "credentials")
+                        or part.lower().startswith(".env")
+                        or part.lower().endswith((".key", ".pem", ".p12"))
+                        for part in Path(value).parts))
+
+
+def _strings(value: Any, name: str) -> None:
+    for item in _list(value, name):
+        bounded_text(item, name=name, limit=512)
+
+
+def _sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
+
+
 def packet(value: Any) -> dict:
     p = exact(value, PACKET_FIELDS, PACKET_FIELDS, name="packet")
     if p["schema"] != "pod-packet/v1":
         raise PodError("invalid_packet", "Unsupported packet schema")
     for key in ("objective", "responsibility", "candidate", "policy_revision", "plan_revision", "report_contract"):
         bounded_text(p[key], name=key)
-    for key in ("criteria", "scope", "actions", "context", "dependencies", "sources"):
-        _list(p[key], key)
+    for key in ("criteria", "actions", "dependencies"):
+        _strings(p[key], key)
+    for item in _list(p["scope"], "scope"):
+        if not _safe_relative(item):
+            raise PodError("invalid_scope", "Packet scope must be a safe relative path")
+    for item in _list(p["context"], "context"):
+        ref = exact(item, {"kind", "path", "sha256", "id", "binding_digest"}, {"kind"}, name="context_reference")
+        if ref["kind"] in ("source", "instruction"):
+            if set(ref) != {"kind", "path", "sha256"} or not _safe_relative(ref["path"]):
+                raise PodError("invalid_context", "Context source must be a bound safe path")
+            if not _sha256(ref["sha256"]):
+                raise PodError("invalid_context", "Context source digest is invalid")
+        elif ref["kind"] == "summary":
+            if set(ref) != {"kind", "id", "binding_digest"}:
+                raise PodError("invalid_context", "Summary context must be a bound reference")
+            bounded_text(ref["id"], name="summary id", limit=128)
+            if not _sha256(ref["binding_digest"]):
+                raise PodError("invalid_context", "Summary binding digest is invalid")
+        else:
+            raise PodError("invalid_context", "Unsupported context reference")
+    for item in _list(p["sources"], "sources"):
+        ref = exact(item, {"path", "state", "sha256"}, {"path", "state"}, name="source")
+        if not _safe_relative(ref["path"]) or ref["state"] not in ("present", "absent", "unavailable"):
+            raise PodError("invalid_source", "Packet source is not a safe bound path")
+        if ref["state"] == "present" and not _sha256(ref.get("sha256")):
+            raise PodError("invalid_source", "Present source needs a content digest")
+    route = exact(p["route"], {"alias", "agent", "model", "account", "bucket", "effort"}, {"agent"}, name="packet_route")
+    for key, value in route.items():
+        if value is not None:
+            bounded_text(value, name="route " + key, limit=256)
     if len(str(p)) > 65536:
         raise PodError("invalid_packet", "Packet is too large")
-    if any(isinstance(x, str) and ("PRIVATE KEY" in x or "TOKEN=" in x) for x in p["context"]):
-        raise PodError("secret_context", "Packet context appears to contain secret material")
     return {"packet_id": digest(p), "body": p}
 
 
-def report(value: Any, frozen: dict) -> dict:
+def report(value: Any, frozen: dict, native_binding: dict) -> dict:
+    if not isinstance(frozen, dict) or not isinstance(frozen.get("body"), dict) or digest(frozen["body"]) != frozen.get("packet_id"):
+        raise PodError("report_binding_mismatch", "Frozen packet content identity changed")
+    packet(frozen["body"])
     r = exact(value, REPORT_FIELDS, REPORT_FIELDS, name="report")
     if r["schema"] != "pod-report/v1" or r["candidate"] != frozen["body"]["candidate"] or r["assignment"] != frozen["packet_id"]:
         raise PodError("report_binding_mismatch", "Report does not bind the frozen packet")
+    for key in ("assignment", "attempt", "candidate"):
+        bounded_text(r[key], name=key, limit=256)
+    if r["outcome"] not in ("succeeded", "failed", "partial", "blocked", "uncertain"):
+        raise PodError("invalid_report", "Report outcome is invalid")
     for key in ("scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"):
-        _list(r[key], key)
-    if set(r["scope"]) - set(frozen["body"]["scope"]):
-        raise PodError("report_scope_expansion", "Worker report expands assigned scope")
-    return r
+        _strings(r[key], key)
+    binding = exact(native_binding, {"runtime", "runId", "taskId", "dispatchId", "workerId"},
+                    {"runtime", "runId", "taskId", "dispatchId", "workerId"}, name="native_binding")
+    if any(not isinstance(value, str) or not value for value in binding.values()) or r["attempt"] != binding["dispatchId"]:
+        raise PodError("report_attempt_mismatch", "Report attempt does not join the issued Dispatch")
+    assigned = frozen["body"]["scope"]
+    deviations = []
+    if set(r["scope"]) != set(assigned):
+        deviations.append("reported_scope_changed")
+    for path in r["files"]:
+        if not _safe_relative(path) or not any(path == base or path.startswith(base.rstrip("/") + "/") for base in assigned):
+            deviations.append("file_outside_assignment")
+    if deviations:
+        return {"status": "reconciliation_required", "deviations": sorted(set(deviations)),
+                "observation": r, "native_binding": binding}
+    return {"status": "validated_observation", "observation": r, "native_binding": binding}
 
 
 def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str,
@@ -69,8 +132,7 @@ def source_identity(root: Path, relative: str, *, max_bytes: int = 1_048_576) ->
         raise PodError("unsafe_source", "Project root is redirected")
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise PodError("unsafe_source", "Source path must stay relative to project")
-    lowered = [part.lower() for part in Path(relative).parts]
-    if any(part in (".env", ".ssh", ".secrets", "secrets", "credentials") or part.endswith((".key", ".pem", ".p12")) for part in lowered):
+    if not _safe_relative(relative):
         raise PodError("secret_source", "Secret-bearing source is outside Pod context collection")
     cursor = root
     for component in Path(relative).parts[:-1]:

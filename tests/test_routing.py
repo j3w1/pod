@@ -30,14 +30,16 @@ def setup():
 def caps():
     return {alias: {"agent": "codex", "model": model, "account": "acct", "efforts": ["high"],
                     "capabilities": [], "suitable_for": ["complex"],
-                    "billing_preflight": True, "fanout_control": True}
+                    "billing_preflight": True, "fanout_control": True, "bucket": "shared"}
             for alias, model in (("sol", "gpt-5.6-sol"), ("terra", "gpt-5.6-terra"))}
 
 
 def quota(percent=50):
     return {"acct": {"schema": "pod-quota/v1", "provider": "codex", "account": "acct",
                      "bucket": "shared", "observed_at": NOW.isoformat(), "source": "supported_metadata",
-                     "confidence": "observed", "remaining_percent": percent}}
+                     "confidence": "observed", "unknowns": [],
+                     "windows": [{"name": "hour", "remaining_percent": percent}],
+                     "remaining_percent": percent}}
 
 
 class RoutingTests(unittest.TestCase):
@@ -68,6 +70,22 @@ class RoutingTests(unittest.TestCase):
                                  now=NOW)["status"], "usable")
         self.assertEqual(preview(assessment(bounded=False), e, capabilities=caps(), quotas=quota(4),
                                  now=NOW)["status"], "blocked")
+
+    def test_provider_bucket_and_every_window_bind_route(self):
+        e = setup()
+        snapshot = quota(70)
+        snapshot["acct"]["windows"].append({"name": "week", "remaining_percent": 0})
+        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot, now=NOW)["status"], "blocked")
+        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
+                                 now=NOW + timedelta(minutes=10))["status"], "blocked")
+        snapshot["acct"]["windows"][1]["remaining_percent"] = 70
+        snapshot["acct"]["provider"] = "claude"
+        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
+                                 occupancy={"acct": 1}, now=NOW)["status"], "blocked")
+        snapshot["acct"]["provider"] = "codex"
+        snapshot["acct"]["bucket"] = "other"
+        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
+                                 occupancy={"acct": 1}, now=NOW)["status"], "blocked")
 
     def test_changed_alias_and_paid_route_need_separate_grants(self):
         e = setup()

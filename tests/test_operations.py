@@ -5,9 +5,11 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.ledger import checkpoint, read
+from pod.ledger import checkpoint, read, record_delivery, reconcile_delivery_item
 from pod.operations import guarded_start, release_once, reconcile_release
-from pod.config import route_identity
+from pod.config import effective, route_identity
+from pod.records import packet
+from pod.internal import run as helper_run
 from tests.common import fixture
 
 
@@ -27,7 +29,9 @@ class FixturePort:
         self.fail_release = False
 
     def assurance(self, route):
-        return {"runtime": "runtime", "billing_preflight": self.assured, "fanout_control": self.assured}
+        return {"runtime": "runtime", "billing_preflight": self.assured, "fanout_control": self.assured,
+                "account_binding": {"provider": route["agent"], "account": route["account"],
+                                    "bucket": route.get("bucket")}}
 
     def read_native(self, owner):
         self.reads += 1
@@ -86,10 +90,12 @@ models:
                   "capabilities": [], "context": [], "reason": "independent", "bounded": True}
     caps = {"sol": {"agent": "codex", "model": "gpt-5.6-sol", "account": "account",
                      "efforts": ["high"], "capabilities": [], "billing_preflight": True,
-                     "fanout_control": True}}
+                     "fanout_control": True, "bucket": "shared"}}
     quota = {"account": {"schema": "pod-quota/v1", "provider": "codex", "account": "account",
                          "bucket": "shared", "observed_at": NOW.isoformat(), "source": "supported",
-                         "confidence": "observed", "remaining_percent": 60}}
+                         "confidence": "observed", "unknowns": [],
+                         "windows": [{"name": "hour", "remaining_percent": 60}],
+                         "remaining_percent": 60}}
     return project, assessment, caps, quota
 
 
@@ -101,9 +107,34 @@ class GuardedOperationTests(unittest.TestCase):
                                                           "APPDATA": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
+            route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
+                     "account": "account", "bucket": "shared", "effort": "high"}
+            frozen = packet({"schema": "pod-packet/v1", "objective": "objective", "criteria": ["works"],
+                             "responsibility": "writer", "scope": ["src/a.py"], "actions": ["edit"],
+                             "candidate": "c", "context": [], "dependencies": [], "route": route,
+                             "policy_revision": effective(project)["revision"], "plan_revision": "plan",
+                             "report_contract": "checks", "sources": []})
             guarded_start(project, "objective", owner="owner", run="run", task="task",
                           operation_id="op", assessment=assessment, capabilities=caps,
-                          quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+                          quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW,
+                          frozen_packet=frozen)
+            worker_report = {"schema": "pod-report/v1", "assignment": frozen["packet_id"],
+                             "attempt": "dispatch", "candidate": "c", "outcome": "succeeded",
+                             "scope": ["src/a.py"], "files": ["outside.py"], "checks": [],
+                             "failures": [], "evidence": [], "uncertainty": [], "questions": []}
+            self.assertEqual(helper_run("report", {"report": worker_report, "packet": frozen,
+                                                   "project": str(project), "objective": "objective",
+                                                   "operation_id": "op"})["status"], "reconciliation_required")
+            with self.assertRaises(PodError):
+                helper_run("report", {"report": {**worker_report, "attempt": "unissued"},
+                                      "packet": frozen, "project": str(project), "objective": "objective",
+                                      "operation_id": "op"})
+            forged = packet({**frozen["body"], "scope": ["outside.py"]})
+            with self.assertRaises(PodError):
+                helper_run("report", {"report": {**worker_report, "assignment": forged["packet_id"],
+                                                 "scope": ["outside.py"]},
+                                      "packet": forged, "project": str(project), "objective": "objective",
+                                      "operation_id": "op"})
             with self.assertRaises(PodError):
                 release_once(project, "objective", owner="owner", dispatch="dispatch", port=port)
             self.assertEqual(port.release_calls, 0)
@@ -158,6 +189,30 @@ class GuardedOperationTests(unittest.TestCase):
                 guarded_start(project, "objective", **kw)
             self.assertEqual(port.starts, 1)
 
+    def test_worker_done_delivery_requires_bound_settlement_and_disposition(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                          "LOCALAPPDATA": str(root / "state"),
+                                                          "XDG_CONFIG_HOME": str(root / "config"),
+                                                          "APPDATA": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            guarded_start(project, "objective", owner="owner", run="run", task="task",
+                          operation_id="op", assessment=assessment, capabilities=caps,
+                          quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+            delivery = {"id": "delivery", "runtime": "runtime", "runId": "run", "messages": [
+                {"id": "done", "type": "worker_done", "runId": "run", "taskId": "task", "dispatchId": "dispatch"}]}
+            self.assertFalse(record_delivery(project, "objective", owner="owner", delivery=delivery)["ack_eligible"])
+            observed = {"runtime": "runtime", "runId": "run", "messageId": "done", "taskId": "task",
+                        "dispatchId": "dispatch", "kind": "settlement", "status": "completed", "receiptId": "native-done"}
+            with self.assertRaises(PodError):
+                reconcile_delivery_item(project, "objective", owner="owner", delivery_id="delivery",
+                                        message_id="done", native_reader=lambda: observed)
+            port.settled = True
+            release_once(project, "objective", owner="owner", dispatch="dispatch", port=port)
+            reconcile_delivery_item(project, "objective", owner="owner", delivery_id="delivery",
+                                    message_id="done", native_reader=lambda: observed)
+            self.assertTrue(record_delivery(project, "objective", owner="owner", delivery=delivery)["ack_eligible"])
+
     def test_prelaunch_denial_and_unknown_effect_do_not_retry(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
                                                           "LOCALAPPDATA": str(root / "state"),
@@ -180,6 +235,25 @@ class GuardedOperationTests(unittest.TestCase):
             with self.assertRaises(PodError):
                 guarded_start(project, "objective", **kw)
             self.assertEqual(port.starts, 1)
+
+    def test_unverified_account_binding_blocks_before_native_effect(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                          "LOCALAPPDATA": str(root / "state"),
+                                                          "XDG_CONFIG_HOME": str(root / "config"),
+                                                          "APPDATA": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            port.assurance = lambda route: {"runtime": "runtime", "billing_preflight": True,
+                                            "fanout_control": True,
+                                            "account_binding": {"provider": "codex", "account": "other",
+                                                                "bucket": "shared"}}
+            with self.assertRaises(PodError) as caught:
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              operation_id="op", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+            self.assertEqual(caught.exception.code, "account_binding_unverified")
+            self.assertEqual(port.reads, 0)
+            self.assertEqual(port.starts, 0)
 
     def test_fresh_native_read_and_shared_account_occupancy(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
@@ -204,15 +278,52 @@ class GuardedOperationTests(unittest.TestCase):
                                                           "APPDATA": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
+            grant = {"id": "capacity-one", "action": "exceptional_capacity", "account": "account",
+                     "objective": "objective", "run": "run", "plan_revision": "plan", "limit": 4,
+                     "reason": "independent edits", "valid_until": "2026-09-21T00:00:00Z"}
             base = dict(owner="owner", run="run", task="task", operation_id="op",
                         assessment=assessment, capabilities=caps, quotas=quota,
                         occupancy={}, plan_revision="plan", port=port, now=NOW, capacity=4)
             with self.assertRaises(PodError):
-                guarded_start(project, "objective", **base,
-                              exceptional_grant={"objective": "wrong", "run": "run",
-                                                 "plan_revision": "plan", "limit": 4, "reason": "independent"})
+                guarded_start(project, "objective", **base, exceptional_grant=grant)
             self.assertEqual(port.starts, 0)
+            config = root / "config" / "pod" / "config.yaml"
+            config.write_text(config.read_text() + "policy:\n  exceptional_grants:\n    - id: capacity-one\n      action: exceptional_capacity\n      account: account\n      objective: objective\n      run: run\n      plan_revision: plan\n      limit: 4\n      reason: independent edits\n      valid_until: '2026-09-21T00:00:00Z'\n")
+            with self.assertRaises(PodError):
+                guarded_start(project, "objective", **base,
+                              exceptional_grant={**grant, "run": "other"})
+            with self.assertRaises(PodError):
+                guarded_start(project, "objective", **base,
+                              exceptional_grant={**grant, "valid_until": "2027-09-21T00:00:00Z"})
+            (project / ".pod").mkdir()
+            local = project / ".pod" / "config.yaml"
+            local.write_text("schema: pod/v1\npolicy: {max_workers: 2}\n")
+            with self.assertRaises(PodError) as local_limit:
+                guarded_start(project, "objective", **base, exceptional_grant=grant)
+            self.assertEqual(local_limit.exception.code, "capacity_ceiling")
+            local.unlink()
             self.assertEqual(guarded_start(project, "objective", **base,
-                             exceptional_grant={"objective": "objective", "run": "run",
-                                                "plan_revision": "plan", "limit": 4,
-                                                "reason": "independent"})["status"], "confirmed")
+                             exceptional_grant=grant)["status"], "confirmed")
+
+    def test_ordinary_three_needs_reason_and_respects_personal_hard_ceiling(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                          "LOCALAPPDATA": str(root / "state"),
+                                                          "XDG_CONFIG_HOME": str(root / "config"),
+                                                          "APPDATA": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            base = dict(owner="owner", run="run", task="task", operation_id="op",
+                        assessment=assessment, capabilities=caps, quotas=quota,
+                        occupancy={}, plan_revision="plan", port=port, now=NOW, capacity=3)
+            with self.assertRaises(PodError) as missing:
+                guarded_start(project, "objective", **base)
+            self.assertEqual(missing.exception.code, "capacity_reason_required")
+            config = root / "config" / "pod" / "config.yaml"
+            original = config.read_text()
+            config.write_text(original + "policy: {max_workers: 2}\n")
+            with self.assertRaises(PodError) as ceiling:
+                guarded_start(project, "objective", **base, capacity_reason="three independent edits")
+            self.assertEqual(ceiling.exception.code, "capacity_ceiling")
+            config.write_text(original)
+            self.assertEqual(guarded_start(project, "objective", **base,
+                                           capacity_reason="three independent edits")["status"], "confirmed")

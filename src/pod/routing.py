@@ -8,9 +8,9 @@ from typing import Any
 from .config import COMPLEXITIES, EFFORTS, route_identity, validate
 from .errors import PodError
 from .util import bounded_text, digest, exact
+from .quota import validate_snapshot
 
 ASSESSMENT_FIELDS = {"method", "responsibility", "complexity", "risk", "size", "uncertainty", "verifiability", "capabilities", "context", "reason", "bounded", "data_location"}
-SNAPSHOT_FIELDS = {"schema", "provider", "account", "bucket", "windows", "remaining_percent", "observed_at", "source", "confidence", "unknowns", "reset_at", "consumption"}
 
 
 def assess(raw: Any) -> dict:
@@ -29,26 +29,39 @@ def assess(raw: Any) -> dict:
     return a
 
 
-def quota_state(snapshot: dict | None, *, account: str | None, policy: dict, now: datetime) -> tuple[str, str]:
-    if snapshot is None:
+def quota_state(snapshot: dict | None, *, provider: str | None, account: str | None,
+                bucket: str | None, policy: dict, now: datetime) -> tuple[str, str]:
+    if snapshot is None or not all(isinstance(x, str) and x for x in (provider, account, bucket)):
         return "unknown", "no supported quota snapshot"
-    s = exact(snapshot, SNAPSHOT_FIELDS, {"schema", "provider", "account", "bucket", "observed_at", "source", "confidence"}, name="quota")
-    if s["schema"] != "pod-quota/v1" or s["account"] != account:
-        return "unknown", "quota snapshot does not bind the route account"
-    if not isinstance(s["source"], str) or s["source"] in ("guess", "undocumented", "credential_scrape"):
+    try:
+        s = validate_snapshot(snapshot)
+    except PodError:
+        return "unknown", "quota snapshot is invalid"
+    if s["provider"] != provider or s["account"] != account or s["bucket"] != bucket:
+        return "unknown", "quota snapshot does not bind provider/account/bucket"
+    if s["source"] not in ("supported", "supported_metadata") or s["confidence"] != "observed":
         return "unknown", "unsupported quota source"
     try:
-        age = (now - datetime.fromisoformat(s["observed_at"].replace("Z", "+00:00"))).total_seconds()
-    except (TypeError, ValueError):
+        observed = datetime.fromisoformat(s["observed_at"].replace("Z", "+00:00"))
+        if observed.tzinfo is None or now.tzinfo is None:
+            raise ValueError("timezone required")
+        age = (now - observed).total_seconds()
+    except (TypeError, ValueError, OverflowError):
         return "unknown", "invalid quota timestamp"
-    if not isinstance(age, (int, float)):
-        return "unknown", "invalid quota timestamp"
-    remaining = s.get("remaining_percent")
-    if remaining is None or type(remaining) not in (int, float) or not 0 <= remaining <= 100:
-        return "unknown", "quota remaining is unknown"
-    if remaining == 0:
+    if age < 0:
+        return "unknown", "quota observation is from the future"
+    windows = s["windows"]
+    known = [window["remaining_percent"] for window in windows if "remaining_percent" in window]
+    if "remaining_percent" in s:
+        known.append(s["remaining_percent"])
+    if 0 in known:
         return "exhausted", "applicable bucket is exhausted"
-    if age < 0 or age > policy["quota_fresh_seconds"]:
+    if s["unknowns"]:
+        return "unknown", "quota windows have unresolved values"
+    if not windows or any("remaining_percent" not in window for window in windows):
+        return "unknown", "applicable quota windows are unknown"
+    remaining = min(known)
+    if age > policy["quota_fresh_seconds"]:
         return "unknown", "quota observation is stale"
     if remaining <= policy["quota_critical"]:
         return "critical", "applicable bucket is critical"
@@ -119,6 +132,9 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
         if not isinstance(advertised, dict) or advertised.get("agent") != model.get("agent") or advertised.get("model") != model.get("model") or advertised.get("account") != model.get("account"):
             reject.append("installed route capability is unverified")
         else:
+            if "bucket" in advertised and (not isinstance(advertised["bucket"], str)
+                                            or not advertised["bucket"] or len(advertised["bucket"]) > 128):
+                reject.append("route quota bucket identity is invalid")
             if alias != preferred and a["complexity"] not in advertised.get("suitable_for", []):
                 reject.append("alternative suitability for this assignment is unverified")
             approved_efforts = model.get("efforts", [preferred_effort])
@@ -139,7 +155,9 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
             grant = _grant(rules["spending_grants"], action="paid_usage", route=model, objective=objective, units=1, now=now)
             if grant is None:
                 reject.append("paid or uncertain billing lacks an exact spending grant")
-        qstate, qreason = quota_state(quota_map.get(model.get("account")), account=model.get("account"), policy=rules, now=now)
+        route_bucket = advertised.get("bucket") if isinstance(advertised, dict) and isinstance(advertised.get("bucket"), str) else None
+        qstate, qreason = quota_state(quota_map.get(model.get("account")), provider=model.get("agent"),
+                                     account=model.get("account"), bucket=route_bucket, policy=rules, now=now)
         if qstate == "exhausted":
             reject.append(qreason)
         elif qstate == "unknown" and occupied.get(model.get("account"), 0) >= 1:
@@ -159,7 +177,8 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
                 "selected": None, "reason": "no approved, usable route", "rejections": reasons,
                 "policy_revision": effective["revision"]}
     alias, model, effort, qstate = chosen
-    route = {"alias": alias, "agent": model["agent"], "model": model["model"], "account": model["account"], "effort": effort}
+    route = {"alias": alias, "agent": model["agent"], "model": model["model"], "account": model["account"],
+             "bucket": caps[alias].get("bucket"), "effort": effort}
     return {"schema": "pod-route/v1", "status": "usable", "preferred": preferred,
             "selected": route, "reason": "preferred" if alias == preferred else "preferred infeasible: " + "; ".join(reasons.get(preferred, [])),
             "rejections": reasons, "quota_state": qstate, "approval_ref": model["approval_ref"],

@@ -14,6 +14,7 @@ from .errors import PodError
 from .util import digest, exact
 
 SCHEMA = "pod/v1"
+DEFAULT_WORKER_CAPACITY = 2
 COMPLEXITIES = ("trivial", "simple", "standard", "complex", "very_complex")
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approval_route", "billing", "efforts", "capabilities", "locations"}
@@ -39,7 +40,9 @@ DEFAULT = {
         "very_complex": {"model": "astra", "effort": "high"},
     },
     "policy": {
-        "max_workers": 2, "ordinary_max": 3, "quota_low": 20,
+        # The normal starting capacity is DEFAULT_WORKER_CAPACITY. These are
+        # hard ordinary ceilings; a scoped personal grant is needed above 3.
+        "max_workers": 3, "ordinary_max": 3, "quota_low": 20,
         "quota_critical": 5, "quota_fresh_seconds": 60,
         "retain_idle_minutes": 30, "child_delegation": False,
         "review": "independent",
@@ -158,6 +161,8 @@ def validate(value: Any) -> dict:
             raise PodError("invalid_config", f"Invalid {field}")
     if "max_workers" in policy and not 0 <= policy["max_workers"] <= 8:
         raise PodError("invalid_config", "max_workers exceeds eight")
+    if "ordinary_max" in policy and policy["ordinary_max"] > 3:
+        raise PodError("invalid_config", "ordinary_max exceeds three")
     for field in ("allowed_agents", "allowed_accounts", "allowed_locations"):
         if field in policy:
             _strings(policy[field], field)
@@ -170,7 +175,7 @@ def validate(value: Any) -> dict:
             if not isinstance(policy[field], list) or len(policy[field]) > 32:
                 raise PodError("invalid_config", f"Invalid {field}")
             for grant in policy[field]:
-                exact(grant, {"id", "action", "account", "bucket", "model", "objective", "run", "plan_revision", "limit", "valid_until", "max_units"}, {"id", "action", "account", "valid_until"}, name="grant")
+                exact(grant, {"id", "action", "account", "bucket", "model", "objective", "run", "plan_revision", "limit", "reason", "valid_until", "max_units"}, {"id", "action", "account", "valid_until"}, name="grant")
                 for required_string in ("id", "action", "account", "valid_until"):
                     if not isinstance(grant[required_string], str) or not grant[required_string]:
                         raise PodError("invalid_config", "Grant identity and validity must be strings")
@@ -187,7 +192,7 @@ def validate(value: Any) -> dict:
                     if grant["action"] != "reset_credit" or not isinstance(grant.get("bucket"), str) or type(grant.get("max_units")) is not int or grant["max_units"] != 1:
                         raise PodError("invalid_config", "Reset grant needs exact bucket and one credit")
                 else:
-                    if grant["action"] != "exceptional_capacity" or any(not isinstance(grant.get(key), str) or not grant[key] for key in ("objective", "run", "plan_revision")) or type(grant.get("limit")) is not int or not 4 <= grant["limit"] <= 8:
+                    if grant["action"] != "exceptional_capacity" or any(not isinstance(grant.get(key), str) or not grant[key].strip() for key in ("objective", "run", "plan_revision", "reason")) or type(grant.get("limit")) is not int or not 4 <= grant["limit"] <= 8:
                         raise PodError("invalid_config", "Exceptional grant needs objective, Run, plan and limit")
     if "context" in obj:
         exact(obj["context"], {"references", "checks"}, name="context")
@@ -234,6 +239,8 @@ def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
                 raise PodError("authority_expansion", "Local policy cannot grant delegation")
             if key in ("quota_low", "quota_critical") and val < prior:
                 raise PodError("authority_expansion", "Local quota threshold cannot weaken personal policy")
+            if key == "quota_fresh_seconds" and val > prior:
+                raise PodError("authority_expansion", "Local quota freshness cannot exceed personal policy")
             if key == "review" and prior == "project_stricter" and val != prior:
                 raise PodError("authority_expansion", "Local review cannot weaken personal policy")
             if key in ("spending_grants", "reset_grants", "exceptional_grants"):

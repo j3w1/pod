@@ -338,4 +338,3 @@ These facts are not Pod lifecycle, quota, billing, permission/fan-out or recover
 Host workspace doctor passed, but canonical pod registration is an owner-admin cutover
 dependency. Implementation/tests, live core matrix, hosted CI, independent audit,
 acceptance, merge and release were NOT_RUN for Pod at reconciliation.
-

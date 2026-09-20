@@ -64,6 +64,19 @@ policy:
                 with self.assertRaises(PodError):
                     effective(root, personal=root / "none")
 
+    def test_project_cannot_extend_personal_quota_freshness(self):
+        with fixture() as root:
+            personal = root / "personal.yaml"
+            personal.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 60}\n")
+            (root / ".pod").mkdir()
+            local = root / ".pod" / "config.yaml"
+            local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 3600}\n")
+            with self.assertRaises(PodError) as caught:
+                effective(root, personal=personal)
+            self.assertEqual(caught.exception.code, "authority_expansion")
+            local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 30}\n")
+            self.assertEqual(effective(root, personal=personal)["policy"]["policy"]["quota_fresh_seconds"], 30)
+
     def test_changed_model_identity_invalidates_prior_approval_binding(self):
         with fixture() as root:
             personal = root / "personal.yaml"

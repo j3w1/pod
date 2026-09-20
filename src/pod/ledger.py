@@ -148,11 +148,20 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         return state
 
 
-def _grant_matches(grant: dict | None, *, objective: str, run_id: str, plan_revision: str, capacity: int) -> bool:
-    return (isinstance(grant, dict) and grant.get("objective") == objective
+def _grant_matches(grant: dict | None, authorized: list, *, objective: str, run_id: str,
+                   plan_revision: str, account: str, capacity: int, now: datetime) -> bool:
+    if not isinstance(grant, dict) or grant not in authorized:
+        return False
+    try:
+        expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (grant.get("action") == "exceptional_capacity" and grant.get("objective") == objective
             and grant.get("run") == run_id and grant.get("plan_revision") == plan_revision
-            and type(grant.get("limit")) is int and grant["limit"] == capacity
-            and isinstance(grant.get("reason"), str) and bool(grant["reason"].strip()))
+            and grant.get("account") == account and type(grant.get("limit")) is int
+            and capacity <= grant["limit"] <= 8 and capacity >= 4
+            and isinstance(grant.get("reason"), str) and bool(grant["reason"].strip())
+            and expiry.tzinfo is not None and now.tzinfo is not None and now <= expiry)
 
 
 def _pending_account(account: str, bucket: str | None = None) -> int:
@@ -170,24 +179,19 @@ def _pending_account(account: str, bucket: str | None = None) -> int:
     return count
 
 
-def _quota_hold(account: str, snapshot: dict | None, state: str) -> bool:
+def _quota_hold(provider: str, account: str, bucket: str | None,
+                snapshot: dict | None, state: str) -> bool:
     """Persist exhaustion until a later fresh positive supported observation."""
     path = state_root() / "quota-holds.json"
-    raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v1", "holds": {}}
+    raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v2", "holds": {}}
     exact(raw, {"schema", "holds"}, {"schema", "holds"}, name="quota_holds")
-    if raw["schema"] != "pod-quota-holds/v1" or not isinstance(raw["holds"], dict):
+    if raw["schema"] != "pod-quota-holds/v2" or not isinstance(raw["holds"], dict):
         raise PodError("state_migration_required", "Quota hold schema is unsupported")
-    bucket = snapshot.get("bucket") if isinstance(snapshot, dict) else None
-    key = digest({"bucket": bucket}) if isinstance(bucket, str) and bucket else None
-    # Also retain an account-wide hold when the next observation is absent or
-    # cannot name the old bucket.
-    account_key = digest({"account": account})
+    key = digest({"provider": provider, "account": account, "bucket": bucket})
     observed_at = snapshot.get("observed_at") if isinstance(snapshot, dict) else None
-    existing = [x for x in (raw["holds"].get(account_key), raw["holds"].get(key) if key else None) if x]
+    existing = raw["holds"].get(key)
     if state == "exhausted":
-        raw["holds"][account_key] = observed_at or "unknown"
-        if key:
-            raw["holds"][key] = observed_at or "unknown"
+        raw["holds"][key] = observed_at or "unknown"
         atomic_json(path, raw)
         return True
     if existing:
@@ -196,16 +200,12 @@ def _quota_hold(account: str, snapshot: dict | None, state: str) -> bool:
                 return datetime.fromisoformat(candidate.replace("Z", "+00:00")) > datetime.fromisoformat(previous.replace("Z", "+00:00"))
             except (TypeError, ValueError):
                 return False
-        if state in ("normal", "low", "critical") and isinstance(observed_at, str) and all(later(observed_at, past) for past in existing):
-            raw["holds"].pop(account_key, None)
-            if key:
-                raw["holds"].pop(key, None)
+        if state in ("normal", "low", "critical") and isinstance(observed_at, str) and later(observed_at, existing):
+            raw["holds"].pop(key, None)
             atomic_json(path, raw)
             return False
         return True
-    if state == "unknown" and key is None and raw["holds"]:
-        # Without a bucket identity, an observed exhausted shared bucket
-        # cannot be ruled out for this route.
+    if state == "unknown" and bucket is None and raw["holds"]:
         return True
     return False
 
@@ -213,23 +213,50 @@ def _quota_hold(account: str, snapshot: dict | None, state: str) -> bool:
 def reserve(project: Path, objective: str, *, owner: str, operation_id: str, requested: dict,
             route_decision: dict, capability_contract: dict, native_reader: Callable[[], dict],
             capacity: int, run_id: str, plan_revision: str,
-            exceptional_grant: dict | None = None, quota_rules: dict | None = None,
+            exceptional_grant: dict | None = None, capacity_reason: str | None = None,
+            frozen_packet: dict | None = None,
             now: datetime | None = None) -> dict:
     """Read native state inside global admission lock, then reserve one effect."""
     bounded_text(operation_id, name="operation_id", limit=128)
     if route_decision.get("status") != "usable" or route_decision.get("selected") != requested:
         raise PodError("route_unusable", "Requested launch is not the approved route decision")
-    require_prelaunch_assurance(capability_contract)
+    require_prelaunch_assurance(capability_contract, requested)
     if type(capacity) is not int or capacity < 1 or capacity > 8:
         raise PodError("invalid_capacity", "Capacity must be one through eight")
-    if capacity > 3 and not _grant_matches(exceptional_grant, objective=objective, run_id=run_id,
-                                           plan_revision=plan_revision, capacity=capacity):
-        raise PodError("exceptional_grant_required", "Exceptional capacity requires an exact objective/Run/plan grant")
+    packet_id = None
+    if frozen_packet is not None:
+        from .records import packet
+        if (not isinstance(frozen_packet, dict) or not isinstance(frozen_packet.get("body"), dict)
+                or packet(frozen_packet["body"]) != frozen_packet
+                or frozen_packet["body"]["plan_revision"] != plan_revision
+                or frozen_packet["body"]["objective"] != objective
+                or frozen_packet["body"]["policy_revision"] != route_decision.get("policy_revision")
+                or frozen_packet["body"]["route"] != requested):
+            raise PodError("invalid_packet", "Admission packet is not frozen for this plan")
+        packet_id = frozen_packet["packet_id"]
+    from .config import effective
+    effective_policy = effective(project)
+    policy = effective_policy["policy"]["policy"]
+    if capacity <= 3:
+        if capacity > min(policy["max_workers"], policy["ordinary_max"]):
+            raise PodError("capacity_ceiling", "Capacity exceeds effective personal/ordinary policy")
+        if capacity == 3 and not (isinstance(capacity_reason, str) and capacity_reason.strip()):
+            raise PodError("capacity_reason_required", "Three workers require a concrete reason")
+    elif not _grant_matches(exceptional_grant, policy["exceptional_grants"], objective=objective,
+                            run_id=run_id, plan_revision=plan_revision, account=requested["account"],
+                            capacity=capacity, now=now or datetime.now(timezone.utc)):
+        raise PodError("exceptional_grant_required", "Exceptional capacity requires a current effective personal grant")
+    elif (effective_policy["provenance"].get("policy.max_workers") in ("project", "task")
+          and capacity > policy["max_workers"]):
+        raise PodError("capacity_ceiling", "Local hard capacity restriction remains effective")
     path = _path(project, objective)
     # The global lock serializes all local objective/account reservations. It
     # does not fence other hosts; cross-host admission needs native atomicity.
     with _lock(state_root() / "admission"):
         with _lock(path):
+            current = effective(project)
+            if current["revision"] != route_decision.get("policy_revision") or current["policy"]["policy"] != policy:
+                raise PodError("policy_revision_mismatch", "Admission policy changed after route selection")
             native = native_reader()
             if native.get("runtime") != capability_contract.get("runtime") or not native.get("authoritative"):
                 raise PodError("native_authority_unverified", "Native runtime/ownership is not proven")
@@ -243,18 +270,27 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
             state = _read(path)
             if state["owner"] != owner:
                 raise PodError("coordinator_conflict", "Coordinator ownership is absent or changed")
+            if frozen_packet is not None:
+                checkpoint_value = state.get("checkpoint")
+                if (not isinstance(checkpoint_value, dict)
+                        or checkpoint_value.get("candidate") != frozen_packet["body"]["candidate"]
+                        or checkpoint_value.get("criteria") != frozen_packet["body"]["criteria"]):
+                    raise PodError("packet_plan_mismatch", "Packet differs from the owned checkpoint")
             prior = state["effects"].get(operation_id)
             if prior is not None:
-                if prior["request"] != requested or prior.get("run_id") != run_id or prior.get("plan_revision") != plan_revision:
+                if (prior["request"] != requested or prior.get("run_id") != run_id
+                        or prior.get("plan_revision") != plan_revision or prior.get("packet_id") != packet_id):
                     raise PodError("operation_conflict", "Operation identity was reused with a changed request")
                 return {**prior, "existing": True}
             active = [w for w in workers if w.get("state") not in ("released",)]
             if any(not isinstance(w, dict) or not w.get("account") or not w.get("objective") for w in active):
                 raise PodError("native_occupancy_unverified", "Active worker account/objective binding is unavailable")
-            qstate, _ = quota_state(native.get("quota"), account=requested["account"],
-                                    policy=quota_rules or {"quota_fresh_seconds": 60, "quota_critical": 5, "quota_low": 20},
+            qstate, _ = quota_state(native.get("quota"), provider=requested["agent"],
+                                    account=requested["account"], bucket=requested.get("bucket"),
+                                    policy=policy,
                                     now=now or datetime.now(timezone.utc))
-            if _quota_hold(requested["account"], native.get("quota"), qstate):
+            if _quota_hold(requested["agent"], requested["account"], requested.get("bucket"),
+                           native.get("quota"), qstate):
                 raise PodError("quota_exhausted", "Current applicable quota bucket is exhausted")
             bucket = native.get("quota", {}).get("bucket") if isinstance(native.get("quota"), dict) and qstate != "unknown" else None
             if active and bucket is not None and any(not w.get("bucket") for w in active):
@@ -274,6 +310,7 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                       "runtime": native["runtime"], "operation_id": operation_id,
                       "route_revision": route_decision["policy_revision"], "native_binding": None,
                       "run_id": run_id, "plan_revision": plan_revision, "bucket": bucket,
+                      "packet_id": packet_id,
                       "created_at": datetime.now(timezone.utc).isoformat()}
             state["effects"][operation_id] = effect
             _write(path, state)
@@ -321,14 +358,28 @@ def reconcile(project: Path, objective: str, *, owner: str, operation_id: str,
         return effect
 
 
-def record_delivery(project: Path, objective: str, *, owner: str, delivery: dict,
-                    reconciled_message_ids: set[str]) -> dict:
-    exact(delivery, {"id", "messages", "runtime"}, {"id", "messages", "runtime"}, name="delivery")
-    if not isinstance(delivery["messages"], list) or any(not isinstance(m, dict) or not isinstance(m.get("id"), str) for m in delivery["messages"]):
+def record_delivery(project: Path, objective: str, *, owner: str, delivery: dict) -> dict:
+    """Journal each immutable native item; eligibility reads only durable effects."""
+    exact(delivery, {"id", "messages", "runtime", "runId"},
+          {"id", "messages", "runtime", "runId"}, name="delivery")
+    for key in ("id", "runtime", "runId"):
+        bounded_text(delivery[key], name=key, limit=128)
+    if not isinstance(delivery["messages"], list) or len(delivery["messages"]) > 64:
         raise PodError("invalid_delivery", "Delivery items are malformed")
-    ids = {m["id"] for m in delivery["messages"]}
-    if ids != reconciled_message_ids:
-        raise PodError("delivery_unresolved", "All Delivery items must be reconciled before acknowledgment")
+    items = {}
+    for message in delivery["messages"]:
+        item = exact(message, {"id", "type", "runId", "taskId", "dispatchId"},
+                     {"id", "type", "runId"}, name="delivery_item")
+        if item["type"] not in ("worker_done", "question", "escalation", "heartbeat") or item["runId"] != delivery["runId"]:
+            raise PodError("invalid_delivery", "Delivery item type or Run is unsupported")
+        for key, value in item.items():
+            bounded_text(value, name=key, limit=128)
+        if item["type"] == "worker_done" and not all(item.get(key) for key in ("taskId", "dispatchId")):
+            raise PodError("invalid_delivery", "Settlement needs exact Task and Dispatch")
+        if item["id"] in items:
+            raise PodError("invalid_delivery", "Duplicate message identity")
+        items[item["id"]] = {"identity": digest({"runtime": delivery["runtime"], **item}),
+                             "item": item, "effect": None}
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -336,18 +387,70 @@ def record_delivery(project: Path, objective: str, *, owner: str, delivery: dict
             raise PodError("coordinator_conflict", "Delivery belongs to another coordinator")
         prior = state["deliveries"].get(delivery["id"])
         identity = digest(delivery)
-        if prior and prior != identity:
+        if prior and (not isinstance(prior, dict) or prior.get("identity") != identity):
             raise PodError("delivery_conflict", "Delivery identity changed")
-        state["deliveries"][delivery["id"]] = identity
-        _write(path, state)
-        return {"ack_eligible": True, "delivery_id": delivery["id"]}
+        if not prior:
+            state["deliveries"][delivery["id"]] = {"identity": identity, "runtime": delivery["runtime"],
+                                                   "runId": delivery["runId"], "items": items}
+            _write(path, state)
+        unresolved = [key for key, row in state["deliveries"][delivery["id"]]["items"].items()
+                      if row["effect"] is None]
+        return {"ack_eligible": not unresolved, "delivery_id": delivery["id"], "unresolved": unresolved}
+
+
+def reconcile_delivery_item(project: Path, objective: str, *, owner: str, delivery_id: str,
+                            message_id: str, native_reader: Callable[[], dict]) -> dict:
+    """Persist an effect from a trusted native readback seam before acknowledgment."""
+    native_effect = native_reader()
+    effect = exact(native_effect, {"runtime", "runId", "messageId", "taskId", "dispatchId",
+                                   "kind", "status", "receiptId"},
+                   {"runtime", "runId", "messageId", "kind", "status", "receiptId"}, name="delivery_effect")
+    path = _path(project, objective)
+    with _lock(path):
+        state = _read(path)
+        if state["owner"] != owner or delivery_id not in state["deliveries"]:
+            raise PodError("unknown_delivery", "No owned Delivery")
+        delivery = state["deliveries"][delivery_id]
+        row = delivery["items"].get(message_id)
+        if row is None:
+            raise PodError("unknown_delivery_item", "Message is not in this Delivery")
+        item = row["item"]
+        if (effect["runtime"] != delivery["runtime"] or effect["runId"] != delivery["runId"]
+                or effect["messageId"] != message_id or effect.get("taskId") != item.get("taskId")
+                or effect.get("dispatchId") != item.get("dispatchId")):
+            raise PodError("delivery_effect_mismatch", "Effect does not join exact native item")
+        if item["type"] == "worker_done":
+            bindings = [e for e in state["effects"].values() if e.get("state") == "confirmed"
+                        and e.get("runtime") == effect["runtime"] and e.get("native_binding", {}).get("runId") == effect["runId"]
+                        and e.get("native_binding", {}).get("taskId") == effect["taskId"]
+                        and e.get("native_binding", {}).get("dispatchId") == effect["dispatchId"]]
+            cleanup = state["cleanup"].get(effect["dispatchId"], {})
+            if (effect["kind"] != "settlement" or effect["status"] not in ("completed", "failed")
+                    or len(bindings) != 1 or cleanup.get("state") not in ("released", "already_released", "retained")):
+                raise PodError("delivery_unresolved", "Settlement and terminal disposition are not durably reconciled")
+        elif item["type"] == "question":
+            if effect["kind"] != "reply" or effect["status"] != "replied":
+                raise PodError("delivery_unresolved", "Question has no native reply receipt")
+        elif item["type"] == "heartbeat":
+            if effect["kind"] != "observation" or effect["status"] != "recorded":
+                raise PodError("delivery_unresolved", "Heartbeat has no recorded observation")
+        else:
+            if effect["kind"] != "decision" or effect["status"] != "recorded":
+                raise PodError("delivery_unresolved", "Escalation has no recorded decision")
+        bounded_text(effect["receiptId"], name="receiptId", limit=128)
+        if row["effect"] and row["effect"] != effect:
+            raise PodError("delivery_effect_conflict", "A different effect was already recorded")
+        if not row["effect"]:
+            row["effect"] = effect
+            _write(path, state)
+        return {"status": "reconciled", "delivery_id": delivery_id, "message_id": message_id}
 
 
 def intervention(project: Path, objective: str, *, owner: str, task: str, correction: dict,
                  diagnosis: dict | None = None) -> dict:
-    exact(correction, {"obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
+    exact(correction, {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
                        "next_discriminating_check", "correction_key"},
-          {"obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
+          {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
            "next_discriminating_check", "correction_key"}, name="correction")
     for item in correction.values():
         bounded_text(item, name="correction")
@@ -360,11 +463,11 @@ def intervention(project: Path, objective: str, *, owner: str, task: str, correc
         identity = digest(correction)
         if identity in [row["identity"] for row in history]:
             raise PodError("correction_replay", "Equivalent correction was already attempted")
-        # The evidence/obligation, rather than a caller-provided correction
-        # label, is the bounded equivalence key. Rewording the label cannot
-        # reset the no-progress threshold.
-        obligation = " ".join(correction["obligation"].casefold().split())
-        same = [row for row in history if row.get("obligation") == obligation
+        # Stable criterion/failure identities are assigned from the acceptance
+        # map and failure record. Text is retained for diagnosis, not used to
+        # infer arbitrary semantic equivalence.
+        same = [row for row in history if row.get("criterion_id") == correction["criterion_id"]
+                and row.get("failure_id") == correction["failure_id"]
                 and row["evidence"] == correction["last_meaningful_evidence"]]
         if len(same) >= 2:
             if diagnosis is None:
@@ -376,7 +479,11 @@ def intervention(project: Path, objective: str, *, owner: str, task: str, correc
             if digest(diagnosis) in [row.get("diagnosis") for row in history]:
                 raise PodError("diagnosis_replay", "Diagnosis evidence was already consumed")
         history.append({"identity": identity, "key": correction["correction_key"],
-                        "obligation": obligation,
+                        "criterion_id": correction["criterion_id"], "failure_id": correction["failure_id"],
+                        "obligation": correction["obligation"],
+                        "failing_example": correction["failing_example"],
+                        "hypothesis": correction["hypothesis"],
+                        "next_discriminating_check": correction["next_discriminating_check"],
                         "evidence": correction["last_meaningful_evidence"],
                         "diagnosis": digest(diagnosis) if diagnosis else None})
         _write(path, state)

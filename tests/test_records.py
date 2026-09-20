@@ -8,7 +8,7 @@ from tests.common import fixture
 def packet_body():
     return {"schema": "pod-packet/v1", "objective": "make change", "criteria": ["works"],
             "responsibility": "writer", "scope": ["src/a.py"], "actions": ["edit"],
-            "candidate": "abc", "context": ["read AGENTS.md"], "dependencies": [],
+            "candidate": "abc", "context": [{"kind": "instruction", "path": "AGENTS.md", "sha256": "a" * 64}], "dependencies": [],
             "route": {"agent": "codex"}, "policy_revision": "p", "plan_revision": "plan",
             "report_contract": "report checks", "sources": []}
 
@@ -16,17 +16,37 @@ def packet_body():
 class RecordTests(unittest.TestCase):
     def test_packet_report_scope_and_binding(self):
         frozen = packet(packet_body())
-        row = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": "one",
+        row = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": "dispatch",
                "candidate": "abc", "outcome": "succeeded", "scope": ["src/a.py"], "files": [],
                "checks": [], "failures": [], "evidence": [], "uncertainty": [], "questions": []}
-        self.assertEqual(report(row, frozen), row)
+        binding = {"runtime": "runtime", "runId": "run", "taskId": "task",
+                   "dispatchId": "dispatch", "workerId": "worker"}
+        self.assertEqual(report(row, frozen, binding)["status"], "validated_observation")
         row["scope"] = ["src/other.py"]
-        with self.assertRaises(PodError):
-            report(row, frozen)
+        self.assertEqual(report(row, frozen, binding)["status"], "reconciliation_required")
         row["scope"] = []
         row["candidate"] = "other"
         with self.assertRaises(PodError):
-            report(row, frozen)
+            report(row, frozen, binding)
+
+    def test_nested_context_and_report_scope_deviations(self):
+        body = packet_body()
+        body["context"] = [{"kind": "source", "path": ".env.production", "sha256": "digest"}]
+        with self.assertRaises(PodError):
+            packet(body)
+        body["context"] = [{"kind": "source", "path": "ok.txt", "sha256": "digest",
+                            "nested": {"TOKEN": "placeholder"}}]
+        with self.assertRaises(PodError):
+            packet(body)
+        frozen = packet(packet_body())
+        binding = {"runtime": "runtime", "runId": "run", "taskId": "task",
+                   "dispatchId": "dispatch", "workerId": "worker"}
+        row = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": "dispatch",
+               "candidate": "abc", "outcome": "succeeded", "scope": [], "files": ["outside.py"],
+               "checks": [], "failures": [], "evidence": [], "uncertainty": [], "questions": []}
+        self.assertEqual(report(row, frozen, binding)["status"], "reconciliation_required")
+        with self.assertRaises(PodError):
+            report({**row, "attempt": "unissued"}, frozen, binding)
 
     def test_source_changed_absent_unavailable_distinct(self):
         with fixture() as root:
@@ -40,6 +60,9 @@ class RecordTests(unittest.TestCase):
                 verify_sources(root, [before])
             path.unlink()
             self.assertEqual(source_identity(root, "a.txt")["state"], "absent")
+            (root / ".env.production").write_text("placeholder")
+            with self.assertRaises(PodError):
+                source_identity(root, ".env.production")
             with self.assertRaises(PodError):
                 verify_sources(root, [before])
 
