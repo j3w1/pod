@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.ledger import checkpoint, reserve, reconcile, record_delivery, reconcile_delivery_item, read, check_bound_sources, intervention
+from pod.ledger import checkpoint, reserve, reconcile, record_delivery, reconcile_delivery_item, read, check_bound_sources, intervention, _quota_hold
 from pod.records import source_identity
 from pod.config import effective
 from tests.common import fixture
@@ -20,7 +20,60 @@ def checkpoint_body():
             "questions": [], "verification_gaps": ["works"], "next_safe_action": "inspect"}
 
 
+def bind_confirmed_task(project, body=None):
+    checkpoint(project, "objective", owner="terminal", value=body or checkpoint_body(), native={"runtime": "r"})
+    route = {"agent": "codex", "model": "m", "account": "a", "bucket": None, "effort": "high"}
+    reserve(project, "objective", owner="terminal", operation_id="task-launch", requested=route,
+            route_decision={"status": "usable", "selected": route,
+                            "policy_revision": effective(project)["revision"]},
+            capability_contract={"runtime": "r", "billing_preflight": True, "fanout_control": True,
+                                 "account_binding": {"provider": "codex", "account": "a", "bucket": None}},
+            native_reader=lambda: {"runtime": "r", "authoritative": True, "owner": "terminal",
+                                   "scope": "all", "complete": True, "workers": [], "cross_host": False},
+            capacity=1, run_id="run", plan_revision="plan")
+    launch = {key: route[key] for key in ("agent", "model", "effort")}
+    reconcile(project, "objective", owner="terminal", operation_id="task-launch",
+              observed={"runtime": "r", "operation_id": "task-launch",
+                        "launch": {"requested": launch, "effective": launch}, "state": "ready",
+                        "runId": "run", "taskId": "task", "dispatchId": "dispatch",
+                        "worker_show": {"dispatch": {"id": "dispatch"},
+                                        "projection": {"id": "worker", "dispatchId": "dispatch",
+                                                       "runId": "run", "taskId": "task"},
+                                        "worker": {"startOptions": {"launch": {"requested": launch,
+                                                                               "effective": launch}}}}})
+
+
 class LedgerTests(unittest.TestCase):
+    def test_exhaustion_hold_is_monotonic_by_window_after_restart(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state") } ):
+            at = datetime(2026, 9, 20, 0, 20, 5, tzinfo=timezone.utc)
+            def snapshot(seconds, hour, week):
+                return {"schema": "pod-quota/v1", "provider": "codex", "account": "a",
+                        "bucket": "shared", "observed_at": (at + timedelta(seconds=seconds)).isoformat(),
+                        "source": "supported", "confidence": "observed", "unknowns": [],
+                        "windows": [{"name": "hour", "remaining_percent": hour},
+                                    {"name": "week", "remaining_percent": week}]}
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(-5, 0, 40),
+                                        "exhausted", now=at, freshness=60))
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(-15, 0, 40),
+                                        "exhausted", now=at, freshness=60))
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(-10, 50, 40),
+                                        "normal", now=at, freshness=60))
+            script = ("from datetime import datetime,timezone; from pod.ledger import _quota_hold; "
+                      "print(_quota_hold('codex','a','shared',None,'unknown', "
+                      "now=datetime(2026,9,20,0,20,5,tzinfo=timezone.utc),freshness=60))")
+            resumed = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                                     text=True, check=True, env=os.environ.copy())
+            self.assertEqual(resumed.stdout.strip(), "True")
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(0, 50, 0),
+                                        "exhausted", now=at, freshness=60))
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(-2, 50, 40),
+                                        "normal", now=at, freshness=60))
+            self.assertFalse(_quota_hold("codex", "a", "shared", snapshot(2, 50, 40),
+                                         "normal", now=at + timedelta(seconds=2), freshness=60))
+            self.assertFalse(_quota_hold("codex", "b", "independent", None,
+                                         "unknown", now=at, freshness=60))
+
     def test_exhausted_bucket_hold_needs_later_supported_positive_read(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
                                                          "LOCALAPPDATA": str(root / "state"),
@@ -53,6 +106,18 @@ class LedgerTests(unittest.TestCase):
                 call("two", now + timedelta(seconds=5))
             self.assertEqual(missing.exception.code, "quota_exhausted")
             native["quota"] = {"schema": "pod-quota/v1", "provider": "codex", "account": "a",
+                               "bucket": "shared", "observed_at": (now - timedelta(seconds=10)).isoformat(),
+                               "source": "supported", "confidence": "observed", "unknowns": [],
+                               "windows": [{"name": "hour", "remaining_percent": 0}]}
+            with self.assertRaises(PodError):
+                call("older-zero", now)
+            native["quota"] = {**native["quota"],
+                               "observed_at": (now - timedelta(seconds=5)).isoformat(),
+                               "windows": [{"name": "hour", "remaining_percent": 30}]}
+            with self.assertRaises(PodError) as middle:
+                call("middle-positive", now)
+            self.assertEqual(middle.exception.code, "quota_exhausted")
+            native["quota"] = {"schema": "pod-quota/v1", "provider": "codex", "account": "a",
                                "bucket": "shared", "observed_at": (now + timedelta(seconds=10)).isoformat(),
                                "source": "supported", "confidence": "observed", "unknowns": [],
                                "windows": [{"name": "hour", "remaining_percent": 30}], "remaining_percent": 30}
@@ -64,8 +129,8 @@ class LedgerTests(unittest.TestCase):
                                                          "APPDATA": str(root / "config")}):
             project = root / "project"
             project.mkdir()
-            checkpoint(project, "objective", owner="terminal", value=checkpoint_body(), native={"runtime": "r"})
-            correction = {"criterion_id": "parse-c1", "failure_id": "parser-f1",
+            bind_confirmed_task(project)
+            correction = {"criterion_id": "works", "failure_id": "parser-f1",
                           "obligation": "Fix failing parser", "failing_example": "input x",
                           "hypothesis": "wrong branch", "last_meaningful_evidence": "trace-1",
                           "next_discriminating_check": "probe y", "correction_key": "first"}
@@ -82,11 +147,138 @@ class LedgerTests(unittest.TestCase):
                 intervention(project, "objective", owner="terminal", task="task",
                              correction={**correction, "correction_key": "third"},
                              diagnosis={"diagnosis_evidence": "trace-1"})
+            (project / "new-probe").write_text("new discriminating fixture")
             intervention(project, "objective", owner="terminal", task="task",
                          correction={**correction, "obligation": "Repair failing parser",
                                      "correction_key": "third"},
                          diagnosis={"diagnosis_evidence": "new-probe"})
             self.assertEqual(len(read(project, "objective")["interventions"]["task"]), 3)
+            with self.assertRaises(PodError) as renamed:
+                intervention(project, "objective", owner="terminal", task="task",
+                             correction={**correction, "failure_id": "new failure label",
+                                         "correction_key": "fourth"})
+            self.assertEqual(renamed.exception.code, "diagnosis_required")
+
+    def test_correction_labels_do_not_reset_task_history_or_reuse_evidence(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                         "XDG_CONFIG_HOME": str(root / "config")}):
+            project = root / "project"
+            project.mkdir()
+            bound = {**checkpoint_body(), "criteria": ["works", "other accepted criterion"]}
+            bind_confirmed_task(project, bound)
+            base = {"criterion_id": "works", "failure_id": "first label", "obligation": "fix parse",
+                    "failing_example": "x", "hypothesis": "branch", "last_meaningful_evidence": "trace",
+                    "next_discriminating_check": "probe", "correction_key": "one"}
+            intervention(project, "objective", owner="terminal", task="task", correction=base)
+            intervention(project, "objective", owner="terminal", task="task",
+                         correction={**base, "correction_key": "two"})
+            for changed in ({"failure_id": "renamed", "obligation": "repair parser"},
+                            {"criterion_id": "other accepted criterion", "failure_id": "new label"},
+                            {"last_meaningful_evidence": "claimed new evidence"}):
+                with self.assertRaises(PodError) as denied:
+                    intervention(project, "objective", owner="terminal", task="task",
+                                 correction={**base, **changed, "correction_key": "three"})
+                self.assertEqual(denied.exception.code, "diagnosis_required")
+            restarted = ("from pathlib import Path; from pod.ledger import intervention; "
+                         "from pod.errors import PodError; import json,sys; "
+                         "\ntry: intervention(Path(sys.argv[1]), 'objective', owner='terminal', task='task', "
+                         "correction=json.loads(sys.argv[2]))\n"
+                         "except PodError as error: print(error.code)")
+            result = subprocess.run([sys.executable, "-c", restarted, str(project),
+                                     json.dumps({**base, "failure_id": "after restart", "correction_key": "three"})],
+                                    capture_output=True, text=True, check=True, env=os.environ.copy())
+            self.assertEqual(result.stdout.strip(), "diagnosis_required")
+            with self.assertRaises(PodError) as fake_task:
+                intervention(project, "objective", owner="terminal", task="renamed task",
+                             correction={**base, "correction_key": "three"})
+            self.assertEqual(fake_task.exception.code, "task_unbound")
+            (project / "proof.txt").write_text("distinct observed bytes")
+            third = {**base, "failure_id": "renamed", "correction_key": "three"}
+            intervention(project, "objective", owner="terminal", task="task", correction=third,
+                         diagnosis={"diagnosis_evidence": "proof.txt"})
+            (project / "same-proof.txt").write_text("distinct observed bytes")
+            with self.assertRaises(PodError) as reused:
+                intervention(project, "objective", owner="terminal", task="task",
+                             correction={**base, "correction_key": "four"},
+                             diagnosis={"diagnosis_evidence": "same-proof.txt"})
+            self.assertEqual(reused.exception.code, "diagnosis_replay")
+            self.assertEqual(len(read(project, "objective")["interventions"]["task"]), 3)
+
+    def test_unknown_bucket_pending_across_objectives_and_known_independence(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                         "XDG_CONFIG_HOME": str(root / "config")}):
+            project = root / "project"
+            project.mkdir()
+            for objective in ("first", "second", "third"):
+                checkpoint(project, objective, owner="terminal", value=checkpoint_body(), native={"runtime": "r"})
+            native = {"runtime": "r", "authoritative": True, "owner": "terminal", "scope": "all",
+                      "complete": True, "workers": [], "atomic_admission": False, "cross_host": False}
+            def attempt(objective, account, bucket):
+                route = {"agent": "codex", "model": "m", "account": account, "bucket": bucket,
+                         "effort": "high"}
+                return reserve(project, objective, owner="terminal", operation_id=objective,
+                               requested=route, route_decision={"status": "usable", "selected": route,
+                                                               "policy_revision": effective(project)["revision"]},
+                               capability_contract={"runtime": "r", "billing_preflight": True,
+                                                    "fanout_control": True,
+                                                    "account_binding": {"provider": "codex", "account": account,
+                                                                        "bucket": bucket}},
+                               native_reader=lambda: native, capacity=2, run_id="run", plan_revision="plan")
+            attempt("first", "a", None)
+            with self.assertRaises(PodError) as blocked:
+                attempt("second", "b", None)
+            self.assertEqual(blocked.exception.code, "unknown_quota_capacity")
+            with self.assertRaises(PodError) as also_blocked:
+                attempt("third", "b", "independent")
+            self.assertEqual(also_blocked.exception.code, "bucket_occupancy_unverified")
+            native["quota"] = {"schema": "pod-quota/v1", "provider": "codex", "account": "b",
+                               "bucket": "independent", "observed_at": datetime.now(timezone.utc).isoformat(),
+                               "source": "supported", "confidence": "observed", "unknowns": [],
+                               "windows": [{"name": "hour", "remaining_percent": 50}]}
+            with self.assertRaises(PodError) as known_but_overlapping:
+                attempt("third", "b", "independent")
+            self.assertEqual(known_but_overlapping.exception.code, "bucket_occupancy_unverified")
+
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                         "XDG_CONFIG_HOME": str(root / "config")}):
+            project = root / "project"
+            project.mkdir()
+            for objective in ("first", "second"):
+                checkpoint(project, objective, owner="terminal", value=checkpoint_body(), native={"runtime": "r"})
+            route_a = {"agent": "codex", "model": "m", "account": "a", "bucket": "bucket-a", "effort": "high"}
+            route_b = {"agent": "codex", "model": "m", "account": "b", "bucket": "bucket-b", "effort": "high"}
+            native = {"runtime": "r", "authoritative": True, "owner": "terminal", "scope": "all",
+                      "complete": True, "workers": [], "atomic_admission": False, "cross_host": False}
+            for objective, route in (("first", route_a), ("second", route_b)):
+                result = reserve(project, objective, owner="terminal", operation_id=objective,
+                                 requested=route, route_decision={"status": "usable", "selected": route,
+                                                                 "policy_revision": effective(project)["revision"]},
+                                 capability_contract={"runtime": "r", "billing_preflight": True,
+                                                      "fanout_control": True,
+                                                      "account_binding": {"provider": "codex", "account": route["account"],
+                                                                          "bucket": route["bucket"]}},
+                                 native_reader=lambda: native, capacity=2, run_id="run", plan_revision="plan")
+                self.assertFalse(result["existing"])
+            for objective in ("third", "fourth"):
+                checkpoint(project, objective, owner="terminal", value=checkpoint_body(), native={"runtime": "r"})
+            native["workers"] = [{"state": "active", "account": "a", "objective": "external",
+                                  "bucket": "bucket-a", "agent": "codex"}]
+            def active_attempt(objective):
+                route = {"agent": "codex", "model": "m", "account": "c",
+                         "bucket": "bucket-c", "effort": "high"}
+                return reserve(project, objective, owner="terminal", operation_id=objective,
+                               requested=route, route_decision={"status": "usable", "selected": route,
+                                                               "policy_revision": effective(project)["revision"]},
+                               capability_contract={"runtime": "r", "billing_preflight": True,
+                                                    "fanout_control": True,
+                                                    "account_binding": {"provider": "codex", "account": "c",
+                                                                        "bucket": "bucket-c"}},
+                               native_reader=lambda: native, capacity=2, run_id="run", plan_revision="plan")
+            self.assertFalse(active_attempt("third")["existing"])
+            native["workers"][0]["bucket"] = None
+            with self.assertRaises(PodError) as unknown_active:
+                active_attempt("fourth")
+            self.assertEqual(unknown_active.exception.code, "bucket_occupancy_unverified")
     def test_definitive_source_rejection_survives_restored_bytes(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
                                                           "LOCALAPPDATA": str(root / "state"),

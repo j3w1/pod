@@ -9,3 +9,5 @@ Use `pod-packet/v1` for a delegated assignment: objective, criteria, responsibil
 Context entries are typed source, instruction or summary references with digests, never arbitrary nested content. Treat report scope or file deviations as untrusted observations requiring coordinator reconciliation. The private report helper requires a confirmed native attempt from the local effects journal.
 
 Fresh Tasks get fresh sessions. A compatible same-Task correction may reuse a settled worker only when native support and route identity prove it. Reassess mixed-complexity assignments separately. Parallel edits require independent boundaries or supported isolation.
+
+Correction history requires a confirmed native effect for the exact Task and an accepted checkpoint criterion. Caller failure IDs, wording and evidence descriptions cannot reset its threshold. After two corrections, a diagnosis names a distinct bounded project source whose observed content identity is recorded; this source observation alone does not prove the proposed diagnosis is semantically right or authorize dispatch.

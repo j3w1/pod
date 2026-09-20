@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterator
 
 from .errors import PodError
 from .orca import effective_launch, require_prelaunch_assurance
+from .quota import validate_snapshot
 from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact
 
@@ -164,49 +165,98 @@ def _grant_matches(grant: dict | None, authorized: list, *, objective: str, run_
             and expiry.tzinfo is not None and now.tzinfo is not None and now <= expiry)
 
 
-def _pending_account(account: str, bucket: str | None = None) -> int:
+def _bucket_overlap(provider: str, account: str, bucket: str | None, other: dict) -> bool:
+    if other.get("account") == account:
+        return True
+    other_provider = other.get("agent")
+    if other_provider is None:
+        return True
+    if other_provider is not None and other_provider != provider:
+        return False
+    other_bucket = other.get("bucket")
+    return bucket is None or other_bucket is None or bucket == other_bucket
+
+
+def _pending_account(provider: str, account: str, bucket: str | None = None) -> list[dict]:
     root = state_root()
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
-    count = 0
+    overlapping = []
     if root.exists():
         for path in root.glob("*/context.json"):
             state = _read(path)
-            count += sum(1 for effect in state["effects"].values()
-                         if effect.get("state") in ("reserved", "uncertain")
-                         and (effect.get("request", {}).get("account") == account
-                              or bucket is not None and effect.get("bucket") == bucket))
-    return count
+            for effect in state["effects"].values():
+                if not isinstance(effect, dict):
+                    raise PodError("state_migration_required", "Pending effect row is malformed")
+                if effect.get("state") not in ("reserved", "uncertain"):
+                    continue
+                if not isinstance(effect.get("request"), dict):
+                    raise PodError("state_migration_required", "Pending effect request is malformed")
+                row = {**effect["request"], "bucket": effect.get("bucket")}
+                if _bucket_overlap(provider, account, bucket, row):
+                    overlapping.append(row)
+    return overlapping
 
 
 def _quota_hold(provider: str, account: str, bucket: str | None,
-                snapshot: dict | None, state: str) -> bool:
+                snapshot: dict | None, state: str, *, now: datetime, freshness: int) -> bool:
     """Persist exhaustion until a later fresh positive supported observation."""
     path = state_root() / "quota-holds.json"
-    raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v2", "holds": {}}
+    raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v3", "holds": {}}
     exact(raw, {"schema", "holds"}, {"schema", "holds"}, name="quota_holds")
-    if raw["schema"] != "pod-quota-holds/v2" or not isinstance(raw["holds"], dict):
+    if raw["schema"] != "pod-quota-holds/v3" or not isinstance(raw["holds"], dict):
         raise PodError("state_migration_required", "Quota hold schema is unsupported")
     key = digest({"provider": provider, "account": account, "bucket": bucket})
-    observed_at = snapshot.get("observed_at") if isinstance(snapshot, dict) else None
-    existing = raw["holds"].get(key)
-    if state == "exhausted":
-        raw["holds"][key] = observed_at or "unknown"
-        atomic_json(path, raw)
-        return True
-    if existing:
-        def later(candidate: str, previous: str) -> bool:
-            try:
-                return datetime.fromisoformat(candidate.replace("Z", "+00:00")) > datetime.fromisoformat(previous.replace("Z", "+00:00"))
-            except (TypeError, ValueError):
-                return False
-        if state in ("normal", "low", "critical") and isinstance(observed_at, str) and later(observed_at, existing):
+    row = raw["holds"].get(key, {"provider": provider, "account": account,
+                                  "bucket": bucket, "windows": {}})
+    if not isinstance(row, dict) or any(row.get(field) != value for field, value in
+                                        (("provider", provider), ("account", account), ("bucket", bucket))) or not isinstance(row.get("windows"), dict):
+        raise PodError("state_migration_required", "Quota hold identity is malformed")
+    windows = dict(row["windows"])
+    supported = None
+    if state != "unknown" and isinstance(snapshot, dict):
+        try:
+            candidate = validate_snapshot(snapshot)
+            observed = datetime.fromisoformat(candidate["observed_at"].replace("Z", "+00:00"))
+            if (candidate["provider"] == provider and candidate["account"] == account
+                    and candidate["bucket"] == bucket and candidate["source"] in ("supported", "supported_metadata")
+                    and candidate["confidence"] == "observed" and observed.tzinfo is not None
+                    and now.tzinfo is not None and 0 <= (now - observed).total_seconds()):
+                supported = (candidate, observed, (now - observed).total_seconds() <= freshness)
+        except (PodError, TypeError, ValueError, OverflowError):
+            pass
+    if supported:
+        candidate, observed, fresh = supported
+        values = {digest({"window": window["name"]}): window.get("remaining_percent")
+                  for window in candidate["windows"]}
+        if "remaining_percent" in candidate:
+            values[digest({"aggregate": True})] = candidate["remaining_percent"]
+        for name, value in values.items():
+            previous = windows.get(name)
+            if previous is not None:
+                try:
+                    older = datetime.fromisoformat(previous.replace("Z", "+00:00"))
+                except (AttributeError, ValueError) as exc:
+                    raise PodError("state_migration_required", "Quota hold timestamp is malformed") from exc
+                if older.tzinfo is None:
+                    raise PodError("state_migration_required", "Quota hold timestamp has no timezone")
+            if value == 0 and (previous is None or observed > older):
+                windows[name] = observed.isoformat()
+            elif fresh and value is not None and value > 0 and previous is not None and observed > older:
+                windows.pop(name)
+        if windows:
+            raw["holds"][key] = {**row, "windows": windows}
+        else:
             raw["holds"].pop(key, None)
-            atomic_json(path, raw)
-            return False
+        atomic_json(path, raw)
+    if state == "exhausted":
         return True
-    if state == "unknown" and bucket is None and raw["holds"]:
+    if windows:
         return True
+    if bucket is None:
+        return any(isinstance(other, dict) and other.get("provider") == provider
+                   and other.get("account") == account and other.get("windows")
+                   for other in raw["holds"].values())
     return False
 
 
@@ -267,6 +317,8 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
             workers = native.get("workers")
             if not isinstance(workers, list):
                 raise PodError("native_occupancy_unverified", "Native worker inventory is malformed")
+            if any(not isinstance(worker, dict) for worker in workers):
+                raise PodError("native_occupancy_unverified", "Native worker row is malformed")
             state = _read(path)
             if state["owner"] != owner:
                 raise PodError("coordinator_conflict", "Coordinator ownership is absent or changed")
@@ -290,21 +342,24 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                                     policy=policy,
                                     now=now or datetime.now(timezone.utc))
             if _quota_hold(requested["agent"], requested["account"], requested.get("bucket"),
-                           native.get("quota"), qstate):
+                           native.get("quota"), qstate, now=now or datetime.now(timezone.utc),
+                           freshness=policy["quota_fresh_seconds"]):
                 raise PodError("quota_exhausted", "Current applicable quota bucket is exhausted")
-            bucket = native.get("quota", {}).get("bucket") if isinstance(native.get("quota"), dict) and qstate != "unknown" else None
-            if active and bucket is not None and any(not w.get("bucket") for w in active):
+            bucket = requested.get("bucket")
+            overlapping = [w for w in active if _bucket_overlap(requested["agent"], requested["account"], bucket, w)]
+            if active and bucket is not None and any(not w.get("bucket") for w in overlapping):
                 raise PodError("bucket_occupancy_unverified", "Active worker bucket binding is unavailable")
-            if qstate == "unknown" and any(w["account"] != requested["account"] for w in active):
+            if qstate == "unknown" and any(w["account"] != requested["account"] for w in overlapping):
                 raise PodError("bucket_occupancy_unverified", "Shared bucket ownership is unavailable")
             objective_occupied = sum(1 for w in active if w["objective"] == objective)
-            account_occupied = sum(1 for w in active if w["account"] == requested["account"]
-                                   or bucket is not None and w.get("bucket") == bucket)
+            account_occupied = len(overlapping)
             local_objective = sum(1 for e in state["effects"].values() if e["state"] in ("reserved", "uncertain"))
-            local_account = _pending_account(requested["account"], bucket)
+            pending = _pending_account(requested["agent"], requested["account"], bucket)
+            if bucket is not None and any(row.get("bucket") is None or not row.get("agent") for row in pending):
+                raise PodError("bucket_occupancy_unverified", "Pending effect bucket binding is unavailable")
             if objective_occupied + local_objective >= capacity:
                 raise PodError("capacity_full", "Objective capacity is occupied")
-            if qstate == "unknown" and account_occupied + local_account >= 1:
+            if qstate == "unknown" and account_occupied + len(pending) >= 1:
                 raise PodError("unknown_quota_capacity", "Unknown account quota permits one active worker")
             effect = {"schema": "pod-effect/v1", "state": "reserved", "request": requested,
                       "runtime": native["runtime"], "operation_id": operation_id,
@@ -321,7 +376,7 @@ def reconcile(project: Path, objective: str, *, owner: str, operation_id: str,
               observed: dict | None, definitive_absence: bool = False) -> dict:
     """Only exact positive proof settles or frees a reserved/uncertain effect."""
     path = _path(project, objective)
-    with _lock(path):
+    with _lock(state_root() / "admission"), _lock(path):
         state = _read(path)
         if state["owner"] != owner or operation_id not in state["effects"]:
             raise PodError("unknown_effect", "No owned effect identity to reconcile")
@@ -448,6 +503,7 @@ def reconcile_delivery_item(project: Path, objective: str, *, owner: str, delive
 
 def intervention(project: Path, objective: str, *, owner: str, task: str, correction: dict,
                  diagnosis: dict | None = None) -> dict:
+    bounded_text(task, name="task", limit=128)
     exact(correction, {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
                        "next_discriminating_check", "correction_key"},
           {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
@@ -459,25 +515,36 @@ def intervention(project: Path, objective: str, *, owner: str, task: str, correc
         state = _read(path)
         if state["owner"] != owner:
             raise PodError("coordinator_conflict", "Correction belongs to another coordinator")
+        if not any(effect.get("state") == "confirmed" and
+                   isinstance(effect.get("native_binding"), dict) and
+                   effect["native_binding"].get("taskId") == task
+                   for effect in state["effects"].values() if isinstance(effect, dict)):
+            raise PodError("task_unbound", "Correction Task lacks a confirmed native effect binding")
+        checkpoint_value = state.get("checkpoint")
+        criteria = checkpoint_value.get("criteria") if isinstance(checkpoint_value, dict) else None
+        if not isinstance(criteria, list) or correction["criterion_id"] not in criteria:
+            raise PodError("criterion_unbound", "Correction criterion is absent from the accepted checkpoint")
         history = state["interventions"].setdefault(task, [])
         identity = digest(correction)
         if identity in [row["identity"] for row in history]:
             raise PodError("correction_replay", "Equivalent correction was already attempted")
-        # Stable criterion/failure identities are assigned from the acceptance
-        # map and failure record. Text is retained for diagnosis, not used to
-        # infer arbitrary semantic equivalence.
-        same = [row for row in history if row.get("criterion_id") == correction["criterion_id"]
-                and row.get("failure_id") == correction["failure_id"]
-                and row["evidence"] == correction["last_meaningful_evidence"]]
-        if len(same) >= 2:
+        # The caller supplies failure labels and evidence descriptions. Neither
+        # changes the durable per-Task threshold. A later attempt needs a new
+        # bounded source observation as explicit discriminating evidence.
+        diagnosis_source = None
+        if len(history) >= 2:
             if diagnosis is None:
                 raise PodError("diagnosis_required", "Two equivalent failures require a discriminating diagnosis")
             exact(diagnosis, {"diagnosis_evidence"}, {"diagnosis_evidence"}, name="diagnosis")
             bounded_text(diagnosis["diagnosis_evidence"], name="diagnosis_evidence")
-            if diagnosis["diagnosis_evidence"] == correction["last_meaningful_evidence"]:
-                raise PodError("diagnosis_unproductive", "Diagnosis must add discriminating evidence")
-            if digest(diagnosis) in [row.get("diagnosis") for row in history]:
+            from .records import source_identity
+            diagnosis_source = source_identity(project, diagnosis["diagnosis_evidence"])
+            if diagnosis_source["state"] != "present":
+                raise PodError("diagnosis_unproductive", "Diagnosis needs a present bounded evidence source")
+            if diagnosis_source["sha256"] in [row.get("diagnosis_source_digest") for row in history]:
                 raise PodError("diagnosis_replay", "Diagnosis evidence was already consumed")
+        elif diagnosis is not None:
+            raise PodError("diagnosis_unproductive", "A diagnosis is only recorded after the correction threshold")
         history.append({"identity": identity, "key": correction["correction_key"],
                         "criterion_id": correction["criterion_id"], "failure_id": correction["failure_id"],
                         "obligation": correction["obligation"],
@@ -485,6 +552,8 @@ def intervention(project: Path, objective: str, *, owner: str, task: str, correc
                         "hypothesis": correction["hypothesis"],
                         "next_discriminating_check": correction["next_discriminating_check"],
                         "evidence": correction["last_meaningful_evidence"],
-                        "diagnosis": digest(diagnosis) if diagnosis else None})
+                        "diagnosis": digest(diagnosis) if diagnosis else None,
+                        "diagnosis_source": diagnosis_source,
+                        "diagnosis_source_digest": diagnosis_source["sha256"] if diagnosis_source else None})
         _write(path, state)
         return {"correction_identity": identity, "dispatch_authorized": False}

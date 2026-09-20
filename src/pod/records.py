@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import ExitStack
 import hashlib
+import errno
 import os
 import stat
 from typing import Any
@@ -128,37 +130,177 @@ def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str
 
 
 def source_identity(root: Path, relative: str, *, max_bytes: int = 1_048_576) -> dict:
-    if root.is_symlink() or (hasattr(root, "is_junction") and root.is_junction()):
-        raise PodError("unsafe_source", "Project root is redirected")
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise PodError("unsafe_source", "Source path must stay relative to project")
+    if "\x00" in relative:
+        raise PodError("unsafe_source", "Source path contains an invalid component")
+    if os.name == "nt":
+        import ntpath
+        if ntpath.splitdrive(relative)[0] or ntpath.isabs(relative) or ":" in relative:
+            raise PodError("unsafe_source", "Windows source path must be a plain relative file path")
     if not _safe_relative(relative):
         raise PodError("secret_source", "Secret-bearing source is outside Pod context collection")
-    cursor = root
-    for component in Path(relative).parts[:-1]:
-        cursor = cursor / component
-        if cursor.is_symlink() or (hasattr(cursor, "is_junction") and cursor.is_junction()) or not cursor.is_dir():
-            raise PodError("unsafe_source", "Source parent is redirected or unavailable")
-    path = root / relative
-    if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
-        raise PodError("unsafe_source", "Source is redirected")
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        return {"path": relative, "state": "absent"}
-    except OSError:
-        return {"path": relative, "state": "unavailable"}
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
-            raise PodError("unsafe_source", "Source must be a bounded regular file")
-        data = os.read(fd, max_bytes + 1)
-        after = os.fstat(fd)
-        if len(data) > max_bytes or (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size) != (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size):
+    if type(max_bytes) is not int or max_bytes < 0 or max_bytes > 1_048_576:
+        raise PodError("unsafe_source", "Source read limit is invalid")
+    if os.name == "nt":
+        return _source_identity_windows(root, relative, max_bytes)
+    nofollow, directory, nonblock = (getattr(os, name, 0) for name in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK"))
+    if not (nofollow and directory and nonblock):
+        raise PodError("source_unavailable", "No-follow descriptor-relative source access is unsupported on this host")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+    absolute = Path(os.path.abspath(root))
+    with ExitStack() as stack:
+        try:
+            parent = os.open(absolute.anchor, flags | directory)
+            stack.callback(os.close, parent)
+            # Start at the filesystem anchor: the project root's ancestors are
+            # also pinned, so a parent replacement cannot redirect descent.
+            for part in absolute.parts[1:]:
+                parent = os.open(part, flags | directory, dir_fd=parent)
+                stack.callback(os.close, parent)
+            for part in Path(relative).parts[:-1]:
+                try:
+                    parent = os.open(part, flags | directory, dir_fd=parent)
+                except FileNotFoundError:
+                    return {"path": relative, "state": "absent"}
+                stack.callback(os.close, parent)
+            try:
+                fd = os.open(Path(relative).name, flags | nonblock, dir_fd=parent)
+            except FileNotFoundError:
+                return {"path": relative, "state": "absent"}
+            stack.callback(os.close, fd)
+        except (NotImplementedError, TypeError) as exc:
+            raise PodError("source_unavailable", "Descriptor-relative source access is unsupported") from exc
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                raise PodError("unsafe_source", "Source path contains a redirect or non-directory") from exc
+            return {"path": relative, "state": "unavailable"}
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
+                raise PodError("unsafe_source", "Source must be a bounded regular file")
+            chunks, remaining = [], max_bytes + 1
+            while remaining:
+                chunk = os.read(fd, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            after = os.fstat(fd)
+        except OSError:
+            return {"path": relative, "state": "unavailable"}
+        data = b"".join(chunks)
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if len(data) > max_bytes or len(data) != before.st_size or identity(before) != identity(after):
             return {"path": relative, "state": "unavailable"}
         return {"path": relative, "state": "present", "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def _source_identity_windows(root: Path, relative: str, max_bytes: int) -> dict:
+    """Retain each non-reparse ancestor without delete sharing through the read."""
+    import ctypes
+    from ctypes import wintypes
+    import ntpath
+
+    read_data, read_attributes = 0x0001, 0x0080
+    share_read, open_existing = 0x0001, 3
+    backup_semantics, open_reparse = 0x02000000, 0x00200000
+    reparse_attribute, directory_attribute, disk_type = 0x0400, 0x0010, 1
+
+    class TagInfo(ctypes.Structure):
+        _fields_ = [("attributes", wintypes.DWORD), ("tag", wintypes.DWORD)]
+
+    class FileTime(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    class FileInfo(ctypes.Structure):
+        _fields_ = [("attributes", wintypes.DWORD), ("created", FileTime), ("accessed", FileTime),
+                    ("written", FileTime), ("volume", wintypes.DWORD), ("size_high", wintypes.DWORD),
+                    ("size_low", wintypes.DWORD), ("links", wintypes.DWORD),
+                    ("index_high", wintypes.DWORD), ("index_low", wintypes.DWORD)]
+
+    try:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        close = kernel.CloseHandle
+        tag_info = kernel.GetFileInformationByHandleEx
+        file_info = kernel.GetFileInformationByHandle
+        file_type = kernel.GetFileType
+        read = kernel.ReadFile
+    except (AttributeError, OSError) as exc:
+        raise PodError("source_unavailable", "Required Windows no-follow handle primitives are unavailable") from exc
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    close.argtypes, close.restype = (wintypes.HANDLE,), wintypes.BOOL
+    tag_info.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+    tag_info.restype = wintypes.BOOL
+    file_info.argtypes, file_info.restype = (wintypes.HANDLE, ctypes.POINTER(FileInfo)), wintypes.BOOL
+    file_type.argtypes, file_type.restype = (wintypes.HANDLE,), wintypes.DWORD
+    read.argtypes = (wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                     ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID)
+    read.restype = wintypes.BOOL
+
+    absolute = ntpath.abspath(os.fspath(root))
+    drive, tail = ntpath.splitdrive(absolute)
+    if not drive or drive.startswith("\\\\") or not tail.startswith("\\"):
+        raise PodError("source_unavailable", "Retained local Windows ancestry is unavailable for this source")
+    components = [drive + "\\"] + [part for part in tail.split("\\") if part] + list(Path(relative).parts)
+    handles: list[int] = []
+    current = components[0]
+    invalid = ctypes.c_void_p(-1).value
+    try:
+        for index, part in enumerate(components):
+            if index:
+                current = ntpath.join(current, part)
+            final = index == len(components) - 1
+            handle = create(current, read_attributes | (read_data if final else 0), share_read,
+                            None, open_existing, backup_semantics | open_reparse, None)
+            if handle == invalid:
+                if final and ctypes.get_last_error() in (2, 3):
+                    return {"path": relative, "state": "absent"}
+                return {"path": relative, "state": "unavailable"}
+            handles.append(handle)
+            tag = TagInfo()
+            if not tag_info(handle, 9, ctypes.byref(tag), ctypes.sizeof(tag)):
+                return {"path": relative, "state": "unavailable"}
+            if tag.attributes & reparse_attribute:
+                raise PodError("unsafe_source", "Source path contains a reparse point")
+            if not final and not tag.attributes & directory_attribute:
+                raise PodError("unsafe_source", "Source parent is not a directory")
+            if final:
+                if tag.attributes & directory_attribute or file_type(handle) != disk_type:
+                    raise PodError("unsafe_source", "Source must be a regular disk file")
+                before = FileInfo()
+                if not file_info(handle, ctypes.byref(before)):
+                    return {"path": relative, "state": "unavailable"}
+                size = before.size_high << 32 | before.size_low
+                if size > max_bytes:
+                    raise PodError("unsafe_source", "Source must be a bounded regular file")
+                chunks = []
+                remaining = max_bytes + 1
+                while remaining:
+                    amount = min(65536, remaining)
+                    buffer = ctypes.create_string_buffer(amount)
+                    received = wintypes.DWORD()
+                    if not read(handle, buffer, amount, ctypes.byref(received), None):
+                        return {"path": relative, "state": "unavailable"}
+                    if not received.value:
+                        break
+                    chunks.append(buffer.raw[:received.value])
+                    remaining -= received.value
+                after = FileInfo()
+                if not file_info(handle, ctypes.byref(after)):
+                    return {"path": relative, "state": "unavailable"}
+                data = b"".join(chunks)
+                stable = lambda s: (s.volume, s.index_high, s.index_low, s.size_high,
+                                    s.size_low, s.written.high, s.written.low)
+                if len(data) > max_bytes or len(data) != size or stable(before) != stable(after):
+                    return {"path": relative, "state": "unavailable"}
+                return {"path": relative, "state": "present", "sha256": hashlib.sha256(data).hexdigest()}
     finally:
-        os.close(fd)
+        for handle in reversed(handles):
+            close(handle)
 
 
 def verify_sources(root: Path, bound: list[dict]) -> None:

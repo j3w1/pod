@@ -1,4 +1,9 @@
 import unittest
+import hashlib
+import os
+import subprocess
+import sys
+from unittest.mock import patch
 
 from pod.records import packet, report, source_identity, verify_sources, acceptance
 from pod.errors import PodError
@@ -65,6 +70,56 @@ class RecordTests(unittest.TestCase):
                 source_identity(root, ".env.production")
             with self.assertRaises(PodError):
                 verify_sources(root, [before])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo") and hasattr(os, "O_NOFOLLOW"), "POSIX source handles")
+    def test_source_parent_replacement_keeps_original_directory(self):
+        with fixture() as root:
+            project = root / "project"
+            parent = project / "parent"
+            parent.mkdir(parents=True)
+            (parent / "ordinary.txt").write_bytes(b"inside fixture")
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "ordinary.txt").write_bytes(b"outside fixture")
+            real_open = os.open
+            swapped = False
+
+            def swap_before_final(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if path == "ordinary.txt" and kwargs.get("dir_fd") is not None and not swapped:
+                    swapped = True
+                    parent.rename(project / "retained")
+                    parent.symlink_to(outside, target_is_directory=True)
+                return real_open(path, flags, *args, **kwargs)
+
+            with patch("pod.records.os.open", side_effect=swap_before_final):
+                result = source_identity(project, "parent/ordinary.txt")
+            self.assertTrue(swapped)
+            self.assertEqual(result["sha256"], hashlib.sha256(b"inside fixture").hexdigest())
+            with self.assertRaises(PodError) as redirected:
+                source_identity(project, "parent/ordinary.txt")
+            self.assertEqual(redirected.exception.code, "unsafe_source")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO fixture requires POSIX")
+    def test_fifo_source_returns_without_waiting_for_writer(self):
+        with fixture() as root:
+            os.mkfifo(root / "pipe")
+            script = ("from pathlib import Path; from pod.records import source_identity; "
+                      "from pod.errors import PodError; import sys; "
+                      "\ntry: source_identity(Path(sys.argv[1]), 'pipe')\n"
+                      "except PodError as error: print(error.code)")
+            result = subprocess.run([sys.executable, "-c", script, str(root)],
+                                    capture_output=True, text=True, timeout=2, check=True)
+            self.assertEqual(result.stdout.strip(), "unsafe_source")
+
+    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "POSIX flag fixture")
+    def test_missing_no_follow_primitive_fails_closed(self):
+        with fixture() as root:
+            (root / "ordinary.txt").write_text("fixture")
+            with patch("pod.records.os.O_NOFOLLOW", 0):
+                with self.assertRaises(PodError) as unavailable:
+                    source_identity(root, "ordinary.txt")
+            self.assertEqual(unavailable.exception.code, "source_unavailable")
 
     def test_criterion_cannot_be_satisfied_by_wrong_candidate(self):
         row = {"schema": "pod-evidence/v1", "criterion": "works", "candidate": "old",
