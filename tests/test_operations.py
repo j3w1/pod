@@ -8,7 +8,7 @@ from pod.errors import PodError
 from pod.ledger import checkpoint, read, record_delivery, reconcile_delivery_item, reserve
 from pod.operations import guarded_start, release_once, reconcile_release
 from pod.config import effective, route_identity
-from pod.records import packet, source_identity
+from pod.records import packet, source_identity, verify_sources
 from pod.internal import run as helper_run
 from tests.common import fixture
 
@@ -28,6 +28,7 @@ class FixturePort:
         self.release_calls = 0
         self.fail_release = False
         self.quota = None
+        self.resource_state = None
 
     def assurance(self, route):
         return {"runtime": "runtime", "billing_preflight": self.assured, "fanout_control": self.assured,
@@ -55,7 +56,8 @@ class FixturePort:
                 "projection": {"id": "worker", "runId": "run", "taskId": "task", "dispatchId": dispatch},
                 "worker": {"dispatchId": dispatch, "startOptions": {
                     "launch": {"requested": launch, "effective": launch}}}, "terminal": None,
-                "terminalResource": {"releaseState": "released"} if self.release_status == "released" and self.release_calls else None}}
+                "terminalResource": {"releaseState": self.resource_state or "released"}
+                if self.resource_state or (self.release_status == "released" and self.release_calls) else None}}
 
     def release_worker(self, dispatch):
         self.release_calls += 1
@@ -112,6 +114,89 @@ def frozen_for(project, *, sources=None, context=None):
 
 
 class GuardedOperationTests(unittest.TestCase):
+    def test_source_state_matrix_matches_direct_and_guarded_checks(self):
+        expected = {
+            ("present", "present"): None,
+            ("present", "absent"): "source_absent",
+            ("present", "unavailable"): "source_unavailable",
+            ("absent", "present"): "source_changed",
+            ("absent", "absent"): "source_absent",
+            ("absent", "unavailable"): "source_unavailable",
+            ("unavailable", "present"): "source_unbound",
+            ("unavailable", "absent"): "source_unbound",
+            ("unavailable", "unavailable"): "source_unbound",
+        }
+        for (frozen_state, current_state), code in expected.items():
+            with self.subTest(frozen=frozen_state, current=current_state), fixture() as root, patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                project, assessment, caps, quota = inputs(root)
+                source = project / "notes.txt"
+                source.write_text("harmless bound bytes")
+                bound = (source_identity(project, "notes.txt") if frozen_state == "present"
+                         else {"path": "notes.txt", "state": frozen_state})
+                if current_state == "absent":
+                    source.unlink()
+                observed = {"path": "notes.txt", "state": "unavailable"}
+                observation = (patch("pod.records.source_identity", return_value=observed)
+                               if current_state == "unavailable"
+                               else patch("pod.records.source_identity", wraps=source_identity))
+                frozen = frozen_for(project, sources=[bound])
+                port = FixturePort()
+                with observation:
+                    if code is None:
+                        verify_sources(project, [bound])
+                        self.assertEqual(guarded_start(
+                            project, "objective", owner="owner", run="run", task="task",
+                            operation_id="op", assessment=assessment, capabilities=caps,
+                            quotas=quota, occupancy={}, plan_revision="plan", port=port,
+                            now=NOW, frozen_packet=frozen)["status"], "confirmed")
+                    else:
+                        with self.assertRaises(PodError) as direct:
+                            verify_sources(project, [bound])
+                        self.assertEqual(direct.exception.code, code)
+                        with self.assertRaises(PodError) as guarded:
+                            guarded_start(project, "objective", owner="owner", run="run", task="task",
+                                          operation_id="op", assessment=assessment, capabilities=caps,
+                                          quotas=quota, occupancy={}, plan_revision="plan", port=port,
+                                          now=NOW, frozen_packet=frozen)
+                        self.assertEqual(guarded.exception.code, code)
+                self.assertEqual(port.starts, 1 if code is None else 0)
+                self.assertEqual(bool(read(project, "objective")["source_rejections"]),
+                                 code in ("source_absent", "source_changed"))
+
+    def test_unavailable_at_freeze_remains_unbound_for_every_current_state(self):
+        for current in ("present", "absent", "unavailable"):
+            with self.subTest(current=current), fixture() as root, patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                project, assessment, caps, quota = inputs(root)
+                source = project / "notes.txt"
+                if current == "present":
+                    source.write_text("harmless newly observed bytes")
+                frozen = frozen_for(project, sources=[{"path": "notes.txt", "state": "unavailable"}])
+                port = FixturePort()
+                kw = dict(owner="owner", run="run", task="task", operation_id="op",
+                          assessment=assessment, capabilities=caps, quotas=quota,
+                          occupancy={}, plan_revision="plan", port=port, now=NOW,
+                          frozen_packet=frozen)
+                for operation in ("op", "retry"):
+                    with self.assertRaises(PodError) as held:
+                        guarded_start(project, "objective", **{**kw, "operation_id": operation})
+                    self.assertEqual(held.exception.code, "source_unbound")
+                    with self.assertRaises(PodError) as direct:
+                        verify_sources(project, frozen["body"]["sources"])
+                    self.assertEqual(direct.exception.code, "source_unbound")
+                self.assertEqual(read(project, "objective")["source_rejections"], {})
+                self.assertEqual(read(project, "objective")["effects"], {})
+                self.assertEqual(port.starts, 0)
+                if current == "present":
+                    rebound = frozen_for(project, sources=[source_identity(project, "notes.txt")])
+                    self.assertNotEqual(rebound["packet_id"], frozen["packet_id"])
+                    self.assertEqual(guarded_start(project, "objective", **{
+                        **kw, "frozen_packet": rebound})["status"], "confirmed")
+                    self.assertEqual(port.starts, 1)
+
     def test_frozen_sources_are_checked_at_guarded_admission(self):
         for case in ("changed", "absent", "bound_absent", "unavailable", "context_changed", "unchanged"):
             with self.subTest(case=case), fixture() as root, patch.dict(os.environ, {
@@ -256,6 +341,92 @@ class GuardedOperationTests(unittest.TestCase):
             self.assertEqual(port.release_calls, 1)
             self.assertEqual(guarded_start(project, "objective", **next_start)["status"], "confirmed")
             self.assertEqual(port.starts, 2)
+
+    def test_retained_cleanup_occupies_until_exact_release_readback(self):
+        for fleet in ("omitted", "coarse_released", "active"):
+            with self.subTest(fleet=fleet), fixture() as root, patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                project, assessment, caps, quota = inputs(root)
+                port = FixturePort()
+                common = dict(owner="owner", run="run", task="task", assessment=assessment,
+                              capabilities=caps, quotas=quota, occupancy={}, plan_revision="plan",
+                              port=port, now=NOW)
+                guarded_start(project, "objective", operation_id="op", **common)
+                port.settled = True
+                self.assertEqual(release_once(project, "objective", owner="owner",
+                                              dispatch="dispatch", port=port)["status"], "retained")
+                if fleet != "omitted":
+                    port.workers = [{"state": "released" if fleet == "coarse_released" else "occupied",
+                                     "account": "account", "objective": "objective",
+                                     "dispatchId": "dispatch", "agent": "codex", "bucket": "shared"}]
+                with self.assertRaises(PodError) as full:
+                    guarded_start(project, "objective", operation_id="op-2", capacity=1, **common)
+                self.assertEqual(full.exception.code, "capacity_full")
+                checkpoint(project, "second", owner="owner", value={
+                    "schema": "pod-checkpoint/v1", "criteria": ["works"], "plan_revision": "p",
+                    "candidate": "c", "policy_revision": "r", "native_refs": [], "assignments": [],
+                    "questions": [], "verification_gaps": ["works"], "next_safe_action": "inspect"},
+                    native={"runtime": "runtime"})
+                with self.assertRaises(PodError) as shared:
+                    guarded_start(project, "second", operation_id="other", capacity=2,
+                                  **{**common, "quotas": {}})
+                self.assertEqual(shared.exception.code, "unknown_quota_capacity")
+                self.assertEqual(port.starts, 1)
+                wrong = port.show_worker("dispatch")
+                wrong["result"]["projection"]["workerId"] = "other-worker"
+                wrong["result"]["projection"]["id"] = "other-worker"
+                with patch.object(port, "show_worker", return_value=wrong):
+                    with self.assertRaises(PodError) as mismatch:
+                        reconcile_release(project, "objective", owner="owner",
+                                          dispatch="dispatch", port=port)
+                self.assertEqual(mismatch.exception.code, "release_identity_unverified")
+                self.assertEqual(reconcile_release(project, "objective", owner="owner",
+                                                   dispatch="dispatch", port=port)["status"], "retained")
+                self.assertEqual(port.release_calls, 1)
+                if fleet == "active":
+                    port.quota = quota["account"]
+                    route = frozen_for(project)["body"]["route"]
+                    decision = {"status": "usable", "selected": route,
+                                "policy_revision": effective(project)["revision"]}
+                    intent = reserve(project, "objective", owner="owner", operation_id="op-2",
+                                     requested=route, route_decision=decision,
+                                     capability_contract=port.assurance(route),
+                                     native_reader=lambda: port.read_native("owner"), capacity=2,
+                                     run_id="run", plan_revision="plan", now=NOW)
+                    self.assertFalse(intent["existing"])
+                else:
+                    port.resource_state = "released"
+                    self.assertEqual(reconcile_release(project, "objective", owner="owner",
+                                                       dispatch="dispatch", port=port)["status"], "released")
+                    self.assertEqual(port.release_calls, 1)
+                    self.assertEqual(guarded_start(project, "objective", operation_id="op-2",
+                                                   capacity=1, **common)["status"], "confirmed")
+
+    def test_pending_release_reconciles_positive_retained_readback(self):
+        for pending in ("reserved", "uncertain"):
+            with self.subTest(pending=pending), fixture() as root, patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                project, assessment, caps, quota = inputs(root)
+                port = FixturePort()
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              operation_id="op", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+                port.settled = True
+                if pending == "reserved":
+                    with patch.object(port, "release_worker", side_effect=KeyboardInterrupt):
+                        with self.assertRaises(KeyboardInterrupt):
+                            release_once(project, "objective", owner="owner", dispatch="dispatch", port=port)
+                else:
+                    port.fail_release = True
+                    with self.assertRaises(PodError):
+                        release_once(project, "objective", owner="owner", dispatch="dispatch", port=port)
+                port.resource_state = "retained"
+                self.assertEqual(reconcile_release(project, "objective", owner="owner",
+                                                   dispatch="dispatch", port=port)["status"], "retained")
+                self.assertEqual(read(project, "objective")["cleanup"]["dispatch"]["state"], "retained")
+                self.assertEqual(port.release_calls, 1 if pending == "uncertain" else 0)
 
     def test_reserved_release_reconciles_exact_readback_and_deduplicates_capacity(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),

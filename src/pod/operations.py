@@ -209,7 +209,9 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
         cleanup = state["cleanup"].get(dispatch)
         if state["owner"] != owner or not cleanup:
             raise PodError("unknown_release", "No owned release intention")
-        if cleanup["state"] not in ("reserved", "uncertain"):
+        if cleanup["state"] not in ("reserved", "uncertain", "retained", "released", "already_released"):
+            raise PodError("state_migration_required", "Cleanup state is unsupported")
+        if cleanup["state"] not in ("reserved", "uncertain", "retained"):
             return {"status": cleanup["state"], "dispatch": dispatch}
         shown = native_port.show_worker(dispatch)
         result = shown.get("result", {})
@@ -221,5 +223,10 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
             cleanup["state"] = "released"
             _write(path, state)
             return {"status": "released", "dispatch": dispatch, "source": "native_readback"}
+        if (cleanup["state"] in ("reserved", "uncertain") and isinstance(resource, dict)
+                and resource.get("releaseState") == "retained"):
+            cleanup["state"] = "retained"
+            _write(path, state)
+            return {"status": "retained", "dispatch": dispatch, "source": "native_readback"}
         return {"status": cleanup["state"], "dispatch": dispatch,
                 "next_safe_action": "inspect native recovery metadata"}

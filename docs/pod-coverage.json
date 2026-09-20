@@ -562,7 +562,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_settled_terminal_less_release_retained_once",
+      "offline_test": "tests.test_operations.GuardedOperationTests.test_retained_cleanup_occupies_until_exact_release_readback",
       "candidate_status": "NOT_RUN"
     },
     {

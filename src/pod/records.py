@@ -333,9 +333,13 @@ def _source_identity_windows(root: Path, relative: str, max_bytes: int) -> dict:
 def verify_sources(root: Path, bound: list[dict]) -> None:
     for entry in bound:
         exact(entry, {"path", "state", "sha256"}, {"path", "state"}, name="source")
+        if entry["state"] == "unavailable":
+            raise PodError("source_unbound", "Source needs a fresh actual binding")
         observed = source_identity(root, entry["path"])
         if observed["state"] == "unavailable":
             raise PodError("source_unavailable", "Source observation is unavailable")
+        if observed["state"] == "absent":
+            raise PodError("source_absent", "Bound source is absent")
         if observed != entry:
             raise PodError("source_changed", "Bound source has changed or disappeared")
 

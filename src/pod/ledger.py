@@ -112,6 +112,10 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
         raise PodError("source_rejected", "Assignment has a durable definitive source rejection")
     for entry in sources:
         exact(entry, {"path", "state", "sha256"}, {"path", "state"}, name="source")
+        if entry["state"] == "unavailable":
+            # No bytes or absence were frozen. A later observation cannot
+            # establish a historical change or bind this assignment.
+            raise PodError("source_unbound", "Source needs a fresh actual binding")
         try:
             observed = source_identity(project, entry["path"])
         except PodError as exc:
@@ -209,7 +213,10 @@ def _pending_account(provider: str, account: str, bucket: str | None = None) -> 
             for dispatch, cleanup in state["cleanup"].items():
                 if not isinstance(cleanup, dict):
                     raise PodError("state_migration_required", "Pending cleanup row is malformed")
-                if cleanup.get("state") not in ("reserved", "uncertain"):
+                cleanup_state = cleanup.get("state")
+                if cleanup_state not in ("reserved", "uncertain", "retained", "released", "already_released"):
+                    raise PodError("state_migration_required", "Pending cleanup state is unsupported")
+                if cleanup_state not in ("reserved", "uncertain", "retained"):
                     continue
                 binding = cleanup.get("binding")
                 matches = [effect for effect in state["effects"].values()
@@ -397,7 +404,7 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                                   if effect["state"] in ("reserved", "uncertain"))
             objective_keys.update(("dispatch", cleanup["runtime"], dispatch)
                                   for dispatch, cleanup in state["cleanup"].items()
-                                  if cleanup["state"] in ("reserved", "uncertain"))
+                                  if cleanup["state"] in ("reserved", "uncertain", "retained"))
             account_keys = {key for key, worker in zip(native_keys, active) if worker in overlapping}
             account_keys.update(row["_key"] for row in pending)
             if len(objective_keys) >= capacity:
