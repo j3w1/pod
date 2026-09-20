@@ -1,0 +1,102 @@
+"""Private bounded helper entry. It installs no public command."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from .config import effective
+from .errors import PodError
+from .records import packet, report, source_identity, verify_sources, acceptance
+from .routing import preview, replay
+from .release import release_gate
+from .util import bounded_json, exact
+
+
+def run(operation: str, request: dict) -> dict:
+    if operation == "preview":
+        exact(request, {"project", "assessment", "capabilities", "quotas", "occupancy", "strict_pin",
+                        "safety_refusal", "objective", "task_policy"},
+              {"project", "assessment"}, name="request")
+        policy = effective(Path(request["project"]), task=request.get("task_policy"))
+        return preview(request["assessment"], policy, capabilities=request.get("capabilities"),
+                       quotas=request.get("quotas"), occupancy=request.get("occupancy"),
+                       strict_pin=request.get("strict_pin"), safety_refusal=request.get("safety_refusal", False),
+                       objective=request.get("objective"))
+    if operation == "replay":
+        return replay(request)
+    if operation == "packet":
+        return packet(request)
+    if operation == "report":
+        exact(request, {"report", "packet"}, {"report", "packet"}, name="request")
+        return report(request["report"], request["packet"])
+    if operation == "source":
+        exact(request, {"project", "path"}, {"project", "path"}, name="request")
+        return source_identity(Path(request["project"]), request["path"])
+    if operation == "verify-sources":
+        exact(request, {"project", "sources"}, {"project", "sources"}, name="request")
+        verify_sources(Path(request["project"]), request["sources"])
+        return {"status": "current"}
+    if operation == "acceptance":
+        exact(request, {"criteria", "evidence_rows", "candidate", "policy_revision",
+                        "sources", "dependencies", "environment", "review_required", "hosted_required"},
+              {"criteria", "evidence_rows", "candidate", "policy_revision",
+               "sources", "dependencies", "environment", "review_required", "hosted_required"}, name="request")
+        return acceptance(**request)
+    if operation == "release-gate":
+        exact(request, {"candidate", "tree", "records"},
+              {"candidate", "tree", "records"}, name="request")
+        return release_gate(**request)
+    if operation == "admission":
+        exact(request, {"project", "objective", "owner", "run", "task", "operation_id",
+                        "assessment", "capabilities", "quotas", "occupancy", "plan_revision",
+                        "capacity", "capacity_reason", "exceptional_grant"},
+              {"project", "objective", "owner", "run", "task", "operation_id",
+               "assessment", "capabilities", "quotas", "occupancy", "plan_revision"}, name="request")
+        from .operations import guarded_start
+        # The production port verifies installed controls itself; request JSON
+        # can supply assessment snapshots but cannot assert native assurance.
+        return guarded_start(Path(request["project"]), request["objective"],
+                             owner=request["owner"], run=request["run"], task=request["task"],
+                             operation_id=request["operation_id"], assessment=request["assessment"],
+                             capabilities=request["capabilities"], quotas=request["quotas"],
+                             occupancy=request["occupancy"], plan_revision=request["plan_revision"],
+                             capacity=request.get("capacity", 2),
+                             capacity_reason=request.get("capacity_reason"),
+                             exceptional_grant=request.get("exceptional_grant"))
+    if operation == "release":
+        exact(request, {"project", "objective", "owner", "dispatch"},
+              {"project", "objective", "owner", "dispatch"}, name="request")
+        from .operations import release_once
+        return release_once(Path(request["project"]), request["objective"],
+                            owner=request["owner"], dispatch=request["dispatch"])
+    if operation == "reconcile-release":
+        exact(request, {"project", "objective", "owner", "dispatch"},
+              {"project", "objective", "owner", "dispatch"}, name="request")
+        from .operations import reconcile_release
+        return reconcile_release(Path(request["project"]), request["objective"],
+                                 owner=request["owner"], dispatch=request["dispatch"])
+    raise PodError("unknown_operation", "Unsupported private helper operation")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m pod.internal")
+    parser.add_argument("operation", choices=("preview", "replay", "packet", "report", "source",
+                                               "verify-sources", "acceptance", "admission", "release",
+                                               "reconcile-release", "release-gate"))
+    parser.add_argument("--input", required=True, type=Path)
+    args = parser.parse_args(argv)
+    try:
+        value = bounded_json(args.input)
+        result = run(args.operation, value)
+        print(json.dumps({"schema": "pod-helper/v1", "status": "ok", "result": result}, sort_keys=True))
+        return 0
+    except PodError as exc:
+        print(json.dumps({"schema": "pod-helper/v1", "status": "blocked",
+                          "error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,4 +1,6 @@
-# Live first-increment exercise
+# Legacy live first-increment exercise (historical)
+
+This preserved pre-Pod trial plan is not authorization to run a Pod live trial or mutate an existing project.
 
 The implementation worker did not launch a nested worker. Run the following only from a user-owned root context after reviewing the candidate. The fixture is disposable; do not substitute a CE or ordinary project checkout.
 

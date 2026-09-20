@@ -1,4 +1,4 @@
-name: ci
+name: Pod candidate checks
 
 on:
   push:
@@ -16,47 +16,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install wheel tooling
-        run: python -m pip install --upgrade build
-      - name: Unit and incident tests
+      - name: Install package and build tooling
+        run: python -m pip install --upgrade build PyYAML
+      - name: Unit and incident suite
         run: python -m unittest discover -s tests -v
         env:
           PYTHONPATH: src
-      - name: Incident tests (explicit package discovery)
-        run: python -m unittest discover -s tests/incidents -t tests -v
+      - name: Explicit incident discovery
+        run: python -m unittest discover -s tests/incidents -t . -v
         env:
           PYTHONPATH: src
-      - name: Unit and incident tests (simulated Win32 provider)
-        if: runner.os == 'Linux'
-        run: |
-          python -m unittest discover -s tests -v
-          python -m unittest discover -s tests/incidents -t tests -v
-        env:
-          PYTHONPATH: src
-          ORCHESTRATE_BOOTSTRAP_PROVIDER: simulated-win32
       - name: Compile
         run: python -m compileall -q src tests
-      - name: Build and isolated install smoke
+      - name: Build frozen wheel from Git archive
         shell: bash
         run: |
-          python -m build
+          EXPORT="$(mktemp -d)"
+          git archive HEAD | tar -x -C "$EXPORT"
+          pushd "$EXPORT"
+          python -m build --wheel
+          popd
+          mkdir -p dist
+          cp "$EXPORT"/dist/*.whl dist/
+      - name: Install wheel into isolated environment
+        shell: bash
+        run: |
           python -m venv .venv-smoke
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             .venv-smoke/Scripts/python -m pip install dist/*.whl
-            .venv-smoke/Scripts/orchestrate --help
-            .venv-smoke/Scripts/orchestrate doctor --help
-            .venv-smoke/Scripts/orchestrate-wsl --help
-            .venv-smoke/Scripts/python tests/installed_machine_smoke.py \
-              --source-root "$PWD" \
-              --command "$PWD/.venv-smoke/Scripts/orchestrate.exe" \
-              --provider posix \
-              --skip-cli
+            .venv-smoke/Scripts/pod --help
+            .venv-smoke/Scripts/pod config --check --json
+            .venv-smoke/Scripts/pod doctor --json
+            POD_BIN="$PWD/.venv-smoke/Scripts/pod"
           else
             .venv-smoke/bin/python -m pip install dist/*.whl
-            .venv-smoke/bin/orchestrate --help
-            .venv-smoke/bin/orchestrate doctor --help
-            .venv-smoke/bin/orchestrate-wsl --help
-            .venv-smoke/bin/python tests/installed_machine_smoke.py \
-              --source-root "$PWD" \
-              --command "$PWD/.venv-smoke/bin/orchestrate"
+            .venv-smoke/bin/pod --help
+            .venv-smoke/bin/pod config --check --json
+            .venv-smoke/bin/pod doctor --json
+            POD_BIN="$PWD/.venv-smoke/bin/pod"
           fi
+          FIXTURE="$(mktemp -d)"
+          (cd "$FIXTURE" && "$POD_BIN" setup --json)

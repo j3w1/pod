@@ -1,4 +1,6 @@
-# Orca public CLI compatibility
+# Legacy Orca public CLI compatibility (historical)
+
+This record belongs to the pre-Pod implementation. [Pod's consolidated specification](pod-spec.md) governs the new product; observations here cannot grant current Pod capability.
 
 This is a bounded compatibility record, not general Orca, provider, WSL, hosted, or release certification.
 

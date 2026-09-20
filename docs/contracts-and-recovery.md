@@ -1,4 +1,6 @@
-# Execution contracts and recovery
+# Legacy execution contracts and recovery (historical)
+
+This document records the pre-Pod implementation and its recovery evidence. It remains for audit and exact legacy-state reconciliation; [Pod's consolidated specification](pod-spec.md) is the sole active Pod product authority. No statement below grants a Pod worker launch or installed-state cleanup.
 
 This document describes the implemented single-owner controller, bounded coordination contracts, and per-Run efficiency controls. Orca remains authoritative for Runs, Tasks, Dispatches, dependencies, gates, workers, messages, and terminal ownership. The local database is an effects journal and evidence index, not a task scheduler.
 

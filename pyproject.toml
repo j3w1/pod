@@ -3,9 +3,9 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "j3w1-orchestrate"
-version = "0.2.0"
-description = "An Orca-native execution layer for governed software work"
+name = "j3w1-pod"
+version = "0.1.0"
+description = "A skill-first coordination policy for Orca"
 readme = "README.md"
 requires-python = ">=3.13"
 license = { file = "LICENSE" }
@@ -18,17 +18,16 @@ classifiers = [
   "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
 ]
-dependencies = []
-
-[project.urls]
-Repository = "https://github.com/j3w1/orchestrate"
+dependencies = ["PyYAML>=6.0.2,<7"]
 
 [project.scripts]
-orchestrate = "orchestrate.cli:main"
-orchestrate-wsl = "orchestrate.wsl:launcher_main"
+pod = "pod.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+pod = ["skill/SKILL.md", "skill/references/*.md"]
