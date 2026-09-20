@@ -79,6 +79,25 @@ class OrcaPort:
         return {"runtime": value.get("_meta", {}).get("runtimeId"), **value["result"]}
 
 
+def _release_readback_matches(shown: dict, runtime: str, dispatch: str, binding: dict) -> bool:
+    result = shown.get("result")
+    if not isinstance(result, dict) or shown.get("runtime") != runtime:
+        return False
+    native_dispatch = result.get("dispatch")
+    projection = result.get("projection")
+    worker = result.get("worker")
+    return (isinstance(native_dispatch, dict) and isinstance(projection, dict)
+            and isinstance(worker, dict)
+            and native_dispatch.get("id") == dispatch
+            and native_dispatch.get("runId") == binding["runId"]
+            and native_dispatch.get("taskId") == binding["taskId"]
+            and projection.get("id") == binding["workerId"]
+            and projection.get("runId") == binding["runId"]
+            and projection.get("taskId") == binding["taskId"]
+            and projection.get("dispatchId") == dispatch
+            and worker.get("dispatchId") == dispatch)
+
+
 def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
                   operation_id: str, assessment: dict, capabilities: dict, quotas: dict,
                   occupancy: dict, plan_revision: str, capacity: int = DEFAULT_WORKER_CAPACITY,
@@ -143,13 +162,8 @@ def release_once(project: Path, objective: str, *, owner: str, dispatch: str,
         shown = native_port.show_worker(dispatch)
         result = shown.get("result", {})
         native_dispatch = result.get("dispatch", {})
-        projection = result.get("projection", {})
-        if (shown.get("runtime") != bindings[0]["runtime"]
-                or native_dispatch.get("id") != dispatch
-                or native_dispatch.get("runId") != binding["runId"]
-                or native_dispatch.get("taskId") != binding["taskId"]
+        if (not _release_readback_matches(shown, bindings[0]["runtime"], dispatch, binding)
                 or native_dispatch.get("status") not in ("completed", "failed")
-                or projection.get("id") != binding["workerId"]
                 or result.get("worker", {}).get("startOptions", {}).get("launch") !=
                    {"requested": requested_launch, "effective": requested_launch}):
             raise PodError("release_identity_unverified", "Native settlement or worker identity is unproven")
@@ -165,7 +179,7 @@ def release_once(project: Path, objective: str, *, owner: str, dispatch: str,
         if disposition not in ("released", "already_released", "retained"):
             raise PodError("native_release_uncertain", "Release disposition needs exact reconciliation")
         after = native_port.show_worker(dispatch)
-        if after.get("runtime") != shown["runtime"] or after.get("result", {}).get("dispatch", {}).get("id") != dispatch:
+        if not _release_readback_matches(after, shown["runtime"], dispatch, binding):
             raise PodError("native_release_uncertain", "Post-release readback identity changed")
         resource = after["result"].get("terminalResource")
         if disposition in ("released", "already_released") and (
@@ -195,18 +209,17 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
         cleanup = state["cleanup"].get(dispatch)
         if state["owner"] != owner or not cleanup:
             raise PodError("unknown_release", "No owned release intention")
-        if cleanup["state"] != "uncertain":
+        if cleanup["state"] not in ("reserved", "uncertain"):
             return {"status": cleanup["state"], "dispatch": dispatch}
         shown = native_port.show_worker(dispatch)
         result = shown.get("result", {})
         resource = result.get("terminalResource")
         binding = cleanup["binding"]
-        if (shown.get("runtime") != cleanup["runtime"]
-                or result.get("dispatch", {}).get("id") != dispatch
-                or result.get("projection", {}).get("id") != binding["workerId"]):
+        if not _release_readback_matches(shown, cleanup["runtime"], dispatch, binding):
             raise PodError("release_identity_unverified", "Native release readback does not join binding")
         if isinstance(resource, dict) and resource.get("releaseState") in ("released", "already_released"):
             cleanup["state"] = "released"
             _write(path, state)
             return {"status": "released", "dispatch": dispatch, "source": "native_readback"}
-        return {"status": "uncertain", "dispatch": dispatch, "next_safe_action": "inspect native recovery metadata"}
+        return {"status": cleanup["state"], "dispatch": dispatch,
+                "next_safe_action": "inspect native recovery metadata"}

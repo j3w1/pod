@@ -95,32 +95,42 @@ def context_for_run(run_id: str) -> dict | None:
 def check_bound_sources(project: Path, objective: str, *, owner: str,
                         assignment: str, sources: list[dict]) -> dict:
     """Definitive source rejection sticks to the same assignment after restoration."""
-    from .records import source_identity
     bounded_text(assignment, name="assignment", limit=128)
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
         if state["owner"] != owner:
             raise PodError("coordinator_conflict", "Source check belongs to another coordinator")
-        prior = state["source_rejections"].get(assignment)
-        if prior:
-            raise PodError("source_rejected", "Assignment has a durable definitive source rejection")
-        for entry in sources:
-            exact(entry, {"path", "state", "sha256"}, {"path", "state"}, name="source")
-            try:
-                observed = source_identity(project, entry["path"])
-            except PodError as exc:
-                if exc.code in ("unsafe_source", "secret_source"):
-                    state["source_rejections"][assignment] = {"reason": exc.code, "path": entry["path"]}
-                    _write(path, state)
-                raise
-            if observed["state"] == "unavailable":
-                raise PodError("source_unavailable", "Source is temporarily unavailable")
-            if observed != entry:
-                state["source_rejections"][assignment] = {"reason": "source_changed", "path": entry["path"]}
+        return _check_bound_sources_locked(project, path, state, assignment, sources)
+
+
+def _check_bound_sources_locked(project: Path, path: Path, state: dict,
+                                assignment: str, sources: list[dict]) -> dict:
+    """Check source bytes with the objective lock held, immediately before admission."""
+    from .records import source_identity
+    if state["source_rejections"].get(assignment):
+        raise PodError("source_rejected", "Assignment has a durable definitive source rejection")
+    for entry in sources:
+        exact(entry, {"path", "state", "sha256"}, {"path", "state"}, name="source")
+        try:
+            observed = source_identity(project, entry["path"])
+        except PodError as exc:
+            if exc.code in ("unsafe_source", "secret_source"):
+                state["source_rejections"][assignment] = {"reason": exc.code, "path": entry["path"]}
                 _write(path, state)
-                raise PodError("source_changed", "Bound source changed or disappeared")
-        return {"status": "current", "assignment": assignment}
+            raise
+        if observed["state"] == "unavailable":
+            raise PodError("source_unavailable", "Source is temporarily unavailable")
+        if observed["state"] == "absent":
+            reason = "source_absent"
+        elif observed != entry:
+            reason = "source_changed"
+        else:
+            continue
+        state["source_rejections"][assignment] = {"reason": reason, "path": entry["path"]}
+        _write(path, state)
+        raise PodError(reason, "Bound source is absent or changed")
+    return {"status": "current", "assignment": assignment}
 
 
 def _write(path: Path, value: dict) -> None:
@@ -185,14 +195,33 @@ def _pending_account(provider: str, account: str, bucket: str | None = None) -> 
     if root.exists():
         for path in root.glob("*/context.json"):
             state = _read(path)
-            for effect in state["effects"].values():
+            for operation_id, effect in state["effects"].items():
                 if not isinstance(effect, dict):
                     raise PodError("state_migration_required", "Pending effect row is malformed")
                 if effect.get("state") not in ("reserved", "uncertain"):
                     continue
                 if not isinstance(effect.get("request"), dict):
                     raise PodError("state_migration_required", "Pending effect request is malformed")
-                row = {**effect["request"], "bucket": effect.get("bucket")}
+                row = {**effect["request"], "bucket": effect.get("bucket"),
+                       "_key": ("launch", str(path), operation_id)}
+                if _bucket_overlap(provider, account, bucket, row):
+                    overlapping.append(row)
+            for dispatch, cleanup in state["cleanup"].items():
+                if not isinstance(cleanup, dict):
+                    raise PodError("state_migration_required", "Pending cleanup row is malformed")
+                if cleanup.get("state") not in ("reserved", "uncertain"):
+                    continue
+                binding = cleanup.get("binding")
+                matches = [effect for effect in state["effects"].values()
+                           if isinstance(effect, dict) and effect.get("state") == "confirmed"
+                           and effect.get("native_binding") == binding
+                           and isinstance(binding, dict) and binding.get("dispatchId") == dispatch
+                           and effect.get("runtime") == cleanup.get("runtime")]
+                if len(matches) != 1 or not isinstance(matches[0].get("request"), dict):
+                    raise PodError("cleanup_identity_unverified", "Pending cleanup has no exact launch binding")
+                effect = matches[0]
+                row = {**effect["request"], "bucket": effect.get("bucket"),
+                       "_key": ("dispatch", cleanup["runtime"], dispatch)}
                 if _bucket_overlap(provider, account, bucket, row):
                     overlapping.append(row)
     return overlapping
@@ -328,6 +357,10 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                         or checkpoint_value.get("candidate") != frozen_packet["body"]["candidate"]
                         or checkpoint_value.get("criteria") != frozen_packet["body"]["criteria"]):
                     raise PodError("packet_plan_mismatch", "Packet differs from the owned checkpoint")
+                body = frozen_packet["body"]
+                bound = [*body["sources"], *({"path": ref["path"], "state": "present", "sha256": ref["sha256"]}
+                                             for ref in body["context"] if ref["kind"] in ("source", "instruction"))]
+                _check_bound_sources_locked(project, path, state, packet_id, bound)
             prior = state["effects"].get(operation_id)
             if prior is not None:
                 if (prior["request"] != requested or prior.get("run_id") != run_id
@@ -351,15 +384,25 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                 raise PodError("bucket_occupancy_unverified", "Active worker bucket binding is unavailable")
             if qstate == "unknown" and any(w["account"] != requested["account"] for w in overlapping):
                 raise PodError("bucket_occupancy_unverified", "Shared bucket ownership is unavailable")
-            objective_occupied = sum(1 for w in active if w["objective"] == objective)
-            account_occupied = len(overlapping)
-            local_objective = sum(1 for e in state["effects"].values() if e["state"] in ("reserved", "uncertain"))
             pending = _pending_account(requested["agent"], requested["account"], bucket)
             if bucket is not None and any(row.get("bucket") is None or not row.get("agent") for row in pending):
                 raise PodError("bucket_occupancy_unverified", "Pending effect bucket binding is unavailable")
-            if objective_occupied + local_objective >= capacity:
+            native_keys = [("dispatch", native["runtime"], w["dispatchId"])
+                           if isinstance(w.get("dispatchId"), str) and w["dispatchId"]
+                           else ("native", index)
+                           for index, w in enumerate(active)]
+            objective_keys = {key for key, worker in zip(native_keys, active) if worker["objective"] == objective}
+            objective_keys.update(("launch", str(path), operation_id)
+                                  for operation_id, effect in state["effects"].items()
+                                  if effect["state"] in ("reserved", "uncertain"))
+            objective_keys.update(("dispatch", cleanup["runtime"], dispatch)
+                                  for dispatch, cleanup in state["cleanup"].items()
+                                  if cleanup["state"] in ("reserved", "uncertain"))
+            account_keys = {key for key, worker in zip(native_keys, active) if worker in overlapping}
+            account_keys.update(row["_key"] for row in pending)
+            if len(objective_keys) >= capacity:
                 raise PodError("capacity_full", "Objective capacity is occupied")
-            if qstate == "unknown" and account_occupied + len(pending) >= 1:
+            if qstate == "unknown" and account_keys:
                 raise PodError("unknown_quota_capacity", "Unknown account quota permits one active worker")
             effect = {"schema": "pod-effect/v1", "state": "reserved", "request": requested,
                       "runtime": native["runtime"], "operation_id": operation_id,
