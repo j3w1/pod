@@ -191,47 +191,102 @@ def _bucket_overlap(provider: str, account: str, bucket: str | None, other: dict
     return bucket is None or other_bucket is None or bucket == other_bucket
 
 
-def _pending_account(provider: str, account: str, bucket: str | None = None) -> list[dict]:
+def _local_occupancy() -> list[dict]:
+    """Project unresolved launch and release evidence into worker identities."""
     root = state_root()
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
-    overlapping = []
+    occupied = []
     if root.exists():
         for path in root.glob("*/context.json"):
             state = _read(path)
+            if not isinstance(state["effects"], dict) or not isinstance(state["cleanup"], dict):
+                raise PodError("state_migration_required", "Effect or cleanup journal is malformed")
+            confirmed = {}
             for operation_id, effect in state["effects"].items():
                 if not isinstance(effect, dict):
-                    raise PodError("state_migration_required", "Pending effect row is malformed")
-                if effect.get("state") not in ("reserved", "uncertain"):
-                    continue
-                if not isinstance(effect.get("request"), dict):
-                    raise PodError("state_migration_required", "Pending effect request is malformed")
-                row = {**effect["request"], "bucket": effect.get("bucket"),
-                       "_key": ("launch", str(path), operation_id)}
-                if _bucket_overlap(provider, account, bucket, row):
-                    overlapping.append(row)
+                    raise PodError("state_migration_required", "Effect row is malformed")
+                status = effect.get("state")
+                if status not in ("reserved", "uncertain", "confirmed"):
+                    # No installed adapter can prove an effect was absent. An
+                    # unfamiliar disposition cannot silently free its slot.
+                    raise PodError("effect_disposition_unverified", "Effect disposition needs exact proof")
+                request = effect.get("request")
+                if (not isinstance(request, dict) or not request.get("account") or not request.get("agent")
+                        or effect.get("bucket") != request.get("bucket")):
+                    raise PodError("state_migration_required", "Effect account binding is malformed")
+                runtime = effect.get("runtime")
+                if not isinstance(runtime, str) or not runtime:
+                    raise PodError("state_migration_required", "Effect runtime binding is malformed")
+                key = ("launch", str(path), operation_id)
+                if status == "confirmed":
+                    binding = effect.get("native_binding")
+                    if (not isinstance(binding, dict) or any(not isinstance(binding.get(field), str)
+                            or not binding[field] for field in ("dispatchId", "workerId", "runId", "taskId"))):
+                        raise PodError("effect_identity_unverified", "Confirmed launch lacks exact native binding")
+                    key = ("dispatch", runtime, binding["dispatchId"])
+                    confirmed.setdefault(binding["dispatchId"], []).append(effect)
+                    if len(confirmed[binding["dispatchId"]]) != 1:
+                        raise PodError("effect_identity_unverified", "Dispatch has multiple confirmed launch bindings")
+                occupied.append({**request, "bucket": effect.get("bucket"),
+                                 "_key": key, "_path": path, "_dispatch":
+                                 effect["native_binding"]["dispatchId"] if status == "confirmed" else None})
             for dispatch, cleanup in state["cleanup"].items():
                 if not isinstance(cleanup, dict):
-                    raise PodError("state_migration_required", "Pending cleanup row is malformed")
+                    raise PodError("state_migration_required", "Cleanup row is malformed")
                 cleanup_state = cleanup.get("state")
                 if cleanup_state not in ("reserved", "uncertain", "retained", "released", "already_released"):
-                    raise PodError("state_migration_required", "Pending cleanup state is unsupported")
-                if cleanup_state not in ("reserved", "uncertain", "retained"):
-                    continue
+                    raise PodError("state_migration_required", "Cleanup state is unsupported")
                 binding = cleanup.get("binding")
-                matches = [effect for effect in state["effects"].values()
-                           if isinstance(effect, dict) and effect.get("state") == "confirmed"
-                           and effect.get("native_binding") == binding
-                           and isinstance(binding, dict) and binding.get("dispatchId") == dispatch
+                matches = [effect for effect in confirmed.get(dispatch, [])
+                           if effect.get("native_binding") == binding
                            and effect.get("runtime") == cleanup.get("runtime")]
-                if len(matches) != 1 or not isinstance(matches[0].get("request"), dict):
-                    raise PodError("cleanup_identity_unverified", "Pending cleanup has no exact launch binding")
-                effect = matches[0]
-                row = {**effect["request"], "bucket": effect.get("bucket"),
-                       "_key": ("dispatch", cleanup["runtime"], dispatch)}
-                if _bucket_overlap(provider, account, bucket, row):
-                    overlapping.append(row)
-    return overlapping
+                if len(matches) != 1:
+                    raise PodError("cleanup_identity_unverified", "Cleanup has no unique exact launch binding")
+                if cleanup_state in ("released", "already_released"):
+                    occupied = [row for row in occupied
+                                if not (row["_path"] == path and row["_dispatch"] == dispatch
+                                        and row["_key"] == ("dispatch", cleanup["runtime"], dispatch))]
+    return occupied
+
+
+def _occupancy_projection(native: dict, objective_path: Path, objective: str,
+                          requested: dict) -> tuple[set[tuple], set[tuple], list[dict], list[dict]]:
+    """Use one identity set for objective and overlapping-account admission."""
+    workers = native["workers"]
+    active = []
+    seen = {}
+    for index, worker in enumerate(workers):
+        status = worker.get("state")
+        if status == "released":
+            continue
+        if status not in ("occupied", "active", "launching", "reserved", "uncertain", "confirmed", "retained"):
+            raise PodError("native_occupancy_unverified", "Native worker state is unsupported")
+        if not worker.get("account") or not worker.get("objective"):
+            raise PodError("native_occupancy_unverified", "Active worker account/objective binding is unavailable")
+        dispatch = worker.get("dispatchId")
+        key = (("dispatch", native["runtime"], dispatch)
+               if isinstance(dispatch, str) and dispatch else ("native", index))
+        identity = (worker["account"], worker["objective"], worker.get("agent"), worker.get("bucket"))
+        if key in seen and seen[key] != identity:
+            raise PodError("native_occupancy_unverified", "Native Dispatch has conflicting occupancy bindings")
+        seen[key] = identity
+        active.append({**worker, "_key": key})
+    local = _local_occupancy()
+    for row in local:
+        if row["_key"] in seen and (row["account"] != seen[row["_key"]][0]
+                                    or (seen[row["_key"]][2] is not None
+                                        and row["agent"] != seen[row["_key"]][2])
+                                    or (seen[row["_key"]][3] is not None
+                                        and row.get("bucket") != seen[row["_key"]][3])):
+            raise PodError("native_occupancy_unverified", "Native and local Dispatch bindings conflict")
+    bucket = requested.get("bucket")
+    overlap = [row for row in [*active, *local]
+               if _bucket_overlap(requested["agent"], requested["account"], bucket, row)]
+    objective_keys = {row["_key"] for row in active if row["objective"] == objective}
+    objective_keys.update(row["_key"] for row in local if row["_path"] == objective_path)
+    account_keys = {row["_key"] for row in overlap}
+    return objective_keys, account_keys, active, overlap
 
 
 def _quota_hold(provider: str, account: str, bucket: str | None,
@@ -374,9 +429,6 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                         or prior.get("plan_revision") != plan_revision or prior.get("packet_id") != packet_id):
                     raise PodError("operation_conflict", "Operation identity was reused with a changed request")
                 return {**prior, "existing": True}
-            active = [w for w in workers if w.get("state") not in ("released",)]
-            if any(not isinstance(w, dict) or not w.get("account") or not w.get("objective") for w in active):
-                raise PodError("native_occupancy_unverified", "Active worker account/objective binding is unavailable")
             qstate, _ = quota_state(native.get("quota"), provider=requested["agent"],
                                     account=requested["account"], bucket=requested.get("bucket"),
                                     policy=policy,
@@ -386,27 +438,13 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                            freshness=policy["quota_fresh_seconds"]):
                 raise PodError("quota_exhausted", "Current applicable quota bucket is exhausted")
             bucket = requested.get("bucket")
-            overlapping = [w for w in active if _bucket_overlap(requested["agent"], requested["account"], bucket, w)]
-            if active and bucket is not None and any(not w.get("bucket") for w in overlapping):
-                raise PodError("bucket_occupancy_unverified", "Active worker bucket binding is unavailable")
-            if qstate == "unknown" and any(w["account"] != requested["account"] for w in overlapping):
+            objective_keys, account_keys, active, overlapping = _occupancy_projection(
+                native, path, objective, requested)
+            if bucket is not None and any(not row.get("bucket") for row in overlapping):
+                raise PodError("bucket_occupancy_unverified", "Occupied worker bucket binding is unavailable")
+            if qstate == "unknown" and any(row["account"] != requested["account"]
+                                           for row in active if row in overlapping):
                 raise PodError("bucket_occupancy_unverified", "Shared bucket ownership is unavailable")
-            pending = _pending_account(requested["agent"], requested["account"], bucket)
-            if bucket is not None and any(row.get("bucket") is None or not row.get("agent") for row in pending):
-                raise PodError("bucket_occupancy_unverified", "Pending effect bucket binding is unavailable")
-            native_keys = [("dispatch", native["runtime"], w["dispatchId"])
-                           if isinstance(w.get("dispatchId"), str) and w["dispatchId"]
-                           else ("native", index)
-                           for index, w in enumerate(active)]
-            objective_keys = {key for key, worker in zip(native_keys, active) if worker["objective"] == objective}
-            objective_keys.update(("launch", str(path), operation_id)
-                                  for operation_id, effect in state["effects"].items()
-                                  if effect["state"] in ("reserved", "uncertain"))
-            objective_keys.update(("dispatch", cleanup["runtime"], dispatch)
-                                  for dispatch, cleanup in state["cleanup"].items()
-                                  if cleanup["state"] in ("reserved", "uncertain", "retained"))
-            account_keys = {key for key, worker in zip(native_keys, active) if worker in overlapping}
-            account_keys.update(row["_key"] for row in pending)
             if len(objective_keys) >= capacity:
                 raise PodError("capacity_full", "Objective capacity is occupied")
             if qstate == "unknown" and account_keys:

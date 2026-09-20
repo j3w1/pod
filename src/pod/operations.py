@@ -206,10 +206,45 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
-        cleanup = state["cleanup"].get(dispatch)
-        if state["owner"] != owner or not cleanup:
+        if state["owner"] != owner:
             raise PodError("unknown_release", "No owned release intention")
-        if cleanup["state"] not in ("reserved", "uncertain", "retained", "released", "already_released"):
+        if not isinstance(state["effects"], dict) or not isinstance(state["cleanup"], dict):
+            raise PodError("state_migration_required", "Effect or cleanup journal is malformed")
+        if dispatch not in state["cleanup"]:
+            # A confirmed launch can outlive the fleet projection before any
+            # release attempt was journaled. Inspect its exact native resource
+            # without issuing a second effect or discarding launch evidence.
+            bindings = [effect for effect in state["effects"].values()
+                        if isinstance(effect, dict) and effect.get("state") == "confirmed"
+                        and isinstance(effect.get("native_binding"), dict)
+                        and effect["native_binding"].get("dispatchId") == dispatch]
+            if len(bindings) != 1:
+                raise PodError("unknown_release", "No unique confirmed Pod worker binding")
+            effect = bindings[0]
+            binding = effect["native_binding"]
+            if (not isinstance(effect.get("runtime"), str) or not effect["runtime"]
+                    or any(not isinstance(binding.get(field), str) or not binding[field]
+                           for field in ("dispatchId", "workerId", "runId", "taskId"))):
+                raise PodError("release_identity_unverified", "Confirmed worker binding is incomplete")
+            shown = native_port.show_worker(dispatch)
+            if not _release_readback_matches(shown, effect["runtime"], dispatch, binding):
+                raise PodError("release_identity_unverified", "Native release readback does not join binding")
+            result = shown["result"]
+            resource = result.get("terminalResource")
+            release_state = resource.get("releaseState") if isinstance(resource, dict) else None
+            if (result["dispatch"].get("status") in ("completed", "failed")
+                    and release_state in ("released", "already_released")):
+                state["cleanup"][dispatch] = {"schema": "pod-cleanup/v1", "state": release_state,
+                                              "binding": binding, "runtime": shown["runtime"],
+                                              "repeat_allowed": False}
+                _write(path, state)
+                return {"status": release_state, "dispatch": dispatch, "source": "native_readback"}
+            return {"status": "confirmed", "dispatch": dispatch,
+                    "next_safe_action": "inspect native recovery metadata"}
+        cleanup = state["cleanup"][dispatch]
+        if not isinstance(cleanup, dict):
+            raise PodError("state_migration_required", "Cleanup row is malformed")
+        if cleanup.get("state") not in ("reserved", "uncertain", "retained", "released", "already_released"):
             raise PodError("state_migration_required", "Cleanup state is unsupported")
         if cleanup["state"] not in ("reserved", "uncertain", "retained"):
             return {"status": cleanup["state"], "dispatch": dispatch}
