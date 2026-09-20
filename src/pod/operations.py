@@ -98,6 +98,30 @@ def _release_readback_matches(shown: dict, runtime: str, dispatch: str, binding:
             and worker.get("dispatchId") == dispatch)
 
 
+def _release_launch_matches(shown: dict, effect: dict) -> bool:
+    request = effect.get("request")
+    result = shown.get("result")
+    if not isinstance(request, dict) or not isinstance(result, dict):
+        return False
+    launch = {key: request.get(key) for key in ("agent", "model", "effort")}
+    if any(not isinstance(value, str) or not value for value in launch.values()):
+        return False
+    worker = result.get("worker")
+    start_options = worker.get("startOptions") if isinstance(worker, dict) else None
+    return (isinstance(start_options, dict)
+            and start_options.get("launch") == {"requested": launch, "effective": launch})
+
+
+def _confirmed_release_effect(state: dict, dispatch: str) -> dict:
+    bindings = [effect for effect in state["effects"].values()
+                if isinstance(effect, dict) and effect.get("state") == "confirmed"
+                and isinstance(effect.get("native_binding"), dict)
+                and effect["native_binding"].get("dispatchId") == dispatch]
+    if len(bindings) != 1:
+        raise PodError("release_identity_unverified", "No unique confirmed Pod worker binding")
+    return bindings[0]
+
+
 def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
                   operation_id: str, assessment: dict, capabilities: dict, quotas: dict,
                   occupancy: dict, plan_revision: str, capacity: int = DEFAULT_WORKER_CAPACITY,
@@ -153,19 +177,14 @@ def release_once(project: Path, objective: str, *, owner: str, dispatch: str,
             raise PodError("coordinator_conflict", "Release belongs to another coordinator")
         if dispatch in state["cleanup"]:
             raise PodError("release_already_recorded", "Reconcile the existing release identity without repeating it")
-        bindings = [e for e in state["effects"].values() if e.get("state") == "confirmed"
-                    and e.get("native_binding", {}).get("dispatchId") == dispatch]
-        if len(bindings) != 1:
-            raise PodError("release_identity_unverified", "No unique confirmed Pod worker binding")
-        binding = bindings[0]["native_binding"]
-        requested_launch = {key: bindings[0]["request"][key] for key in ("agent", "model", "effort")}
+        effect = _confirmed_release_effect(state, dispatch)
+        binding = effect["native_binding"]
         shown = native_port.show_worker(dispatch)
         result = shown.get("result", {})
         native_dispatch = result.get("dispatch", {})
-        if (not _release_readback_matches(shown, bindings[0]["runtime"], dispatch, binding)
+        if (not _release_readback_matches(shown, effect["runtime"], dispatch, binding)
                 or native_dispatch.get("status") not in ("completed", "failed")
-                or result.get("worker", {}).get("startOptions", {}).get("launch") !=
-                   {"requested": requested_launch, "effective": requested_launch}):
+                or not _release_launch_matches(shown, effect)):
             raise PodError("release_identity_unverified", "Native settlement or worker identity is unproven")
         state["cleanup"][dispatch] = {"schema": "pod-cleanup/v1", "state": "reserved",
                                       "binding": binding, "runtime": shown["runtime"],
@@ -179,7 +198,8 @@ def release_once(project: Path, objective: str, *, owner: str, dispatch: str,
         if disposition not in ("released", "already_released", "retained"):
             raise PodError("native_release_uncertain", "Release disposition needs exact reconciliation")
         after = native_port.show_worker(dispatch)
-        if not _release_readback_matches(after, shown["runtime"], dispatch, binding):
+        if (not _release_readback_matches(after, shown["runtime"], dispatch, binding)
+                or not _release_launch_matches(after, effect)):
             raise PodError("native_release_uncertain", "Post-release readback identity changed")
         resource = after["result"].get("terminalResource")
         if disposition in ("released", "already_released") and (
@@ -214,21 +234,16 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
             # A confirmed launch can outlive the fleet projection before any
             # release attempt was journaled. Inspect its exact native resource
             # without issuing a second effect or discarding launch evidence.
-            bindings = [effect for effect in state["effects"].values()
-                        if isinstance(effect, dict) and effect.get("state") == "confirmed"
-                        and isinstance(effect.get("native_binding"), dict)
-                        and effect["native_binding"].get("dispatchId") == dispatch]
-            if len(bindings) != 1:
-                raise PodError("unknown_release", "No unique confirmed Pod worker binding")
-            effect = bindings[0]
+            effect = _confirmed_release_effect(state, dispatch)
             binding = effect["native_binding"]
             if (not isinstance(effect.get("runtime"), str) or not effect["runtime"]
                     or any(not isinstance(binding.get(field), str) or not binding[field]
                            for field in ("dispatchId", "workerId", "runId", "taskId"))):
                 raise PodError("release_identity_unverified", "Confirmed worker binding is incomplete")
             shown = native_port.show_worker(dispatch)
-            if not _release_readback_matches(shown, effect["runtime"], dispatch, binding):
-                raise PodError("release_identity_unverified", "Native release readback does not join binding")
+            if (not _release_readback_matches(shown, effect["runtime"], dispatch, binding)
+                    or not _release_launch_matches(shown, effect)):
+                raise PodError("release_identity_unverified", "Native release readback or launch changed")
             result = shown["result"]
             resource = result.get("terminalResource")
             release_state = resource.get("releaseState") if isinstance(resource, dict) else None
@@ -252,8 +267,11 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
         result = shown.get("result", {})
         resource = result.get("terminalResource")
         binding = cleanup["binding"]
-        if not _release_readback_matches(shown, cleanup["runtime"], dispatch, binding):
-            raise PodError("release_identity_unverified", "Native release readback does not join binding")
+        effect = _confirmed_release_effect(state, dispatch)
+        if (effect.get("native_binding") != binding or effect.get("runtime") != cleanup["runtime"]
+                or not _release_readback_matches(shown, cleanup["runtime"], dispatch, binding)
+                or not _release_launch_matches(shown, effect)):
+            raise PodError("release_identity_unverified", "Native release readback or launch changed")
         if isinstance(resource, dict) and resource.get("releaseState") in ("released", "already_released"):
             cleanup["state"] = "released"
             _write(path, state)
