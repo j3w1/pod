@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import checkpoint, read, reconcile, record_delivery, reconcile_delivery_item, reserve
-from pod.operations import OrcaPort, guarded_start, release_once, reconcile_release
+from pod.operations import (OrcaPort, acknowledge_delivery, guarded_start, reconcile_launch,
+                            reconcile_release, release_once, settle_delivery)
 from pod.config import effective, route_identity
 from pod.records import packet, source_identity, verify_sources
 from pod.internal import run as helper_run
@@ -241,11 +242,12 @@ def downgrade_worker_binding(root, project):
     return predecessor
 
 
-def frozen_for(project, *, sources=None, context=None):
+def frozen_for(project, *, sources=None, context=None, actions=None):
     route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
              "account": "account", "bucket": "shared", "effort": "high"}
     return packet({"schema": "pod-packet/v1", "objective": "objective", "criteria": ["works"],
-                   "responsibility": "writer", "scope": ["notes.txt"], "actions": ["edit"],
+                   "responsibility": "writer", "scope": ["notes.txt"],
+                   "actions": actions or ["edit"],
                    "candidate": "c", "context": context or [], "dependencies": [], "route": route,
                    "policy_revision": effective(project)["revision"], "plan_revision": "plan",
                    "report_contract": "checks", "sources": sources or []})
@@ -1382,3 +1384,202 @@ class GuardedOperationTests(unittest.TestCase):
             config.write_text(original)
             self.assertEqual(guarded_start(project, "objective", **base,
                                            capacity_reason="three independent edits")["status"], "confirmed")
+
+
+class DelegationPathTests(unittest.TestCase):
+    """The production delegation path: launch, recover, count, settle, release."""
+
+    def prepared(self, root):
+        return inputs(root)
+
+    def start(self, project, assessment, caps, quota, port, **extra):
+        arguments = dict(owner="owner", run="run", task="task", operation_id="op",
+                         assessment=assessment, capabilities=caps, quotas=quota, occupancy={},
+                         plan_revision="plan", port=port, now=NOW)
+        arguments.update(extra)
+        return guarded_start(project, "objective", **arguments)
+
+    def test_a_structured_failure_occupies_capacity_and_is_never_relaunched(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.receipt_override = {"state": "failed", "failedStage": "dispatch_input",
+                                     "residualResources": [{"kind": "terminal"}],
+                                     "mutation": {"requestId": "req-1"}}
+            result = self.start(project, assessment, caps, quota, port)
+            self.assertEqual(result["status"], "uncertain")
+            self.assertEqual(result["native_failure"]["failedStage"], "dispatch_input")
+            effect = read(project, "objective")["effects"]["op"]
+            self.assertEqual(effect["state"], "uncertain")
+            self.assertEqual(effect["native_failure"]["mutation"], {"requestId": "req-1"})
+            with self.assertRaises(PodError) as repeated:
+                self.start(project, assessment, caps, quota, port)
+            self.assertEqual(repeated.exception.code, "operation_already_recorded")
+            self.assertEqual(port.starts, 1)
+
+    def test_a_lost_response_is_recovered_by_readback_not_by_starting_again(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            original = port.start_worker
+
+            def lost(**kwargs):
+                original(**kwargs)
+                raise PodError("native_effect_uncertain", "response never arrived")
+
+            port.start_worker = lost
+            with self.assertRaises(PodError):
+                self.start(project, assessment, caps, quota, port)
+            self.assertEqual(read(project, "objective")["effects"]["op"]["state"], "uncertain")
+            port.start_worker = original
+            adopted = reconcile_launch(project, "objective", owner="owner", operation_id="op",
+                                       run="run", task="task", port=port)
+            self.assertEqual(adopted["action"], "adopted")
+            self.assertEqual(adopted["status"], "confirmed")
+            self.assertEqual(adopted["dispatchId"], "dispatch")
+            self.assertEqual(port.starts, 1)
+
+    def test_an_absent_row_holds_the_slot_and_two_rows_refuse(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.start_worker = lambda **kwargs: (_ for _ in ()).throw(
+                PodError("native_effect_uncertain", "lost"))
+            with self.assertRaises(PodError):
+                self.start(project, assessment, caps, quota, port)
+            port.find_rows = []
+            held = reconcile_launch(project, "objective", owner="owner", operation_id="op",
+                                    run="run", task="task", port=port)
+            self.assertEqual(held["action"], "hold")
+            self.assertEqual(held["status"], "uncertain")
+            port.find_rows = [{"dispatchId": "one", "taskId": "task"},
+                              {"dispatchId": "two", "taskId": "task"}]
+            with self.assertRaises(PodError) as ambiguous:
+                reconcile_launch(project, "objective", owner="owner", operation_id="op",
+                                 run="run", task="task", port=port)
+            self.assertEqual(ambiguous.exception.code, "native_occupancy_unverified")
+
+    def test_a_worker_this_coordinator_never_launched_does_not_block_admission(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.workers = [{"state": "retained", "dispatchId": "ctx_foreign", "foreign": True,
+                             "account": None, "objective": None},
+                            {"state": "uncertain", "dispatchId": "ctx_other", "foreign": True,
+                             "account": None, "objective": None}]
+            result = self.start(project, assessment, caps, quota, port)
+            self.assertEqual(result["status"], "confirmed")
+            self.assertEqual(port.starts, 1)
+
+    def test_a_descendant_counts_and_is_refused_when_policy_forbids_it(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.workers = [{"state": "active", "dispatchId": "ctx_child", "descendant": True,
+                             "parent": "ctx_parent", "account": "account", "objective": "objective",
+                             "agent": "codex", "bucket": "shared"}]
+            with self.assertRaises(PodError) as refused:
+                self.start(project, assessment, caps, quota, port)
+            self.assertEqual(refused.exception.code, "unauthorized_descendant")
+            self.assertEqual(port.starts, 0)
+
+    def test_a_descendant_occupies_objective_capacity_once_allowed(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.descendants_allowed = True
+            port.workers = [{"state": "active", "dispatchId": "ctx_child", "descendant": True,
+                             "parent": "ctx_parent", "account": "account", "objective": "objective",
+                             "agent": "codex", "bucket": "shared"}]
+            with self.assertRaises(PodError) as full:
+                self.start(project, assessment, caps, quota, port, capacity=1)
+            self.assertEqual(full.exception.code, "capacity_full")
+
+    def test_delegating_from_a_packet_needs_explicit_policy(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            (project / "notes.txt").write_text("value = 1\n")
+            sources = [{"path": "notes.txt", "state": "present",
+                        "sha256": source_identity(project, "notes.txt")["sha256"]}]
+            frozen = frozen_for(project, sources=sources, actions=["delegate"])
+            port = FixturePort()
+            with self.assertRaises(PodError) as refused:
+                self.start(project, assessment, caps, quota, port, frozen_packet=frozen)
+            self.assertEqual(refused.exception.code, "delegation_unauthorized")
+            self.assertEqual(port.starts, 0)
+
+    def test_worker_placement_refuses_a_creation_mode(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            for placement in ("new-child", "new-top-level", "path:"):
+                with self.subTest(placement=placement):
+                    with self.assertRaises(PodError) as caught:
+                        self.start(project, assessment, caps, quota, port, worktree=placement)
+                    self.assertEqual(caught.exception.code, "invalid_worktree_selector")
+            self.assertEqual(port.starts, 0)
+            placed = self.start(project, assessment, caps, quota, port,
+                                worktree="path:/fixture/repo")
+            self.assertEqual(placed["status"], "confirmed")
+            self.assertEqual(port.started["dispatch"]["worktree"], "path:/fixture/repo")
+
+    def test_a_settlement_delivery_releases_once_and_acknowledges_after(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.release_status = "released"
+            self.start(project, assessment, caps, quota, port)
+            port.settled = True
+            port.deliveries = [{"id": "delivery-1", "messages": [
+                {"id": "message-1", "type": "worker_done",
+                 "payload": json.dumps({"runId": "run", "taskId": "task",
+                                        "dispatchId": "dispatch"})}]}]
+            settled = settle_delivery(project, "objective", owner="owner", run="run",
+                                      timeout_ms=60000, port=port)
+            self.assertEqual(settled["status"], "recorded")
+            self.assertTrue(settled["ack_eligible"])
+            self.assertEqual(settled["settled"][0]["dispatchId"], "dispatch")
+            self.assertEqual(port.release_calls, 1)
+            acknowledged = acknowledge_delivery(project, "objective", owner="owner", run="run",
+                                                delivery_id="delivery-1", port=port)
+            self.assertEqual(acknowledged["status"], "acknowledged")
+            self.assertEqual(port.delivery_calls[-1]["ack"], "delivery-1")
+            state = read(project, "objective")
+            self.assertEqual(state["cleanup"]["dispatch"]["state"], "released")
+            self.assertIsNotNone(state["deliveries"]["delivery-1"]["items"]["message-1"]["effect"])
+
+    def test_an_unresolved_delivery_cannot_be_acknowledged(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            self.start(project, assessment, caps, quota, port)
+            port.deliveries = [{"id": "delivery-2", "messages": [
+                {"id": "message-2", "type": "question",
+                 "payload": json.dumps({"runId": "run"})}]}]
+            settled = settle_delivery(project, "objective", owner="owner", run="run", port=port)
+            self.assertFalse(settled["ack_eligible"])
+            with self.assertRaises(PodError) as caught:
+                acknowledge_delivery(project, "objective", owner="owner", run="run",
+                                     delivery_id="delivery-2", port=port)
+            self.assertEqual(caught.exception.code, "delivery_unresolved")
+            self.assertFalse([call for call in port.delivery_calls if call["ack"]])
+
+    def test_an_empty_mailbox_records_nothing(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            self.start(project, assessment, caps, quota, port)
+            empty = settle_delivery(project, "objective", owner="owner", run="run", port=port)
+            self.assertEqual(empty["status"], "empty")
+            self.assertFalse(read(project, "objective")["deliveries"])

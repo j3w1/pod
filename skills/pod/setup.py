@@ -99,22 +99,41 @@ def _managed_by_skills_cli(host: str, target: Path, targets: dict[str, Path], *,
 
 
 def _redirected_below(path: Path, root: Path) -> bool:
+    """Whether anything Pod would create below a profile root is redirected.
+
+    The root itself may legitimately be a symlink on an ordinary machine, so the
+    walk stops there rather than refusing the whole installation.
+    """
     cursor = path
-    root = Path(os.path.abspath(root))
+    boundary = Path(os.path.abspath(root))
     while True:
+        if Path(os.path.abspath(cursor)) == boundary:
+            return False
         if cursor.is_symlink():
             return True
         parent = cursor.parent
-        if parent == cursor or Path(os.path.abspath(cursor)) == root:
+        if parent == cursor:
             return False
         cursor = parent
+
+
+def _owned_hosts(project: Path) -> set[str]:
+    manifest = project / ".pod" / "skills.json"
+    if not manifest.is_file():
+        return set()
+    try:
+        prior = bounded_json(manifest)
+    except PodError:
+        return set()
+    owned = prior.get("owned_hosts") if isinstance(prior, dict) else None
+    return {host for host in owned if isinstance(host, str)} if isinstance(owned, list) else set()
 
 
 def inspect(project: Path, *, global_scope: bool = False) -> dict:
     source = canonical()
     targets = _targets(project, global_scope)
-    roots = _roots(project, global_scope)
     lock = skills_cli_entry()
+    owned = set() if global_scope else _owned_hosts(project)
     report = {}
     for host, target in targets.items():
         declared = installed_version(target) if target.is_dir() else None
@@ -122,12 +141,14 @@ def inspect(project: Path, *, global_scope: bool = False) -> dict:
         if _managed_by_skills_cli(host, target, targets, global_scope=global_scope, entry=lock["entry"]):
             status, manager = "managed_by_skills_cli", "skills_cli"
         elif target.is_symlink():
+            manager = "unowned"
             status = "redirected"
         elif not target.exists():
             status = "missing"
         elif not target.is_dir():
-            status = "conflict"
+            status, manager = "conflict", "unowned"
         else:
+            manager = "pod_setup" if host in owned else "unowned"
             states = []
             if installed_files(target) - set(source):
                 states.append("extra")

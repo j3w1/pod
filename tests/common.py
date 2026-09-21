@@ -1,8 +1,22 @@
 from contextlib import contextmanager
+import json
 import os
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "orca-1.4.206"
+
+
+def receipt(name: str) -> dict:
+    """One sanitized capture of the installed Orca runtime's own output."""
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def envelope(name: str) -> dict:
+    """The same capture in the shape read_command returns."""
+    body = receipt(name)
+    return {"runtime": body["_meta"]["runtimeId"], "result": body["result"]}
 
 
 @contextmanager

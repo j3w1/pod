@@ -134,12 +134,12 @@ def _route_report(root: Path, snapshot: dict) -> dict:
         policy = effective(root)
     except PodError as exc:
         return {"status": "unavailable", "reason": exc.code}
+    if snapshot.get("status") != "observed":
+        return {"status": "unavailable", "reason": snapshot.get("reason", "orca_unavailable")}
     models = {alias: model for alias, model in policy["policy"]["models"].items()
               if model.get("approved") and model.get("agent") in ("codex", "claude")}
     if not models:
         return {"status": "none_approved"}
-    if snapshot.get("status") != "observed":
-        return {"status": "unavailable", "reason": snapshot.get("reason", "orca_unavailable")}
     try:
         accounts = account_metadata_raw()
         fleet = hosts()

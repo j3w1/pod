@@ -236,11 +236,12 @@ def contract() -> dict:
         snapshot["reason"] = exc.code
         return snapshot
     result = status["result"]
-    advertised = result.get("capabilities")
+    runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
+    advertised = runtime.get("capabilities")
     advertised = advertised if isinstance(advertised, list) else []
     snapshot["runtime"] = status["runtime"]
     snapshot["capabilities"] = {key: value in advertised for key, value in CAPABILITY_KEYS.items()}
-    snapshot["runtime_state"] = result.get("runtimeState")
+    snapshot["runtime_state"] = runtime.get("state")
     return snapshot
 
 

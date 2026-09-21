@@ -1,6 +1,6 @@
 import json
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 import subprocess
 import sys
 import unittest
@@ -8,14 +8,15 @@ from unittest.mock import patch
 
 from pod.cli import execute, parser
 from pod.errors import PodError
-from pod.setup import _relative_key, canonical, setup
+from pod.bundle import BUNDLE_FILES, canonical, version
+from pod.setup import _relative_key, inspect, setup
 from pod.ledger import checkpoint
 from tests.common import fixture
 
 
 class SetupCliTests(unittest.TestCase):
-    def test_nested_windows_skill_paths_use_canonical_manifest_keys(self):
-        root = PureWindowsPath(r"C:\project\.agents\skills\pod")
+    def test_nested_skill_paths_use_canonical_manifest_keys(self):
+        root = Path("/project/.agents/skills/pod")
         nested = root / "references" / "planning.md"
         self.assertEqual(_relative_key(nested, root), "references/planning.md")
 
@@ -164,3 +165,155 @@ class SetupCliTests(unittest.TestCase):
             self.assertEqual(result["next_safe_action"], "run checks")
             self.assertEqual(result["native"]["workers_by_state"], {"active": 1, "released": 1})
             self.assertNotIn("workers", result["native"])
+
+
+class SkillOwnershipTests(unittest.TestCase):
+    """Who owns a placed copy, and what repeating setup is allowed to touch."""
+
+    def install_global(self, root):
+        project = root / "project"
+        project.mkdir(exist_ok=True)
+        setup(project, global_scope=True)
+        return project
+
+    def test_a_skills_cli_symlink_is_recognised_and_left_alone(self):
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+            project = self.install_global(root)
+            canonical_copy = root / "agents" / "skills" / "pod"
+            linked = root / "claude" / "skills" / "pod"
+            for name in sorted(BUNDLE_FILES, reverse=True):
+                path = linked / name
+                if path.is_file():
+                    path.unlink()
+            for directory in ("references", "agents", "scripts"):
+                if (linked / directory).is_dir():
+                    (linked / directory).rmdir()
+            linked.rmdir()
+            linked.symlink_to(canonical_copy, target_is_directory=True)
+            report = inspect(project, global_scope=True)
+            self.assertEqual(report["claude"]["status"], "managed_by_skills_cli")
+            self.assertEqual(report["claude"]["manager"], "skills_cli")
+            outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["claude"], "managed_by_skills_cli")
+            self.assertTrue(linked.is_symlink())
+            self.assertEqual(linked.resolve(), canonical_copy.resolve())
+
+    def test_a_lock_entry_marks_the_global_copy_as_externally_managed(self):
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude"),
+                                                        "XDG_STATE_HOME": str(root / "state")}):
+            project = self.install_global(root)
+            lock = root / "state" / "skills" / ".skill-lock.json"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text(json.dumps({"version": 3, "skills": {"pod": {
+                "source": "j3w1/pod", "ref": "v0.1.0", "installedAt": "2026-09-21T00:00:00Z"}}}))
+            report = inspect(project, global_scope=True)
+            self.assertEqual(report["codex"]["status"], "managed_by_skills_cli")
+            outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["codex"], "managed_by_skills_cli")
+            self.assertEqual(outcome["ownership"]["codex"], "skills_cli")
+
+    def older_bundle(self):
+        """The bytes a previous release would have placed."""
+        source = dict(canonical())
+        source["references/routing.md"] = b"# Routing and quota\n\nAn older release.\n"
+        return source
+
+    def test_a_version_change_upgrades_only_an_untouched_owned_copy(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            with patch("pod.setup.canonical", return_value=self.older_bundle()):
+                self.assertEqual(setup(project)["skills"]["codex"], "installed")
+            manifest_path = project / ".pod" / "skills.json"
+            self.assertEqual(json.loads(manifest_path.read_text())["version"], version())
+            placed = project / ".agents" / "skills" / "pod" / "references" / "routing.md"
+            self.assertEqual(placed.read_bytes(), self.older_bundle()["references/routing.md"])
+            upgraded = setup(project)
+            self.assertEqual(upgraded["skills"]["codex"], "upgraded")
+            self.assertEqual(placed.read_bytes(), canonical()["references/routing.md"])
+            self.assertIn("codex", json.loads(manifest_path.read_text())["owned_hosts"])
+            self.assertEqual(setup(project)["skills"]["codex"], "reused")
+
+    def test_an_edited_copy_is_never_replaced_by_an_upgrade(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            with patch("pod.setup.canonical", return_value=self.older_bundle()):
+                setup(project)
+            edited = project / ".agents" / "skills" / "pod" / "references" / "routing.md"
+            edited.write_text("# my own notes\n")
+            self.assertEqual(setup(project)["skills"]["codex"], "preserved_modified")
+            self.assertEqual(edited.read_text(), "# my own notes\n")
+
+    def test_a_differing_version_is_preserved_with_its_own_next_step(self):
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+            project = self.install_global(root)
+            skill = root / "agents" / "skills" / "pod"
+            text = (skill / "SKILL.md").read_text(encoding="utf-8")
+            (skill / "SKILL.md").write_text(text.replace('version: "', 'version: "9.'),
+                                            encoding="utf-8")
+            report = inspect(project, global_scope=True)
+            self.assertEqual(report["codex"]["status"], "other_version")
+            self.assertTrue(report["codex"]["version"].startswith("9."))
+            outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["codex"], "preserved_other_version")
+            self.assertTrue((skill / "SKILL.md").read_text(encoding="utf-8").count('version: "9.'))
+
+    def test_an_installed_copy_carries_and_runs_its_own_helpers(self):
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+            project = self.install_global(root)
+            skill = root / "agents" / "skills" / "pod"
+            for name in BUNDLE_FILES:
+                self.assertTrue((skill / name).is_file(), name)
+            helped = subprocess.run([sys.executable, str(skill / "scripts" / "pod.py"), "--help"],
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(helped.returncode, 0, helped.stderr)
+            self.assertIn("doctor", helped.stdout)
+
+    def test_interpreter_caches_in_a_placed_copy_are_not_a_modification(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            setup(project)
+            cache = project / ".agents" / "skills" / "pod" / "__pycache__"
+            cache.mkdir()
+            (cache / "cli.cpython-313.pyc").write_bytes(b"cached")
+            self.assertEqual(setup(project)["skills"]["codex"], "reused")
+            self.assertEqual(inspect(project)["codex"]["status"], "current")
+
+    def test_a_symlinked_native_home_root_is_accepted(self):
+        """Ordinary machines redirect ~/.claude; only paths Pod creates must be plain."""
+        with fixture() as root:
+            real = root / "claude-real"
+            real.mkdir()
+            linked = root / "claude-link"
+            linked.symlink_to(real, target_is_directory=True)
+            project = root / "project"
+            project.mkdir()
+            with patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                         "CLAUDE_CONFIG_DIR": str(linked)}):
+                outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["claude"], "installed")
+            self.assertTrue((real / "skills" / "pod" / "SKILL.md").is_file())
+
+    def test_doctor_reports_the_bundle_prerequisites_and_manager(self):
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude"),
+                                                        "XDG_STATE_HOME": str(root / "state")}):
+            project = self.install_global(root)
+            with patch("pod.cli.contract", return_value={"status": "unavailable",
+                                                         "reason": "orca_unavailable"}), \
+                 patch("pod.cli.account_metadata", side_effect=PodError("unavailable", "offline")), \
+                 patch("pod.cli.executable", side_effect=PodError("orca_unavailable", "absent")):
+                report = execute(parser().parse_args(["doctor"]), project)
+            self.assertEqual(report["bundle"]["version"], version())
+            self.assertEqual(report["prerequisites"]["python"], "ok")
+            self.assertIn("Pod never installs it", report["prerequisites"]["orca"])
+            self.assertEqual(report["routes"], {"status": "unavailable", "reason": "orca_unavailable"})
+            self.assertIsNone(report["skills_cli"]["entry"])
+            self.assertEqual(report["global_skills"]["codex"]["manager"], "unowned")
+            self.assertEqual(report["global_skills"]["codex"]["status"], "current")

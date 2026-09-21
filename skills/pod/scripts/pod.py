@@ -23,8 +23,20 @@ def bundle_dir(script=None):
     return os.path.dirname(os.path.dirname(os.path.realpath(target)))
 
 
+def _yaml_importable():
+    try:
+        import yaml  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def preflight(version_info=None, find_spec=None, bundle=None):
-    """Return None when the helper can run, else one actionable failure record."""
+    """Return None when the helper can run, else one actionable failure record.
+
+    Nothing from the Pod package is imported until every prerequisite holds, so a
+    missing one produces guidance rather than a traceback.
+    """
     version = sys.version_info if version_info is None else version_info
     if tuple(version[:2]) < MIN_PYTHON:
         running = ".".join(str(part) for part in version[:3])
@@ -38,12 +50,8 @@ def preflight(version_info=None, find_spec=None, bundle=None):
         return {"code": "bundle_incomplete",
                 "message": ("Pod bundle at %s is incomplete (missing %s). Reinstall it: %s"
                             % (root, ", ".join(missing), REINSTALL))}
-    spec = importlib.util.find_spec if find_spec is None else find_spec
-    try:
-        found = spec("yaml")
-    except (ImportError, ValueError):
-        found = None
-    if found is None:
+    probe = _yaml_importable if find_spec is None else find_spec
+    if not probe():
         return {"code": "pyyaml_missing",
                 "message": ("PyYAML is not importable by %s. One user-space step installs it: %s "
                             "(or install your distribution's python-yaml package). Pod installs nothing itself."
