@@ -7,6 +7,7 @@ from unittest.mock import patch
 from pod.config import effective, personal_path, read_yaml, route_identity
 from pod.errors import PodError
 from pod.ledger import checkpoint, read, state_root
+from pod.util import native_home
 from tests.common import fixture
 
 
@@ -163,6 +164,62 @@ policy:
             self.assertEqual(caught.exception.code, "authority_expansion")
             local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 30}\n")
             self.assertEqual(effective(root, personal=personal)["policy"]["policy"]["quota_fresh_seconds"], 30)
+
+    def test_local_routing_can_tighten_but_not_weaken_or_replace_strict_pin(self):
+        with fixture() as root:
+            personal = root / "personal.yaml"
+            personal.write_text("schema: pod/v1\nrouting:\n  complex: {model: sol, effort: high, strict: true}\n")
+            (root / ".pod").mkdir()
+            local = root / ".pod" / "config.yaml"
+            for row in ("{strict: false}", "{model: terra}"):
+                local.write_text(f"schema: pod/v1\nrouting:\n  complex: {row}\n")
+                with self.assertRaises(PodError) as caught:
+                    effective(root, personal=personal)
+                self.assertEqual(caught.exception.code, "authority_expansion")
+            local.write_text("schema: pod/v1\nrouting:\n  complex: {effort: xhigh}\n")
+            row = effective(root, personal=personal)["policy"]["routing"]["complex"]
+            self.assertEqual(row, {"model": "sol", "effort": "xhigh", "strict": True})
+            with self.assertRaises(PodError) as task_layer:
+                effective(root, personal=personal,
+                          task={"schema": "pod/v1", "routing": {"complex": {"strict": False}}})
+            self.assertEqual(task_layer.exception.code, "authority_expansion")
+
+            personal.write_text("schema: pod/v1\nrouting:\n  complex: {model: sol, effort: high}\n")
+            local.write_text("schema: pod/v1\nrouting:\n  complex: {model: terra, strict: true}\n")
+            row = effective(root, personal=personal)["policy"]["routing"]["complex"]
+            self.assertEqual(row["model"], "terra")
+            self.assertTrue(row["strict"])
+
+    def test_native_home_variables_reject_relative_or_malformed_values(self):
+        with fixture() as root:
+            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "APPDATA", "LOCALAPPDATA",
+                         "CODEX_HOME", "CLAUDE_CONFIG_DIR"):
+                for value in ("", ".", "relative/path", "bad\x00path"):
+                    environment = {**os.environ, name: value}
+                    with self.subTest(name=name, value=repr(value)), patch.object(os, "environ", environment):
+                        with self.assertRaises(PodError) as caught:
+                            native_home(name, default=root / "safe-default")
+                        self.assertEqual(caught.exception.code, "invalid_native_home")
+                existing_file = root / f"{name}.txt"
+                existing_file.write_text("not a directory")
+                with patch.dict(os.environ, {name: str(existing_file)}):
+                    with self.assertRaises(PodError) as caught:
+                        native_home(name, default=root / "safe-default")
+                    self.assertEqual(caught.exception.code, "invalid_native_home")
+
+    def test_relative_xdg_homes_cannot_place_policy_or_state_in_project(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            previous = {name: os.environ[name] for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME")}
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": "relative-config",
+                                         "XDG_STATE_HOME": "relative-state"}):
+                with self.assertRaises(PodError):
+                    personal_path()
+                with self.assertRaises(PodError):
+                    state_root()
+                self.assertEqual(list(project.iterdir()), [])
+            self.assertEqual({name: os.environ[name] for name in previous}, previous)
 
     def test_changed_model_identity_invalidates_prior_approval_binding(self):
         with fixture() as root:

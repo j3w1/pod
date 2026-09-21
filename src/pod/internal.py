@@ -43,8 +43,10 @@ def run(operation: str, request: dict) -> dict:
         if (not effect or effect.get("state") != "confirmed" or not effect.get("native_binding")
                 or effect.get("packet_id") != request["packet"].get("packet_id")):
             raise PodError("report_attempt_unverified", "No confirmed native attempt binding")
+        binding = effect["native_binding"]
         return report(request["report"], request["packet"],
-                      {"runtime": effect["runtime"], **effect["native_binding"]})
+                      {"runtime": effect["runtime"], **{key: binding[key] for key in
+                       ("runId", "taskId", "dispatchId", "workerId")}})
     if operation == "source":
         exact(request, {"project", "path"}, {"project", "path"}, name="request")
         return source_identity(Path(request["project"]), request["path"])

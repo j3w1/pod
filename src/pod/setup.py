@@ -9,7 +9,7 @@ import os
 import yaml
 
 from .errors import PodError
-from .util import atomic_json, bounded_json
+from .util import atomic_json, bounded_json, native_home
 
 SKILL_FILES = ("SKILL.md", "references/planning.md", "references/routing.md",
                "references/native-effects.md", "references/verification.md")
@@ -37,8 +37,8 @@ def _relative_key(path: PurePath, root: PurePath) -> str:
 
 def _targets(project: Path, global_scope: bool) -> dict[str, Path]:
     if global_scope:
-        codex = (Path(os.environ["CODEX_HOME"]) / "skills" / "pod") if os.environ.get("CODEX_HOME") else Path.home() / ".agents" / "skills" / "pod"
-        claude = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "skills" / "pod"
+        codex = native_home("CODEX_HOME", default=Path.home() / ".agents") / "skills" / "pod"
+        claude = native_home("CLAUDE_CONFIG_DIR", default=Path.home() / ".claude") / "skills" / "pod"
     else:
         codex = project / ".agents" / "skills" / "pod"
         claude = project / ".claude" / "skills" / "pod"

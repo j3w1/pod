@@ -12,7 +12,7 @@ from .errors import PodError
 from .orca import effective_launch, require_prelaunch_assurance
 from .quota import validate_snapshot
 from .routing import quota_state
-from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home
+from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
 
 def state_root() -> Path:
@@ -20,11 +20,10 @@ def state_root() -> Path:
     if override is not None:
         return override
     if os.name == "nt":
-        root = os.environ.get("LOCALAPPDATA")
-        if not root:
+        if "LOCALAPPDATA" not in os.environ:
             raise PodError("state_home_unavailable", "LOCALAPPDATA is required for Pod state")
-        return Path(root) / "pod"
-    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "pod"
+        return native_home("LOCALAPPDATA") / "pod"
+    return native_home("XDG_STATE_HOME", default=Path.home() / ".local" / "state") / "pod"
 
 
 def _path(project: Path, objective: str) -> Path:
@@ -182,6 +181,63 @@ def _grant_matches(grant: dict | None, authorized: list, *, objective: str, run_
             and expiry.tzinfo is not None and now.tzinfo is not None and now <= expiry)
 
 
+def _spending_grant_binding(grants: list, supplied: object, *, requested: dict,
+                            objective: str, now: datetime) -> tuple[dict, int]:
+    """Rejoin the previewed exact grant and return its durable unit bound."""
+    if not isinstance(supplied, dict):
+        raise PodError("spending_grant_required", "Paid launch lacks its exact spending grant")
+    matches = [grant for grant in grants
+               if isinstance(grant, dict) and grant.get("id") == supplied.get("id")]
+    if len(matches) != 1:
+        raise PodError("spending_grant_required", "Paid launch grant identity is unavailable")
+    grant = matches[0]
+    expected = {"id": grant["id"], "identity": digest(grant), "units": 1,
+                "scope": digest({key: grant.get(key) for key in
+                                 ("id", "action", "account", "model", "objective")})}
+    try:
+        expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PodError("spending_grant_required", "Paid launch grant validity is invalid") from exc
+    if (supplied != expected or grant.get("action") != "paid_usage"
+            or grant.get("account") != requested.get("account")
+            or grant.get("model") != requested.get("model")
+            or grant.get("objective") != objective
+            or type(grant.get("max_units")) is not int or grant["max_units"] < 1
+            or expiry.tzinfo is None or now.tzinfo is None or now > expiry):
+        raise PodError("spending_grant_required", "Paid launch grant scope or validity changed")
+    return expected, grant["max_units"]
+
+
+def _spent_grant_units(binding: dict, requested: dict) -> int:
+    """Count durable reservations for one scoped grant across all local objectives."""
+    root = state_root()
+    if root.is_symlink():
+        raise PodError("unsafe_state", "State root is redirected")
+    used = 0
+    if not root.exists():
+        return used
+    for path in root.glob("*/context.json"):
+        state = _read(path)
+        for effect in state["effects"].values():
+            if not isinstance(effect, dict) or effect.get("state") not in ("reserved", "uncertain", "confirmed"):
+                continue
+            authorization = effect.get("spending_grant")
+            request = effect.get("request")
+            if authorization is None:
+                if (isinstance(request, dict) and request.get("account") == requested.get("account")
+                        and request.get("model") == requested.get("model")):
+                    raise PodError("spending_history_unverified", "Earlier matching launch lacks grant accounting")
+                continue
+            if not isinstance(authorization, dict):
+                raise PodError("state_migration_required", "Spending grant accounting is malformed")
+            units = authorization.get("units")
+            if type(units) is not int or units < 1 or not isinstance(authorization.get("scope"), str):
+                raise PodError("state_migration_required", "Spending grant accounting is malformed")
+            if authorization["scope"] == binding["scope"]:
+                used += units
+    return used
+
+
 def _bucket_overlap(provider: str, account: str, bucket: str | None, other: dict) -> bool:
     if other.get("account") == account:
         return True
@@ -225,7 +281,9 @@ def _local_occupancy() -> list[dict]:
                 if status == "confirmed":
                     binding = effect.get("native_binding")
                     if (not isinstance(binding, dict) or any(not isinstance(binding.get(field), str)
-                            or not binding[field] for field in ("dispatchId", "workerId", "runId", "taskId"))):
+                            or not binding[field] for field in ("dispatchId", "workerId", "runId", "taskId",
+                                                               "worktreeId", "terminalHandle",
+                                                               "terminalResourceId"))):
                         raise PodError("effect_identity_unverified", "Confirmed launch lacks exact native binding")
                     key = ("dispatch", runtime, binding["dispatchId"])
                     confirmed.setdefault(binding["dispatchId"], []).append(effect)
@@ -381,6 +439,20 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
     from .config import effective
     effective_policy = effective(project)
     policy = effective_policy["policy"]["policy"]
+    route_model = effective_policy["policy"]["models"].get(requested.get("alias"))
+    if isinstance(route_model, dict) and (route_model.get("agent") != requested.get("agent")
+            or route_model.get("model") != requested.get("model")
+            or route_model.get("account") != requested.get("account")):
+        raise PodError("route_unusable", "Requested route no longer matches effective policy")
+    current_time = now or datetime.now(timezone.utc)
+    spending_grant = None
+    spending_limit = None
+    if isinstance(route_model, dict) and route_model.get("billing", "unknown") != "included":
+        spending_grant, spending_limit = _spending_grant_binding(
+            policy["spending_grants"], route_decision.get("spending_grant"),
+            requested=requested, objective=objective, now=current_time)
+    elif route_decision.get("spending_grant") is not None:
+        raise PodError("spending_grant_mismatch", "Included route cannot consume a paid grant")
     if capacity <= 3:
         if capacity > min(policy["max_workers"], policy["ordinary_max"]):
             raise PodError("capacity_ceiling", "Capacity exceeds effective personal/ordinary policy")
@@ -429,9 +501,12 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
             prior = state["effects"].get(operation_id)
             if prior is not None:
                 if (prior["request"] != requested or prior.get("run_id") != run_id
-                        or prior.get("plan_revision") != plan_revision or prior.get("packet_id") != packet_id):
+                        or prior.get("plan_revision") != plan_revision or prior.get("packet_id") != packet_id
+                        or prior.get("spending_grant") != spending_grant):
                     raise PodError("operation_conflict", "Operation identity was reused with a changed request")
                 return {**prior, "existing": True}
+            if spending_grant is not None and _spent_grant_units(spending_grant, requested) + 1 > spending_limit:
+                raise PodError("spending_grant_exhausted", "Spending grant has no unreserved units")
             qstate, _ = quota_state(native.get("quota"), provider=requested["agent"],
                                     account=requested["account"], bucket=requested.get("bucket"),
                                     policy=policy,
@@ -456,7 +531,7 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                       "runtime": native["runtime"], "operation_id": operation_id,
                       "route_revision": route_decision["policy_revision"], "native_binding": None,
                       "run_id": run_id, "plan_revision": plan_revision, "bucket": bucket,
-                      "packet_id": packet_id,
+                      "packet_id": packet_id, "spending_grant": spending_grant,
                       "created_at": datetime.now(timezone.utc).isoformat()}
             state["effects"][operation_id] = effect
             _write(path, state)
@@ -482,18 +557,49 @@ def reconcile(project: Path, objective: str, *, owner: str, operation_id: str,
             worker = observed.get("worker_show")
             if not isinstance(worker, dict) or worker.get("dispatch", {}).get("id") != observed["dispatchId"]:
                 raise PodError("native_identity_unverified", "Worker readback does not join Dispatch")
+            native_dispatch = worker.get("dispatch")
             projection = worker.get("projection")
             if (not isinstance(projection, dict) or not isinstance(projection.get("id"), str)
                     or projection.get("dispatchId") != observed["dispatchId"]
                     or projection.get("runId") != observed["runId"]
                     or projection.get("taskId") != observed["taskId"]):
                 raise PodError("native_identity_unverified", "Worker identity is missing")
-            start_options = worker.get("worker", {}).get("startOptions")
+            native_worker = worker.get("worker")
+            resource = worker.get("terminalResource")
+            terminal = worker.get("terminal")
+            if (not isinstance(native_dispatch, dict)
+                    or native_dispatch.get("runId") != observed["runId"]
+                    or native_dispatch.get("taskId") != observed["taskId"]
+                    or not isinstance(native_worker, dict)
+                    or native_worker.get("dispatchId") != observed["dispatchId"]
+                    or not all(isinstance(native_worker.get(field), str) and native_worker[field]
+                               for field in ("worktreeId", "agentTerminalHandle"))
+                    or not isinstance(resource, dict)
+                    or not all(isinstance(resource.get(field), str) and resource[field]
+                               for field in ("id", "terminalHandle", "worktreeId"))
+                    or resource.get("originDispatchId") != observed["dispatchId"]
+                    or resource.get("ownerDispatchId") != observed["dispatchId"]
+                    or resource.get("worktreeId") != native_worker["worktreeId"]
+                    or resource.get("terminalHandle") != native_worker["agentTerminalHandle"]
+                    or resource.get("ownershipState") != "owned"
+                    or resource.get("releaseState") != "not_requested"
+                    or resource.get("retainedReason") is not None
+                    or resource.get("releaseRequestedAt") is not None
+                    or resource.get("releaseCompletedAt") is not None
+                    or resource.get("releaseError") is not None
+                    or resource.get("archive") != {"source": None, "status": None}
+                    or (terminal is not None and (not isinstance(terminal, dict)
+                                                  or terminal.get("handle") != native_worker["agentTerminalHandle"]))):
+                raise PodError("native_identity_unverified", "Worker terminal resource identity is missing or contradictory")
+            start_options = native_worker.get("startOptions")
             if not isinstance(start_options, dict) or start_options.get("launch") != observed["launch"]:
                 raise PodError("effective_launch_unverified", "Worker readback launch changed or is unavailable")
             effect["state"] = "confirmed"
             effect["native_binding"] = {"dispatchId": observed["dispatchId"], "workerId": projection["id"],
-                                        "taskId": observed["taskId"], "runId": observed["runId"]}
+                                        "taskId": observed["taskId"], "runId": observed["runId"],
+                                        "worktreeId": native_worker["worktreeId"],
+                                        "terminalHandle": native_worker["agentTerminalHandle"],
+                                        "terminalResourceId": resource["id"]}
         elif definitive_absence:
             # Only a native contract capable of proving operation-ID absence may
             # produce this flag; this API does not infer it from an empty list.

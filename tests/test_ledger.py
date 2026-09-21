@@ -20,6 +20,33 @@ def checkpoint_body():
             "questions": [], "verification_gaps": ["works"], "next_safe_action": "inspect"}
 
 
+def start_observation(route, *, operation="task-launch", dispatch="dispatch",
+                      worker="worker", task="task"):
+    launch = {key: route[key] for key in ("agent", "model", "effort")}
+    return {"runtime": "r", "operation_id": operation,
+            "launch": {"requested": launch, "effective": launch}, "state": "ready",
+            "runId": "run", "taskId": task, "dispatchId": dispatch,
+            "worker_show": {"dispatch": {"id": dispatch, "runId": "run", "taskId": task},
+                            "projection": {"id": worker, "dispatchId": dispatch,
+                                           "runId": "run", "taskId": task},
+                            "worker": {"dispatchId": dispatch, "worktreeId": "worktree",
+                                       "agentTerminalHandle": "terminal",
+                                       "startOptions": {"launch": {"requested": launch,
+                                                                      "effective": launch}}},
+                            "terminal": {"handle": "terminal"},
+                            "terminalResource": {"id": "resource", "terminalHandle": "terminal",
+                                                 "worktreeId": "worktree",
+                                                 "originDispatchId": dispatch,
+                                                 "ownerDispatchId": dispatch,
+                                                 "ownershipState": "owned",
+                                                 "releaseState": "not_requested",
+                                                 "retainedReason": None,
+                                                 "releaseRequestedAt": None,
+                                                 "releaseCompletedAt": None,
+                                                 "releaseError": None,
+                                                 "archive": {"source": None, "status": None}}}}
+
+
 def bind_confirmed_task(project, body=None):
     checkpoint(project, "objective", owner="terminal", value=body or checkpoint_body(), native={"runtime": "r"})
     route = {"agent": "codex", "model": "m", "account": "a", "bucket": None, "effort": "high"}
@@ -31,16 +58,8 @@ def bind_confirmed_task(project, body=None):
             native_reader=lambda: {"runtime": "r", "authoritative": True, "owner": "terminal",
                                    "scope": "all", "complete": True, "workers": [], "cross_host": False},
             capacity=1, run_id="run", plan_revision="plan")
-    launch = {key: route[key] for key in ("agent", "model", "effort")}
     reconcile(project, "objective", owner="terminal", operation_id="task-launch",
-              observed={"runtime": "r", "operation_id": "task-launch",
-                        "launch": {"requested": launch, "effective": launch}, "state": "ready",
-                        "runId": "run", "taskId": "task", "dispatchId": "dispatch",
-                        "worker_show": {"dispatch": {"id": "dispatch"},
-                                        "projection": {"id": "worker", "dispatchId": "dispatch",
-                                                       "runId": "run", "taskId": "task"},
-                                        "worker": {"startOptions": {"launch": {"requested": launch,
-                                                                               "effective": launch}}}}})
+              observed=start_observation(route))
 
 
 class LedgerTests(unittest.TestCase):
@@ -354,12 +373,7 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(reconcile(project, "objective", owner="terminal", operation_id="op", observed=None)["state"], "uncertain")
             with self.assertRaises(PodError):
                 reconcile(project, "objective", owner="terminal", operation_id="op", observed=None, definitive_absence=True)
-            launch = {key: route["selected"][key] for key in ("agent", "model", "effort")}
-            observed = {"runtime": "r", "operation_id": "op", "launch": {"requested": launch, "effective": launch},
-                        "state": "ready", "runId": "run", "taskId": "task", "dispatchId": "d",
-                        "worker_show": {"dispatch": {"id": "d"}, "projection": {
-                            "id": "w", "dispatchId": "d", "runId": "run", "taskId": "task"},
-                            "worker": {"startOptions": {"launch": {"requested": launch, "effective": launch}}}}}
+            observed = start_observation(route["selected"], operation="op", dispatch="d", worker="w")
             self.assertEqual(reconcile(project, "objective", owner="terminal", operation_id="op", observed=observed)["state"], "confirmed")
             self.assertIsNone(read(root / "unknown", "other"))
 

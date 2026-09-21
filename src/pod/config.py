@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 
 from .errors import PodError
-from .util import digest, exact, explicit_home
+from .util import digest, exact, explicit_home, native_home
 
 SCHEMA = "pod/v1"
 DEFAULT_WORKER_CAPACITY = 2
@@ -174,6 +174,9 @@ def validate(value: Any) -> dict:
         if field in policy:
             if not isinstance(policy[field], list) or len(policy[field]) > 32:
                 raise PodError("invalid_config", f"Invalid {field}")
+            grant_ids = [grant.get("id") for grant in policy[field] if isinstance(grant, dict)]
+            if len(grant_ids) != len(set(grant_ids)):
+                raise PodError("invalid_config", f"{field} grant ids must be unique")
             for grant in policy[field]:
                 exact(grant, {"id", "action", "account", "bucket", "model", "objective", "run", "plan_revision", "limit", "reason", "valid_until", "max_units"}, {"id", "action", "account", "valid_until"}, name="grant")
                 for required_string in ("id", "action", "account", "valid_until"):
@@ -206,11 +209,10 @@ def personal_path() -> Path:
     if override is not None:
         return override / "config.yaml"
     if os.name == "nt":
-        root = os.environ.get("APPDATA")
-        if not root:
+        if "APPDATA" not in os.environ:
             raise PodError("config_home_unavailable", "APPDATA is required for personal configuration")
-        return Path(root) / "pod" / "config.yaml"
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "pod" / "config.yaml"
+        return native_home("APPDATA") / "pod" / "config.yaml"
+    return native_home("XDG_CONFIG_HOME", default=Path.home() / ".config") / "pod" / "config.yaml"
 
 
 def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
@@ -227,6 +229,11 @@ def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
             base["models"][alias] = {**base["models"].get(alias, {}), **model}
         provenance[f"models.{alias}"] = scope
     for complexity, row in layer.get("routing", {}).items():
+        prior_row = base["routing"][complexity]
+        if (scope != "personal" and prior_row.get("strict") is True
+                and (row.get("strict") is False
+                     or ("model" in row and row["model"] != prior_row.get("model")))):
+            raise PodError("authority_expansion", "Project/task routing cannot weaken or replace a strict pin")
         base["routing"][complexity].update(row)
         provenance[f"routing.{complexity}"] = scope
     for key, val in layer.get("policy", {}).items():

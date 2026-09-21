@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -30,6 +31,8 @@ class FixturePort:
         self.fail_release = False
         self.quota = None
         self.resource_state = None
+        self.started = {}
+        self.terminal_visible = True
 
     def assurance(self, route):
         return {"runtime": "runtime", "billing_preflight": self.assured, "fanout_control": self.assured,
@@ -45,26 +48,74 @@ class FixturePort:
     def start_worker(self, *, run, task, owner, route):
         self.starts += 1
         launch = {key: route[key] for key in ("agent", "model", "effort")}
-        return {"runtime": "runtime", "runId": run, "taskId": task, "dispatchId": "dispatch",
+        dispatch = "dispatch" if self.starts == 1 else f"dispatch-{self.starts}"
+        self.settled = False
+        self.resource_state = None
+        self.release_calls = 0
+        self.started[dispatch] = {"run": run, "task": task, "launch": launch}
+        return {"runtime": "runtime", "runId": run, "taskId": task, "dispatchId": dispatch,
                 "state": "ready", "launch": {"requested": launch, "effective": launch},
                 **self.receipt_override}
 
     def show_worker(self, dispatch):
-        launch = {"agent": "codex", "model": "gpt-5.6-sol", "effort": "high"}
+        started = self.started.get(dispatch, {"run": "run", "task": "task",
+                                              "launch": {"agent": "codex", "model": "gpt-5.6-sol",
+                                                         "effort": "high"}})
+        launch = dict(started["launch"])
+        resource_state = self.resource_state
+        if resource_state is None and self.release_calls and self.release_status in ("released", "already_released"):
+            resource_state = "released"
+        elif resource_state is None and self.release_calls and self.release_status == "retained" and not self.fail_release:
+            resource_state = "retained"
+        elif resource_state is None:
+            resource_state = "not_requested"
+        if resource_state in ("released", "already_released"):
+            resource = {"ownershipState": "released", "releaseState": "released",
+                        "retainedReason": None, "releaseRequestedAt": "2026-09-20T00:00:00+00:00",
+                        "releaseCompletedAt": "2026-09-20T00:00:01+00:00", "releaseError": None,
+                        "archive": {"source": "transcript", "status": "captured"}}
+            terminal = {"handle": f"term-{dispatch}", "connected": False, "writable": False,
+                        "exitCause": {"kind": "operator_close"}}
+            observation = {"status": "exited", "exactWorker": True}
+        elif resource_state == "retained":
+            resource = {"ownershipState": "user_owned", "releaseState": "retained",
+                        "retainedReason": "user_takeover", "releaseRequestedAt": None,
+                        "releaseCompletedAt": None, "releaseError": None,
+                        "archive": {"source": None, "status": None}}
+            terminal = {"handle": f"term-{dispatch}"}
+            observation = {"status": "settled", "exactWorker": True}
+        else:
+            resource = {"ownershipState": "owned", "releaseState": "not_requested",
+                        "retainedReason": None, "releaseRequestedAt": None,
+                        "releaseCompletedAt": None, "releaseError": None,
+                        "archive": {"source": None, "status": None}}
+            terminal = {"handle": f"term-{dispatch}", "connected": True, "writable": True}
+            observation = {"status": "live", "exactWorker": True}
+        if resource_state == "not_requested" and not self.terminal_visible:
+            terminal = None
+        resource.update({"id": f"resource-{dispatch}", "terminalHandle": f"term-{dispatch}",
+                         "worktreeId": "worktree", "originDispatchId": dispatch,
+                         "ownerDispatchId": dispatch})
         return {"runtime": "runtime", "result": {"dispatch": {
-                    "id": dispatch, "runId": "run", "taskId": "task",
-                    "status": "completed" if self.settled else "active"},
-                "projection": {"id": "worker", "runId": "run", "taskId": "task", "dispatchId": dispatch},
-                "worker": {"dispatchId": dispatch, "startOptions": {
-                    "launch": {"requested": launch, "effective": launch}}}, "terminal": None,
-                "terminalResource": {"releaseState": self.resource_state or "released"}
-                if self.resource_state or (self.release_status == "released" and self.release_calls) else None}}
+                    "id": dispatch, "runId": started["run"], "taskId": started["task"],
+                    "status": "completed" if self.settled else "dispatched",
+                    "lastFailure": None},
+                "projection": {"id": f"worker-{dispatch}", "runId": started["run"],
+                               "taskId": started["task"], "dispatchId": dispatch},
+                "worker": {"dispatchId": dispatch, "worktreeId": "worktree",
+                           "agentTerminalHandle": f"term-{dispatch}",
+                           "state": "succeeded" if self.settled else "ready",
+                           "stage": "settled" if self.settled else "input_accepted",
+                           "lastError": None,
+                           "startOptions": {"launch": {"requested": dict(launch),
+                                                        "effective": dict(launch)}}},
+                "terminal": terminal, "observation": observation, "terminalResource": resource}}
 
     def release_worker(self, dispatch):
         self.release_calls += 1
         if self.fail_release:
             raise PodError("native_release_uncertain", "lost response")
-        return {"runtime": "runtime", "status": self.release_status}
+        return {"runtime": "runtime", "dispatchId": dispatch, "status": self.release_status}
 
 
 def inputs(root):
@@ -115,6 +166,127 @@ def frozen_for(project, *, sources=None, context=None):
 
 
 class GuardedOperationTests(unittest.TestCase):
+    def test_paid_grant_units_are_durably_reserved_before_distinct_starts(self):
+        with fixture() as root, patch.dict(os.environ, {
+                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            config = root / "config" / "pod" / "config.yaml"
+            config.write_text(config.read_text().replace("billing: included", "billing: paid") + """policy:
+  spending_grants:
+    - id: paid-once
+      action: paid_usage
+      account: account
+      model: gpt-5.6-sol
+      objective: objective
+      valid_until: '2026-09-21T00:00:00Z'
+      max_units: 1
+""")
+            port = FixturePort()
+            first = guarded_start(project, "objective", owner="owner", run="run", task="task-one",
+                                  operation_id="paid-one", assessment=assessment, capabilities=caps,
+                                  quotas=quota, occupancy={}, plan_revision="plan", capacity=2,
+                                  port=port, now=NOW)
+            authorization = first["effect"]["spending_grant"]
+            self.assertEqual(authorization["id"], "paid-once")
+            self.assertEqual(authorization["units"], 1)
+            self.assertTrue(authorization["identity"])
+            self.assertTrue(authorization["scope"])
+            with self.assertRaises(PodError) as exhausted:
+                guarded_start(project, "objective", owner="owner", run="run", task="task-two",
+                              operation_id="paid-two", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", capacity=2,
+                              port=port, now=NOW)
+            self.assertEqual(exhausted.exception.code, "spending_grant_exhausted")
+            self.assertEqual(port.starts, 1)
+            self.assertNotIn("paid-two", read(project, "objective")["effects"])
+            with self.assertRaises(PodError) as replayed:
+                guarded_start(project, "objective", owner="owner", run="run", task="task-one",
+                              operation_id="paid-one", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", capacity=2,
+                              port=port, now=NOW)
+            self.assertEqual(replayed.exception.code, "operation_already_recorded")
+            self.assertEqual(port.starts, 1)
+
+    def test_contradictory_release_readback_retains_occupancy(self):
+        with fixture() as root, patch.dict(os.environ, {
+                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            guarded_start(project, "objective", owner="owner", run="run", task="task",
+                          operation_id="first", assessment=assessment, capabilities=caps,
+                          quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+            port.settled = True
+            port.resource_state = "released"
+            valid = port.show_worker("dispatch")
+            mutations = (
+                lambda value: value["result"]["terminalResource"].update({"id": "unbound-resource"}),
+                lambda value: value["result"]["terminalResource"].update({"ownershipState": "owned"}),
+                lambda value: value["result"]["terminalResource"].update({"releaseError": "release failed"}),
+                lambda value: value["result"]["terminal"].update({"connected": True, "writable": True}),
+                lambda value: value["result"]["terminalResource"]["archive"].update({"status": "pending"}),
+                lambda value: value["result"]["dispatch"].update({"status": "active"}),
+                lambda value: value["result"]["worker"].update({"stage": "input_accepted"}),
+                lambda value: value["result"]["terminalResource"].update({"releaseCompletedAt": None}),
+                lambda value: value["result"]["terminal"].update({"handle": "other-terminal"}),
+                lambda value: value["result"]["observation"].update({"status": "live"}),
+                lambda value: value["result"]["observation"].update({"exactWorker": False}),
+            )
+            route = frozen_for(project)["body"]["route"]
+            decision = {"status": "usable", "selected": route,
+                        "policy_revision": effective(project)["revision"]}
+            for index, mutate in enumerate(mutations):
+                contradictory = deepcopy(valid)
+                mutate(contradictory)
+                with self.subTest(index=index), patch.object(port, "show_worker", return_value=contradictory):
+                    try:
+                        outcome = reconcile_release(project, "objective", owner="owner",
+                                                    dispatch="dispatch", port=port)
+                    except PodError as held:
+                        self.assertEqual(held.code, "release_identity_unverified")
+                    else:
+                        self.assertEqual(outcome["status"], "confirmed")
+                self.assertEqual(read(project, "objective")["cleanup"], {})
+                with self.assertRaises(PodError) as occupied:
+                    reserve(project, "objective", owner="owner", operation_id=f"replacement-{index}",
+                            requested=route, route_decision=decision,
+                            capability_contract=port.assurance(route),
+                            native_reader=lambda: port.read_native("owner"), capacity=1,
+                            run_id="run", plan_revision="plan", now=NOW)
+                self.assertEqual(occupied.exception.code, "capacity_full")
+            self.assertEqual(reconcile_release(project, "objective", owner="owner",
+                                               dispatch="dispatch", port=port)["status"], "released")
+            self.assertEqual(port.release_calls, 0)
+
+    def test_release_requires_installed_owned_archive_and_connected_terminal_shape(self):
+        with fixture() as root, patch.dict(os.environ, {
+                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            guarded_start(project, "objective", owner="owner", run="run", task="task",
+                          operation_id="first", assessment=assessment, capabilities=caps,
+                          quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+            port.settled = True
+            for field, value in (("archive", None), ("terminal", {
+                    "handle": "term-dispatch", "connected": False, "writable": False})):
+                wrong = port.show_worker("dispatch")
+                if field == "archive":
+                    wrong["result"]["terminalResource"][field] = value
+                else:
+                    wrong["result"][field] = value
+                with self.subTest(field=field), patch.object(port, "show_worker", return_value=wrong):
+                    with self.assertRaises(PodError) as held:
+                        release_once(project, "objective", owner="owner",
+                                     dispatch="dispatch", port=port)
+                    self.assertEqual(held.exception.code, "release_identity_unverified")
+                self.assertEqual(port.release_calls, 0)
+                self.assertEqual(read(project, "objective")["cleanup"], {})
+            self.assertEqual(release_once(project, "objective", owner="owner",
+                                          dispatch="dispatch", port=port)["status"], "retained")
+            self.assertEqual(port.release_calls, 1)
+
     def test_occupancy_state_cleanup_fleet_matrix(self):
         """Both admission consumers honor one unresolved worker identity."""
         cases = [(effect, cleanup, fleet, consumer)
@@ -160,8 +332,6 @@ class GuardedOperationTests(unittest.TestCase):
                                              dispatch="dispatch", port=port)
                         else:
                             port.release_status = cleanup_state
-                            if cleanup_state == "already_released":
-                                port.resource_state = "already_released"
                             self.assertEqual(release_once(project, "objective", owner="owner",
                                                           dispatch="dispatch", port=port)["status"],
                                              cleanup_state)
@@ -723,12 +893,13 @@ class GuardedOperationTests(unittest.TestCase):
                                                           "APPDATA": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
+            port.terminal_visible = False
             kw = dict(owner="owner", run="run", task="task", operation_id="op",
                       assessment=assessment, capabilities=caps, quotas=quota,
                       occupancy={}, plan_revision="plan", port=port, now=NOW)
             result = guarded_start(project, "objective", **kw)
             self.assertEqual(result["status"], "confirmed")
-            self.assertEqual(result["effect"]["native_binding"]["workerId"], "worker")
+            self.assertEqual(result["effect"]["native_binding"]["workerId"], "worker-dispatch")
             self.assertEqual(port.starts, 1)
             self.assertEqual(port.reads, 1)
             with self.assertRaises(PodError):

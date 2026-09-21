@@ -81,7 +81,10 @@ class OrcaPort:
 
 def _release_readback_matches(shown: dict, runtime: str, dispatch: str, binding: dict) -> bool:
     result = shown.get("result")
-    if not isinstance(result, dict) or shown.get("runtime") != runtime:
+    if (not isinstance(result, dict) or shown.get("runtime") != runtime
+            or any(not isinstance(binding.get(field), str) or not binding[field]
+                   for field in ("runId", "taskId", "workerId", "worktreeId",
+                                 "terminalHandle", "terminalResourceId"))):
         return False
     native_dispatch = result.get("dispatch")
     projection = result.get("projection")
@@ -95,7 +98,91 @@ def _release_readback_matches(shown: dict, runtime: str, dispatch: str, binding:
             and projection.get("runId") == binding["runId"]
             and projection.get("taskId") == binding["taskId"]
             and projection.get("dispatchId") == dispatch
-            and worker.get("dispatchId") == dispatch)
+            and worker.get("dispatchId") == dispatch
+            and worker.get("worktreeId") == binding["worktreeId"]
+            and worker.get("agentTerminalHandle") == binding["terminalHandle"]
+            and isinstance(result.get("terminalResource"), dict)
+            and result["terminalResource"].get("id") == binding["terminalResourceId"]
+            and result["terminalResource"].get("terminalHandle") == binding["terminalHandle"]
+            and result["terminalResource"].get("worktreeId") == binding["worktreeId"]
+            and result["terminalResource"].get("originDispatchId") == dispatch
+            and result["terminalResource"].get("ownerDispatchId") == dispatch)
+
+
+def _settled_execution(result: dict, binding: dict) -> bool:
+    native_dispatch = result.get("dispatch")
+    worker = result.get("worker")
+    if not isinstance(native_dispatch, dict) or not isinstance(worker, dict):
+        return False
+    required_dispatch = {"status", "lastFailure"}
+    required_worker = {"state", "stage", "lastError"}
+    if not required_dispatch <= set(native_dispatch) or not required_worker <= set(worker):
+        return False
+    succeeded = (native_dispatch["status"], native_dispatch["lastFailure"],
+                 worker["state"], worker["stage"], worker["lastError"]) == (
+                     "completed", None, "succeeded", "settled", None)
+    failed = (native_dispatch["status"], native_dispatch["lastFailure"],
+              worker["state"], worker["stage"], worker["lastError"]) == (
+                  "failed", "worker_failed", "failed", "settled", "worker_failed")
+    return (succeeded or failed) and worker.get("agentTerminalHandle") == binding["terminalHandle"]
+
+
+def _resource_disposition(result: dict, binding: dict, disposition: str) -> bool:
+    resource = result.get("terminalResource")
+    if not isinstance(resource, dict):
+        return False
+    required = {"ownershipState", "releaseState", "retainedReason", "releaseRequestedAt",
+                "releaseCompletedAt", "releaseError", "archive"}
+    if not required <= set(resource):
+        return False
+    if disposition == "owned":
+        terminal = result.get("terminal")
+        return (resource["ownershipState"] == "owned"
+                and resource["releaseState"] == "not_requested"
+                and resource["retainedReason"] is None
+                and resource["releaseRequestedAt"] is None
+                and resource["releaseCompletedAt"] is None
+                and resource["releaseError"] is None
+                and resource["archive"] == {"source": None, "status": None}
+                and isinstance(terminal, dict)
+                and terminal.get("handle") == binding["terminalHandle"]
+                and terminal.get("connected") is True
+                and terminal.get("writable") is True)
+    archive = resource["archive"]
+    if disposition == "released":
+        terminal = result.get("terminal")
+        observation = result.get("observation")
+        return (resource["ownershipState"] == "released"
+                and resource["releaseState"] == "released"
+                and resource["retainedReason"] is None
+                and resource["releaseError"] is None
+                and isinstance(resource["releaseRequestedAt"], str)
+                and bool(resource["releaseRequestedAt"])
+                and isinstance(resource["releaseCompletedAt"], str)
+                and bool(resource["releaseCompletedAt"])
+                and isinstance(archive, dict)
+                and archive.get("source") == "transcript"
+                and archive.get("status") == "captured"
+                and isinstance(terminal, dict)
+                and terminal.get("handle") == binding["terminalHandle"]
+                and terminal.get("connected") is False
+                and terminal.get("writable") is False
+                and isinstance(terminal.get("exitCause"), dict)
+                and terminal["exitCause"].get("kind") == "operator_close"
+                and isinstance(observation, dict)
+                and observation.get("status") == "exited"
+                and observation.get("exactWorker") is True)
+    if disposition == "retained":
+        return (resource["ownershipState"] == "user_owned"
+                and resource["releaseState"] == "retained"
+                and resource["retainedReason"] == "user_takeover"
+                and resource["releaseError"] is None
+                and resource["releaseRequestedAt"] is None
+                and resource["releaseCompletedAt"] is None
+                and isinstance(archive, dict)
+                and archive.get("source") is None
+                and archive.get("status") is None)
+    return False
 
 
 def _release_launch_matches(shown: dict, effect: dict) -> bool:
@@ -181,10 +268,10 @@ def release_once(project: Path, objective: str, *, owner: str, dispatch: str,
         binding = effect["native_binding"]
         shown = native_port.show_worker(dispatch)
         result = shown.get("result", {})
-        native_dispatch = result.get("dispatch", {})
         if (not _release_readback_matches(shown, effect["runtime"], dispatch, binding)
-                or native_dispatch.get("status") not in ("completed", "failed")
-                or not _release_launch_matches(shown, effect)):
+                or not _settled_execution(result, binding)
+                or not _release_launch_matches(shown, effect)
+                or not _resource_disposition(result, binding, "owned")):
             raise PodError("release_identity_unverified", "Native settlement or worker identity is unproven")
         state["cleanup"][dispatch] = {"schema": "pod-cleanup/v1", "state": "reserved",
                                       "binding": binding, "runtime": shown["runtime"],
@@ -192,19 +279,19 @@ def release_once(project: Path, objective: str, *, owner: str, dispatch: str,
         _write(path, state)
     try:
         receipt = native_port.release_worker(dispatch)
-        if receipt.get("runtime") != shown["runtime"]:
+        if receipt.get("runtime") != shown["runtime"] or receipt.get("dispatchId") != dispatch:
             raise PodError("native_release_uncertain", "Release runtime changed")
         disposition = receipt.get("status", receipt.get("state"))
         if disposition not in ("released", "already_released", "retained"):
             raise PodError("native_release_uncertain", "Release disposition needs exact reconciliation")
         after = native_port.show_worker(dispatch)
         if (not _release_readback_matches(after, shown["runtime"], dispatch, binding)
+                or not _settled_execution(after.get("result", {}), binding)
                 or not _release_launch_matches(after, effect)):
             raise PodError("native_release_uncertain", "Post-release readback identity changed")
-        resource = after["result"].get("terminalResource")
-        if disposition in ("released", "already_released") and (
-                not isinstance(resource, dict) or resource.get("releaseState") not in ("released", "already_released")):
-            raise PodError("native_release_uncertain", "Released resource readback is unavailable")
+        expected_disposition = "released" if disposition in ("released", "already_released") else "retained"
+        if not _resource_disposition(after["result"], binding, expected_disposition):
+            raise PodError("native_release_uncertain", "Release resource proof is contradictory or incomplete")
         with _lock(path):
             state = _read(path)
             state["cleanup"][dispatch]["state"] = disposition
@@ -238,22 +325,21 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
             binding = effect["native_binding"]
             if (not isinstance(effect.get("runtime"), str) or not effect["runtime"]
                     or any(not isinstance(binding.get(field), str) or not binding[field]
-                           for field in ("dispatchId", "workerId", "runId", "taskId"))):
+                           for field in ("dispatchId", "workerId", "runId", "taskId", "worktreeId",
+                                         "terminalHandle", "terminalResourceId"))):
                 raise PodError("release_identity_unverified", "Confirmed worker binding is incomplete")
             shown = native_port.show_worker(dispatch)
             if (not _release_readback_matches(shown, effect["runtime"], dispatch, binding)
                     or not _release_launch_matches(shown, effect)):
                 raise PodError("release_identity_unverified", "Native release readback or launch changed")
             result = shown["result"]
-            resource = result.get("terminalResource")
-            release_state = resource.get("releaseState") if isinstance(resource, dict) else None
-            if (result["dispatch"].get("status") in ("completed", "failed")
-                    and release_state in ("released", "already_released")):
-                state["cleanup"][dispatch] = {"schema": "pod-cleanup/v1", "state": release_state,
+            if (_settled_execution(result, binding)
+                    and _resource_disposition(result, binding, "released")):
+                state["cleanup"][dispatch] = {"schema": "pod-cleanup/v1", "state": "released",
                                               "binding": binding, "runtime": shown["runtime"],
                                               "repeat_allowed": False}
                 _write(path, state)
-                return {"status": release_state, "dispatch": dispatch, "source": "native_readback"}
+                return {"status": "released", "dispatch": dispatch, "source": "native_readback"}
             return {"status": "confirmed", "dispatch": dispatch,
                     "next_safe_action": "inspect native recovery metadata"}
         cleanup = state["cleanup"][dispatch]
@@ -265,19 +351,19 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
             return {"status": cleanup["state"], "dispatch": dispatch}
         shown = native_port.show_worker(dispatch)
         result = shown.get("result", {})
-        resource = result.get("terminalResource")
         binding = cleanup["binding"]
         effect = _confirmed_release_effect(state, dispatch)
         if (effect.get("native_binding") != binding or effect.get("runtime") != cleanup["runtime"]
                 or not _release_readback_matches(shown, cleanup["runtime"], dispatch, binding)
+                or not _settled_execution(result, binding)
                 or not _release_launch_matches(shown, effect)):
             raise PodError("release_identity_unverified", "Native release readback or launch changed")
-        if isinstance(resource, dict) and resource.get("releaseState") in ("released", "already_released"):
+        if _resource_disposition(result, binding, "released"):
             cleanup["state"] = "released"
             _write(path, state)
             return {"status": "released", "dispatch": dispatch, "source": "native_readback"}
-        if (cleanup["state"] in ("reserved", "uncertain") and isinstance(resource, dict)
-                and resource.get("releaseState") == "retained"):
+        if (cleanup["state"] in ("reserved", "uncertain")
+                and _resource_disposition(result, binding, "retained")):
             cleanup["state"] = "retained"
             _write(path, state)
             return {"status": "retained", "dispatch": dispatch, "source": "native_readback"}

@@ -58,6 +58,20 @@ class SetupCliTests(unittest.TestCase):
             self.assertEqual(list(project.iterdir()), [])
             self.assertEqual((root / "codex" / "skills" / "pod" / "SKILL.md").read_bytes(), canonical()["SKILL.md"])
 
+    def test_relative_native_skill_homes_fail_before_global_project_write(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            for name in ("CODEX_HOME", "CLAUDE_CONFIG_DIR"):
+                values = {"CODEX_HOME": str(root / "codex"),
+                          "CLAUDE_CONFIG_DIR": str(root / "claude"), name: "relative-home"}
+                with self.subTest(name=name), patch.dict(os.environ, values):
+                    with self.assertRaises(PodError) as caught:
+                        setup(project, global_scope=True)
+                    self.assertEqual(caught.exception.code, "invalid_native_home")
+                    self.assertEqual(list(project.iterdir()), [])
+                    self.assertFalse((project / "relative-home").exists())
+
     def test_doctor_diagnoses_duplicate_scopes_without_repair(self):
         with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "codex"),
                                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):

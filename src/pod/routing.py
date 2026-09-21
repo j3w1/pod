@@ -70,7 +70,8 @@ def quota_state(snapshot: dict | None, *, provider: str | None, account: str | N
     return "normal", "supported quota observation"
 
 
-def _grant(grants: list, *, action: str, route: dict, objective: str | None, units: int, now: datetime) -> str | None:
+def _grant(grants: list, *, action: str, route: dict, objective: str | None,
+           units: int, now: datetime) -> dict | None:
     for grant in grants:
         if grant.get("action") != action or grant.get("account") != route.get("account"):
             continue
@@ -85,7 +86,9 @@ def _grant(grants: list, *, action: str, route: dict, objective: str | None, uni
         except (TypeError, ValueError):
             continue
         if expiry.tzinfo is not None and now.tzinfo is not None and now <= expiry:
-            return grant["id"]
+            return {"id": grant["id"], "identity": digest(grant), "units": units,
+                    "scope": digest({key: grant.get(key) for key in
+                                     ("id", "action", "account", "model", "objective")})}
     return None
 
 
@@ -102,7 +105,7 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
     preferred_effort = rows[a["complexity"]]["effort"]
     pin = strict_pin or (preferred if rows[a["complexity"]].get("strict") else None)
     reasons: dict[str, list[str]] = {}
-    feasible: list[tuple[str, dict, str, str]] = []
+    feasible: list[tuple[str, dict, str, str, dict | None]] = []
     if safety_refusal:
         return {"schema": "pod-route/v1", "status": "blocked", "preferred": preferred,
                 "selected": None, "reason": "provider safety refusal; rerouting prohibited",
@@ -151,6 +154,7 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
             if advertised.get("fanout_control") is not True or advertised.get("billing_preflight") is not True:
                 reject.append("pre-dispatch fan-out or billing control is unverified")
         billing = model.get("billing", "unknown")
+        grant = None
         if billing != "included":
             grant = _grant(rules["spending_grants"], action="paid_usage", route=model, objective=objective, units=1, now=now)
             if grant is None:
@@ -169,19 +173,20 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
         if reject:
             reasons[alias] = reject
         else:
-            feasible.append((alias, model, effort, qstate))
+            feasible.append((alias, model, effort, qstate, grant))
     order = [preferred] + [x for x in models if x != preferred]
     chosen = next((x for name in order for x in feasible if x[0] == name), None)
     if chosen is None:
         return {"schema": "pod-route/v1", "status": "blocked", "preferred": preferred,
                 "selected": None, "reason": "no approved, usable route", "rejections": reasons,
                 "policy_revision": effective["revision"]}
-    alias, model, effort, qstate = chosen
+    alias, model, effort, qstate, grant = chosen
     route = {"alias": alias, "agent": model["agent"], "model": model["model"], "account": model["account"],
              "bucket": caps[alias].get("bucket"), "effort": effort}
     return {"schema": "pod-route/v1", "status": "usable", "preferred": preferred,
             "selected": route, "reason": "preferred" if alias == preferred else "preferred infeasible: " + "; ".join(reasons.get(preferred, [])),
             "rejections": reasons, "quota_state": qstate, "approval_ref": model["approval_ref"],
+            "spending_grant": grant,
             "policy_revision": effective["revision"], "assessment_digest": digest(a),
             "catalog_revision": digest(caps)}
 

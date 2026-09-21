@@ -32,6 +32,25 @@ def explicit_home(name: str) -> Path | None:
     return path
 
 
+def native_home(name: str, *, default: Path | None = None) -> Path:
+    """Resolve a native profile home without allowing cwd-relative authority."""
+    if name not in os.environ:
+        if default is None:
+            raise PodError("native_home_unavailable", f"{name} is required")
+        path = default
+    else:
+        value = os.environ[name]
+        if not value or len(value) > 4096 or "\x00" in value:
+            raise PodError("invalid_native_home", f"{name} must be an absolute directory path")
+        try:
+            path = Path(value)
+        except (OSError, ValueError) as exc:
+            raise PodError("invalid_native_home", f"{name} must be an absolute directory path") from exc
+    if not path.is_absolute() or (path.exists() and not path.is_dir()):
+        raise PodError("invalid_native_home", f"{name} must be an absolute directory path")
+    return path
+
+
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
