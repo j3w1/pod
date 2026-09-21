@@ -11,7 +11,7 @@ from pod.orca import account_metadata, effective_launch, read_command, worker_ro
 
 class OrcaAdapterTests(unittest.TestCase):
     def test_pod_location_overrides_do_not_replace_native_subprocess_profile(self):
-        native = {"APPDATA": "native-appdata", "LOCALAPPDATA": "native-localappdata",
+        native = {
                   "CODEX_HOME": "native-codex", "CLAUDE_CONFIG_DIR": "native-claude"}
         overrides = {"POD_CONFIG_HOME": "/isolated/pod-config", "POD_STATE_HOME": "/isolated/pod-state"}
 
@@ -62,7 +62,7 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(metadata["providers"]["claude"]["freshness"], "stale")
         self.assertEqual(metadata["providers"]["claude"]["windows"]["session"]["usedPercent"], 20)
         self.assertNotIn("secret", json.dumps(metadata))
-        self.assertEqual(metadata["providers"]["claude"]["account_association"], "unknown")
+        self.assertEqual(metadata["providers"]["claude"]["account_association"], "host_login")
 
     def test_actual_receipt_shape_and_optional_terminal(self):
         request = {"agent": "codex", "model": "m", "effort": "high"}

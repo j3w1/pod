@@ -1,6 +1,6 @@
 import unittest
 
-from pod.release import LIVE_CHECKS, REQUIRED_GATES, release_gate
+from pod.release import DELEGATION_CHECKS, LIVE_CHECKS, REQUIRED_GATES, release_gate
 from pod.errors import PodError
 
 COMMIT = "1" * 40
@@ -12,15 +12,21 @@ SHA256_TREE = "6" * 64
 
 
 def row(gate, outcome="PASS"):
-    host = ("Linux" if gate.endswith("_linux") else
-            "Windows" if gate.endswith("_windows") else "Linux")
     value = {"schema": "pod-validation/v1", "candidate": COMMIT, "tree": TREE,
-             "host": host, "utc": "2026-09-20T00:00:00Z", "gate": gate,
+             "host": "Linux", "utc": "2026-09-20T00:00:00Z", "gate": gate,
              "command": "bounded check", "outcome": outcome,
              "report": f"reports/{gate}.txt sha256:{REPORT_DIGEST}"}
     if gate.startswith("live_"):
         value["checks"] = {name: "PASS" for name in LIVE_CHECKS}
+    if gate.startswith("orca_delegation_"):
+        value["checks"] = {name: "PASS" for name in DELEGATION_CHECKS}
     return value
+
+
+def authorization(candidate=COMMIT, tree=TREE, scope=("merge", "release")):
+    return {"schema": "pod-release-authorization/v1", "candidate": candidate, "tree": tree,
+            "scope": list(scope), "authorized_by": "owner instruction",
+            "utc": "2026-09-21T00:00:00Z", "reference": "tasks/pod/authorization.md"}
 
 
 class ReleaseGateTests(unittest.TestCase):
@@ -28,7 +34,7 @@ class ReleaseGateTests(unittest.TestCase):
         records = [row(gate) for gate in REQUIRED_GATES if not gate.startswith("live_")]
         result = release_gate(COMMIT, TREE, records)
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["gates"]["live_codex_windows"], "NOT_RUN")
+        self.assertEqual(result["gates"]["live_codex_linux"], "NOT_RUN")
         self.assertFalse(result["release_authorized"])
 
     def test_all_records_only_request_owner_decision(self):
@@ -46,28 +52,67 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["gates"]["skill_validation"], "NOT_RUN")
 
-    def test_hosted_linux_and_windows_are_independently_required(self):
-        self.assertIn("hosted_ci_linux", REQUIRED_GATES)
-        self.assertIn("hosted_ci_windows", REQUIRED_GATES)
-        for missing in ("hosted_ci_linux", "hosted_ci_windows"):
-            with self.subTest(missing=missing):
-                records = [row(gate) for gate in REQUIRED_GATES if gate != missing]
+    def test_gate_list_is_linux_only_and_covers_delegation_and_packaging(self):
+        self.assertNotIn("matched_evaluation", REQUIRED_GATES)
+        self.assertFalse([gate for gate in REQUIRED_GATES if gate.endswith("_windows")])
+        for gate in ("hosted_ci_linux", "skill_bundle_parity", "skills_cli_install",
+                     "bundle_copy_form", "orca_delegation_codex", "orca_delegation_claude"):
+            with self.subTest(gate=gate):
+                self.assertIn(gate, REQUIRED_GATES)
+                records = [row(other) for other in REQUIRED_GATES if other != gate]
                 result = release_gate(COMMIT, TREE, records)
                 self.assertEqual(result["status"], "blocked")
-                self.assertEqual(result["gates"][missing], "NOT_RUN")
-        complete = release_gate(COMMIT, TREE, [row(gate) for gate in REQUIRED_GATES])
-        self.assertEqual(complete["status"], "owner_decision_required")
-        self.assertFalse(complete["release_authorized"])
+                self.assertEqual(result["gates"][gate], "NOT_RUN")
 
-    def test_os_labelled_gates_reject_single_host_spoofing(self):
-        for host in ("Linux", "Windows"):
+    def test_non_linux_host_is_rejected(self):
+        for host in ("Windows", "Darwin", "linux"):
             with self.subTest(host=host):
-                records = [row(gate) for gate in REQUIRED_GATES]
-                for record in records:
-                    record["host"] = host
+                records = [{**row("unit_linux"), "host": host}]
                 with self.assertRaises(PodError) as caught:
                     release_gate(COMMIT, TREE, records)
                 self.assertEqual(caught.exception.code, "invalid_validation")
+
+    def test_delegation_record_needs_every_subcheck(self):
+        records = [row(gate) for gate in REQUIRED_GATES]
+        delegation = next(x for x in records if x["gate"] == "orca_delegation_claude")
+        delegation["checks"]["delivery"] = "NOT_RUN"
+        result = release_gate(COMMIT, TREE, records)
+        self.assertEqual(result["gates"]["orca_delegation_claude"], "UNAVAILABLE")
+        self.assertEqual(result["status"], "blocked")
+
+    def test_owner_authorization_is_an_input_not_a_test_result(self):
+        records = [row(gate) for gate in REQUIRED_GATES]
+        complete = release_gate(COMMIT, TREE, records)
+        self.assertEqual(complete["status"], "owner_decision_required")
+        self.assertFalse(complete["release_authorized"])
+        self.assertFalse(complete["authorization"]["present"])
+        granted = release_gate(COMMIT, TREE, records, authorization())
+        self.assertEqual(granted["status"], "authorized")
+        self.assertTrue(granted["release_authorized"])
+        self.assertEqual(granted["authorization"]["scope"], ["merge", "release"])
+        for mismatch in (authorization(candidate=OTHER_COMMIT),
+                         authorization(tree="7" * 40),
+                         authorization(scope=("merge",))):
+            with self.subTest(mismatch=mismatch["scope"]):
+                result = release_gate(COMMIT, TREE, records, mismatch)
+                self.assertEqual(result["status"], "owner_decision_required")
+                self.assertFalse(result["release_authorized"])
+        incomplete = [row(gate) for gate in REQUIRED_GATES if gate != "hosted_ci_linux"]
+        still_blocked = release_gate(COMMIT, TREE, incomplete, authorization())
+        self.assertEqual(still_blocked["status"], "blocked")
+        self.assertFalse(still_blocked["release_authorized"])
+
+    def test_malformed_authorization_is_refused(self):
+        records = [row(gate) for gate in REQUIRED_GATES]
+        for broken in ({**authorization(), "schema": "other/v1"},
+                       {**authorization(), "utc": "2026-09-21T00:00:00+00:00"},
+                       {**authorization(), "scope": []},
+                       {**authorization(), "scope": ["publish"]},
+                       {**authorization(), "candidate": "short"}):
+            with self.subTest(broken=broken.get("schema")):
+                with self.assertRaises(PodError) as caught:
+                    release_gate(COMMIT, TREE, records, broken)
+                self.assertEqual(caught.exception.code, "invalid_authorization")
 
     def test_non_os_gate_host_vocabulary_and_duplicate_unknown_validation(self):
         invalid_host = row("skill_validation")

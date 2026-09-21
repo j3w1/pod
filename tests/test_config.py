@@ -55,8 +55,7 @@ class ConfigTests(unittest.TestCase):
             state_home = root / "pod-state"
             config_home.mkdir()
             (config_home / "config.yaml").write_text("schema: pod/v1\n")
-            native = {"APPDATA": str(root / "native-appdata"),
-                      "LOCALAPPDATA": str(root / "native-localappdata"),
+            native = {
                       "CODEX_HOME": str(root / "native-codex"),
                       "CLAUDE_CONFIG_DIR": str(root / "native-claude")}
             overrides = {"POD_CONFIG_HOME": str(config_home), "POD_STATE_HOME": str(state_home)}
@@ -195,7 +194,7 @@ policy:
 
     def test_native_home_variables_reject_relative_or_malformed_values(self):
         with fixture() as root:
-            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "APPDATA", "LOCALAPPDATA",
+            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME",
                          "CODEX_HOME", "CLAUDE_CONFIG_DIR"):
                 for value in ("", ".", "relative/path", "bad\x00path"):
                     environment = {**os.environ, name: value}
@@ -214,8 +213,8 @@ policy:
         with fixture() as root:
             project = root / "project"
             project.mkdir()
-            config_home = "APPDATA" if os.name == "nt" else "XDG_CONFIG_HOME"
-            state_home = "LOCALAPPDATA" if os.name == "nt" else "XDG_STATE_HOME"
+            config_home = "XDG_CONFIG_HOME"
+            state_home = "XDG_STATE_HOME"
             previous = {name: os.environ[name] for name in (config_home, state_home)}
             with patch.dict(os.environ, {config_home: "relative-config",
                                          state_home: "relative-state"}):
@@ -235,7 +234,7 @@ policy:
             redirected = root.parent / "redirected-native-home"
             redirected.symlink_to(contained, target_is_directory=True)
             original = dict(os.environ)
-            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "APPDATA", "LOCALAPPDATA",
+            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME",
                          "CODEX_HOME", "CLAUDE_CONFIG_DIR"):
                 for value in (contained, redirected):
                     with self.subTest(name=name, value=value), patch.dict(os.environ, {name: str(value)}):
@@ -250,8 +249,8 @@ policy:
             project.mkdir()
             contained_config = project / "config-home"
             contained_state = project / "state-home"
-            config_home = "APPDATA" if os.name == "nt" else "XDG_CONFIG_HOME"
-            state_home = "LOCALAPPDATA" if os.name == "nt" else "XDG_STATE_HOME"
+            config_home = "XDG_CONFIG_HOME"
+            state_home = "XDG_STATE_HOME"
             overrides = {config_home: str(contained_config),
                          state_home: str(contained_state)}
             with chdir(project), patch.dict(os.environ, overrides):

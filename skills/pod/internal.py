@@ -8,7 +8,8 @@ from pathlib import Path
 
 from .config import effective
 from .errors import PodError
-from .records import packet, report, source_identity, verify_sources, acceptance
+from .records import (acceptance, integration_observation, packet, report, source_identity,
+                      verify_sources)
 from .routing import preview, replay
 from .release import release_gate
 from .util import bounded_json, exact
@@ -56,18 +57,45 @@ def run(operation: str, request: dict) -> dict:
         return {"status": "current"}
     if operation == "acceptance":
         exact(request, {"criteria", "evidence_rows", "candidate", "policy_revision",
-                        "sources", "dependencies", "environment", "review_required", "hosted_required"},
+                        "sources", "dependencies", "environment", "review_required", "hosted_required",
+                        "owner_acceptance", "integration"},
               {"criteria", "evidence_rows", "candidate", "policy_revision",
                "sources", "dependencies", "environment", "review_required", "hosted_required"}, name="request")
         return acceptance(**request)
+    if operation == "integration-observe":
+        exact(request, {"project", "candidate", "base_ref"}, {"project", "candidate"}, name="request")
+        return integration_observation(Path(request["project"]), request["candidate"],
+                                       base_ref=request.get("base_ref", "origin/main"))
     if operation == "release-gate":
-        exact(request, {"candidate", "tree", "records"},
+        exact(request, {"candidate", "tree", "records", "authorization"},
               {"candidate", "tree", "records"}, name="request")
         return release_gate(**request)
+    if operation == "checkpoint":
+        exact(request, {"project", "objective", "owner", "value"},
+              {"project", "objective", "owner", "value"}, name="request")
+        from .ledger import checkpoint
+        from .orca import contract
+        snapshot = contract()
+        if snapshot.get("status") != "observed":
+            raise PodError("orca_unavailable", "A checkpoint needs a current native runtime read")
+        return checkpoint(Path(request["project"]), request["objective"], owner=request["owner"],
+                          value=request["value"], native={"runtime": snapshot["runtime"]})
+    if operation == "governor":
+        exact(request, {"project", "objective", "owner", "action", "override"},
+              {"project", "objective", "owner", "action"}, name="request")
+        from .governor import decide
+        return decide(Path(request["project"]), request["objective"], owner=request["owner"],
+                      action=request["action"], override=request.get("override"))
+    if operation == "governor-outcome":
+        exact(request, {"project", "objective", "owner", "record_id", "outcome"},
+              {"project", "objective", "owner", "record_id", "outcome"}, name="request")
+        from .governor import record_outcome
+        return record_outcome(Path(request["project"]), request["objective"], owner=request["owner"],
+                              record_id=request["record_id"], outcome=request["outcome"])
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task", "operation_id",
                         "assessment", "capabilities", "quotas", "occupancy", "plan_revision",
-                        "capacity", "capacity_reason", "exceptional_grant", "packet"},
+                        "capacity", "capacity_reason", "exceptional_grant", "packet", "worktree"},
               {"project", "objective", "owner", "run", "task", "operation_id",
                "assessment", "capabilities", "quotas", "occupancy", "plan_revision", "packet"}, name="request")
         from .operations import guarded_start
@@ -81,7 +109,32 @@ def run(operation: str, request: dict) -> dict:
                              capacity=request.get("capacity", 2),
                              capacity_reason=request.get("capacity_reason"),
                              exceptional_grant=request.get("exceptional_grant"),
-                             frozen_packet=request["packet"])
+                             frozen_packet=request["packet"],
+                             worktree=request.get("worktree", "current"))
+    if operation == "reconcile-launch":
+        exact(request, {"project", "objective", "owner", "operation_id", "run", "task"},
+              {"project", "objective", "owner", "operation_id", "run", "task"}, name="request")
+        from .operations import reconcile_launch
+        return reconcile_launch(Path(request["project"]), request["objective"], owner=request["owner"],
+                                operation_id=request["operation_id"], run=request["run"],
+                                task=request["task"])
+    if operation == "delivery":
+        exact(request, {"project", "objective", "owner", "run", "timeout_ms", "retain"},
+              {"project", "objective", "owner", "run"}, name="request")
+        from .operations import settle_delivery
+        retain = request.get("retain") or []
+        if not isinstance(retain, list) or any(not isinstance(item, str) for item in retain):
+            raise PodError("invalid_request", "Retained dispatch identities must be strings")
+        return settle_delivery(Path(request["project"]), request["objective"], owner=request["owner"],
+                               run=request["run"], timeout_ms=request.get("timeout_ms"),
+                               retain=tuple(retain))
+    if operation == "delivery-ack":
+        exact(request, {"project", "objective", "owner", "run", "delivery_id"},
+              {"project", "objective", "owner", "run", "delivery_id"}, name="request")
+        from .operations import acknowledge_delivery
+        return acknowledge_delivery(Path(request["project"]), request["objective"],
+                                    owner=request["owner"], run=request["run"],
+                                    delivery_id=request["delivery_id"])
     if operation == "release":
         exact(request, {"project", "objective", "owner", "dispatch"},
               {"project", "objective", "owner", "dispatch"}, name="request")
@@ -100,8 +153,11 @@ def run(operation: str, request: dict) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
     parser.add_argument("operation", choices=("brief", "preview", "replay", "packet", "report", "source",
-                                               "verify-sources", "acceptance", "admission", "release",
-                                               "reconcile-release", "release-gate"))
+                                               "verify-sources", "acceptance", "integration-observe",
+                                               "checkpoint", "admission", "reconcile-launch",
+                                               "delivery", "delivery-ack", "release",
+                                               "reconcile-release", "release-gate",
+                                               "governor", "governor-outcome"))
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:

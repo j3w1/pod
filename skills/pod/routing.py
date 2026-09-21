@@ -135,6 +135,8 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
         if not isinstance(advertised, dict) or advertised.get("agent") != model.get("agent") or advertised.get("model") != model.get("model") or advertised.get("account") != model.get("account"):
             reject.append("installed route capability is unverified")
         else:
+            # A request cannot assert a native protection. Routing decides policy
+            # feasibility only; the installed runtime establishes the route at admission.
             if "bucket" in advertised and (not isinstance(advertised["bucket"], str)
                                             or not advertised["bucket"] or len(advertised["bucket"]) > 128):
                 reject.append("route quota bucket identity is invalid")
@@ -151,8 +153,6 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
                 reject.append("requested effort is unsupported")
             if not set(a["capabilities"]) <= set(advertised.get("capabilities", [])):
                 reject.append("required capability is unsupported")
-            if advertised.get("fanout_control") is not True or advertised.get("billing_preflight") is not True:
-                reject.append("pre-dispatch fan-out or billing control is unverified")
         billing = model.get("billing", "unknown")
         grant = None
         if billing != "included":

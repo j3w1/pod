@@ -11,7 +11,7 @@ from pod.errors import PodError
 from pod.ledger import checkpoint, reserve, reconcile, record_delivery, reconcile_delivery_item, read, check_bound_sources, intervention, _quota_hold
 from pod.records import source_identity
 from pod.config import effective
-from tests.common import fixture
+from tests.common import establishment, fixture
 
 
 def checkpoint_body():
@@ -53,8 +53,7 @@ def bind_confirmed_task(project, body=None):
     reserve(project, "objective", owner="terminal", operation_id="task-launch", requested=route,
             route_decision={"status": "usable", "selected": route,
                             "policy_revision": effective(project)["revision"]},
-            capability_contract={"runtime": "r", "billing_preflight": True, "fanout_control": True,
-                                 "account_binding": {"provider": "codex", "account": "a", "bucket": None}},
+            establishment=establishment(route, runtime="r"),
             native_reader=lambda: {"runtime": "r", "authoritative": True, "owner": "terminal",
                                    "scope": "all", "complete": True, "workers": [], "cross_host": False},
             capacity=1, run_id="run", plan_revision="plan")
@@ -95,16 +94,13 @@ class LedgerTests(unittest.TestCase):
 
     def test_exhausted_bucket_hold_needs_later_supported_positive_read(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                         "LOCALAPPDATA": str(root / "state"),
-                                                         "XDG_CONFIG_HOME": str(root / "config"),
-                                                         "APPDATA": str(root / "config")}):
+                                                         "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             checkpoint(project, "objective", owner="terminal", value=checkpoint_body(), native={"runtime": "r"})
             route = {"agent": "codex", "model": "m", "account": "a", "bucket": "shared", "effort": "high"}
             decision = {"status": "usable", "selected": route, "policy_revision": effective(project)["revision"]}
-            cap = {"runtime": "r", "billing_preflight": True, "fanout_control": True,
-                   "account_binding": {"provider": "codex", "account": "a", "bucket": "shared"}}
+            cap = establishment(route, runtime="r")
             now = datetime(2026, 9, 20, tzinfo=timezone.utc)
             native = {"runtime": "r", "authoritative": True, "owner": "terminal", "scope": "all",
                       "complete": True, "workers": [], "atomic_admission": False, "cross_host": False,
@@ -114,7 +110,7 @@ class LedgerTests(unittest.TestCase):
                                 "windows": [{"name": "hour", "remaining_percent": 0}], "remaining_percent": 0}}
             def call(operation, at):
                 return reserve(project, "objective", owner="terminal", operation_id=operation,
-                               requested=route, route_decision=decision, capability_contract=cap,
+                               requested=route, route_decision=decision, establishment=cap,
                                native_reader=lambda: native, capacity=2, run_id="run",
                                plan_revision="plan", now=at)
             with self.assertRaises(PodError) as exhausted:
@@ -143,9 +139,7 @@ class LedgerTests(unittest.TestCase):
             self.assertFalse(call("three", now + timedelta(seconds=10))["existing"])
     def test_two_equivalent_corrections_require_productive_diagnosis(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                         "LOCALAPPDATA": str(root / "state"),
-                                                         "XDG_CONFIG_HOME": str(root / "config"),
-                                                         "APPDATA": str(root / "config")}):
+                                                         "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             bind_confirmed_task(project)
@@ -238,10 +232,7 @@ class LedgerTests(unittest.TestCase):
                 return reserve(project, objective, owner="terminal", operation_id=objective,
                                requested=route, route_decision={"status": "usable", "selected": route,
                                                                "policy_revision": effective(project)["revision"]},
-                               capability_contract={"runtime": "r", "billing_preflight": True,
-                                                    "fanout_control": True,
-                                                    "account_binding": {"provider": "codex", "account": account,
-                                                                        "bucket": bucket}},
+                               establishment=establishment(route, runtime="r"),
                                native_reader=lambda: native, capacity=2, run_id="run", plan_revision="plan")
             attempt("first", "a", None)
             with self.assertRaises(PodError) as blocked:
@@ -272,10 +263,7 @@ class LedgerTests(unittest.TestCase):
                 result = reserve(project, objective, owner="terminal", operation_id=objective,
                                  requested=route, route_decision={"status": "usable", "selected": route,
                                                                  "policy_revision": effective(project)["revision"]},
-                                 capability_contract={"runtime": "r", "billing_preflight": True,
-                                                      "fanout_control": True,
-                                                      "account_binding": {"provider": "codex", "account": route["account"],
-                                                                          "bucket": route["bucket"]}},
+                                 establishment=establishment(route, runtime="r"),
                                  native_reader=lambda: native, capacity=2, run_id="run", plan_revision="plan")
                 self.assertFalse(result["existing"])
             for objective in ("third", "fourth"):
@@ -288,10 +276,7 @@ class LedgerTests(unittest.TestCase):
                 return reserve(project, objective, owner="terminal", operation_id=objective,
                                requested=route, route_decision={"status": "usable", "selected": route,
                                                                "policy_revision": effective(project)["revision"]},
-                               capability_contract={"runtime": "r", "billing_preflight": True,
-                                                    "fanout_control": True,
-                                                    "account_binding": {"provider": "codex", "account": "c",
-                                                                        "bucket": "bucket-c"}},
+                               establishment=establishment(route, runtime="r"),
                                native_reader=lambda: native, capacity=2, run_id="run", plan_revision="plan")
             self.assertFalse(active_attempt("third")["existing"])
             native["workers"][0]["bucket"] = None
@@ -300,9 +285,7 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(unknown_active.exception.code, "bucket_occupancy_unverified")
     def test_definitive_source_rejection_survives_restored_bytes(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             source = project / "a.txt"
@@ -324,9 +307,7 @@ class LedgerTests(unittest.TestCase):
 
     def test_missing_source_parent_rejection_survives_restoration(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             source = project / "nested" / "a.txt"
             source.parent.mkdir(parents=True)
@@ -347,23 +328,21 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(second.exception.code, "source_rejected")
     def test_concurrent_objectives_share_unknown_account_allowance(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             for objective in ("first", "second"):
                 checkpoint(project, objective, owner="terminal", value=checkpoint_body(), native={"runtime": "r"})
             route = {"agent": "codex", "model": "m", "account": "a", "effort": "high"}
             decision = {"status": "usable", "selected": route, "policy_revision": effective(project)["revision"], "quota_state": "unknown"}
-            cap = {"runtime": "r", "billing_preflight": True, "fanout_control": True,
-                   "account_binding": {"provider": "codex", "account": "a", "bucket": None}}
+            cap = establishment({"agent": "codex", "model": "m", "account": "a", "bucket": None,
+                                 "effort": "high"}, runtime="r")
             native = {"runtime": "r", "authoritative": True, "owner": "terminal", "scope": "all",
                       "complete": True, "workers": [], "atomic_admission": False, "cross_host": False}
             def attempt(objective):
                 try:
                     reserve(project, objective, owner="terminal", operation_id=objective,
-                            requested=route, route_decision=decision, capability_contract=cap,
+                            requested=route, route_decision=decision, establishment=cap,
                             native_reader=lambda: native, capacity=2, run_id="run",
                             plan_revision="plan")
                     return "admitted"
@@ -375,9 +354,7 @@ class LedgerTests(unittest.TestCase):
 
     def test_uncertain_effect_retains_capacity_and_exact_reconciliation(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             checkpoint(project, "objective", owner="terminal", value=checkpoint_body(), native={"runtime": "r"})
@@ -385,14 +362,14 @@ class LedgerTests(unittest.TestCase):
                      "policy_revision": effective(project)["revision"]}
             native = {"runtime": "r", "authoritative": True, "owner": "terminal", "scope": "all",
                       "complete": True, "workers": [], "atomic_admission": False, "cross_host": False}
-            cap = {"runtime": "r", "billing_preflight": True, "fanout_control": True,
-                   "account_binding": {"provider": "codex", "account": "a", "bucket": None}}
+            cap = establishment({"agent": "codex", "model": "m", "account": "a", "bucket": None,
+                                 "effort": "high"}, runtime="r")
             reserve(project, "objective", owner="terminal", operation_id="op", requested=route["selected"],
-                    route_decision=route, capability_contract=cap, native_reader=lambda: native,
+                    route_decision=route, establishment=cap, native_reader=lambda: native,
                     capacity=1, run_id="run", plan_revision="plan")
             with self.assertRaises(PodError):
                 reserve(project, "objective", owner="terminal", operation_id="op2", requested=route["selected"],
-                        route_decision=route, capability_contract=cap, native_reader=lambda: native,
+                        route_decision=route, establishment=cap, native_reader=lambda: native,
                         capacity=1, run_id="run", plan_revision="plan")
             self.assertEqual(reconcile(project, "objective", owner="terminal", operation_id="op", observed=None)["state"], "uncertain")
             with self.assertRaises(PodError):
@@ -403,9 +380,7 @@ class LedgerTests(unittest.TestCase):
 
     def test_delivery_requires_every_item_and_replays(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             checkpoint(project, "objective", owner="terminal", value=checkpoint_body(), native={"runtime": "r"})

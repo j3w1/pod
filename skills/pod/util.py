@@ -78,7 +78,7 @@ def digest(value: Any) -> str:
 def bounded_json(path: Path, *, limit: int = MAX_RECORD) -> Any:
     cursor = path.parent
     while cursor != cursor.parent:
-        if cursor.is_symlink() or (hasattr(cursor, "is_junction") and cursor.is_junction()):
+        if cursor.is_symlink():
             raise PodError("unsafe_record", "Record parent is redirected")
         cursor = cursor.parent
     if path.is_symlink() or not path.is_file():

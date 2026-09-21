@@ -14,6 +14,10 @@ from typing import Any
 from .errors import PodError
 from .util import bounded_text, digest, exact
 
+import re
+
+_HEX40 = re.compile(r"[0-9a-f]{40}")
+
 PACKET_FIELDS = {"schema", "objective", "criteria", "responsibility", "scope", "actions", "candidate", "context", "dependencies", "route", "policy_revision", "plan_revision", "report_contract", "sources"}
 REPORT_FIELDS = {"schema", "assignment", "attempt", "candidate", "outcome", "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"}
 EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt"}
@@ -161,16 +165,10 @@ def source_identity(root: Path, relative: str, *, max_bytes: int = 1_048_576) ->
         raise PodError("unsafe_source", "Source path must stay relative to project")
     if "\x00" in relative:
         raise PodError("unsafe_source", "Source path contains an invalid component")
-    if os.name == "nt":
-        import ntpath
-        if ntpath.splitdrive(relative)[0] or ntpath.isabs(relative) or ":" in relative:
-            raise PodError("unsafe_source", "Windows source path must be a plain relative file path")
     if not _safe_relative(relative):
         raise PodError("secret_source", "Secret-bearing source is outside Pod context collection")
     if type(max_bytes) is not int or max_bytes < 0 or max_bytes > 1_048_576:
         raise PodError("unsafe_source", "Source read limit is invalid")
-    if os.name == "nt":
-        return _source_identity_windows(root, relative, max_bytes)
     nofollow, directory, nonblock = (getattr(os, name, 0) for name in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK"))
     if not (nofollow and directory and nonblock):
         raise PodError("source_unavailable", "No-follow descriptor-relative source access is unsupported on this host")
@@ -223,115 +221,6 @@ def source_identity(root: Path, relative: str, *, max_bytes: int = 1_048_576) ->
         return {"path": relative, "state": "present", "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def _source_identity_windows(root: Path, relative: str, max_bytes: int) -> dict:
-    """Retain each non-reparse ancestor without delete sharing through the read."""
-    import ctypes
-    from ctypes import wintypes
-    import ntpath
-
-    read_data, read_attributes = 0x0001, 0x0080
-    share_read, open_existing = 0x0001, 3
-    backup_semantics, open_reparse = 0x02000000, 0x00200000
-    reparse_attribute, directory_attribute, disk_type = 0x0400, 0x0010, 1
-
-    class TagInfo(ctypes.Structure):
-        _fields_ = [("attributes", wintypes.DWORD), ("tag", wintypes.DWORD)]
-
-    class FileTime(ctypes.Structure):
-        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
-
-    class FileInfo(ctypes.Structure):
-        _fields_ = [("attributes", wintypes.DWORD), ("created", FileTime), ("accessed", FileTime),
-                    ("written", FileTime), ("volume", wintypes.DWORD), ("size_high", wintypes.DWORD),
-                    ("size_low", wintypes.DWORD), ("links", wintypes.DWORD),
-                    ("index_high", wintypes.DWORD), ("index_low", wintypes.DWORD)]
-
-    try:
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        create = kernel.CreateFileW
-        close = kernel.CloseHandle
-        tag_info = kernel.GetFileInformationByHandleEx
-        file_info = kernel.GetFileInformationByHandle
-        file_type = kernel.GetFileType
-        read = kernel.ReadFile
-    except (AttributeError, OSError) as exc:
-        raise PodError("source_unavailable", "Required Windows no-follow handle primitives are unavailable") from exc
-    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
-                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
-    create.restype = wintypes.HANDLE
-    close.argtypes, close.restype = (wintypes.HANDLE,), wintypes.BOOL
-    tag_info.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
-    tag_info.restype = wintypes.BOOL
-    file_info.argtypes, file_info.restype = (wintypes.HANDLE, ctypes.POINTER(FileInfo)), wintypes.BOOL
-    file_type.argtypes, file_type.restype = (wintypes.HANDLE,), wintypes.DWORD
-    read.argtypes = (wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
-                     ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID)
-    read.restype = wintypes.BOOL
-
-    absolute = ntpath.abspath(os.fspath(root))
-    drive, tail = ntpath.splitdrive(absolute)
-    if not drive or drive.startswith("\\\\") or not tail.startswith("\\"):
-        raise PodError("source_unavailable", "Retained local Windows ancestry is unavailable for this source")
-    root_components = [drive + "\\"] + [part for part in tail.split("\\") if part]
-    components = root_components + list(Path(relative).parts)
-    source_component_start = len(root_components)
-    handles: list[int] = []
-    current = components[0]
-    invalid = ctypes.c_void_p(-1).value
-    try:
-        for index, part in enumerate(components):
-            if index:
-                current = ntpath.join(current, part)
-            final = index == len(components) - 1
-            handle = create(current, read_attributes | (read_data if final else 0), share_read,
-                            None, open_existing, backup_semantics | open_reparse, None)
-            if handle == invalid:
-                if index >= source_component_start and ctypes.get_last_error() in (2, 3):
-                    return {"path": relative, "state": "absent"}
-                return {"path": relative, "state": "unavailable"}
-            handles.append(handle)
-            tag = TagInfo()
-            if not tag_info(handle, 9, ctypes.byref(tag), ctypes.sizeof(tag)):
-                return {"path": relative, "state": "unavailable"}
-            if tag.attributes & reparse_attribute:
-                raise PodError("unsafe_source", "Source path contains a reparse point")
-            if not final and not tag.attributes & directory_attribute:
-                raise PodError("unsafe_source", "Source parent is not a directory")
-            if final:
-                if tag.attributes & directory_attribute or file_type(handle) != disk_type:
-                    raise PodError("unsafe_source", "Source must be a regular disk file")
-                before = FileInfo()
-                if not file_info(handle, ctypes.byref(before)):
-                    return {"path": relative, "state": "unavailable"}
-                size = before.size_high << 32 | before.size_low
-                if size > max_bytes:
-                    raise PodError("unsafe_source", "Source must be a bounded regular file")
-                chunks = []
-                remaining = max_bytes + 1
-                while remaining:
-                    amount = min(65536, remaining)
-                    buffer = ctypes.create_string_buffer(amount)
-                    received = wintypes.DWORD()
-                    if not read(handle, buffer, amount, ctypes.byref(received), None):
-                        return {"path": relative, "state": "unavailable"}
-                    if not received.value:
-                        break
-                    chunks.append(buffer.raw[:received.value])
-                    remaining -= received.value
-                after = FileInfo()
-                if not file_info(handle, ctypes.byref(after)):
-                    return {"path": relative, "state": "unavailable"}
-                data = b"".join(chunks)
-                stable = lambda s: (s.volume, s.index_high, s.index_low, s.size_high,
-                                    s.size_low, s.written.high, s.written.low)
-                if len(data) > max_bytes or len(data) != size or stable(before) != stable(after):
-                    return {"path": relative, "state": "unavailable"}
-                return {"path": relative, "state": "present", "sha256": hashlib.sha256(data).hexdigest()}
-    finally:
-        for handle in reversed(handles):
-            close(handle)
-
-
 def verify_sources(root: Path, bound: list[dict]) -> None:
     for entry in bound:
         exact(entry, {"path", "state", "sha256"}, {"path", "state"}, name="source")
@@ -346,9 +235,37 @@ def verify_sources(root: Path, bound: list[dict]) -> None:
             raise PodError("source_changed", "Bound source has changed or disappeared")
 
 
+def integration_observation(project: Path, candidate: str, *, base_ref: str = "origin/main") -> dict:
+    """Read Git for whether a candidate is merged and tagged. It changes nothing."""
+    import subprocess
+
+    record = {"schema": "pod-integration-observation/v1", "candidate": candidate,
+              "base_ref": base_ref, "ancestor_of_base": None, "tags": [], "reason": None}
+    if not isinstance(candidate, str) or not _HEX40.fullmatch(candidate or ""):
+        raise PodError("invalid_candidate", "Candidate must be a full Git commit id")
+    def run(argv):
+        return subprocess.run(["git", "-C", str(project), *argv], capture_output=True,
+                              text=True, timeout=30, check=False)
+    try:
+        ancestor = run(["merge-base", "--is-ancestor", candidate, base_ref])
+        if ancestor.returncode == 0:
+            record["ancestor_of_base"] = True
+        elif ancestor.returncode == 1:
+            record["ancestor_of_base"] = False
+        else:
+            record["reason"] = "base_ref_unavailable"
+        tags = run(["tag", "--points-at", candidate])
+        if tags.returncode == 0:
+            record["tags"] = sorted(line.strip() for line in tags.stdout.splitlines() if line.strip())[:16]
+    except (OSError, subprocess.SubprocessError):
+        record["reason"] = "git_unavailable"
+    return record
+
+
 def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str, policy_revision: str,
                sources: list, dependencies: list, environment: str,
-               review_required: bool, hosted_required: bool) -> dict:
+               review_required: bool, hosted_required: bool,
+               owner_acceptance: dict | None = None, integration: dict | None = None) -> dict:
     """Project-criteria projection. Caller records never confer external acceptance."""
     checks = {}
     for criterion in criteria:
@@ -370,7 +287,29 @@ def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str
                 review = state
             if kind == "hosted" and hosted_required:
                 hosted = state
+    granted = None
+    if owner_acceptance is not None:
+        granted = exact(owner_acceptance, {"schema", "candidate", "policy_revision", "utc", "accepted_by"},
+                        {"schema", "candidate", "policy_revision", "utc", "accepted_by"},
+                        name="acceptance_authorization")
+        if granted["schema"] != "pod-acceptance-authorization/v1":
+            raise PodError("invalid_acceptance", "Acceptance authorization schema is unsupported")
+        for field in ("candidate", "policy_revision", "utc", "accepted_by"):
+            bounded_text(granted[field], name=field, limit=512)
+        if granted["candidate"] != candidate or granted["policy_revision"] != policy_revision:
+            granted = None
+    observed = None
+    if integration is not None:
+        observed = exact(integration, {"schema", "candidate", "base_ref", "ancestor_of_base", "tags", "reason"},
+                         {"schema", "candidate"}, name="integration")
+        if observed["schema"] != "pod-integration-observation/v1" or observed["candidate"] != candidate:
+            raise PodError("invalid_integration", "Integration observation does not bind this candidate")
+    accepted = bool(checks_pass and granted is not None
+                    and review in ("NOT_REQUIRED", "RECORDED_PASS_UNVERIFIED")
+                    and hosted in ("NOT_REQUIRED", "RECORDED_PASS_UNVERIFIED"))
     return {"implemented": "unassessed", "required_checks_pass": checks_pass,
             "independently_reviewed": review, "hosted_proof_complete": hosted,
-            "accepted": False, "merged": False, "released": False,
-            "criteria": checks, "project_assessment_required": True}
+            "accepted": accepted,
+            "merged": bool(observed and observed.get("ancestor_of_base") is True),
+            "released": bool(observed and observed.get("tags")),
+            "criteria": checks, "project_assessment_required": granted is None}

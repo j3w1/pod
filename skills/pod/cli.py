@@ -14,11 +14,13 @@ from typing import Any
 
 import yaml
 
+from .bundle import bundle_root, version
 from .config import DEFAULT, effective, personal_path, route_identity
 from .errors import PodError
 from .ledger import context_for_run
-from .orca import account_metadata, contract, read_command, worker_rows
-from .setup import inspect, setup
+from .orca import (account_metadata, account_metadata_raw, agent_login_mode, contract, executable,
+                   hosts, read_command, route_establishment, worker_rows)
+from .setup import inspect, setup, skills_cli_entry
 
 
 def parser() -> argparse.ArgumentParser:
@@ -48,10 +50,8 @@ def _edit(path: Path, *, project_scope: bool) -> None:
         seed = {"schema": "pod/v1"} if project_scope else DEFAULT
         with path.open("x", encoding="utf-8") as stream:
             stream.write(yaml.safe_dump(seed, sort_keys=False))
-    editor = os.environ.get("EDITOR", "notepad" if os.name == "nt" else "vi")
-    argv = shlex.split(editor, posix=os.name != "nt")
-    if os.name == "nt":
-        argv = [part[1:-1] if len(part) >= 2 and part[0] == part[-1] == '"' else part for part in argv]
+    editor = os.environ.get("EDITOR", "vi")
+    argv = shlex.split(editor)
     if not argv:
         raise PodError("editor_unavailable", "EDITOR is empty")
     try:
@@ -103,6 +103,68 @@ def _status(root: Path, run: str | None) -> dict:
             "usage": "unknown", "cost": "unknown"}
 
 
+def _bundle_report() -> dict:
+    return {"version": version(), "path": str(bundle_root()),
+            "python": ".".join(str(part) for part in sys.version_info[:3]),
+            "pyyaml": getattr(yaml, "__version__", "unknown")}
+
+
+def _prerequisites(snapshot: dict) -> dict:
+    """Actionable prerequisite guidance. Nothing here installs or repairs anything."""
+    report = {"python": "ok", "pyyaml": "ok"}
+    if sys.version_info[:2] < (3, 13):
+        report["python"] = ("Python 3.13 or newer is required; this interpreter is "
+                            + ".".join(str(part) for part in sys.version_info[:3]))
+    if snapshot.get("status") == "observed":
+        report["orca"] = "ok"
+    else:
+        try:
+            executable()
+            report["orca"] = ("Orca is installed but did not answer a status read ("
+                              + str(snapshot.get("reason", "unknown")) + "); start it with `orca open`")
+        except PodError:
+            report["orca"] = ("Orca is not on PATH. Install Orca and expose `orca`, or set "
+                              "ORCA_CLI_COMMAND. Pod never installs it.")
+    return report
+
+
+def _route_report(root: Path, snapshot: dict) -> dict:
+    """Which approved routes the installed runtime actually establishes, read-only."""
+    try:
+        policy = effective(root)
+    except PodError as exc:
+        return {"status": "unavailable", "reason": exc.code}
+    models = {alias: model for alias, model in policy["policy"]["models"].items()
+              if model.get("approved") and model.get("agent") in ("codex", "claude")}
+    if not models:
+        return {"status": "none_approved"}
+    if snapshot.get("status") != "observed":
+        return {"status": "unavailable", "reason": snapshot.get("reason", "orca_unavailable")}
+    try:
+        accounts = account_metadata_raw()
+        fleet = hosts()
+    except PodError as exc:
+        return {"status": "unavailable", "reason": exc.code}
+    delegation = bool(policy["policy"]["policy"].get("child_delegation"))
+    logins: dict[str, dict] = {}
+    report = {}
+    for alias, model in models.items():
+        agent = model["agent"]
+        logins.setdefault(agent, agent_login_mode(agent))
+        route = {"alias": alias, "agent": agent, "model": model.get("model"),
+                 "account": model.get("account"), "bucket": None, "effort": None}
+        established = route_establishment(route, model, snapshot=snapshot, accounts=accounts,
+                                          login=logins[agent], fleet=fleet,
+                                          child_delegation=delegation)
+        report[alias] = {"tiers": {name: control["tier"] for name, control
+                                   in established["controls"].items()},
+                         "login_mode": established["login"]["mode"],
+                         "billing": established["billing"],
+                         "hard_stops": established["hard_stops"],
+                         "disclosures": established["disclosures"]}
+    return {"status": "observed", "routes": report}
+
+
 def execute(args: argparse.Namespace, root: Path) -> dict:
     if args.command == "setup":
         return {"schema": "pod-cli/v1", "status": "ok", **setup(root, global_scope=args.global_scope)}
@@ -132,17 +194,28 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
         for host in local_skills:
             local_status = local_skills[host]["status"]
             global_status = global_skills[host]["status"]
+            local_version = local_skills[host].get("version")
+            global_version = global_skills[host].get("version")
             if local_status == "current" and global_status == "current":
                 overlap[host] = "duplicate_current_copies"
+            elif local_status == "managed_by_skills_cli" and global_status == "managed_by_skills_cli":
+                overlap[host] = "duplicate_current_copies"
+            elif local_status not in ("missing", "current") and global_status == "managed_by_skills_cli":
+                overlap[host] = "skills_cli_global_shadowed_by_local"
+            elif (local_version and global_version and local_version != global_version):
+                overlap[host] = "version_mismatch"
             elif local_status not in ("missing", "current") and global_status == "current":
                 overlap[host] = "modified_local_may_shadow_global"
             elif local_status == "current" and global_status not in ("missing", "current"):
                 overlap[host] = "modified_global_copy"
+        snapshot = contract()
         return {"schema": "pod-cli/v1", "status": "observed", "config": config,
-                "orca": contract(), "project_skills": local_skills,
+                "orca": snapshot, "project_skills": local_skills,
                 "global_skills": global_skills, "integration_overlap": overlap,
-                "quota": quota, "billing_preflight": "unverified", "fanout_control": "unverified",
-                "native_probe": "not_run"}
+                "quota": quota, "bundle": _bundle_report(),
+                "prerequisites": _prerequisites(snapshot),
+                "routes": _route_report(root, snapshot),
+                "skills_cli": skills_cli_entry(), "native_probe": "not_run"}
     if args.command == "status":
         return {"schema": "pod-cli/v1", **_status(root, args.run)}
     raise PodError("unknown_command", "Unknown command")

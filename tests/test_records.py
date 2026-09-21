@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from pod.records import (_source_identity_windows, acceptance, packet, report,
+from pod.records import (acceptance, integration_observation, packet, report,
                          source_identity, verify_sources)
 from pod.errors import PodError
 from tests.common import fixture
@@ -22,34 +22,6 @@ def packet_body():
 
 
 class RecordTests(unittest.TestCase):
-    def test_windows_missing_intermediate_source_parent_is_absent(self):
-        import ctypes
-
-        invalid = ctypes.c_void_p(-1).value
-        create = Mock(side_effect=(101, 102, invalid))
-
-        def directory_info(_handle, _kind, pointer, _size):
-            pointer._obj.attributes = 0x0010
-            return True
-
-        kernel = SimpleNamespace(
-            CreateFileW=create,
-            CloseHandle=Mock(return_value=True),
-            GetFileInformationByHandleEx=Mock(side_effect=directory_info),
-            GetFileInformationByHandle=Mock(),
-            GetFileType=Mock(),
-            ReadFile=Mock(),
-        )
-        with (patch("ctypes.WinDLL", return_value=kernel, create=True),
-              patch("ctypes.get_last_error", return_value=3, create=True),
-              patch("ntpath.abspath", return_value=r"C:\project")):
-            observed = _source_identity_windows(
-                Path("ignored-project"), "nested/file.txt", 1024
-            )
-        self.assertEqual(observed, {"path": "nested/file.txt", "state": "absent"})
-        self.assertEqual(create.call_count, 3)
-        self.assertEqual(kernel.CloseHandle.call_count, 2)
-
     def test_conventional_credential_paths_rejected_before_open_and_packet_admission(self):
         excluded = (
             ".env", ".env.production", "nested/.netrc", "nested/_netrc", "nested\\_netrc",
@@ -145,7 +117,6 @@ class RecordTests(unittest.TestCase):
             with self.assertRaises(PodError):
                 verify_sources(root, [before])
 
-    @unittest.skipUnless(hasattr(os, "mkfifo") and hasattr(os, "O_NOFOLLOW"), "POSIX source handles")
     def test_source_parent_replacement_keeps_original_directory(self):
         with fixture() as root:
             project = root / "project"
@@ -174,7 +145,6 @@ class RecordTests(unittest.TestCase):
                 source_identity(project, "parent/ordinary.txt")
             self.assertEqual(redirected.exception.code, "unsafe_source")
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO fixture requires POSIX")
     def test_fifo_source_returns_without_waiting_for_writer(self):
         with fixture() as root:
             os.mkfifo(root / "pipe")
@@ -186,7 +156,6 @@ class RecordTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=2, check=True)
             self.assertEqual(result.stdout.strip(), "unsafe_source")
 
-    @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "POSIX flag fixture")
     def test_missing_no_follow_primitive_fails_closed(self):
         with fixture() as root:
             (root / "ordinary.txt").write_text("fixture")

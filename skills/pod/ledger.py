@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 import os
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from .errors import PodError
-from .orca import effective_launch, require_prelaunch_assurance
+from .orca import effective_launch, require_route_establishment
 from .quota import validate_snapshot
 from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
+NATIVE_SCOPES = ("all", "bound+ledger_runs")
 _PREDECESSOR_BINDING_FIELDS = {"dispatchId", "workerId", "taskId", "runId"}
 _CURRENT_BINDING_FIELDS = _PREDECESSOR_BINDING_FIELDS | {
     "worktreeId", "terminalHandle", "terminalResourceId",
@@ -45,16 +47,17 @@ def state_root(project: Path | None = None) -> Path:
     override = explicit_home("POD_STATE_HOME")
     if override is not None:
         return override
-    if os.name == "nt":
-        if "LOCALAPPDATA" not in os.environ:
-            raise PodError("state_home_unavailable", "LOCALAPPDATA is required for Pod state")
-        return native_home("LOCALAPPDATA", project=project) / "pod"
     return native_home("XDG_STATE_HOME", default=Path.home() / ".local" / "state",
                        project=project) / "pod"
 
 
 def _path(project: Path, objective: str) -> Path:
-    return state_root(project) / digest({"project": str(project.resolve()), "objective": objective}) / "context.json"
+    return objective_root(project, objective) / "context.json"
+
+
+def objective_root(project: Path, objective: str) -> Path:
+    """The private directory that holds every record for one objective."""
+    return state_root(project) / digest({"project": str(project.resolve()), "objective": objective})
 
 
 @contextmanager
@@ -67,20 +70,12 @@ def _lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.parent.is_symlink():
         raise PodError("unsafe_state", "State directory is redirected")
-    fd = os.open(path.parent / ".lock", os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    fd = os.open(path.parent / ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        if os.name == "nt":
-            import msvcrt
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
-        if os.name == "nt":
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+        fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
@@ -343,12 +338,21 @@ def _occupancy_projection(native: dict, objective_path: Path, objective: str,
     workers = native["workers"]
     active = []
     seen = {}
+    foreign = []
+    descendants = []
     for index, worker in enumerate(workers):
         status = worker.get("state")
         if status == "released":
             continue
         if status not in ("occupied", "active", "launching", "reserved", "uncertain", "confirmed", "retained"):
             raise PodError("native_occupancy_unverified", "Native worker state is unsupported")
+        if worker.get("foreign"):
+            # A worker this coordinator never launched occupies the host, not Pod's
+            # objective or account budget. It is disclosed, never silently counted.
+            foreign.append(worker.get("dispatchId"))
+            continue
+        if worker.get("descendant"):
+            descendants.append(worker.get("dispatchId"))
         if not worker.get("account") or not worker.get("objective"):
             raise PodError("native_occupancy_unverified", "Active worker account/objective binding is unavailable")
         dispatch = worker.get("dispatchId")
@@ -370,9 +374,13 @@ def _occupancy_projection(native: dict, objective_path: Path, objective: str,
     bucket = requested.get("bucket")
     overlap = [row for row in [*active, *local]
                if _bucket_overlap(requested["agent"], requested["account"], bucket, row)]
+    if descendants and native.get("descendants_allowed") is not True:
+        raise PodError("unauthorized_descendant",
+                       "A Pod-managed worker started a descendant that policy does not authorize")
     objective_keys = {row["_key"] for row in active if row["objective"] == objective}
     objective_keys.update(row["_key"] for row in local if row["_path"] == objective_path)
     account_keys = {row["_key"] for row in overlap}
+    native["foreign_active"] = sorted(item for item in foreign if isinstance(item, str))
     return objective_keys, account_keys, active, overlap
 
 
@@ -440,7 +448,7 @@ def _quota_hold(provider: str, account: str, bucket: str | None,
 
 
 def reserve(project: Path, objective: str, *, owner: str, operation_id: str, requested: dict,
-            route_decision: dict, capability_contract: dict, native_reader: Callable[[], dict],
+            route_decision: dict, establishment: dict, native_reader: Callable[[], dict],
             capacity: int, run_id: str, plan_revision: str,
             exceptional_grant: dict | None = None, capacity_reason: str | None = None,
             frozen_packet: dict | None = None,
@@ -449,7 +457,7 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
     bounded_text(operation_id, name="operation_id", limit=128)
     if route_decision.get("status") != "usable" or route_decision.get("selected") != requested:
         raise PodError("route_unusable", "Requested launch is not the approved route decision")
-    require_prelaunch_assurance(capability_contract, requested)
+    require_route_establishment(establishment, requested)
     if type(capacity) is not int or capacity < 1 or capacity > 8:
         raise PodError("invalid_capacity", "Capacity must be one through eight")
     packet_id = None
@@ -501,9 +509,10 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
             if current["revision"] != route_decision.get("policy_revision") or current["policy"]["policy"] != policy:
                 raise PodError("policy_revision_mismatch", "Admission policy changed after route selection")
             native = native_reader()
-            if native.get("runtime") != capability_contract.get("runtime") or not native.get("authoritative"):
+            if native.get("runtime") != establishment.get("runtime") or not native.get("authoritative"):
                 raise PodError("native_authority_unverified", "Native runtime/ownership is not proven")
-            if native.get("owner") != owner or native.get("scope") != "all" or native.get("complete") is not True:
+            if (native.get("owner") != owner or native.get("scope") not in NATIVE_SCOPES
+                    or native.get("complete") is not True):
                 raise PodError("native_occupancy_unverified", "Native owner or complete fleet scope is unproven")
             if native.get("cross_host") and native.get("atomic_admission") is not True:
                 raise PodError("distributed_admission_unverified", "Cross-host admission requires native atomic fencing")
@@ -522,6 +531,9 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
                         or checkpoint_value.get("criteria") != frozen_packet["body"]["criteria"]):
                     raise PodError("packet_plan_mismatch", "Packet differs from the owned checkpoint")
                 body = frozen_packet["body"]
+                if "delegate" in body.get("actions", []) and not policy.get("child_delegation"):
+                    raise PodError("delegation_unauthorized",
+                                   "Worker-initiated delegation is not authorized by personal policy")
                 bound = [*body["sources"], *({"path": ref["path"], "state": "present", "sha256": ref["sha256"]}
                                              for ref in body["context"] if ref["kind"] in ("source", "instruction"))]
                 _check_bound_sources_locked(project, path, state, packet_id, bound)
@@ -567,7 +579,8 @@ def reserve(project: Path, objective: str, *, owner: str, operation_id: str, req
 
 
 def reconcile(project: Path, objective: str, *, owner: str, operation_id: str,
-              observed: dict | None, definitive_absence: bool = False) -> dict:
+              observed: dict | None, definitive_absence: bool = False,
+              native_failure: dict | None = None) -> dict:
     """Only exact positive proof settles or frees a reserved/uncertain effect."""
     path = _path(project, objective)
     with _lock(state_root(project) / "admission"), _lock(path):
@@ -576,6 +589,16 @@ def reconcile(project: Path, objective: str, *, owner: str, operation_id: str,
             raise PodError("unknown_effect", "No owned effect identity to reconcile")
         effect = state["effects"][operation_id]
         if effect["state"] in ("confirmed", "absent"):
+            return effect
+        if native_failure is not None:
+            if observed is not None or definitive_absence:
+                raise PodError("invalid_reconciliation",
+                               "A structured native failure is not a positive readback")
+            # The Dispatch may hold resources. The slot stays occupied and the exact
+            # native metadata is retained for a later readback-driven recovery.
+            effect["state"] = "uncertain"
+            effect["native_failure"] = native_failure
+            _write(path, state)
             return effect
         if observed is not None:
             if observed.get("runtime") != effect["runtime"] or observed.get("operation_id") != operation_id:

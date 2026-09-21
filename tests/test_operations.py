@@ -37,29 +37,75 @@ class FixturePort:
         self.terminal_visible = True
         self.headless = False
         self.release_observation = "exited"
+        self.login_auth = "oauth"
+        self.runtime = "runtime"
+        self.establish_bucket = ...
+        self.establish_account = None
+        self.hard_stops_override = None
+        self.descendants_allowed = False
+        self.scope = "all"
+        self.find_rows = None
+        self.deliveries = []
+        self.delivery_calls = []
 
-    def assurance(self, route):
-        return {"runtime": "runtime", "billing_preflight": self.assured, "fanout_control": self.assured,
-                "account_binding": {"provider": route["agent"], "account": route["account"],
-                                    "bucket": route.get("bucket")}}
+    def establish(self, route, model_policy, *, child_delegation=False):
+        observed = {"oauth": "subscription", "api_key": "api"}.get(self.login_auth, "unknown")
+        approved = (model_policy or {}).get("billing", "included")
+        hard_stops = []
+        if approved == "included" and observed != "subscription":
+            hard_stops.append("billing_mode_unverified")
+        if observed == "api" and approved != "paid":
+            hard_stops.append("paid_route_forbidden")
+        if not self.assured:
+            hard_stops.append("billing_mode_unverified")
+        if self.hard_stops_override is not None:
+            hard_stops = list(self.hard_stops_override)
+        bucket = route.get("bucket") if self.establish_bucket is ... else self.establish_bucket
+        account = self.establish_account or route.get("account")
+        return {"schema": "pod-route-establishment/v1", "runtime": self.runtime,
+                "version": "1.4.206", "executable": "/fixture/orca",
+                "route": {"agent": route.get("agent"), "model": route.get("model"),
+                          "account": account, "bucket": bucket,
+                          "effort": route.get("effort")},
+                "controls": {}, "hard_stops": hard_stops, "disclosures": [],
+                "login": {"mode": "host_login", "auth": self.login_auth,
+                          "subscription": observed == "subscription", "managed_accounts": 0,
+                          "identity_digest": None},
+                "billing": {"observed": observed, "approved": approved}}
 
-    def read_native(self, owner):
+    def read_native(self, owner, *, run=None, route=None, runs=()):
         self.reads += 1
-        return {"runtime": "runtime", "authoritative": True, "owner": owner, "scope": "all",
+        return {"runtime": self.runtime, "authoritative": True, "owner": owner, "scope": self.scope,
                 "complete": True, "workers": self.workers, "cross_host": False,
-                "atomic_admission": False, "quota": self.quota}
+                "atomic_admission": False, "quota": self.quota,
+                "descendants_allowed": self.descendants_allowed}
 
-    def start_worker(self, *, run, task, owner, route):
+    def start_worker(self, *, run, task, owner, route, worktree="current"):
         self.starts += 1
         launch = {key: route[key] for key in ("agent", "model", "effort")}
         dispatch = "dispatch" if self.starts == 1 else f"dispatch-{self.starts}"
         self.settled = False
         self.resource_state = None
         self.release_calls = 0
-        self.started[dispatch] = {"run": run, "task": task, "launch": launch}
-        return {"runtime": "runtime", "runId": run, "taskId": task, "dispatchId": dispatch,
+        self.started[dispatch] = {"run": run, "task": task, "launch": launch,
+                                  "worktree": worktree}
+        return {"runtime": self.runtime, "runId": run, "taskId": task, "dispatchId": dispatch,
                 "state": "ready", "launch": {"requested": launch, "effective": launch},
                 **self.receipt_override}
+
+    def find_worker(self, *, run, task):
+        if self.find_rows is not None:
+            return list(self.find_rows)
+        return [{"dispatchId": dispatch, "runId": value["run"], "taskId": value["task"]}
+                for dispatch, value in self.started.items() if value["task"] == task]
+
+    def wait_delivery(self, *, run, timeout_ms=None, ack=None, types=()):
+        self.delivery_calls.append({"run": run, "timeout_ms": timeout_ms, "ack": ack})
+        if ack is not None:
+            return {"runtime": self.runtime, "acknowledged": ack}
+        if not self.deliveries:
+            return {"runtime": self.runtime}
+        return {"runtime": self.runtime, "delivery": self.deliveries.pop(0)}
 
     def show_worker(self, dispatch):
         started = self.started.get(dispatch, {"run": "run", "task": "task",
@@ -134,13 +180,13 @@ class FixturePort:
             for field in ("terminal", "observation", "terminalResource"):
                 result.pop(field)
             result["projection"].pop("resource")
-        return {"runtime": "runtime", "result": result}
+        return {"runtime": self.runtime, "result": result}
 
     def release_worker(self, dispatch):
         self.release_calls += 1
         if self.fail_release:
             raise PodError("native_release_uncertain", "lost response")
-        value = {"runtime": "runtime", "dispatchId": dispatch, "status": self.release_status}
+        value = {"runtime": self.runtime, "dispatchId": dispatch, "status": self.release_status}
         if self.release_status in ("release_pending", "release_unknown"):
             value.update({"processAction": "none", "recovery": ["worker-show", dispatch]})
         return value
@@ -173,8 +219,7 @@ models:
                   "risk": "low", "size": "small", "uncertainty": "low", "verifiability": "unit",
                   "capabilities": [], "context": [], "reason": "independent", "bounded": True}
     caps = {"sol": {"agent": "codex", "model": "gpt-5.6-sol", "account": "account",
-                     "efforts": ["high"], "capabilities": [], "billing_preflight": True,
-                     "fanout_control": True, "bucket": "shared"}}
+                     "efforts": ["high"], "capabilities": [], "bucket": "shared"}}
     quota = {"account": {"schema": "pod-quota/v1", "provider": "codex", "account": "account",
                          "bucket": "shared", "observed_at": NOW.isoformat(), "source": "supported",
                          "confidence": "observed", "unknowns": [],
@@ -212,16 +257,16 @@ class GuardedOperationTests(unittest.TestCase):
                                            "processAction": "none", "recovery": "read back worker"},
                    "_meta": {"runtimeId": "runtime"}}
         completed = subprocess.CompletedProcess([], 1, stdout=json.dumps(payload), stderr="")
-        with (patch("pod.operations.executable", return_value=Path("orca")),
-              patch("pod.operations.subprocess.run", return_value=completed)):
+        with (patch("pod.orca.executable", return_value=Path("orca")),
+              patch("pod.orca.subprocess.run", return_value=completed)):
             result = OrcaPort().release_worker("dispatch")
         self.assertEqual(result["status"], "release_unknown")
         self.assertEqual(result["runtime"], "runtime")
 
     def test_paid_grant_units_are_durably_reserved_before_distinct_starts(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             config = root / "config" / "pod" / "config.yaml"
             config.write_text(config.read_text().replace("billing: included", "billing: paid") + """policy:
@@ -262,8 +307,8 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_contradictory_release_readback_retains_occupancy(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -303,7 +348,7 @@ class GuardedOperationTests(unittest.TestCase):
                 with self.assertRaises(PodError) as occupied:
                     reserve(project, "objective", owner="owner", operation_id=f"replacement-{index}",
                             requested=route, route_decision=decision,
-                            capability_contract=port.assurance(route),
+                            establishment=port.establish(route, {"billing": "included"}),
                             native_reader=lambda: port.read_native("owner"), capacity=1,
                             run_id="run", plan_revision="plan", now=NOW)
                 self.assertEqual(occupied.exception.code, "capacity_full")
@@ -313,8 +358,8 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_release_requires_installed_owned_archive_and_connected_terminal_shape(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -351,8 +396,8 @@ class GuardedOperationTests(unittest.TestCase):
         for effect_state, cleanup_state, fleet, consumer in cases:
             with self.subTest(effect=effect_state, cleanup=cleanup_state,
                               fleet=fleet, consumer=consumer), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 route = frozen_for(project)["body"]["route"]
@@ -362,7 +407,7 @@ class GuardedOperationTests(unittest.TestCase):
                 def admit(target, operation, capacity=1):
                     return reserve(project, target, owner="owner", operation_id=operation,
                                    requested=route, route_decision=decision,
-                                   capability_contract=port.assurance(route),
+                                   establishment=port.establish(route, {"billing": "included"}),
                                    native_reader=lambda: port.read_native("owner"),
                                    capacity=capacity, run_id="run", plan_revision="plan", now=NOW)
 
@@ -417,8 +462,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_confirmed_dispatch_deduplicates_native_row(self):
         for cleanup_state in ("none", "retained", "released"):
             with self.subTest(cleanup=cleanup_state), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -435,7 +480,7 @@ class GuardedOperationTests(unittest.TestCase):
                 intent = reserve(project, "objective", owner="owner", operation_id="second",
                                  requested=route, route_decision={"status": "usable", "selected": route,
                                                                    "policy_revision": effective(project)["revision"]},
-                                 capability_contract=port.assurance(route),
+                                 establishment=port.establish(route, {"billing": "included"}),
                                  native_reader=lambda: port.read_native("owner"), capacity=2,
                                  run_id="run", plan_revision="plan", now=NOW)
                 self.assertFalse(intent["existing"])
@@ -443,8 +488,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_unproved_effect_disposition_never_releases_capacity(self):
         for disposition in ("absent", "failed", "unrecognized"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, _, _, _ = inputs(root)
                 port = FixturePort()
                 route = frozen_for(project)["body"]["route"]
@@ -453,7 +498,7 @@ class GuardedOperationTests(unittest.TestCase):
                 def admit(operation):
                     return reserve(project, "objective", owner="owner", operation_id=operation,
                                    requested=route, route_decision=decision,
-                                   capability_contract=port.assurance(route),
+                                   establishment=port.establish(route, {"billing": "included"}),
                                    native_reader=lambda: port.read_native("owner"),
                                    capacity=2, run_id="run", plan_revision="plan", now=NOW)
                 admit("first")
@@ -476,8 +521,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_confirmed_without_cleanup_reconciles_exact_release_read_only(self):
         for fleet in ("omitted", "coarse_released"):
             with self.subTest(fleet=fleet), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -514,7 +559,7 @@ class GuardedOperationTests(unittest.TestCase):
                 intent = reserve(project, "objective", owner="owner", operation_id="second",
                                  requested=route, route_decision={"status": "usable", "selected": route,
                                                                    "policy_revision": effective(project)["revision"]},
-                                 capability_contract=port.assurance(route),
+                                 establishment=port.establish(route, {"billing": "included"}),
                                  native_reader=lambda: port.read_native("owner"), capacity=1,
                                  run_id="run", plan_revision="plan", now=NOW)
                 self.assertFalse(intent["existing"])
@@ -527,9 +572,7 @@ class GuardedOperationTests(unittest.TestCase):
             for side, field in variants:
                 with self.subTest(cleanup=cleanup_state, side=side, field=field), fixture() as root, patch.dict(
                         os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                     "LOCALAPPDATA": str(root / "state"),
-                                     "XDG_CONFIG_HOME": str(root / "config"),
-                                     "APPDATA": str(root / "config")}):
+                                     "XDG_CONFIG_HOME": str(root / "config")}):
                     project, assessment, caps, quota = inputs(root)
                     port = FixturePort()
                     guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -574,7 +617,7 @@ class GuardedOperationTests(unittest.TestCase):
                         reserve(project, "objective", owner="owner", operation_id="second",
                                 requested=route, route_decision={"status": "usable", "selected": route,
                                                                  "policy_revision": effective(project)["revision"]},
-                                capability_contract=port.assurance(route),
+                                establishment=port.establish(route, {"billing": "included"}),
                                 native_reader=lambda: port.read_native("owner"), capacity=1,
                                 run_id="run", plan_revision="plan", now=NOW)
                     self.assertEqual(occupied.exception.code, "capacity_full")
@@ -597,8 +640,8 @@ class GuardedOperationTests(unittest.TestCase):
         }
         for (frozen_state, current_state), code in expected.items():
             with self.subTest(frozen=frozen_state, current=current_state), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 source = project / "notes.txt"
                 source.write_text("harmless bound bytes")
@@ -637,8 +680,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_unavailable_at_freeze_remains_unbound_for_every_current_state(self):
         for current in ("present", "absent", "unavailable"):
             with self.subTest(current=current), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 source = project / "notes.txt"
                 if current == "present":
@@ -669,8 +712,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_frozen_sources_are_checked_at_guarded_admission(self):
         for case in ("changed", "absent", "bound_absent", "unavailable", "context_changed", "unchanged"):
             with self.subTest(case=case), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 source = project / "notes.txt"
                 source.write_text("first harmless placeholder")
@@ -723,9 +766,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_settled_terminal_less_release_retained_once(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
@@ -768,9 +809,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_uncertain_release_is_not_repeated(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -814,8 +853,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_retained_cleanup_occupies_until_exact_release_readback(self):
         for fleet in ("omitted", "coarse_released", "active"):
             with self.subTest(fleet=fleet), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 common = dict(owner="owner", run="run", task="task", assessment=assessment,
@@ -860,7 +899,7 @@ class GuardedOperationTests(unittest.TestCase):
                                 "policy_revision": effective(project)["revision"]}
                     intent = reserve(project, "objective", owner="owner", operation_id="op-2",
                                      requested=route, route_decision=decision,
-                                     capability_contract=port.assurance(route),
+                                     establishment=port.establish(route, {"billing": "included"}),
                                      native_reader=lambda: port.read_native("owner"), capacity=2,
                                      run_id="run", plan_revision="plan", now=NOW)
                     self.assertFalse(intent["existing"])
@@ -875,8 +914,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_pending_release_reconciles_positive_retained_readback(self):
         for pending in ("reserved", "uncertain"):
             with self.subTest(pending=pending), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -899,9 +938,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_reserved_release_reconciles_exact_readback_and_deduplicates_capacity(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -929,7 +966,7 @@ class GuardedOperationTests(unittest.TestCase):
                         "policy_revision": effective(project)["revision"]}
             route = decision["selected"]
             intent = reserve(project, "objective", owner="owner", operation_id="op-2", requested=route,
-                             route_decision=decision, capability_contract=port.assurance(route),
+                             route_decision=decision, establishment=port.establish(route, {"billing": "included"}),
                              native_reader=lambda: port.read_native("owner"), capacity=2, run_id="run",
                              plan_revision="plan", now=NOW)
             self.assertFalse(intent["existing"])
@@ -940,9 +977,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_complete_guarded_path_without_terminal_and_no_repeat(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             port.headless = True
@@ -979,8 +1014,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_current_failed_settlement_and_headless_release_shapes_reconcile_read_only(self):
         for observation in ("missing", "absent"):
             with self.subTest(observation=observation), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -1012,8 +1047,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_release_pending_and_unknown_are_durable_read_only_recovery_states(self):
         for disposition in ("release_pending", "release_unknown"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -1039,8 +1074,8 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_predecessor_binding_stays_occupied_and_rebinds_exactly_without_effect_replay(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -1059,7 +1094,7 @@ class GuardedOperationTests(unittest.TestCase):
             with self.assertRaises(PodError) as occupied:
                 reserve(project, "objective", owner="owner", operation_id="replacement",
                         requested=route, route_decision=decision,
-                        capability_contract=port.assurance(route),
+                        establishment=port.establish(route, {"billing": "included"}),
                         native_reader=lambda: port.read_native("owner"), capacity=1,
                         run_id="run", plan_revision="plan", now=NOW)
             self.assertEqual(occupied.exception.code, "capacity_full")
@@ -1085,8 +1120,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_predecessor_cleanup_release_labels_hold_until_exact_rebind(self):
         for disposition in ("released", "already_released"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -1103,7 +1138,7 @@ class GuardedOperationTests(unittest.TestCase):
                 reserve_args = dict(project=project, objective="objective", owner="owner",
                                     operation_id="replacement", requested=route,
                                     route_decision=decision,
-                                    capability_contract=port.assurance(route),
+                                    establishment=port.establish(route, {"billing": "included"}),
                                     native_reader=lambda: port.read_native("owner"), capacity=1,
                                     run_id="run", plan_revision="plan", now=NOW)
                 with self.assertRaises(PodError) as occupied:
@@ -1133,8 +1168,8 @@ class GuardedOperationTests(unittest.TestCase):
     def test_predecessor_pending_and_unknown_cleanup_rebind_without_repeating_release(self):
         for disposition in ("release_pending", "release_unknown"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -1157,7 +1192,7 @@ class GuardedOperationTests(unittest.TestCase):
                 with self.assertRaises(PodError) as occupied:
                     reserve(project, "objective", owner="owner", operation_id="replacement",
                             requested=route, route_decision=decision,
-                            capability_contract=port.assurance(route),
+                            establishment=port.establish(route, {"billing": "included"}),
                             native_reader=lambda: port.read_native("owner"), capacity=1,
                             run_id="run", plan_revision="plan", now=NOW)
                 self.assertEqual(occupied.exception.code, "capacity_full")
@@ -1171,8 +1206,8 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_malformed_predecessor_binding_remains_blocked(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
-                "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -1190,7 +1225,7 @@ class GuardedOperationTests(unittest.TestCase):
             with self.assertRaises(PodError) as blocked:
                 reserve(project, "objective", owner="owner", operation_id="replacement",
                         requested=route, route_decision=decision,
-                        capability_contract=port.assurance(route),
+                        establishment=port.establish(route, {"billing": "included"}),
                         native_reader=lambda: port.read_native("owner"), capacity=2,
                         run_id="run", plan_revision="plan", now=NOW)
             self.assertEqual(blocked.exception.code, "effect_identity_unverified")
@@ -1198,9 +1233,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_worker_done_delivery_requires_bound_settlement_and_disposition(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             guarded_start(project, "objective", owner="owner", run="run", task="task",
@@ -1222,9 +1255,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_prelaunch_denial_and_unknown_effect_do_not_retry(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             port.assured = False
@@ -1243,30 +1274,51 @@ class GuardedOperationTests(unittest.TestCase):
                 guarded_start(project, "objective", **kw)
             self.assertEqual(port.starts, 1)
 
-    def test_unverified_account_binding_blocks_before_native_effect(self):
+    def test_unestablished_route_blocks_before_any_native_effect(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
+            start = dict(owner="owner", run="run", task="task", operation_id="op",
+                         assessment=assessment, capabilities=caps, quotas=quota, occupancy={},
+                         plan_revision="plan", now=NOW)
+            cases = {
+                "account_binding_unverified": lambda port: setattr(port, "establish_account", "other"),
+                "native_authority_unverified": lambda port: setattr(port, "runtime", None),
+                "billing_mode_unverified": lambda port: setattr(port, "login_auth", "unknown"),
+                "paid_route_forbidden": lambda port: setattr(port, "hard_stops_override",
+                                                             ["paid_route_forbidden"]),
+            }
+            for code, arrange in cases.items():
+                with self.subTest(code=code):
+                    port = FixturePort()
+                    arrange(port)
+                    with self.assertRaises(PodError) as caught:
+                        guarded_start(project, "objective",
+                                      **{**start, "operation_id": "op-" + code, "port": port})
+                    self.assertEqual(caught.exception.code, code)
+                    self.assertEqual(port.reads, 0)
+                    self.assertEqual(port.starts, 0)
+
+    def test_included_route_with_unknown_bucket_is_established(self):
+        """A supported subscription route is not blocked by absent optional metadata."""
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            caps["sol"].pop("bucket")
+            quota = {}
             port = FixturePort()
-            port.assurance = lambda route: {"runtime": "runtime", "billing_preflight": True,
-                                            "fanout_control": True,
-                                            "account_binding": {"provider": "codex", "account": "other",
-                                                                "bucket": "shared"}}
-            with self.assertRaises(PodError) as caught:
-                guarded_start(project, "objective", owner="owner", run="run", task="task",
-                              operation_id="op", assessment=assessment, capabilities=caps,
-                              quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
-            self.assertEqual(caught.exception.code, "account_binding_unverified")
-            self.assertEqual(port.reads, 0)
-            self.assertEqual(port.starts, 0)
+            port.establish_bucket = None
+            result = guarded_start(project, "objective", owner="owner", run="run", task="task",
+                                   operation_id="op", assessment=assessment, capabilities=caps,
+                                   quotas=quota, occupancy={}, plan_revision="plan", port=port,
+                                   now=NOW)
+            self.assertEqual(result["status"], "confirmed")
+            self.assertEqual(result["establishment"]["hard_stops"], [])
+            self.assertEqual(port.starts, 1)
 
     def test_fresh_native_read_and_shared_account_occupancy(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             port.workers = [{"state": "occupied", "account": "account", "objective": "other"}]
@@ -1280,9 +1332,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_exceptional_grant_exact_scope_and_request_identity(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             grant = {"id": "capacity-one", "action": "exceptional_capacity", "account": "account",
@@ -1314,9 +1364,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_ordinary_three_needs_reason_and_respects_personal_hard_ceiling(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
-                                                          "LOCALAPPDATA": str(root / "state"),
-                                                          "XDG_CONFIG_HOME": str(root / "config"),
-                                                          "APPDATA": str(root / "config")}):
+                                                          "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
             base = dict(owner="owner", run="run", task="task", operation_id="op",

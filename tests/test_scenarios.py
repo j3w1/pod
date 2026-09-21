@@ -74,8 +74,7 @@ class ScenarioFixtureTests(unittest.TestCase):
             def start_worker(self, **kwargs):
                 raise AssertionError("native start called")
 
-        with fixture() as root, patch.dict(os.environ, {"XDG_CONFIG_HOME": str(root / "config"),
-                                                         "APPDATA": str(root / "config")}):
+        with fixture() as root, patch.dict(os.environ, {"XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             _, assessment, capabilities, quota = scenario_inputs()

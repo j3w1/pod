@@ -10,15 +10,18 @@ from .errors import PodError
 from .util import bounded_text, exact
 
 REQUIRED_GATES = (
-    "unit_linux", "unit_windows", "incident_linux", "incident_windows",
-    "compile_linux", "compile_windows", "frozen_wheel_linux", "frozen_wheel_windows",
-    "isolated_install_linux", "isolated_install_windows", "hosted_ci_linux", "hosted_ci_windows",
-    "skill_validation", "independent_review", "live_codex_linux", "live_claude_linux",
-    "live_codex_windows", "live_claude_windows", "matched_evaluation",
-    "project_acceptance",
+    "unit_linux", "incident_linux", "compile_linux", "frozen_wheel_linux",
+    "isolated_install_linux", "bundle_copy_form", "hosted_ci_linux",
+    "skill_validation", "skill_bundle_parity", "skills_cli_install",
+    "independent_review", "live_codex_linux", "live_claude_linux",
+    "orca_delegation_codex", "orca_delegation_claude", "project_acceptance",
 )
 LIVE_CHECKS = ("discovery", "in_session", "authorized_execution", "effective_route",
                "lifecycle", "verification", "adoption")
+DELEGATION_CHECKS = ("request_construction", "account_authentication", "launch_identity",
+                     "effective_launch", "delivery", "settlement", "release")
+AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
+AUTHORIZATION_SCOPES = ("merge", "release", "deploy")
 ROW_FIELDS = {"schema", "candidate", "tree", "host", "utc", "gate", "command",
               "outcome", "report", "checks"}
 _GIT_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -56,7 +59,36 @@ def _sanitized_report(value: Any) -> bool:
     return all(part not in ("", ".", "..") for part in match.group("reference").split("/"))
 
 
-def release_gate(candidate: str, tree: str, records: list[dict]) -> dict:
+def validate_authorization(value: Any, *, candidate: str, tree: str) -> dict | None:
+    """Accept only a complete owner authorization bound to this exact candidate.
+
+    Authorization is an input the owner supplies. It is never derived from test
+    results, and passing checks never produce it.
+    """
+    if value is None:
+        return None
+    record = exact(value, AUTHORIZATION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
+    if record["schema"] != "pod-release-authorization/v1":
+        raise PodError("invalid_authorization", "Authorization schema is unsupported")
+    for field in ("authorized_by", "reference"):
+        bounded_text(record[field], name=field, limit=512)
+    if not _git_object_pair(record["candidate"], record["tree"]):
+        raise PodError("invalid_authorization", "Authorization candidate and tree must be Git object ids")
+    if not _utc_timestamp(record["utc"]):
+        raise PodError("invalid_authorization", "Authorization timestamp must be canonical UTC")
+    scope = record["scope"]
+    if (not isinstance(scope, list) or not scope or len(scope) > 8
+            or any(item not in AUTHORIZATION_SCOPES for item in scope)):
+        raise PodError("invalid_authorization", "Authorization scope is unsupported")
+    if "release" not in scope:
+        return None
+    if record["candidate"] != candidate or record["tree"] != tree:
+        return None
+    return record
+
+
+def release_gate(candidate: str, tree: str, records: list[dict],
+                 authorization: Any = None) -> dict:
     if not _git_object_pair(candidate, tree):
         raise PodError("invalid_validation", "Candidate and tree must use one full Git object format")
     if not isinstance(records, list) or len(records) > 128:
@@ -76,23 +108,31 @@ def release_gate(candidate: str, tree: str, records: list[dict]) -> dict:
             raise PodError("invalid_validation", "Validation timestamp must be canonical UTC")
         if not _sanitized_report(row["report"]):
             raise PodError("invalid_validation", "Validation report reference or digest is malformed")
-        expected_host = ("Linux" if row["gate"].endswith("_linux") else
-                         "Windows" if row["gate"].endswith("_windows") else None)
-        if ((expected_host is not None and row["host"] != expected_host)
-                or (expected_host is None and row["host"] not in ("Linux", "Windows"))):
+        # Linux is the supported execution environment; there is no other host vocabulary.
+        if row["host"] != "Linux":
             raise PodError("invalid_validation", "Validation gate host does not match its required OS")
         if row["candidate"] != candidate or row["tree"] != tree:
             continue
         if row["gate"] in matching:
             raise PodError("duplicate_validation", "Multiple records claim the same candidate gate")
-        if row["gate"].startswith("live_"):
+        required_checks = (LIVE_CHECKS if row["gate"].startswith("live_")
+                           else DELEGATION_CHECKS if row["gate"].startswith("orca_delegation_")
+                           else None)
+        if required_checks is not None:
             checks = row.get("checks")
-            if not isinstance(checks, dict) or set(checks) != set(LIVE_CHECKS) or any(v != "PASS" for v in checks.values()):
+            if (not isinstance(checks, dict) or set(checks) != set(required_checks)
+                    or any(value != "PASS" for value in checks.values())):
                 row = {**row, "outcome": "UNAVAILABLE"}
         matching[row["gate"]] = row
     statuses = {gate: matching[gate]["outcome"] if gate in matching else "NOT_RUN" for gate in REQUIRED_GATES}
     complete = all(status == "PASS" for status in statuses.values())
+    granted = validate_authorization(authorization, candidate=candidate, tree=tree)
+    status = "blocked"
+    if complete:
+        status = "authorized" if granted is not None else "owner_decision_required"
     return {"schema": "pod-release-gate/v1", "candidate": candidate, "tree": tree,
-            "status": "owner_decision_required" if complete else "blocked",
-            "gates": statuses, "missing_or_failed": [gate for gate, status in statuses.items() if status != "PASS"],
-            "release_authorized": False}
+            "status": status, "gates": statuses,
+            "missing_or_failed": [gate for gate, value in statuses.items() if value != "PASS"],
+            "authorization": {"present": granted is not None,
+                              "scope": granted["scope"] if granted else []},
+            "release_authorized": status == "authorized"}

@@ -118,7 +118,7 @@ class SetupCliTests(unittest.TestCase):
 
     def test_config_edit_scope_and_invalid_edit_preserved(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_CONFIG_HOME": str(root / "config"),
-                                                        "APPDATA": str(root / "config"), "EDITOR": f'"{sys.executable}" -c pass'}):
+                                                        "EDITOR": f'"{sys.executable}" -c pass'}):
             project = root / "project"
             project.mkdir()
             args = parser().parse_args(["config", "--edit"])

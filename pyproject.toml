@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "j3w1-pod"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A skill-first coordination policy for Orca"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -15,19 +15,25 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.13",
-  "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
 ]
 dependencies = ["PyYAML>=6.0.2,<7"]
+
+[project.urls]
+Homepage = "https://github.com/j3w1/pod"
+Repository = "https://github.com/j3w1/pod"
+Issues = "https://github.com/j3w1/pod/issues"
+Changelog = "https://github.com/j3w1/pod/blob/main/CHANGELOG.md"
 
 [project.scripts]
 pod = "pod.cli:main"
 
 [tool.setuptools]
-package-dir = { "" = "src" }
+packages = ["pod"]
+package-dir = { pod = "skills/pod" }
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools.dynamic]
+version = { attr = "pod.__version__" }
 
 [tool.setuptools.package-data]
-pod = ["skill/SKILL.md", "skill/references/*.md"]
+pod = ["SKILL.md", "agents/openai.yaml", "scripts/pod.py", "references/*.md"]

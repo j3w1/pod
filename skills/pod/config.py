@@ -208,10 +208,6 @@ def personal_path(project: Path | None = None) -> Path:
     override = explicit_home("POD_CONFIG_HOME")
     if override is not None:
         return override / "config.yaml"
-    if os.name == "nt":
-        if "APPDATA" not in os.environ:
-            raise PodError("config_home_unavailable", "APPDATA is required for personal configuration")
-        return native_home("APPDATA", project=project) / "pod" / "config.yaml"
     return native_home("XDG_CONFIG_HOME", default=Path.home() / ".config",
                        project=project) / "pod" / "config.yaml"
 
