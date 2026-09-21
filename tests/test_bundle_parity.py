@@ -38,5 +38,5 @@ class BundleParityTests(unittest.TestCase):
     def test_the_distribution_declares_no_retired_platform(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         classifiers = project["project"]["classifiers"]
-        self.assertNotIn("Operating System :: Microsoft :: Windows", classifiers)
+        self.assertNotIn("Operating System :: Microsoft :: Windows", classifiers)  # platform-audit: refusal
         self.assertIn("Operating System :: POSIX :: Linux", classifiers)

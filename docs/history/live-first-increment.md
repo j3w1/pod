@@ -1,3 +1,8 @@
+> Historical record. This describes the retired `orchestrate` product and the
+> investigation that preceded Pod. It is preserved unchanged as evidence and is
+> not guidance for the current product, whose supported execution environment is
+> Linux. See `docs/pod-spec.md` for what Pod implements today.
+
 # Legacy live first-increment exercise (historical)
 
 This preserved pre-Pod trial plan is not authorization to run a Pod live trial or mutate an existing project.

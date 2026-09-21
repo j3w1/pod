@@ -1,34 +1,41 @@
 # Pod validation
 
-Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Commit and tree values are full lowercase Git object IDs (40 hexadecimal characters for SHA-1 repositories or 64 for SHA-256 repositories). One selected binding or validation record uses one repository-wide object format, so its commit and tree IDs must have the same width. The timestamp is canonical RFC 3339 UTC with a trailing `Z`, including seconds and at most six fractional-second digits. The report value is a repository-neutral relative artifact identifier followed by ` sha256:` and the artifact's full 64-character lowercase SHA-256 digest; the identifier begins with an ASCII letter or digit, and its path components may otherwise use ASCII letters, digits, `.`, `_`, and `-`, but must not be empty, `.` or `..`. Offline fixtures do not prove live Orca, provider behavior, native Windows, hosted CI, independent review or acceptance. All new-candidate rows start `NOT_RUN` until a matching result is recorded.
+Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Commit and tree values are full lowercase Git object IDs (40 hexadecimal characters for SHA-1 repositories or 64 for SHA-256 repositories). One selected binding or validation record uses one repository-wide object format, so its commit and tree IDs must have the same width. The timestamp is canonical RFC 3339 UTC with a trailing `Z`, including seconds and at most six fractional-second digits. The report value is a repository-neutral relative artifact identifier followed by ` sha256:` and the artifact's full 64-character lowercase SHA-256 digest; the identifier begins with an ASCII letter or digit, and its path components may otherwise use ASCII letters, digits, `.`, `_`, and `-`, but must not be empty, `.` or `..`. Offline fixtures do not prove live Orca, provider behaviour, hosted CI, independent review or acceptance. All new-candidate rows start `NOT_RUN` until a matching result is recorded.
 
 ## Required candidate checks
 
 | Gate | Command or evidence | Current boundary |
 | --- | --- | --- |
-| Unit and incident suite | `PYTHONPATH=src python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
-| Explicit incident discovery | `PYTHONPATH=src:. python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
-| Compile and diff | `python -m compileall -q src tests`; `git diff --check 474a84a6d5a1f7947abc1e38d232c379adf7ff93 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
-| Skill validation | `PYTHONPATH=src python -m pod.skill_validation src/pod/skill`; additionally run the current system skill validator when available | Canonical packaged source, frontmatter, file inventory and references |
-| Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel there | Exact committed candidate |
-| Fresh isolated install | Install wheel into new disposable venv; smoke `pod --help`, each family help, `pod config --check --json`, `pod doctor --json` | No model/Orca mutation |
-| Hosted Windows/Linux | Same suite, incident discovery, frozen wheel and installed CLI smokes in both jobs | Candidate-bound CI |
-| Independent audit | Fresh reviewer of exact commit/tree and reproducible evidence | Findings only |
-| Live core matrix | Codex and Claude Code, each on native Linux and Windows: discovery, in-session coordination, authorized native worker/effective route, lifecycle, verification and adoption | Separate live authorization and disposable project |
+| Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
+| Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
+| Compile and diff | `python -m compileall -q skills tests install.py`; `git diff --check 474a84a6d5a1f7947abc1e38d232c379adf7ff93 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
+| Supported environment audit | `python tools/platform_audit.py` | No unsupported-platform implementation in the tracked product |
+| Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, frontmatter allowlist, helper invocation forms and references |
+| Bundle parity | `python -m pod.skill_validation --wheel dist/*.whl`; `--installed PATH` for a placed copy | The wheel and every placed copy carry the tracked bundle's exact bytes |
+| Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel and sdist there | Exact committed candidate |
+| Fresh isolated install | Install the wheel into a new disposable venv; smoke `pod --help`, each family help, `pod config --check --json`, `pod doctor --json`, then `--installed` parity | No model or Orca mutation |
+| Copied-bundle form | Run `scripts/pod.py doctor --json` from a copy, in an unrelated directory, with no `PYTHONPATH` and no checkout | The installed skill needs nothing outside itself |
+| Skills-CLI install | `npx skills@1.7.0 add SOURCE --skill pod -a codex -a claude-code -g -y` in a disposable home, with `DISABLE_TELEMETRY=1` | The documented installation actually works, and `pod setup` then reports it as externally managed |
+| Hosted Linux | The same suite, incident discovery, audit, frozen build, installs and smokes in one candidate-bound job | Candidate-bound CI |
+| Independent audit | Fresh reviewer of the exact commit and tree with reproducible evidence | Findings only |
+| Live core matrix | Codex and Claude Code, each on Linux: discovery, in-session coordination, authorized native worker and effective route, lifecycle, verification and adoption | Separate live authorization and a disposable project |
+| Orca delegation | Each advertised worker adapter: request construction, account and authentication selection, launch identity, effective launch, delivery, settlement and release | Production adapter against the installed runtime |
 | Project acceptance | Owner governance, merge, release and any publication decisions | External |
 
 For disposable validation, `POD_CONFIG_HOME` may name an absolute directory containing
 `config.yaml`, and `POD_STATE_HOME` may name an absolute Pod state directory. These
 process-scoped Pod-only overrides reject empty, relative, or existing non-directory values;
-they do not change the default personal locations, project YAML authority, `APPDATA`,
-`LOCALAPPDATA`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or Orca's native profile environment.
+they do not change the default personal locations, project YAML authority, `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR`, or Orca's native profile environment.
 Child Orca processes inherit that native profile unchanged. Use fresh owned directories;
 the overrides do not make an existing directory disposable.
 
-Inferred native homes (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `APPDATA`, `LOCALAPPDATA`,
-`CODEX_HOME`, and `CLAUDE_CONFIG_DIR`) must be absolute directories outside the current project,
-both lexically and after resolving existing redirects. Configuration/state access and global setup
-fail before writes when that boundary is not proven. Explicit absolute `POD_CONFIG_HOME` and
+Inferred native homes (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `CODEX_HOME` and
+`CLAUDE_CONFIG_DIR`) must be absolute directories outside the current project,
+both lexically and after resolving existing redirects. A profile home may itself be a symlink,
+as it commonly is on an ordinary machine; only the components Pod would create beneath it must
+be unredirected. Configuration and state access and global setup fail before writes when that
+boundary is not proven. Explicit absolute `POD_CONFIG_HOME` and
 `POD_STATE_HOME` remain Pod-only disposable overrides, and local project-scope setup intentionally
 writes its owned integration beneath the project.
 
@@ -39,13 +46,9 @@ disabled. Process-only controls remove inherited Python and pip control variable
 all pip configuration files for both pip phases and their target re-exec, and disable the
 user site. Before success, the target interpreter runs in isolated mode and verifies the
 installed `j3w1-pod` distribution and `pod` import; no system pip upgrade or profile change
-is attempted. The prior ALLY run failed in `ensurepip` with WinError 448 while traversing
-the Codex `bin` mount; this candidate avoids `ensurepip`, but `install.py` end-to-end on
-native Windows remains `NOT_RUN` until an owner-shell rerun. The complete Windows unit,
-repeat-setup/global-reuse/doctor, frozen-wheel, installed-CLI, and live rows likewise remain
-`NOT_RUN`; Linux fixtures do not promote them.
+is attempted.
 
-The [scenario coverage file](pod-coverage.json) lists all A01–A82. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised. The direct-agent, native-Orca and Pod matched evaluation also remains `NOT_RUN` without bounded live authorization.
+The [scenario coverage file](pod-coverage.json) lists every acceptance scenario. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised, and a retired scenario is recorded as `RETIRED` with its reason rather than as a pass.
 
 Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.
 
@@ -58,12 +61,13 @@ terminal/resource identity and unchanged launch, then durably upgrades the bindi
 release projection can settle. Malformed, ambiguous or contradictory predecessor rows remain held;
 the helper never repeats the native start or release effect.
 
-`python -m pod.internal release-gate --input RECORD.json` projects these exact rows. Hosted CI
-is represented by independent `hosted_ci_linux` and `hosted_ci_windows` gates. Every gate ending
-in `_linux` requires host `Linux`, every gate ending in `_windows` requires host `Windows`, and
-other gates still require one of those two documented host values. A complete set returns
-`owner_decision_required`; it never authorizes publication, merge or installed-state cutover.
-Missing live subchecks remain unavailable even if a top-level result says PASS.
+`python -m pod.internal release-gate --input RECORD.json` projects these exact rows. Every row
+records host `Linux`, the one supported execution environment. A complete set without an owner
+authorization returns `owner_decision_required`: technical readiness is reported, permission is
+withheld. Supplying a `pod-release-authorization/v1` record naming the exact candidate, tree and
+a scope containing `release` returns `authorized`; an incomplete set stays `blocked` whatever the
+authorization says. Missing live or delegation subchecks remain unavailable even if a top-level
+result says PASS. The gate performs no release.
 
 ## Evidence record
 
@@ -72,7 +76,7 @@ Missing live subchecks remain unavailable even if a top-level result says PASS.
   "schema": "pod-validation/v1",
   "candidate": "1111111111111111111111111111111111111111",
   "tree": "2222222222222222222222222222222222222222",
-  "host": "Linux or Windows",
+  "host": "Linux",
   "utc": "2026-09-20T00:00:00Z",
   "gate": "name",
   "command": "sanitized command",
@@ -85,4 +89,4 @@ Do not store raw environments, credentials, source packets, personal paths or ru
 
 ## Runtime limits
 
-The current installed Orca worker contract supports workers without terminals. Pod's read adapter treats terminal identity as optional. Its pre-dispatch billing eligibility and hidden descendant fan-out controls have not been verified, so the guarded admission path fails closed. The metadata adapter does not scrape credential stores or undocumented quota endpoints. Reset credits have only an offline intent guard; no redemption transport is installed. WSL and remote ownership, exact live launch and release reconciliation, and both native OS core matrices require separate evidence.
+The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: the effective launch and the native descendant-depth limit are enforceable controls, the billing mode, account identity, descendant count and quota windows are supported observations, route approval and the delegation setting are owner configuration, and anything else is recorded as unavailable. Pod claims no more than those controls prove. Refusing worker-initiated delegation is a Pod admission decision and a behavioural instruction to the worker, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints, and it stores a digest of an account identifier rather than the identifier. Reset credits have only an offline intent guard; no redemption transport is installed. Cross-host admission is not atomic and is disclosed as such. Exact live launch and release reconciliation, and the live core and delegation matrices, require separate evidence.

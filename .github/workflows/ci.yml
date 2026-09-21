@@ -1,81 +1,186 @@
 name: Pod candidate checks
 
 on:
-  push:
   pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  DISABLE_TELEMETRY: "1"
+  DO_NOT_TRACK: "1"
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: linux
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install package and build tooling
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install build tooling
         run: python -m pip install --upgrade build PyYAML
+
       - name: Unit and incident suite
         run: python -m unittest discover -s tests -v
         env:
-          PYTHONPATH: src
+          PYTHONPATH: skills
       - name: Explicit incident discovery
         run: python -m unittest discover -s tests/incidents -t . -v
         env:
-          PYTHONPATH: src
+          PYTHONPATH: skills
       - name: Compile
-        run: python -m compileall -q src tests
-      - name: Validate canonical skill
-        run: python -m pod.skill_validation src/pod/skill
+        run: python -m compileall -q skills tests install.py
+
+      - name: Validate the skill bundle
+        run: python -m pod.skill_validation skills/pod
         env:
-          PYTHONPATH: src
-      - name: Build frozen wheel from Git archive
-        shell: bash
+          PYTHONPATH: skills
+
+      - name: Supported execution environment audit
+        run: python tools/platform_audit.py
+
+      - name: Build a frozen wheel and sdist from the Git tree
         run: |
           EXPORT="$(mktemp -d)"
           git archive HEAD | tar -x -C "$EXPORT"
-          pushd "$EXPORT"
-          python -m build --wheel
-          popd
+          (cd "$EXPORT" && python -m build)
           mkdir -p dist
-          cp "$EXPORT"/dist/*.whl dist/
-      - name: Install wheel into isolated environment
-        shell: bash
+          cp "$EXPORT"/dist/* dist/
+          echo "POD_EXPORT=$EXPORT" >> "$GITHUB_ENV"
+
+      - name: Wheel matches the bundle
+        run: python -m pod.skill_validation --wheel dist/*.whl
+        env:
+          PYTHONPATH: skills
+
+      - name: Install the wheel into an isolated environment
         run: |
           python -m venv .venv-smoke
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            .venv-smoke/Scripts/python -m pip install dist/*.whl
-            .venv-smoke/Scripts/pod --help
-            .venv-smoke/Scripts/pod setup --help
-            .venv-smoke/Scripts/pod config --help
-            .venv-smoke/Scripts/pod doctor --help
-            .venv-smoke/Scripts/pod status --help
-            POD_BIN="$PWD/.venv-smoke/Scripts/pod"
-          else
-            .venv-smoke/bin/python -m pip install dist/*.whl
-            .venv-smoke/bin/pod --help
-            .venv-smoke/bin/pod setup --help
-            .venv-smoke/bin/pod config --help
-            .venv-smoke/bin/pod doctor --help
-            .venv-smoke/bin/pod status --help
-            POD_BIN="$PWD/.venv-smoke/bin/pod"
-          fi
-          FIXTURE="$(mktemp -d)"
+          .venv-smoke/bin/python -m pip install dist/*.whl
+          for family in "" setup config doctor status; do
+            .venv-smoke/bin/pod $family --help > /dev/null
+          done
           HOMES="$(mktemp -d)"
+          export HOME="$HOMES/home"
           export POD_CONFIG_HOME="$HOMES/pod-config"
           export POD_STATE_HOME="$HOMES/pod-state"
           export XDG_CONFIG_HOME="$HOMES/xdg-config"
           export XDG_STATE_HOME="$HOMES/xdg-state"
-          export APPDATA="$HOMES/appdata"
-          export LOCALAPPDATA="$HOMES/localappdata"
           export CODEX_HOME="$HOMES/codex"
           export CLAUDE_CONFIG_DIR="$HOMES/claude"
-          mkdir -p "$POD_CONFIG_HOME" "$POD_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" \
-            "$APPDATA" "$LOCALAPPDATA" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"
+          mkdir -p "$HOME" "$POD_CONFIG_HOME" "$POD_STATE_HOME" "$XDG_CONFIG_HOME" \
+            "$XDG_STATE_HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"
+          FIXTURE="$(mktemp -d)"
+          POD_BIN="$PWD/.venv-smoke/bin/pod"
           (cd "$FIXTURE" && "$POD_BIN" setup --global --json)
           (cd "$FIXTURE" && "$POD_BIN" setup --json)
           (cd "$FIXTURE" && "$POD_BIN" config --check --json)
           (cd "$FIXTURE" && "$POD_BIN" doctor --json)
+          PYTHONPATH=skills python -m pod.skill_validation --installed "$CODEX_HOME/skills/pod"
+          echo "$HOMES" > "$RUNNER_TEMP/smoke-homes"
+
+      - name: Explicit reviewed-checkout installer
+        run: |
+          python install.py --venv "$RUNNER_TEMP/installer-venv" --expected-commit "$GITHUB_SHA"
+          "$RUNNER_TEMP/installer-venv/bin/pod" --help > /dev/null
+
+      - name: The bundle runs as a plain copy, with no checkout
+        run: |
+          COPY="$RUNNER_TEMP/copy"
+          mkdir -p "$COPY" "$RUNNER_TEMP/elsewhere" "$RUNNER_TEMP/copy-home"
+          cp -r "$POD_EXPORT/skills/pod" "$COPY/pod"
+          cd "$RUNNER_TEMP/elsewhere"
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" \
+            python -I "$COPY/pod/scripts/pod.py" doctor --json > report.json
+          python - <<'PY'
+          import json, os, pathlib
+          report = json.loads(pathlib.Path("report.json").read_text())
+          expected = os.path.join(os.environ["RUNNER_TEMP"], "copy", "pod")
+          assert report["bundle"]["path"].startswith(expected), report["bundle"]
+          assert report["prerequisites"]["python"] == "ok", report["prerequisites"]
+          PY
+
+      - name: Install the skill with the community skills CLI
+        run: |
+          SMOKE="$RUNNER_TEMP/skills-home"
+          mkdir -p "$SMOKE"
+          HOME="$SMOKE" npx --yes skills@1.7.0 add "$POD_EXPORT" \
+            --skill pod -a codex -a claude-code -g -y
+          test -f "$SMOKE/.agents/skills/pod/SKILL.md"
+          test -f "$SMOKE/.agents/skills/pod/scripts/pod.py"
+          grep -q '"pod"' "$SMOKE/.agents/.skill-lock.json"
+          PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
+          HOME="$SMOKE" python "$SMOKE/.claude/skills/pod/scripts/pod.py" doctor --json > /dev/null
+          HOME="$SMOKE" CODEX_HOME="$SMOKE/.agents" CLAUDE_CONFIG_DIR="$SMOKE/.claude" \
+            XDG_STATE_HOME="$SMOKE/.local/state" \
+            .venv-smoke/bin/pod setup --global --json > setup.json
+          python - <<'PY'
+          import json, pathlib
+          outcome = json.loads(pathlib.Path("setup.json").read_text())
+          for host, value in outcome["skills"].items():
+              assert value == "managed_by_skills_cli", (host, value)
+          PY
+
+  release:
+    name: release
+    if: github.ref_type == 'tag'
+    needs: linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install build tooling
+        run: python -m pip install --upgrade build PyYAML
+
+      - name: The tag names the package version
+        run: |
+          DECLARED="$(PYTHONPATH=skills python -c 'import pod; print(pod.__version__)')"
+          test "${GITHUB_REF_NAME#v}" = "$DECLARED"
+
+      - name: Build the release artifacts from the exact tag
+        run: |
+          EXPORT="$(mktemp -d)"
+          git archive "$GITHUB_REF_NAME" | tar -x -C "$EXPORT"
+          (cd "$EXPORT" && python -m build)
+          mkdir -p dist
+          cp "$EXPORT"/dist/* dist/
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix=pod/ \
+            -o "dist/pod-skill-$VERSION.tar.gz" "$GITHUB_REF_NAME:skills/pod"
+          (cd dist && sha256sum ./* > SHA256SUMS)
+
+      - name: The published source installs as a skill
+        run: |
+          SMOKE="$RUNNER_TEMP/release-home"
+          mkdir -p "$SMOKE"
+          HOME="$SMOKE" npx --yes skills@1.7.0 add \
+            "${GITHUB_REPOSITORY}#${GITHUB_REF_NAME}" --skill pod -a codex -a claude-code -g -y
+          PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="docs/release-notes/${GITHUB_REF_NAME}.md"
+          test -f "$NOTES"
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "Pod $GITHUB_REF_NAME" --notes-file "$NOTES" dist/*

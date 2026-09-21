@@ -1,48 +1,186 @@
 # Pod
 
-Pod helps the coding conversation you already have coordinate software work in Orca. It keeps planning and judgment in that conversation, uses a small set of local policy helpers, and leaves native Tasks, Dispatches and workers to Orca.
+Pod turns the coding session you are already in into a coordinator. It is an agent skill: you
+invoke it inside Codex or Claude Code, and that conversation keeps its context, its model and
+its effort while it plans the work, decides what deserves a worker, launches those workers
+through Orca, and verifies what comes back.
 
-The current candidate is a **pre-release implementation**. Direct work, policy inspection, routing preview, bounded records and skill installation have offline coverage. Live worker delegation is blocked when the installed runtime cannot prove billing and hidden fan-out controls before launch.
+Pod is not a second agent, a scheduler or a daemon. Orca owns Runs, Tasks, Dispatches, worker
+placement, messaging and lifecycle. Your project owns source, checks, review and acceptance.
+Pod owns the policy between them.
+
+Supported execution environment: Linux.
+
+## Table of contents
+
+- [How it works](#how-it-works)
+- [Installation](#installation)
+- [The basic workflow](#the-basic-workflow)
+- [When something goes wrong](#when-something-goes-wrong)
+- [What's inside](#whats-inside)
+- [Philosophy](#philosophy)
+- [Updating, rolling back and removing](#updating-rolling-back-and-removing)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## How it works
 
-Invoke the `pod` skill in Claude Code or Codex. It first reads the objective, original success criteria and project rules. Small jobs stay in the current session. Larger jobs can use a compact plan, independently assessed assignments, explicit route approval and candidate-bound checks. Helpers explain a decision; they do not become a scheduler or launch provider inference calls.
+You type `$pod` in Codex or `/pod` in Claude Code. The skill loads into the conversation you
+are already having. Nothing restarts, nothing forks, and your model and effort are unchanged.
 
-The five starter preferences are pending recommendations. Personal YAML supplies exact agent, model and account approval. Project YAML can refine preferences and tighten restrictions. Quota, billing, capacity and native capabilities can block delegation without blocking safe direct work or diagnosis.
+From there the session reads your objective and decides how to do the work. Trivial work it
+does itself. For substantial work it writes a compact brief that ties each of your criteria
+to a check or to an explicit dependency, then decides whether a worker would actually help.
 
-For a personal approval, first enter the exact agent, model and account while leaving `approved: false`. `pod config` displays that route's binding digest. After reviewing the route, set `approved: true`, `approval_ref`, and that exact `approval_route` digest in personal YAML. Changing any route identity invalidates the binding.
+When it would, Pod establishes the route before anything is launched: which agent, which
+model, which account, what the installed Orca runtime can actually enforce, and what it can
+only observe. A route that is approved and running on a subscription login launches. A route
+whose billing mode is unknown, or a paid route with no spending grant, does not.
 
-## Getting started
+After launch, Pod reads the worker back rather than trusting the request. It reconciles the
+exact native identity, processes every Delivery item, releases the worker once, and records
+what was proved and what was not.
 
-Use Python 3.13 or newer on native Linux or Windows. The invoking interpreter must already have pip 22.3 or newer; Pod does not install or upgrade that bootstrap pip. From a clean reviewed checkout, choose a fresh environment outside it:
+## Installation
 
-```sh
-python install.py --venv /path/to/new-venv --expected-commit REVIEWED_COMMIT
-/path/to/new-venv/bin/pod setup
+Pod installs through the agent-skills ecosystem. Pick the agents you use:
+
+```bash
+npx skills add j3w1/pod --skill pod
+npx skills add j3w1/pod --skill pod -a codex -a claude-code
+npx skills add j3w1/pod --skill pod -a codex -a claude-code -g
 ```
 
-On Windows, run the environment's `Scripts\pod.exe`. The installer creates the target without pip, then uses the invoking interpreter's isolated pip with `--python` pointed at that exact environment. It removes inherited Python and pip control variables only from installer subprocesses, writes only to the selected environment, and prints the install command. `pod setup` enrolls project skills; `pod setup --global` installs user skills without changing the current project. It does not change global pip configuration, install Orca or repair PATH.
+The first form installs into the current project; `-g` installs for your user. To pin a
+release instead of tracking the default branch, name the tag as a fragment:
 
-Use `$pod` in Codex or `/pod` in Claude Code after skill discovery. Existing modified skill copies are preserved for review.
+```bash
+npx skills add j3w1/pod#v0.1.0 --skill pod -a codex -a claude-code -g
+```
 
-## Commands
+### Prerequisites
 
-| Command | Purpose |
-| --- | --- |
-| `pod setup [--global]` | Install owned inline skill and references at the selected scope. |
-| `pod config [--check] [--json]` | Read the effective policy and provenance without writing. |
-| `pod config --edit [--scope personal|project]` | Edit canonical YAML; personal is the default scope. |
-| `pod doctor [--json]` | Read installation, policy and capability diagnostics. |
-| `pod status [--run RUN] [--json]` | Read native status; ambiguous Runs require selection. |
+- **Linux.**
+- **Python 3.13 or newer**, available as `python3`.
+- **PyYAML 6.x**, importable by that interpreter. If it is missing, the helper tells you the
+  one command to run. Pod never installs it for you.
+- **Orca**, on `PATH` as `orca`, or named by `ORCA_CLI_COMMAND`. Needed for routing,
+  delegation and status; `config` works without it.
+- **An authenticated Codex or Claude Code session**, which is the coordinator.
 
-Private structured helpers are available through `python -m pod.internal`; they add no global command. The [skill](src/pod/skill/SKILL.md) links the relevant planning, routing, native effect and verification references.
+Loading the skill installs nothing, edits no shell profile, and overwrites no project file.
 
-## Current limits and evidence
+### Without Node
 
-The [Pod specification](docs/pod-spec.md) defines 59 requirements and 82 scenarios. [Coverage data](docs/pod-coverage.json), [validation gates](docs/validation.md), and [progress](docs/pod-progress.md) distinguish offline fixtures from live, hosted, independent and project acceptance evidence. Missing live controls keep affected operations blocked. WSL and remote runtime ownership have no verified transport contract here.
+The skills CLI is a convenience, not a runtime. To install from a reviewed release instead:
 
-This branch makes a breaking package and CLI cutover from `orchestrate` to `pod`. It does not rename the repository or canonical checkout, migrate installed state, merge, deploy or publish. The [migration inventory](docs/pod-migration.md) records retired components and preserved recovery obligations.
+```bash
+git clone --branch v0.1.0 --depth 1 https://github.com/j3w1/pod ~/src/pod
+python3 ~/src/pod/install.py --venv ~/.local/share/pod/venv \
+  --expected-commit "$(git -C ~/src/pod rev-parse v0.1.0^{commit})"
+~/.local/share/pod/venv/bin/pod setup --global
+```
 
-## Development
+The installer refuses a dirty or unexpected checkout, creates the environment itself, and
+touches nothing outside it. The skill it then places carries its own helpers, so that
+environment is only the installer.
 
-Run the unit and incident suite with `python -m unittest discover -s tests -v`, then explicit incident discovery, compile checks and the isolated wheel smoke described in [validation](docs/validation.md). Project governance still decides review, acceptance and release.
+## The basic workflow
+
+1. **Invoke it.** `$pod` or `/pod`, inside the work you are already doing.
+2. **Agree on the objective.** Pod restates your criteria and names the assumptions it is
+   making. Plan-only stays plan-only: it investigates, it does not edit or launch.
+3. **Let it choose the method.** Zero workers when direct work is enough. Two by default.
+   Three needs a reason. Four to eight needs a grant naming the objective, Run and plan.
+   Above eight is refused.
+4. **Watch it delegate.** Each worker gets a frozen packet: scope, actions, bound sources,
+   and the report it owes back. Pod counts what is running, including anything a worker
+   started, and refuses to launch from silence.
+5. **Let it verify.** Worker output is an observation, not an acceptance. Pod binds proof to
+   the exact candidate, source, policy and environment, and keeps "implemented", "locally
+   verified", "reviewed", "hosted", "accepted", "merged" and "released" apart.
+6. **Read the report.** It names what was achieved, what failed, what is uncertain, and what
+   is still blocked.
+
+## When something goes wrong
+
+Run the helpers from the skill directory. There is no global command to install:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/pod.py" doctor --json   # Claude Code
+python3 ~/.agents/skills/pod/scripts/pod.py doctor --json     # Codex, global install
+python3 .agents/skills/pod/scripts/pod.py doctor --json       # Codex, project install
+```
+
+- **`doctor`** reports the installed bundle, your prerequisites, which routes the runtime
+  actually establishes, and where your skill copies live. It changes nothing.
+- **`status`** joins a Run's native worker states to your local decision record.
+- **`config`** shows the merged policy and where each value came from.
+
+Common answers: a **blocked route** names the control that is missing, not a generic refusal.
+**Unknown quota** is conservative by design, allowing one new worker on that account rather
+than halting the objective. An **uncertain launch** keeps its slot until native state is read
+back, because a lost response is not proof that nothing started.
+
+## What's inside
+
+- **The skill.** One `SKILL.md` of coordination policy, with focused references for
+  [planning](skills/pod/references/planning.md),
+  [routing](skills/pod/references/routing.md),
+  [native effects](skills/pod/references/native-effects.md) and
+  [verification](skills/pod/references/verification.md), loaded only when needed.
+- **Four public helper families.** `setup`, `config`, `doctor` and `status`. Nothing else is
+  a command.
+- **Your policy.** `~/.config/pod/config.yaml` holds your approved routes and limits.
+  A project may narrow them in `.pod/config.yaml`; it can never widen them.
+- **A private record per objective.** What was launched, what settled, what is still
+  uncertain, and enough to resume after an interruption.
+
+## Philosophy
+
+**Approval, preference and payment are three different things.** A model you like is not a
+model you approved, and an approved model is not permission to spend.
+
+**Claim only what a control proves.** Pod says which controls back a route and how strongly:
+some the runtime enforces, some it merely reports, some you configured, and some are simply
+unavailable. Refusing a worker's own delegation is a policy decision, not a sandbox.
+
+**Unknown stays unknown.** Missing evidence is reported as missing. Passing tests never
+become permission, and a projection never withholds a readiness fact it can prove.
+
+**An effect you cannot see still happened.** A lost response, a delayed output or an absent
+terminal never justifies starting a second worker.
+
+## Updating, rolling back and removing
+
+One manager per installation. If the skills CLI installed it, keep using it:
+
+```bash
+npx skills update pod -g                         # update
+npx skills add j3w1/pod#v0.1.0 --skill pod -g    # roll back to a release
+npx skills remove pod -g -a codex -a claude-code # remove only Pod
+```
+
+If you installed with `install.py`, re-run `pod setup` after upgrading the environment.
+Either way, `pod setup` recognises a copy the skills CLI owns and leaves it alone, and
+repeating setup on a correct copy is a cheap no-op. Your own edits to a placed copy are
+preserved, not overwritten.
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md) and the
+[validation gates](docs/validation.md). `skills/pod` is simultaneously the Python package,
+the skill bundle and the wheel payload; keep one authoring source for everything.
+
+```bash
+PYTHONPATH=skills python -m unittest discover -s tests -v
+PYTHONPATH=skills python -m pod.skill_validation skills/pod
+python tools/platform_audit.py
+```
+
+[Migration notes](docs/pod-migration.md) record the cutover from the retired `orchestrate`
+product, whose own documents are preserved unchanged in [docs/history](docs/history/).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

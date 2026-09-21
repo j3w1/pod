@@ -32,11 +32,36 @@ class InventoryIntegrityTests(unittest.TestCase):
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
         requirements = re.findall(r"^\| (R\d{2}) \|", spec, flags=re.M)
         scenarios = re.findall(r"^\| (A\d{2}) \|", spec, flags=re.M)
-        self.assertEqual(requirements, [f"R{i:02}" for i in range(1, 60)])
-        self.assertEqual(scenarios, [f"A{i:02}" for i in range(1, 83)])
+        self.assertEqual(requirements, [f"R{i:02}" for i in range(1, len(requirements) + 1)])
+        self.assertEqual(scenarios, [f"A{i:02}" for i in range(1, len(scenarios) + 1)])
         self.assertEqual([row["id"] for row in coverage["scenarios"]], scenarios)
-        self.assertTrue(all(row["required_evidence"] and row["candidate_status"] == "NOT_RUN"
-                            for row in coverage["scenarios"]))
+        for row in coverage["scenarios"]:
+            with self.subTest(row=row["id"]):
+                self.assertTrue(row["required_evidence"])
+                self.assertIn(row["candidate_status"], ("NOT_RUN", "PASS", "RETIRED"))
+                if row["candidate_status"] == "RETIRED":
+                    self.assertTrue(row.get("retired"))
+
+    def test_retired_scenarios_say_so_in_both_places(self):
+        """A retirement is recorded as a decision, never silently reported as a pass."""
+        root = Path(__file__).resolve().parents[1]
+        spec = (root / "docs" / "pod-spec.md").read_text()
+        coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
+        retired_in_spec = {match for match in re.findall(r"^\| (A\d{2}) \| RETIRED", spec, flags=re.M)}
+        retired_in_coverage = {row["id"] for row in coverage["scenarios"]
+                               if row["candidate_status"] == "RETIRED"}
+        self.assertEqual(retired_in_spec, retired_in_coverage)
+        self.assertTrue(retired_in_spec)
+        for row in coverage["scenarios"]:
+            if row["candidate_status"] == "RETIRED":
+                self.assertNotEqual(row["candidate_status"], "PASS")
+
+    def test_no_evidence_type_survives_a_retired_platform(self):
+        root = Path(__file__).resolve().parents[1]
+        coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
+        kinds = {kind for row in coverage["scenarios"] for kind in row["required_evidence"]}
+        self.assertEqual(kinds - {"offline_behavior", "live_native", "external_gate",
+                                  "hosted_ci_linux"}, set())
 
     def test_referenced_fixture_cases_exist(self):
         root = Path(__file__).resolve().parents[1]

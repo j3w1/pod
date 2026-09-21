@@ -65,7 +65,7 @@ class ReleaseGateTests(unittest.TestCase):
                 self.assertEqual(result["gates"][gate], "NOT_RUN")
 
     def test_non_linux_host_is_rejected(self):
-        for host in ("Windows", "Darwin", "linux"):
+        for host in ("Windows", "Darwin", "linux"):  # platform-audit: refusal
             with self.subTest(host=host):
                 records = [{**row("unit_linux"), "host": host}]
                 with self.assertRaises(PodError) as caught:

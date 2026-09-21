@@ -61,8 +61,8 @@ def _bootstrap_pip(environment: dict[str, str]) -> tuple[int, ...]:
 def plan(checkout: Path, environment: Path, expected_commit: str) -> dict:
     if sys.version_info < (3, 13):
         raise RuntimeError("Pod requires Python 3.13 or newer")
-    if sys.platform not in ("linux", "win32"):
-        raise RuntimeError("Pod isolated installation supports native Linux and Windows")
+    if sys.platform != "linux":
+        raise RuntimeError("Pod's supported execution environment is Linux")
     if not expected_commit or len(expected_commit) < 7:
         raise RuntimeError("Provide the reviewed checkout commit")
     if checkout.is_symlink() or not (checkout / "pyproject.toml").is_file():
@@ -77,7 +77,7 @@ def plan(checkout: Path, environment: Path, expected_commit: str) -> dict:
         raise RuntimeError("Checkout does not match the reviewed clean commit")
     process_environment = _subprocess_environment()
     pip_version = _bootstrap_pip(process_environment)
-    python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    python = environment / "bin/python"
     return {"checkout_commit": head, "environment": str(environment), "target_python": str(python),
             "pip_version": pip_version,
             "install_command": [sys.executable, "-I", "-m", "pip", "--python", str(python),

@@ -1,3 +1,8 @@
+> Historical record. This describes the retired `orchestrate` product and the
+> investigation that preceded Pod. It is preserved unchanged as evidence and is
+> not guidance for the current product, whose supported execution environment is
+> Linux. See `docs/pod-spec.md` for what Pod implements today.
+
 # Legacy execution contracts and recovery (historical)
 
 This document records the pre-Pod implementation and its recovery evidence. It remains for audit and exact legacy-state reconciliation; [Pod's consolidated specification](pod-spec.md) is the sole active Pod product authority. No statement below grants a Pod worker launch or installed-state cleanup.

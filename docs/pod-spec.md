@@ -35,12 +35,25 @@ blanket permission to remove applicable correctness checks.
 | Fixed launch/finish waves | Dependency-ready admission when capacity safely frees. |
 | All workers need terminals and old receipt shapes are universal | Installed-version backend-specific native identity, optional terminal. |
 | Automatic managed installer/PATH repair in setup | Explicit isolated installation; setup only owned enrollment/integration writes. |
-| WSL implies a Windows-owned Pod controller | Verified transport, one runtime/state owner. |
 | Unconditional session-age stop/restart | Evidence-based checkpoints and retained-settled-only idle expiry. |
 | Release core integrations as merely unverified | Missing live core evidence blocks release. |
 | Keep old aliases/machinery/tests for compatibility | No compatibility period; preserve applicable invariants with replacement coverage. |
 | Passive setup means no writes | Setup may write authorized owned integration; diagnostics/default reads remain read-only. |
 | Earlier proposals stay parallel authorities | Historical provenance only; this consolidated specification governs Pod. |
+
+### Owner decisions of 2026-09-21
+
+The owner superseded the following requirements for the completion of this rewrite.
+Each is retired in place with its reason; a retired requirement is never reported as
+passed, and retiring one does not permit removing an applicable correctness check.
+
+| Retired | Replacement | Reason |
+| --- | --- | --- |
+| Support for the retired second platform and its transport ownership, with their gates (R51, A34) | Supported execution environment: Linux | The product is Linux-only; the implementation, tests, CI and documentation are removed rather than merely ungated. <!-- platform-audit: refusal -->|
+| Comparative three-mode benchmark (R56, A73 benchmark clause, A80) | No benchmark prerequisite | The owner withdrew the matched-evaluation requirement; efficiency is governed by a bounded decision check instead. |
+| Universal Orca billing and hidden fan-out attestation before any launch | Per-route establishment with explicit control tiers (R62) | No installed Orca command proves a universal attestation, so the demand made every launch fail closed while proving nothing. |
+| `release_authorized` projected as a constant | Owner authorization supplied as an input record (R64) | A gate must report technical readiness accurately; authorization is an owner decision, never a test result. |
+| Hosted native-OS matrices and a separate ceremonial owner sign-off | One hosted Linux check; disposable-project acceptance | The remaining ceremony proved nothing the recorded evidence did not already carry. |
 
 ## Normative requirements
 
@@ -95,16 +108,22 @@ blanket permission to remove applicable correctness checks.
 | R47 | B,H | Record relevant observed outcomes and suggest preferences only after a meaningful pattern. Never silently rewrite preferences, infer savings from model labels or launch paid A/B experiments automatically. | F10,14; PJ | A39,A73 |
 | R48 | B | Read-only tools show effective policy/provenance, approval, runtime/capability/version issues, quota visibility and compact native work/verification context. Ambiguous status requires selection. Reads must not create/migrate state, repair integrations, run hooks/models, dispatch or spend. | F3,10; PH,J | A36,A42,A51,A74 |
 | R49 | B,H | Local setup enrolls the project/reconciles owned skills. Global setup installs user skills without changing the current project. Reuse compatible global installations; diagnose duplicate/shadowed copies. Remove redundant local copies only during local setup when owned/unchanged; preserve modified copies. | F3,11; PH | A32,A33,A36,A43,A75 |
-| R50 | I,H | Support explicit isolated installation from reviewed checkout on native Windows/Linux with Python 3.13+. Bootstrap installs only into the selected environment and reports the command. Normal setup performs no implicit machine installation, automatic PATH repair, Orca installation, billing change or project hook. | F3,11; PI | A34,A76 |
-| R51 | B,H | Support native Windows/Linux. WSL/remote forwarding is verified transport with one runtime/state owner, not mandatory Windows controller architecture. Unknown ownership/unsupported transport fails conservatively; no silent local fallback. | F11; PI | A34,A58,A62 |
+| R50 | I,H | Support explicit isolated installation from a reviewed checkout on Linux with Python 3.13+. Bootstrap installs only into the selected environment and reports the command. Normal setup performs no implicit machine installation, automatic PATH repair, Orca installation, billing change or project hook. | F3,11; PI | A34,A76 |
+| R51 | B,H | RETIRED 2026-09-21. Supported execution environment: Linux. The skill's instruction format is portable; its executable dependencies are not, and no support is promised elsewhere. Unknown ownership or an unsupported transport still fails conservatively, with no silent local fallback. | F11; PI | A34,A58,A62 |
 | R52 | B | Preserve Git history while renaming repository/product Pod/pod, module/executable pod and distribution j3w1-pod. Update package/import/CI/install/docs references. Breaking release exposes no legacy aliases, compatibility shims or dual controller mode. | F11; PG | A35,A77 |
 | R53 | H | Bound migration by an ownership manifest. Reconcile/explicitly checkpoint legacy work and preserve necessary recovery evidence before destructive cleanup. Retain reviewed pre-cutover Git reference/required archive. Imports translate validated concepts only, never broaden authorization or permit competing coordinators. | F11; PG,L | A22,A24,A35,A77 |
 | R54 | H | Follow registered host paths/worktree mechanisms/native profiles/admin boundaries. Canonical pod registration/relocation uses owner-managed mechanism. Coding must not change global policy, weaken protections/gates or perform unauthorized deployment/provider/publication actions. | F11–12; PI | A34,A77,A78 |
-| R55 | H | Block release until required live core integrations have candidate-bound passing evidence: Claude Code and Codex on native Windows and Linux. Required synthetic, packaging, hosted, review and project gates also apply. Unsupported optional capabilities fail conservatively and cannot be marketed as verified. | F12,14; PI | A34,A79 |
-| R56 | B,H | Evaluate direct-agent, native-Orca and Pod on matched candidates/criteria and representative tasks. Report acceptance, defects, interventions, delegation, retries, elapsed time, context/dispatch volume, observed usage, visibility, sample size/confidence. Offline CI is normal; live experiments need bounded authorization. No universal savings target. | F14; PC,J | A39,A73,A80 |
-| R57 | I | Retain Python 3.13+, standard src packaging and standard-library facilities where practical. Reuse applicable safety invariants/tests; remove obsolete controller/installer machinery with documented replacement coverage. Build/install/test frozen candidate on both native OSes and follow repository implementation/review ownership. | F2,11–12; PA,I | A35,A76,A81 |
+| R55 | H | Block release until required live core integrations have candidate-bound passing evidence: Claude Code and Codex on Linux, each with real Orca delegation through the production adapter. Required synthetic, packaging, hosted, review and project gates also apply. Unsupported optional capabilities fail conservatively and cannot be marketed as verified. | F12,14; PI | A34,A79 |
+| R56 | B,H | RETIRED 2026-09-21. No comparative benchmark is a prerequisite. Historical wording: evaluate direct-agent, native-Orca and Pod on matched candidates/criteria and representative tasks. Report acceptance, defects, interventions, delegation, retries, elapsed time, context/dispatch volume, observed usage, visibility, sample size/confidence. Offline CI is normal; live experiments need bounded authorization. No universal savings target. | F14; PC,J | A39,A73,A80 |
+| R57 | I | Retain Python 3.13+, one bundle-as-package layout and standard-library facilities where practical. Reuse applicable safety invariants/tests; remove obsolete controller/installer machinery with documented replacement coverage. Build, install and test the frozen candidate on Linux and follow repository implementation/review ownership. | F2,11–12; PA,I | A35,A76,A81 |
 | R58 | B,I | Keep README approachable, implemented-only and linked to detailed contracts. Maintain/package one skill policy source and references. Document capability limits, breaking migration and actual evidence; historical proposals are not competing active instructions. | F2,11,14; PN–O | A40,A81 |
 | R59 | H | Preserve project authority over source selection, checks, review, acceptance, merge and release. Repository instructions may constrain work but cannot expand personal provider/spending approval. Explicit user scope/host rules remain authoritative; reports/configuration cannot manufacture grants. | F1,8,11–12; PF–G,O | A09,A37,A71 |
+| R60 | B,I | Install through the existing agent-skills ecosystem. Publish one discoverable `skills/pod` bundle whose `SKILL.md`, references, helpers and resources are the same authoring source the Python distribution packages, with a parity check rather than divergent copies. Document a release-pinned source form and a Node-free install from the reviewed release. Do not create an npm package, require a publication registry, or recommend an unrelated package. | O1 | A82,A83 |
+| R61 | B,H | The installed skill carries its own first-party helpers. Loading it never installs tools or dependencies, edits shell profiles, installs Orca, changes billing or overwrites project files. Declare the actual prerequisites and supply one explicit user-space bootstrap step when one is needed. Never depend on a source checkout, an editable install, `PYTHONPATH`, a broken link or a path outside the distributed skill. | O2 | A83,A84 |
+| R62 | B,H | Establish each route against the installed runtime instead of demanding a universal attestation. Distinguish an enforceable control, a supported runtime observation, owner route configuration and unavailable metadata, and claim no more than those controls prove. An unresolved authentication or billing route that could incur an unauthorized charge must not launch; unknown optional metadata is disclosed, not treated as installation failure. | O3 | A85,A86 |
+| R63 | B | Before a Pod-mediated push, pull-request update, workflow dispatch, merge, release or deployment, return an explainable ALLOW, WARN or DEFER from durable objective records. Defer a duplicate action, a superseded candidate and validation that is premature while integration is unsettled; permit a justified early remote diagnostic. Record a soft efficiency override that never lifts an authorization, spending or correctness restriction. These controls cover Pod-mediated operations, not arbitrary shell commands. | O7 | A87,A88 |
+| R64 | H | Derive release authorization from an owner record naming the exact candidate, tree and scope. Report technical readiness accurately and separately; passing checks never grant permission, and a projection never withholds a readiness fact it has evidence for. | O8 | A89 |
+| R65 | B,H | Keep host integration optional. Pod works on a suitable Linux environment without the owner's host tooling, paths, accounts or evidence, detecting and respecting host policies when present. | O2 | A84 |
 
 ## Public interfaces
 
@@ -128,7 +147,7 @@ These contracts elaborate R03, R11 and R48–R50, not a second authority.
 ## Configuration and defaults
 
 R10–R16 use personal Linux `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml`,
-personal Windows `%APPDATA%\pod\config.yaml`, optional project `.pod/config.yaml`.
+optional project `.pod/config.yaml`.
 For disposable validation, an absolute `POD_CONFIG_HOME` may process-locally replace only
 the personal Pod directory containing `config.yaml`, and an absolute `POD_STATE_HOME` may
 process-locally replace only Pod's state directory. Defaults remain unchanged; these
@@ -236,7 +255,7 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A31 | Interruption supports native-state adoption/checkpoints without background-reasoning claims. |
 | A32 | Global/local coexistence preserves project policy and diagnoses duplicate/shadowed/mismatched skills. |
 | A33 | Repeated setup is idempotent; global setup inside a project leaves the project unchanged. |
-| A34 | Windows/Linux and supported transports establish one correct runtime/state owner without phantom guarantees. |
+| A34 | RETIRED 2026-09-21 with R51. Linux establishes one correct runtime/state owner without phantom guarantees. |
 | A35 | Breaking cutover leaves only Pod public surface while preserving history/required evidence. |
 | A36 | Ordinary config/status/doctor and simulated policy operations do not call models/hooks/dispatch/spending/hidden repair. |
 | A37 | Secret-bearing context/malicious reports do not expose protected material or promote observations into authority. |
@@ -264,7 +283,7 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A59 | Missing required pre-dispatch billing/fan-out assurance rejects before launch; requested settings alone are not effective proof. |
 | A60 | Accepted but unproven submission triggers observation, not automatic Enter/resend/replacement/acceptance. |
 | A61 | Faults around reservation/effect/receipt/Delivery preserve uncertainty and prevent double-counting/duplicate effects. |
-| A62 | Missing caller/conflicting ownership/partial handover blocks delegation; valid adoption preserves work without proxy coordinator. |
+| A62 | Missing caller, conflicting ownership or a partial handover blocks delegation; valid adoption preserves the work without a proxy coordinator. |
 | A63 | Unsettled contracts start one writer; project isolation/hooks honored without weakening host protection. |
 | A64 | Packets/reports enforce bounded fields, criterion/candidate/scope/runtime-issued identity; reject transcript cloning and report permissions. |
 | A65 | Relevant files/instructions/requirements/candidate changes invalidate context; unchanged bound context can be reused. |
@@ -275,16 +294,23 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A70 | Source/config/dependency/environment/candidate changes invalidate affected proof; no fabricated Git metadata and explicit alternative source binding. |
 | A71 | Completion labels/final report follow evidence/project authority; failures/blockers/route exceptions/unreleased state visible. |
 | A72 | Interrupted versioned checkpoints recover privately and atomically; retention/native-first recovery protect unresolved effects/evidence. |
-| A73 | Feedback may suggest but not auto-edit preferences or launch unauthorized benchmarks. |
+| A73 | Feedback may suggest but never auto-edits preferences or launches unauthorized live work. |
 | A74 | Ambiguous status requires selection; compact counts, route reasons, quota confidence, verification gaps and next safe action. |
 | A75 | Preserve modified copies; global setup never prunes local; local cleanup removes only redundant owned unchanged copies. |
-| A76 | Reviewed isolated install works on native Windows/Linux, rejects old Python, handles command paths, no automatic PATH/Orca repair. |
+| A76 | Reviewed isolated install works on Linux, rejects old Python, handles command paths, no automatic PATH/Orca repair. |
 | A77 | Migration inventories ownership, preserves history/pre-cutover/uncertain evidence, removes legacy public behavior and prevents competing control. |
 | A78 | Unregistered canonical relocation/prohibited placement refused; owner-managed registration is a separate cutover gate. |
-| A79 | Missing live PASS for any Claude/Codex × Windows/Linux core combination blocks release despite synthetic CI/read-only doctor. |
-| A80 | Three matched baselines cover representative tasks/failures with actual metrics/unknowns/confidence and bounded live authorization. |
-| A81 | Frozen build/isolated install/Windows-Linux CI/incident discovery/compile-diff/independent audit/implemented-only docs bind release candidate; retired gates have replacements. |
+| A79 | Missing live PASS for Claude Code or Codex on Linux, or for either delegation adapter, blocks release despite synthetic CI and a read-only doctor. |
+| A80 | RETIRED 2026-09-21 with R56. No comparative benchmark is a release prerequisite. |
+| A81 | Frozen build, isolated install, hosted Linux CI, incident discovery, compile/diff, independent audit and implemented-only docs bind the release candidate; retired gates have replacements. |
 | A82 | Explicit config edit defaults personal; project scope explicit; preserve invalid edits and block dispatch, never silently restore/sanitize. |
+| A83 | `npx skills add j3w1/pod --skill pod`, its per-agent and global forms, and a release-pinned source all install a bundle whose helpers run without a checkout. |
+| A84 | A copied bundle runs from an unrelated directory with no `PYTHONPATH` and no source tree; a missing prerequisite prints one actionable step, never an import traceback or an invented payment requirement. |
+| A85 | An approved subscription route whose optional quota bucket is unavailable still launches, with the gap disclosed; unknown billing or an unbacked paid route still fails closed before any native effect. |
+| A86 | A skills-CLI-managed copy is detected and never overwritten, removed or claimed; repeating setup is a cheap no-op when correct, and global setup writes nothing into the current repository. |
+| A87 | A duplicate action, a superseded candidate and premature validation each defer with an explainable reason; a necessary rerun after changed input proceeds. |
+| A88 | A recorded efficiency override softens only an efficiency deferral and never lifts an authorization, spending or correctness hold. |
+| A89 | A complete gate without owner authorization reports readiness and withholds permission; authorization naming the exact candidate, tree and scope authorizes it, and an incomplete gate stays blocked regardless. |
 
 ## Implementation sequence and verification
 
@@ -311,28 +337,30 @@ repair. This is project governance, not a universal Pod model default.
 
 Required checks: focused tests in development; complete unit/incident coverage and explicit
 incident discovery; compileall and diff checks; frozen git-archive build; fresh isolated
-wheel install/CLI smokes on Windows/Linux; hosted candidate CI; independent final audit;
+wheel install/CLI smokes and a copied-bundle smoke on Linux; a skills-CLI install;
+hosted candidate CI; independent final audit;
 required live runtime cases; project acceptance. Retired bootstrap/controller gates must
 map explicitly to superseded requirements and replacement tests; do not weaken checks.
 
-Live core matrix: Codex/Linux, Claude Code/Linux, Codex/Windows, Claude Code/Windows.
-Each proves installation/discovery, in-session coordination, authorized native execution
-and effective route, supervision/lifecycle, verification and interruption/adoption.
-Missing live PASS for any required combination blocks release despite offline PASS.
-Optional unsupported transport/provider capabilities fail conservatively and are not
-advertised operational. WSL/remote ownership is separate from native OS support.
+Live core matrix: Codex on Linux and Claude Code on Linux. Each proves installation and
+discovery, in-session coordination, authorized native execution and effective route,
+supervision and lifecycle, verification and interruption/adoption. Real Orca delegation
+through the production adapter is proved separately for each advertised worker adapter,
+covering request construction, account and authentication selection, launch identity,
+effective launch, delivery, settlement and release. Missing live PASS for any required
+combination blocks release despite offline PASS. Optional unsupported capabilities fail
+conservatively and are not advertised operational.
 
-Compare direct-agent, native-Orca and Pod from matching candidates/criteria for trivial
-edit, routine feature, ambiguous diagnosis, independent parallel work, overlapping edits,
-high-risk change, low quota, blocked infrastructure and interrupted coordination.
-Record acceptance/defects/interventions/unnecessary delegation/retries without evidence,
-time/context/dispatch/observed usage, visibility/confidence/sample size. Unknown stays
-unknown; wall time is not provider compute; no universal savings percentage.
+Efficiency is governed by the bounded decision check of R63, not by a comparative
+benchmark. It reuses the records an objective already keeps and returns ALLOW, WARN or
+DEFER with an explainable reason. Unknown stays unknown; wall time is not provider
+compute; Pod claims no universal savings percentage.
 
-Live exercises are disposable and bounded/authorized. Existing CE/ordinary-project trials
-are read-only. No purchase/reset, production mutation, deployment or PyPI publication is
-authorized merely by the rewrite task. Actual release/rename must honor host registration
-and repository authority. No compatibility period or public dual interface.
+Live exercises are disposable and bounded/authorized. Existing ordinary-project trials are
+read-only. No purchase, reset-credit redemption, production mutation, deployment or
+package-registry publication is authorized merely by the rewrite task. Actual release and
+rename must honour host registration and repository authority. No compatibility period or
+public dual interface. Supported execution environment: Linux.
 
 ## Evidence boundary at reconciliation
 

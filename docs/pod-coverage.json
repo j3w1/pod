@@ -1,7 +1,7 @@
 {
   "schema": "pod-scenario-coverage/v1",
   "authority": "docs/pod-spec.md",
-  "note": "An offline_test path maps a scenario to a deterministic fixture slice, not complete scenario proof or an executed test result. Frozen candidate, hosted, live, conversation behavior and external evidence remain separate. Document ID checks prove inventory only.",
+  "note": "Every scenario in the specification appears once, in order. A row records what evidence the scenario needs and, where one exists, the deterministic offline test that covers a slice of it. A retired scenario is recorded as RETIRED with its reason, never as a pass. This file proves inventory integrity, not behaviour.",
   "scenarios": [
     {
       "id": "A01",
@@ -283,7 +283,8 @@
         "external_gate"
       ],
       "offline_test": null,
-      "candidate_status": "NOT_RUN"
+      "candidate_status": "RETIRED",
+      "retired": "2026-09-21 owner decision; see docs/pod-spec.md"
     },
     {
       "id": "A35",
@@ -655,7 +656,6 @@
         "offline_behavior",
         "live_native",
         "hosted_ci_linux",
-        "hosted_ci_windows",
         "external_gate"
       ],
       "offline_test": "tests.test_release.ReleaseGateTests.test_missing_live_core_blocks_even_with_offline_pass",
@@ -667,14 +667,14 @@
         "external_gate"
       ],
       "offline_test": null,
-      "candidate_status": "NOT_RUN"
+      "candidate_status": "RETIRED",
+      "retired": "2026-09-21 owner decision; see docs/pod-spec.md"
     },
     {
       "id": "A81",
       "required_evidence": [
         "offline_behavior",
         "hosted_ci_linux",
-        "hosted_ci_windows",
         "external_gate"
       ],
       "offline_test": "tests.test_release.ReleaseGateTests.test_all_records_only_request_owner_decision",
@@ -686,6 +686,65 @@
         "offline_behavior"
       ],
       "offline_test": "tests.test_setup_cli.SetupCliTests.test_config_edit_scope_and_invalid_edit_preserved",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A83",
+      "required_evidence": [
+        "live_native",
+        "external_gate"
+      ],
+      "offline_test": null,
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A84",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_bundle_install.BundleInstallTests.test_a_copied_bundle_runs_with_no_checkout_and_no_pythonpath",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A85",
+      "required_evidence": [
+        "offline_behavior",
+        "live_native"
+      ],
+      "offline_test": "tests.test_orca_adapter.RouteEstablishmentTests.test_an_included_route_survives_an_unavailable_quota_bucket",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A86",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_setup_cli.SkillOwnershipTests.test_a_skills_cli_symlink_is_recognised_and_left_alone",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A87",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.GovernorTests.test_duplicate_action_defers_and_unchanged_state_is_a_no_op",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A88",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.GovernorTests.test_override_softens_only_an_efficiency_deferral",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A89",
+      "required_evidence": [
+        "offline_behavior",
+        "external_gate"
+      ],
+      "offline_test": "tests.test_release.ReleaseGateTests.test_owner_authorization_is_an_input_not_a_test_result",
       "candidate_status": "NOT_RUN"
     }
   ]

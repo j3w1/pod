@@ -1,3 +1,8 @@
+> Historical record. This describes the retired `orchestrate` product and the
+> investigation that preceded Pod. It is preserved unchanged as evidence and is
+> not guidance for the current product, whose supported execution environment is
+> Linux. See `docs/pod-spec.md` for what Pod implements today.
+
 # Legacy Orca public CLI compatibility (historical)
 
 This record belongs to the pre-Pod implementation. [Pod's consolidated specification](pod-spec.md) governs the new product; observations here cannot grant current Pod capability.

@@ -21,7 +21,7 @@ class IsolatedInstallTests(unittest.TestCase):
             with patch("install.subprocess.run", side_effect=outputs) as runner:
                 result = install.plan(checkout, root / "selected environment", "abcdef1")
             self.assertEqual(result["checkout_commit"], "abcdef123456")
-            python = root / "selected environment" / ("Scripts/python.exe" if install.sys.platform == "win32" else "bin/python")
+            python = root / "selected environment" / "bin/python"
             self.assertEqual(result["install_command"], [install.sys.executable, "-I", "-m", "pip",
                                                          "--python", str(python), "--isolated", "install",
                                                          "--no-input", "--no-warn-script-location", str(checkout)])
@@ -106,7 +106,7 @@ class IsolatedInstallTests(unittest.TestCase):
             config_file.write_text(config_text)
             target = root / "pipless-target"
             install.venv.EnvBuilder(with_pip=False).create(target)
-            target_python = target / ("Scripts/python.exe" if install.sys.platform == "win32" else "bin/python")
+            target_python = target / "bin/python"
             missing_package = root / "missing-package.whl"
             self.assertFalse(missing_package.exists())
             command = [install.sys.executable, "-I", "-m", "pip", "--python", str(target_python),
@@ -136,7 +136,7 @@ class IsolatedInstallTests(unittest.TestCase):
             checkout.mkdir()
             (checkout / "pyproject.toml").write_text("[project]\n")
             target = root / "selected environment"
-            target_python = target / ("Scripts/python.exe" if install.sys.platform == "win32" else "bin/python")
+            target_python = target / "bin/python"
             outputs = [subprocess.CompletedProcess([], 0, "abcdef123456\n", ""),
                        subprocess.CompletedProcess([], 0, "", ""),
                        subprocess.CompletedProcess([], 0, "pip 22.3 from somewhere\n", ""),
@@ -179,7 +179,7 @@ class IsolatedInstallTests(unittest.TestCase):
             checkout.mkdir()
             (checkout / "pyproject.toml").write_text("[project]\n")
             target = root / "venv"
-            target_python = target / ("Scripts/python.exe" if install.sys.platform == "win32" else "bin/python")
+            target_python = target / "bin/python"
             outputs = [subprocess.CompletedProcess([], 0, "abcdef123456\n", ""),
                        subprocess.CompletedProcess([], 0, "", ""),
                        subprocess.CompletedProcess([], 0, "pip 22.3 from somewhere\n", ""),
@@ -201,7 +201,7 @@ class IsolatedInstallTests(unittest.TestCase):
             checkout.mkdir()
             (checkout / "pyproject.toml").write_text("[project]\n")
             target = root / "venv"
-            target_python = target / ("Scripts/python.exe" if install.sys.platform == "win32" else "bin/python")
+            target_python = target / "bin/python"
             outputs = [subprocess.CompletedProcess([], 0, "abcdef123456\n", ""),
                        subprocess.CompletedProcess([], 0, "", ""),
                        subprocess.CompletedProcess([], 0, "pip 22.3 from somewhere\n", ""),
