@@ -108,7 +108,7 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
         return {"schema": "pod-cli/v1", "status": "ok", **setup(root, global_scope=args.global_scope)}
     if args.command == "config":
         if args.edit:
-            target = personal_path() if args.scope == "personal" else root / ".pod" / "config.yaml"
+            target = personal_path(root) if args.scope == "personal" else root / ".pod" / "config.yaml"
             _edit(target, project_scope=args.scope == "project")
         value = effective(root)
         approval_routes = {alias: route_identity(model) for alias, model in value["policy"]["models"].items()

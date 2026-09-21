@@ -28,6 +28,10 @@ jobs:
           PYTHONPATH: src
       - name: Compile
         run: python -m compileall -q src tests
+      - name: Validate canonical skill
+        run: python -m pod.skill_validation src/pod/skill
+        env:
+          PYTHONPATH: src
       - name: Build frozen wheel from Git archive
         shell: bash
         run: |
@@ -45,15 +49,33 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             .venv-smoke/Scripts/python -m pip install dist/*.whl
             .venv-smoke/Scripts/pod --help
-            .venv-smoke/Scripts/pod config --check --json
-            .venv-smoke/Scripts/pod doctor --json
+            .venv-smoke/Scripts/pod setup --help
+            .venv-smoke/Scripts/pod config --help
+            .venv-smoke/Scripts/pod doctor --help
+            .venv-smoke/Scripts/pod status --help
             POD_BIN="$PWD/.venv-smoke/Scripts/pod"
           else
             .venv-smoke/bin/python -m pip install dist/*.whl
             .venv-smoke/bin/pod --help
-            .venv-smoke/bin/pod config --check --json
-            .venv-smoke/bin/pod doctor --json
+            .venv-smoke/bin/pod setup --help
+            .venv-smoke/bin/pod config --help
+            .venv-smoke/bin/pod doctor --help
+            .venv-smoke/bin/pod status --help
             POD_BIN="$PWD/.venv-smoke/bin/pod"
           fi
           FIXTURE="$(mktemp -d)"
+          HOMES="$(mktemp -d)"
+          export POD_CONFIG_HOME="$HOMES/pod-config"
+          export POD_STATE_HOME="$HOMES/pod-state"
+          export XDG_CONFIG_HOME="$HOMES/xdg-config"
+          export XDG_STATE_HOME="$HOMES/xdg-state"
+          export APPDATA="$HOMES/appdata"
+          export LOCALAPPDATA="$HOMES/localappdata"
+          export CODEX_HOME="$HOMES/codex"
+          export CLAUDE_CONFIG_DIR="$HOMES/claude"
+          mkdir -p "$POD_CONFIG_HOME" "$POD_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" \
+            "$APPDATA" "$LOCALAPPDATA" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"
+          (cd "$FIXTURE" && "$POD_BIN" setup --global --json)
           (cd "$FIXTURE" && "$POD_BIN" setup --json)
+          (cd "$FIXTURE" && "$POD_BIN" config --check --json)
+          (cd "$FIXTURE" && "$POD_BIN" doctor --json)

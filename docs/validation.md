@@ -9,7 +9,7 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | Unit and incident suite | `PYTHONPATH=src python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
 | Explicit incident discovery | `PYTHONPATH=src:. python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
 | Compile and diff | `python -m compileall -q src tests`; `git diff --check 474a84a6d5a1f7947abc1e38d232c379adf7ff93 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
-| Skill validation | Skill creator `quick_validate.py src/pod/skill` | Frontmatter and scaffold only |
+| Skill validation | `PYTHONPATH=src python -m pod.skill_validation src/pod/skill`; additionally run the current system skill validator when available | Canonical packaged source, frontmatter, file inventory and references |
 | Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel there | Exact committed candidate |
 | Fresh isolated install | Install wheel into new disposable venv; smoke `pod --help`, each family help, `pod config --check --json`, `pod doctor --json` | No model/Orca mutation |
 | Hosted Windows/Linux | Same suite, incident discovery, frozen wheel and installed CLI smokes in both jobs | Candidate-bound CI |
@@ -24,6 +24,13 @@ they do not change the default personal locations, project YAML authority, `APPD
 `LOCALAPPDATA`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or Orca's native profile environment.
 Child Orca processes inherit that native profile unchanged. Use fresh owned directories;
 the overrides do not make an existing directory disposable.
+
+Inferred native homes (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `APPDATA`, `LOCALAPPDATA`,
+`CODEX_HOME`, and `CLAUDE_CONFIG_DIR`) must be absolute directories outside the current project,
+both lexically and after resolving existing redirects. Configuration/state access and global setup
+fail before writes when that boundary is not proven. Explicit absolute `POD_CONFIG_HOME` and
+`POD_STATE_HOME` remain Pod-only disposable overrides, and local project-scope setup intentionally
+writes its owned integration beneath the project.
 
 The explicit installer requires pip 22.3 or newer on the invoking interpreter, creates the
 selected environment without pip, and uses isolated bootstrap pip's documented `--python`
@@ -43,6 +50,13 @@ The [scenario coverage file](pod-coverage.json) lists all A01–A82. Its test pa
 Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.
 
 Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent source, even one frozen as absent, or a changed source durably rejects that packet assignment when the frozen source had an actual state. A source frozen as unavailable stays unbound: even later readable bytes require a fresh packet with their actual digest, and no historical change or absence is recorded. Current unavailability holds admission without definitive rejection. This is a bounded admission check, not an atomic multi-file snapshot against external writes. Reserved, uncertain and confirmed launches occupy objective and overlapping account capacity, including before cleanup begins and when the fleet omits them or labels them released. Reserved, uncertain and retained cleanup keeps a confirmed worker occupied until exact native resource readback proves release. A confirmed launch without cleanup can also record a settled, exactly bound released resource through read-only reconciliation without repeating release. Fixture tests cover the state/cleanup/fleet matrix, Dispatch deduplication and both read-only paths without proving a live native release. An unproved absent-effect disposition remains an admission hold because the installed adapter has no exact absence proof.
+
+The read-only release-reconciliation helper recognizes the immediate predecessor
+`pod-effect/v1` binding that contains only Run, Task, Dispatch and worker identities. It keeps that
+row occupied, requires an exact same-runtime worker/worktree readback plus every available optional
+terminal/resource identity and unchanged launch, then durably upgrades the binding before any
+release projection can settle. Malformed, ambiguous or contradictory predecessor rows remain held;
+the helper never repeats the native start or release effect.
 
 `python -m pod.internal release-gate --input RECORD.json` projects these exact rows. A complete set returns `owner_decision_required`; it never authorizes publication, merge or installed-state cutover. Missing live subchecks remain unavailable even if a top-level result says PASS.
 

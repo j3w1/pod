@@ -32,8 +32,24 @@ def explicit_home(name: str) -> Path | None:
     return path
 
 
-def native_home(name: str, *, default: Path | None = None) -> Path:
-    """Resolve a native profile home without allowing cwd-relative authority."""
+def _inside(candidate: Path, project: Path) -> bool:
+    """Return whether a path is lexically or physically inside a project."""
+    try:
+        lexical_candidate = Path(os.path.abspath(candidate))
+        lexical_project = Path(os.path.abspath(project))
+        physical_candidate = candidate.resolve(strict=False)
+        physical_project = project.resolve(strict=False)
+        return (lexical_candidate == lexical_project
+                or lexical_candidate.is_relative_to(lexical_project)
+                or physical_candidate == physical_project
+                or physical_candidate.is_relative_to(physical_project))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PodError("invalid_native_home", "Native home containment cannot be proven") from exc
+
+
+def native_home(name: str, *, default: Path | None = None,
+                project: Path | None = None) -> Path:
+    """Resolve a native profile home outside the current project boundary."""
     if name not in os.environ:
         if default is None:
             raise PodError("native_home_unavailable", f"{name} is required")
@@ -48,6 +64,10 @@ def native_home(name: str, *, default: Path | None = None) -> Path:
             raise PodError("invalid_native_home", f"{name} must be an absolute directory path") from exc
     if not path.is_absolute() or (path.exists() and not path.is_dir()):
         raise PodError("invalid_native_home", f"{name} must be an absolute directory path")
+    boundary = project if project is not None else Path.cwd()
+    if _inside(path, boundary):
+        raise PodError("project_contained_native_home",
+                       f"{name} must remain outside the current project")
     return path
 
 

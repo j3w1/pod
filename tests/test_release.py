@@ -29,6 +29,13 @@ class ReleaseGateTests(unittest.TestCase):
         partial[0]["candidate"] = "old"
         self.assertEqual(release_gate("commit", "tree", partial)["gates"][REQUIRED_GATES[0]], "NOT_RUN")
 
+    def test_skill_validation_is_a_required_release_gate(self):
+        self.assertIn("skill_validation", REQUIRED_GATES)
+        records = [row(gate) for gate in REQUIRED_GATES if gate != "skill_validation"]
+        result = release_gate("commit", "tree", records)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["gates"]["skill_validation"], "NOT_RUN")
+
     def test_live_record_needs_all_subchecks(self):
         records = [row(gate) for gate in REQUIRED_GATES]
         live = next(x for x in records if x["gate"] == "live_codex_linux")

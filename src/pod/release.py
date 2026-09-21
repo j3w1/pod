@@ -11,7 +11,7 @@ REQUIRED_GATES = (
     "unit_linux", "unit_windows", "incident_linux", "incident_windows",
     "compile_linux", "compile_windows", "frozen_wheel_linux", "frozen_wheel_windows",
     "isolated_install_linux", "isolated_install_windows", "hosted_ci",
-    "independent_review", "live_codex_linux", "live_claude_linux",
+    "skill_validation", "independent_review", "live_codex_linux", "live_claude_linux",
     "live_codex_windows", "live_claude_windows", "matched_evaluation",
     "project_acceptance",
 )

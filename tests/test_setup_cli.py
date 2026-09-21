@@ -20,8 +20,7 @@ class SetupCliTests(unittest.TestCase):
         self.assertEqual(_relative_key(nested, root), "references/planning.md")
 
     def test_local_idempotent_and_modified_skill_preserved(self):
-        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "codex"),
-                                                        "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+        with fixture() as root:
             first = setup(root)
             self.assertEqual(first["skills"]["codex"], "installed")
             self.assertEqual(setup(root)["skills"]["codex"], "reused")
@@ -72,6 +71,28 @@ class SetupCliTests(unittest.TestCase):
                     self.assertEqual(list(project.iterdir()), [])
                     self.assertFalse((project / "relative-home").exists())
 
+    def test_global_skill_homes_reject_absolute_and_symlink_project_containment_before_writes(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            contained = project / "native-home"
+            contained.mkdir()
+            redirected = root.parent / "skill-home-link"
+            redirected.symlink_to(contained, target_is_directory=True)
+            safe = root.parent / "safe-skill-home"
+            original = dict(os.environ)
+            for name in ("CODEX_HOME", "CLAUDE_CONFIG_DIR"):
+                for value in (contained, redirected):
+                    homes = {"CODEX_HOME": str(safe / "codex"),
+                             "CLAUDE_CONFIG_DIR": str(safe / "claude"), name: str(value)}
+                    with self.subTest(name=name, value=value), patch.dict(os.environ, homes):
+                        with self.assertRaises(PodError) as caught:
+                            setup(project, global_scope=True)
+                        self.assertEqual(caught.exception.code, "project_contained_native_home")
+                        self.assertEqual(list(contained.iterdir()), [])
+                        self.assertFalse(safe.exists())
+            self.assertEqual(dict(os.environ), original)
+
     def test_doctor_diagnoses_duplicate_scopes_without_repair(self):
         with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "codex"),
                                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):
@@ -115,9 +136,10 @@ class SetupCliTests(unittest.TestCase):
             self.assertEqual(local.read_text(), "schema: wrong\n")
 
     def test_doctor_passive(self):
-        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "codex"),
-                                                        "CLAUDE_CONFIG_DIR": str(root / "claude"),
-                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+        with fixture() as root, patch.dict(os.environ, {
+                "CODEX_HOME": str(root.parent / "codex-home"),
+                "CLAUDE_CONFIG_DIR": str(root.parent / "claude-home"),
+                "XDG_CONFIG_HOME": str(root.parent / "config-home")}):
             result = execute(parser().parse_args(["doctor"]), root)
             self.assertEqual(result["native_probe"], "not_run")
             self.assertFalse((root / ".pod").exists())

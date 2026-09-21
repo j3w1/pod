@@ -8,6 +8,12 @@ Bind the frozen packet identity to the admission intention before launch. The re
 
 After native settlement, choose reuse, retain or release. Retained-settled idle expiry defaults to 30 minutes and needs an active/native executor; it does not stop active work or delete changes. Reconcile all Delivery items before acknowledgment, including duplicate deliveries. Missing caller authority or cross-host fencing blocks delegation but permits safe inspection and direct work.
 
+Current bindings record Run, Task, Dispatch, worker and worktree identities plus optional terminal
+and terminal-resource identities. The read-only release reconciliation operation may upgrade the
+immediate predecessor four-identity `pod-effect/v1` row only after exact same-runtime native
+readback; contradictory rows remain occupied. `release_pending` and `release_unknown` retain their
+native recovery metadata and authorize readback only, never a repeated release or terminal close.
+
 Journal every Delivery item and its exact Run/Task/Dispatch obligation. Acknowledgment eligibility follows durable item effects, including a settled worker's terminal disposition, not a caller-supplied set of message IDs. Native receipt integration remains unverified until exercised against the installed runtime.
 
 Checkpoints include objective/criteria, plan/candidate/policy revision, native references, assignments, pending effects/questions, evidence gaps and next safe action. Adoption reads native state before deciding whether work is active, completed awaiting integration, failed, uncertain or stale. A local lock is not distributed fencing. No background scheduler or conversation migration runs.

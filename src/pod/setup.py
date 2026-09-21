@@ -37,8 +37,10 @@ def _relative_key(path: PurePath, root: PurePath) -> str:
 
 def _targets(project: Path, global_scope: bool) -> dict[str, Path]:
     if global_scope:
-        codex = native_home("CODEX_HOME", default=Path.home() / ".agents") / "skills" / "pod"
-        claude = native_home("CLAUDE_CONFIG_DIR", default=Path.home() / ".claude") / "skills" / "pod"
+        codex = native_home("CODEX_HOME", default=Path.home() / ".agents",
+                            project=project) / "skills" / "pod"
+        claude = native_home("CLAUDE_CONFIG_DIR", default=Path.home() / ".claude",
+                             project=project) / "skills" / "pod"
     else:
         codex = project / ".agents" / "skills" / "pod"
         claude = project / ".claude" / "skills" / "pod"

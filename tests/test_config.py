@@ -1,4 +1,5 @@
 import os
+from contextlib import chdir
 from pathlib import Path
 import tempfile
 import unittest
@@ -36,8 +37,10 @@ class ConfigTests(unittest.TestCase):
                                       "assignments": [], "questions": [],
                                       "verification_gaps": ["isolated"],
                                       "next_safe_action": "verify"})
-                    self.assertTrue(personal.is_relative_to(root))
-                    self.assertTrue(state_root().is_relative_to(root))
+                    self.assertTrue(personal.is_relative_to(root.parent))
+                    self.assertTrue(state_root().is_relative_to(root.parent))
+                    self.assertFalse(personal.is_relative_to(root))
+                    self.assertFalse(state_root().is_relative_to(root))
                     self.assertFalse((cache / "inherited-config").exists())
                     self.assertFalse((cache / "inherited-state").exists())
                 self.assertEqual({key: os.environ[key] for key in inherited}, inherited)
@@ -220,6 +223,56 @@ policy:
                     state_root()
                 self.assertEqual(list(project.iterdir()), [])
             self.assertEqual({name: os.environ[name] for name in previous}, previous)
+
+    def test_native_homes_reject_absolute_and_symlink_project_containment(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            contained = project / "native-home"
+            contained.mkdir()
+            redirected = root.parent / "redirected-native-home"
+            redirected.symlink_to(contained, target_is_directory=True)
+            original = dict(os.environ)
+            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "APPDATA", "LOCALAPPDATA",
+                         "CODEX_HOME", "CLAUDE_CONFIG_DIR"):
+                for value in (contained, redirected):
+                    with self.subTest(name=name, value=value), patch.dict(os.environ, {name: str(value)}):
+                        with self.assertRaises(PodError) as caught:
+                            native_home(name, project=project)
+                        self.assertEqual(caught.exception.code, "project_contained_native_home")
+            self.assertEqual(dict(os.environ), original)
+
+    def test_default_config_and_state_calls_reject_project_containment_but_pod_overrides_remain_explicit(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            contained_config = project / "config-home"
+            contained_state = project / "state-home"
+            overrides = {"XDG_CONFIG_HOME": str(contained_config),
+                         "XDG_STATE_HOME": str(contained_state)}
+            with chdir(project), patch.dict(os.environ, overrides):
+                with self.assertRaises(PodError):
+                    personal_path()
+                with self.assertRaises(PodError):
+                    effective(project)
+                with self.assertRaises(PodError):
+                    state_root()
+                with self.assertRaises(PodError):
+                    checkpoint(project, "blocked", owner="owner", native={"runtime": "runtime"},
+                               value={"schema": "pod-checkpoint/v1", "criteria": ["safe"],
+                                      "plan_revision": "plan", "candidate": "candidate",
+                                      "policy_revision": "policy", "native_refs": [],
+                                      "assignments": [], "questions": [],
+                                      "verification_gaps": ["safe"],
+                                      "next_safe_action": "choose external native homes"})
+                self.assertEqual(list(project.iterdir()), [])
+            pod_config = project / "explicit-pod-config"
+            pod_state = project / "explicit-pod-state"
+            with chdir(project), patch.dict(os.environ, {
+                    **overrides, "POD_CONFIG_HOME": str(pod_config),
+                    "POD_STATE_HOME": str(pod_state)}):
+                self.assertEqual(personal_path(), pod_config / "config.yaml")
+                self.assertEqual(state_root(), pod_state)
 
     def test_changed_model_identity_invalidates_prior_approval_binding(self):
         with fixture() as root:

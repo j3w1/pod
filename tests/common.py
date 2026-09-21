@@ -11,13 +11,15 @@ def fixture():
     if root:
         Path(root).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=root) as name:
-        path = Path(name)
-        homes = {"XDG_CONFIG_HOME": str(path / "config-home"),
-                 "XDG_STATE_HOME": str(path / "state-home"),
-                 "APPDATA": str(path / "appdata"),
-                 "LOCALAPPDATA": str(path / "localappdata"),
-                 "CODEX_HOME": str(path / "codex-home"),
-                 "CLAUDE_CONFIG_DIR": str(path / "claude-home")}
+        base = Path(name)
+        path = base / "fixture"
+        path.mkdir()
+        homes = {"XDG_CONFIG_HOME": str(base / "config-home"),
+                 "XDG_STATE_HOME": str(base / "state-home"),
+                 "APPDATA": str(base / "appdata"),
+                 "LOCALAPPDATA": str(base / "localappdata"),
+                 "CODEX_HOME": str(base / "codex-home"),
+                 "CLAUDE_CONFIG_DIR": str(base / "claude-home")}
         with patch.dict(os.environ, homes, clear=False):
             os.environ.pop("POD_CONFIG_HOME", None)
             os.environ.pop("POD_STATE_HOME", None)

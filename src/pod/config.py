@@ -204,15 +204,16 @@ def validate(value: Any) -> dict:
     return obj
 
 
-def personal_path() -> Path:
+def personal_path(project: Path | None = None) -> Path:
     override = explicit_home("POD_CONFIG_HOME")
     if override is not None:
         return override / "config.yaml"
     if os.name == "nt":
         if "APPDATA" not in os.environ:
             raise PodError("config_home_unavailable", "APPDATA is required for personal configuration")
-        return native_home("APPDATA") / "pod" / "config.yaml"
-    return native_home("XDG_CONFIG_HOME", default=Path.home() / ".config") / "pod" / "config.yaml"
+        return native_home("APPDATA", project=project) / "pod" / "config.yaml"
+    return native_home("XDG_CONFIG_HOME", default=Path.home() / ".config",
+                       project=project) / "pod" / "config.yaml"
 
 
 def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
@@ -266,7 +267,7 @@ def effective(project: Path, *, personal: Path | None = None, task: dict | None 
     base = deepcopy(DEFAULT)
     provenance = {"defaults": "pending recommendations"}
     for scope, layer in (
-        ("personal", read_yaml(personal or personal_path())),
+        ("personal", read_yaml(personal or personal_path(project))),
         ("project", read_yaml(project / ".pod" / "config.yaml")),
         ("task", validate(task) if task is not None else None),
     ):
