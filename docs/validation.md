@@ -31,6 +31,12 @@ they do not change the default personal locations, project YAML authority, `CODE
 Child Orca processes inherit that native profile unchanged. Use fresh owned directories;
 the overrides do not make an existing directory disposable.
 
+A host may point `CODEX_HOME` somewhere other than the agents home, as one running Codex
+inside another tool does. Global setup therefore also looks at `~/.agents/skills/pod`, where
+the skills ecosystem keeps its canonical copy, and reports `present_elsewhere` rather than
+installing a second active copy beside it. Which copy wins is the operator's decision, not
+something setup makes by writing.
+
 Inferred native homes (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `CODEX_HOME` and
 `CLAUDE_CONFIG_DIR`) must be absolute directories outside the current project,
 both lexically and after resolving existing redirects. A profile home may itself be a symlink,

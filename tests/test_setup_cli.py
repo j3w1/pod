@@ -384,3 +384,76 @@ class OwnershipClaimRegressions(unittest.TestCase):
             self.assertEqual(report["status"], "observed")
             self.assertIsNone(report["skills_cli"]["lock_file"])
             self.assertFalse(report["skills_cli"]["readable"])
+
+
+class SeparateAgentHomeRegressions(unittest.TestCase):
+    """A host may point CODEX_HOME somewhere other than the agents home.
+
+    Running Codex inside another tool does exactly that. Pod must still see the canonical
+    copy the skills ecosystem placed, or a repeat setup installs a second active one.
+    """
+
+    def install_like_the_skills_cli(self, root):
+        agents = root / ".agents"
+        canonical_copy = agents / "skills" / "pod"
+        canonical_copy.mkdir(parents=True)
+        for name, data in canonical().items():
+            target = canonical_copy / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        claude = root / "claude" / "skills"
+        claude.mkdir(parents=True)
+        (claude / "pod").symlink_to(canonical_copy, target_is_directory=True)
+        return canonical_copy
+
+    def test_a_codex_home_elsewhere_does_not_get_a_second_copy(self):
+        with fixture() as root:
+            canonical_copy = self.install_like_the_skills_cli(root)
+            elsewhere = root / "runtime-home"
+            elsewhere.mkdir()
+            project = root / "project"
+            project.mkdir()
+            with patch.dict(os.environ, {"HOME": str(root),
+                                         "CODEX_HOME": str(elsewhere),
+                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+                report = inspect(project, global_scope=True)
+                self.assertEqual(report["claude"]["status"], "managed_by_skills_cli")
+                outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["claude"], "managed_by_skills_cli")
+            self.assertEqual(outcome["skills"]["codex"], "present_elsewhere")
+            self.assertEqual(outcome["ownership"]["codex"], "skills_cli")
+            self.assertFalse((elsewhere / "skills" / "pod").exists(),
+                             "a second active copy must not be created")
+            self.assertTrue((canonical_copy / "SKILL.md").is_file())
+
+    def test_a_differing_version_there_is_still_not_duplicated(self):
+        """Which copy wins is the operator's call, not something setup decides by writing."""
+        with fixture() as root:
+            canonical_copy = self.install_like_the_skills_cli(root)
+            text = (canonical_copy / "SKILL.md").read_text(encoding="utf-8")
+            (canonical_copy / "SKILL.md").write_text(text.replace('version: "', 'version: "9.'),
+                                                     encoding="utf-8")
+            elsewhere = root / "runtime-home"
+            elsewhere.mkdir()
+            project = root / "project"
+            project.mkdir()
+            with patch.dict(os.environ, {"HOME": str(root),
+                                         "CODEX_HOME": str(elsewhere),
+                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+                outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["codex"], "present_elsewhere")
+            self.assertFalse((elsewhere / "skills" / "pod").exists())
+
+    def test_an_agents_home_inside_the_project_is_not_consulted(self):
+        with fixture() as root:
+            project = root / "project"
+            (project / ".agents" / "skills" / "pod").mkdir(parents=True)
+            (project / ".agents" / "skills" / "pod" / "SKILL.md").write_text("---\nname: pod\n---\n")
+            elsewhere = root / "runtime-home"
+            elsewhere.mkdir()
+            with patch.dict(os.environ, {"HOME": str(project),
+                                         "CODEX_HOME": str(elsewhere),
+                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+                outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["codex"], "installed")
+            self.assertTrue((elsewhere / "skills" / "pod" / "SKILL.md").is_file())
