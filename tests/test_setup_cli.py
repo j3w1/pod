@@ -343,3 +343,44 @@ class SkillOwnershipTests(unittest.TestCase):
             self.assertIsNone(report["skills_cli"]["entry"])
             self.assertEqual(report["global_skills"]["codex"]["manager"], "unowned")
             self.assertEqual(report["global_skills"]["codex"]["status"], "current")
+
+
+class OwnershipClaimRegressions(unittest.TestCase):
+    """Pod must not claim a copy it cannot prove it placed."""
+
+    def test_a_correct_copy_pod_did_not_write_is_not_claimed(self):
+        """A single-agent install from a lock-free source leaves no peer link and no entry.
+
+        Reporting that copy as `pod_setup` claims another manager's installation, which is
+        exactly what repeat setup must never do.
+        """
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+            project = root / "project"
+            project.mkdir()
+            placed = root / "agents" / "skills" / "pod"
+            placed.mkdir(parents=True)
+            for name, data in canonical().items():
+                target = placed / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            outcome = setup(project, global_scope=True)
+            self.assertEqual(outcome["skills"]["codex"], "reused")
+            self.assertEqual(outcome["ownership"]["codex"], "unowned")
+            self.assertEqual(outcome["skills"]["claude"], "installed")
+            self.assertEqual(outcome["ownership"]["claude"], "pod_setup")
+
+    def test_an_unreadable_lock_never_blocks_a_diagnostic(self):
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude"),
+                                                        "XDG_STATE_HOME": "relative-home"}):
+            project = root / "project"
+            project.mkdir()
+            with patch("pod.cli.contract", return_value={"status": "unavailable",
+                                                         "reason": "orca_unavailable"}), \
+                 patch("pod.cli.account_metadata", side_effect=PodError("unavailable", "offline")), \
+                 patch("pod.cli.executable", side_effect=PodError("orca_unavailable", "absent")):
+                report = execute(parser().parse_args(["doctor"]), project)
+            self.assertEqual(report["status"], "observed")
+            self.assertIsNone(report["skills_cli"]["lock_file"])
+            self.assertFalse(report["skills_cli"]["readable"])

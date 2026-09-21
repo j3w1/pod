@@ -119,7 +119,9 @@ python3 .agents/skills/pod/scripts/pod.py doctor --json       # Codex, project i
 
 Common answers: a **blocked route** names the control that is missing, not a generic refusal.
 **Unknown quota** is conservative by design, allowing one new worker on that account rather
-than halting the objective. An **uncertain launch** keeps its slot until native state is read
+than halting the objective. Orca caches its provider quota figures and does not refresh them
+on read, so a reading is often stale enough to count as unknown. That is why two workers is
+the policy default rather than a promise. An **uncertain launch** keeps its slot until native state is read
 back, because a lost response is not proof that nothing started.
 
 ## What's inside

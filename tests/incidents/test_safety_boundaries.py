@@ -26,6 +26,29 @@ class SafetyBoundaryIncidents(unittest.TestCase):
             with self.assertRaises(PodError):
                 source_identity(project, ".env")
 
+    def test_the_establishment_gate_refuses_and_cannot_be_supplied(self):
+        """Two separate facts, because the allowlist alone proves neither.
+
+        The gate refuses a well-formed record that establishes nothing, and no request
+        field can put such a record into admission in the first place.
+        """
+        from pod.orca import require_route_establishment
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a"}
+        unestablished = {"schema": "pod-route-establishment/v1", "runtime": None,
+                         "route": route, "controls": {}, "hard_stops": [], "disclosures": [],
+                         "login": {}, "billing": {}}
+        with self.assertRaises(PodError) as unproven:
+            require_route_establishment(unestablished, route)
+        self.assertEqual(unproven.exception.code, "native_authority_unverified")
+        established = {**unestablished, "runtime": "r",
+                       "route": {**route, "bucket": "default", "effort": "high"}}
+        require_route_establishment(established, route)
+        for stop in ("billing_mode_unverified", "paid_route_forbidden"):
+            with self.subTest(stop=stop):
+                with self.assertRaises(PodError) as caught:
+                    require_route_establishment({**established, "hard_stops": [stop]}, route)
+                self.assertEqual(caught.exception.code, stop)
+
     def test_caller_json_cannot_claim_live_admission(self):
         unestablished = {"schema": "pod-route-establishment/v1", "runtime": None,
                          "route": {}, "controls": {}, "hard_stops": ["native_authority_unverified"],

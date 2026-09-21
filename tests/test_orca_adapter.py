@@ -293,3 +293,67 @@ class MutationAllowlistTests(unittest.TestCase):
                            return_value=subprocess.CompletedProcess([], 0, json.dumps(
                                {"ok": True, "result": {}, "_meta": {"runtimeId": "r"}}), "")):
                     self.assertEqual(read_command(argv)["runtime"], "r")
+
+
+class ReviewFindingRegressions(unittest.TestCase):
+    """Each of these reproduces a defect an independent review found."""
+
+    def login(self, agent, stdout="", stderr="", code=0):
+        completed = subprocess.CompletedProcess([], code, stdout, stderr)
+        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            return agent_login_mode(agent)
+
+    def test_an_absent_codex_login_is_never_read_as_a_subscription(self):
+        """`logged in` is a substring of `not logged in`.
+
+        Reading it as a match reported an absent login as an approved subscription, which
+        is the single condition the billing hard stop exists to catch.
+        """
+        for text in ("Not logged in", "not logged in\n", "You are not signed in",
+                     "Logged out", "", "unrecognised output"):
+            with self.subTest(text=text):
+                observed = self.login("codex", stderr=text)
+                self.assertEqual(observed["auth"], "unknown", text)
+                self.assertIsNone(observed["subscription"], text)
+        self.assertEqual(self.login("codex", stderr="Logged in using ChatGPT")["auth"], "oauth")
+        self.assertEqual(self.login("codex", stderr="Logged in using an API key")["auth"], "api_key")
+
+    def test_a_claude_session_that_is_not_logged_in_is_unknown(self):
+        observed = self.login("claude", stdout=json.dumps({"loggedIn": False}))
+        self.assertEqual(observed["auth"], "unknown")
+        self.assertIsNone(observed["subscription"])
+
+    def test_the_quota_bucket_is_derived_and_cannot_be_asserted(self):
+        """A caller could name the bucket and have it reported back as an observation."""
+        snapshot = {"status": "observed", "runtime": "r", "version": "1.4.206",
+                    "executable": "/fixture/orca", "capabilities": {}}
+        accounts = {"providers": {"claude": {"managed_accounts": 0, "windows": {"weekly": {}},
+                                             "account_association": "host_login"}}}
+        asserted = {"agent": "claude", "model": "fable-5", "account": "a",
+                    "bucket": "default", "effort": "high"}
+        established = route_establishment(asserted, {"billing": "included"}, snapshot=snapshot,
+                                          accounts=accounts,
+                                          login={"auth": "oauth", "subscription": True,
+                                                 "identity_digest": None},
+                                          fleet={"hosts": ["local"], "local_only": True})
+        self.assertEqual(established["route"]["bucket"], "fable")
+        self.assertEqual(established["controls"]["quota_bucket"]["bucket"], "fable")
+        with self.assertRaises(PodError) as caught:
+            require_route_establishment(established, asserted)
+        self.assertEqual(caught.exception.code, "account_binding_unverified")
+
+    def test_a_fleet_page_cannot_introduce_a_scope_the_first_page_lacked(self):
+        pages = [{"runtime": "r", "result": {"scope": None, "workers": [],
+                                             "page": {"hasMore": True, "nextCursor": "next"}}},
+                 {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [],
+                                             "page": {"hasMore": False}}}]
+        with patch("pod.orca.read_command", side_effect=pages):
+            with self.assertRaises(PodError) as caught:
+                worker_rows()
+        self.assertEqual(caught.exception.code, "orca_scope_changed")
+
+    def test_a_dispatch_identity_is_read_across_both_spellings(self):
+        self.assertEqual(identity({"dispatch_id": "ctx_x"}, "dispatchId"), "ctx_x")
+        with self.assertRaises(PodError):
+            identity({"dispatchId": "ctx_a", "dispatch_id": "ctx_b"}, "dispatchId")

@@ -37,6 +37,18 @@ class NativePort(Protocol):
                       ack: str | None = None, types: tuple[str, ...] = DELIVERY_TYPES) -> dict: ...
 
 
+def _identifier(value: object) -> str | None:
+    """An identity that a projection may give as a bare string or as an object."""
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, dict):
+        for key in ("id", "dispatchId", "dispatch_id"):
+            found = value.get(key)
+            if isinstance(found, str) and found:
+                return found
+    return None
+
+
 def _terminal_state(row: dict) -> str:
     state = row.get("terminalState")
     if state == "released":
@@ -53,6 +65,11 @@ def _terminal_state(row: dict) -> str:
 class OrcaPort:
     """Installed Orca adapter: every native effect goes through the mutation allowlist."""
 
+    def __init__(self, project: Path | None = None):
+        # The project under admission, so a state-home containment check is judged against
+        # it rather than against whatever directory the helper happened to run in.
+        self.project = project
+
     def establish(self, route: dict, model_policy: dict, *, child_delegation: bool = False) -> dict:
         return route_establishment(route, model_policy, snapshot=contract(),
                                    accounts=account_metadata_raw(),
@@ -66,16 +83,16 @@ class OrcaPort:
         pages = [worker_rows(run)] if run else [worker_rows()]
         scope = "all"
         if run:
-            scope = "bound+ledger_runs"
-            for extra in runs:
-                if extra and extra != run:
-                    pages.append(worker_rows(extra))
+            extra_runs = sorted({extra for extra in runs if extra and extra != run})
+            scope = "bound+ledger_runs" if extra_runs else "bound"
+            for extra in extra_runs:
+                pages.append(worker_rows(extra))
         runtime = pages[0]["runtime"]
         raw_scope = pages[0]["scope"]
         if not run:
             source = raw_scope.get("source") if isinstance(raw_scope, dict) else None
             scope = source if source == "all" else "bound+ledger_runs"
-        bindings = _ledger_bindings(runtime)
+        bindings = _ledger_bindings(runtime, self.project)
         rows = []
         cross_host = False
         for page in pages:
@@ -88,10 +105,10 @@ class OrcaPort:
                 host_id = host.get("id") if isinstance(host, dict) else host
                 if host_id not in (None, "local"):
                     cross_host = True
-                parent = projection.get("parent")
+                parent = _identifier(projection.get("parent"))
                 bound = bindings.get(dispatch)
                 descendant = False
-                if bound is None and isinstance(parent, str) and parent in bindings:
+                if bound is None and parent is not None and parent in bindings:
                     bound, descendant = bindings[parent], True
                 row = {"state": _terminal_state(worker), "dispatchId": dispatch,
                        "host": host_id or "local", "parent": parent}
@@ -155,12 +172,12 @@ class OrcaPort:
         return {"runtime": receipt["runtime"], **receipt["result"]}
 
 
-def _ledger_bindings(runtime: str) -> dict:
+def _ledger_bindings(runtime: str, project: Path | None = None) -> dict:
     """Which native Dispatches this machine's Pod records actually own."""
     from .ledger import _read, state_root
 
     bindings = {}
-    root = state_root()
+    root = state_root(project)
     if not root.exists():
         return bindings
     for path in root.glob("*/context.json"):
@@ -202,11 +219,19 @@ def _quota_snapshot(route: dict) -> dict | None:
     if not windows:
         return None
     updated = provider.get("updated_at_ms")
-    observed = (datetime.fromtimestamp(updated / 1000, tz=timezone.utc).isoformat()
-                if type(updated) in (int, float) else datetime.now(timezone.utc).isoformat())
+    if type(updated) not in (int, float):
+        # Without a timestamp there is no way to judge age, and an undated number must not
+        # be treated as a current reading.
+        return None
+    observed = datetime.fromtimestamp(updated / 1000, tz=timezone.utc).isoformat()
+    # `confidence` states where the numbers came from: the runtime reported them. How much
+    # to trust them is a question of age, which the reader answers against
+    # `quota_fresh_seconds` using `observed_at`. Orca caches this metadata and does not
+    # refresh it on read, so a reading is often hours old and resolves to unknown quota,
+    # which permits one active worker on that account rather than the usual two.
     return {"schema": "pod-quota/v1", "provider": route["agent"], "account": route["account"],
             "bucket": bucket, "windows": windows, "observed_at": observed,
-            "source": "supported_metadata", "confidence": provider.get("freshness", "unknown"),
+            "source": "supported_metadata", "confidence": "observed",
             "unknowns": sorted(unknowns)}
 
 
@@ -517,7 +542,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     route = decision["selected"]
     model_policy = policy["policy"]["models"].get(route.get("alias"), {})
     child_delegation = bool(policy["policy"]["policy"].get("child_delegation"))
-    native_port = port or OrcaPort()
+    native_port = port or OrcaPort(project)
     establishment = native_port.establish(route, model_policy, child_delegation=child_delegation)
     # The established bucket is recorded as an observation. It never rewrites the route a
     # frozen packet was bound to, which the coordinator chose before anything was read.
@@ -561,13 +586,19 @@ def reconcile_launch(project: Path, objective: str, *, owner: str, operation_id:
 
     bounded_text(owner, name="owner")
     bounded_text(operation_id, name="operation_id", limit=128)
-    native_port = port or OrcaPort()
+    native_port = port or OrcaPort(project)
     state = _read(_path(project, objective))
     effect = state["effects"].get(operation_id)
     if not isinstance(effect, dict):
         raise PodError("unknown_effect", "No owned effect identity to reconcile")
     if effect.get("state") == "confirmed":
         return {"status": "confirmed", "effect": effect, "action": "none"}
+    # The Run is recorded on the effect. Adopting a worker from a Run this effect was never
+    # reserved for would bind Pod to a Dispatch it never started, and a later release would
+    # act on someone else's worker.
+    if effect.get("run_id") != run:
+        raise PodError("effect_identity_mismatch",
+                       "Recovery names a Run this effect was not reserved for")
     rows = native_port.find_worker(run=run, task=task)
     if not rows:
         return {"status": "uncertain", "effect": effect, "action": "hold",
@@ -592,26 +623,28 @@ def reconcile_launch(project: Path, objective: str, *, owner: str, operation_id:
                 "taskId": identity(native_dispatch, "taskId"),
                 "state": "ready" if started else worker.get("state"),
                 "launch": launch, "worker_show": result}
+    if observed["runId"] != run or observed["taskId"] != task:
+        raise PodError("native_identity_unverified",
+                       "Native readback does not join the Run and Task being recovered")
     settled = reconcile(project, objective, owner=owner, operation_id=operation_id, observed=observed)
     return {"status": settled.get("state"), "effect": settled, "action": "adopted",
             "dispatchId": dispatch}
 
 
 def settle_delivery(project: Path, objective: str, *, owner: str, run: str,
-                    timeout_ms: int | None = None, port: NativePort | None = None,
-                    retain: tuple[str, ...] = ()) -> dict:
+                    timeout_ms: int | None = None, port: NativePort | None = None) -> dict:
     """Read one Delivery batch, settle its worker_done items, and report acknowledgment state."""
     from .ledger import record_delivery, reconcile_delivery_item
 
     bounded_text(owner, name="owner")
     bounded_text(run, name="run")
-    native_port = port or OrcaPort()
+    native_port = port or OrcaPort(project)
     receipt = native_port.wait_delivery(run=run, timeout_ms=timeout_ms)
     delivery = _delivery_record(receipt, run)
     if delivery is None:
         return {"status": "empty", "run": run, "delivery_id": None, "ack_eligible": False,
                 "items": []}
-    journal = record_delivery(project, objective, owner=owner, delivery=delivery)
+    record_delivery(project, objective, owner=owner, delivery=delivery)
     settled = []
     for message in delivery["messages"]:
         if message["type"] != "worker_done":
@@ -623,7 +656,10 @@ def settle_delivery(project: Path, objective: str, *, owner: str, run: str,
         status = native_dispatch.get("status")
         if status not in ("completed", "failed"):
             raise PodError("delivery_unresolved", "Settlement readback does not show a settled Dispatch")
-        if dispatch not in retain:
+        # A repeated batch is normal: Orca replays an unacknowledged Delivery. Releasing is
+        # done once, so a dispatch that already has a settled cleanup row is stepped over
+        # rather than raising and stranding the items behind it.
+        if _cleanup_state(project, objective, dispatch) is None:
             release_once(project, objective, owner=owner, dispatch=dispatch, port=native_port)
         completed_at = native_dispatch.get("completedAt") or native_dispatch.get("updatedAt") or status
 
@@ -647,7 +683,7 @@ def acknowledge_delivery(project: Path, objective: str, *, owner: str, run: str,
     """Acknowledge a Delivery only once every item has a durable effect."""
     from .ledger import _path, _read
 
-    native_port = port or OrcaPort()
+    native_port = port or OrcaPort(project)
     state = _read(_path(project, objective))
     if state["owner"] != owner:
         raise PodError("coordinator_conflict", "Delivery belongs to another coordinator")
@@ -658,12 +694,27 @@ def acknowledge_delivery(project: Path, objective: str, *, owner: str, run: str,
     if unresolved:
         raise PodError("delivery_unresolved", "Every Delivery item needs a durable effect first")
     receipt = native_port.wait_delivery(run=run, ack=delivery_id)
+    if receipt.get("runtime") != delivery.get("runtime"):
+        raise PodError("delivery_ack_mismatch",
+                       "Acknowledgment came from a different runtime than the Delivery")
     acknowledged = receipt.get("acknowledged") or receipt.get("acknowledgedDeliveryId")
-    if acknowledged not in (None, delivery_id):
+    if acknowledged is not None and acknowledged != delivery_id:
         raise PodError("delivery_ack_mismatch", "Native acknowledgment names a different Delivery")
     following = _delivery_record(receipt, run)
-    return {"status": "acknowledged", "delivery_id": delivery_id,
+    # A receipt that names no Delivery does not confirm one. The batch was sent for
+    # acknowledgment and every item is durably resolved, but the claim stays honest.
+    return {"status": "acknowledged" if acknowledged == delivery_id else "acknowledgment_unconfirmed",
+            "delivery_id": delivery_id, "confirmed_by_runtime": acknowledged == delivery_id,
             "next_delivery": following["id"] if following else None}
+
+
+def _cleanup_state(project: Path, objective: str, dispatch: str) -> str | None:
+    """The recorded disposition of a release, or None when none was ever recorded."""
+    from .ledger import _path, _read
+
+    state = _read(_path(project, objective))
+    row = state["cleanup"].get(dispatch)
+    return row.get("state") if isinstance(row, dict) else None
 
 
 def _delivery_record(receipt: dict, run: str) -> dict | None:
@@ -704,7 +755,7 @@ def release_once(project: Path, objective: str, *, owner: str, dispatch: str,
                  port: NativePort | None = None) -> dict:
     """Release one exactly settled owned worker once; uncertain release is held."""
     from .ledger import _lock, _path, _read, _write
-    native_port = port or OrcaPort()
+    native_port = port or OrcaPort(project)
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -767,7 +818,7 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
                       port: NativePort | None = None) -> dict:
     """Read native release state only; never repeat the release effect."""
     from .ledger import _lock, _path, _read, _write
-    native_port = port or OrcaPort()
+    native_port = port or OrcaPort(project)
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)

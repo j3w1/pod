@@ -48,19 +48,34 @@ def _roots(project: Path, global_scope: bool) -> dict[str, Path]:
     return {"codex": project, "claude": project}
 
 
-def skills_cli_lock_path() -> Path:
-    """Where the community skills CLI keeps its global installation lock."""
-    state = explicit_home("XDG_STATE_HOME")
+def skills_cli_lock_path() -> Path | None:
+    """Where the community skills CLI keeps its global installation lock.
+
+    This is another tool's file, read passively. A home Pod would refuse for its own state
+    is simply not somewhere to look, rather than a reason to fail a diagnostic.
+    """
+    try:
+        state = explicit_home("XDG_STATE_HOME")
+    except PodError:
+        return None
     if state is not None:
         return state / "skills" / LOCK_NAME
-    return Path.home() / ".agents" / LOCK_NAME
+    try:
+        return Path.home() / ".agents" / LOCK_NAME
+    except (OSError, RuntimeError):
+        return None
 
 
 def skills_cli_entry() -> dict:
     """The skills-CLI lock entry for Pod, read passively and bounded."""
     path = skills_cli_lock_path()
+    if path is None:
+        return {"lock_file": None, "readable": False, "entry": None}
     record = {"lock_file": str(path), "readable": False, "entry": None}
-    if not path.is_file() or path.is_symlink():
+    try:
+        if not path.is_file() or path.is_symlink():
+            return record
+    except OSError:
         return record
     try:
         lock = bounded_json(path, limit=MAX_LOCK)
@@ -280,7 +295,10 @@ def setup(project: Path, *, global_scope: bool = False) -> dict:
                 ownership[host] = "skills_cli"
                 continue
             outcomes[host] = _install(path, source, roots[host])
-            ownership[host] = "pod_setup" if outcomes[host] in ("installed", "reused") else "unowned"
+            # Global scope keeps no ownership marker, so only a copy this call actually
+            # wrote is Pod's. A copy that was simply already correct may belong to another
+            # manager, and claiming it is exactly what a repeat setup must not do.
+            ownership[host] = "pod_setup" if outcomes[host] == "installed" else "unowned"
     else:
         local = targets
         global_state = inspect(project, global_scope=True)

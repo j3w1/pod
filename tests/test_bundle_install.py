@@ -153,3 +153,28 @@ class BundleInstallTests(unittest.TestCase):
                             env_extra={"PYTHONPATH": str(decoy)})
             self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
             self.assertTrue(json.loads(report.stdout)["bundle"]["path"].startswith(str(skill)))
+
+
+class ReviewFindingRegressions(unittest.TestCase):
+    """A module missing deeper in the package must not surface as a traceback."""
+
+    def test_any_missing_module_reports_an_incomplete_bundle(self):
+        if not pyyaml_visible():
+            self.skipTest("PyYAML is not importable under an isolated interpreter here")
+        with fixture() as root:
+            home = root / "home"
+            work = root / "work"
+            for path in (home, work):
+                path.mkdir(parents=True)
+            # cli.py is one of the four names the launcher checks by hand; quota.py is not,
+            # and is imported only once the package is already loading.
+            for missing in ("cli.py", "quota.py", "util.py", "routing.py"):
+                with self.subTest(missing=missing):
+                    skill = copied(root / missing.replace(".", "-"))
+                    (skill / missing).unlink()
+                    blocked = launch(skill, ["doctor", "--json"], home=home, cwd=work)
+                    self.assertEqual(blocked.returncode, 2, blocked.stdout + blocked.stderr)
+                    report = json.loads(blocked.stdout)
+                    self.assertEqual(report["error"]["code"], "bundle_incomplete")
+                    self.assertIn("skills add j3w1/pod", report["error"]["message"])
+                    self.assertNotIn("Traceback", blocked.stderr)

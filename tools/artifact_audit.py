@@ -23,7 +23,8 @@ FORBIDDEN = (
     ("credential-shaped", re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}")),
 )
 # The retired platform, using the source audit's own definitions so there is exactly one.
-# `Windows` names the operating system; a lowercase `windows` identifier is a quota window.
+# The source audit owns the platform definitions; see tools/platform_audit.py for how an
+# operating-system reference is told apart from a quota time window.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from platform_audit import ALLOWED, EXEMPT_PREFIXES, PATTERNS  # noqa: E402
 

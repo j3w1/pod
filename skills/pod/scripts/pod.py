@@ -85,14 +85,30 @@ def main(argv=None):
         else:
             print("pod: " + failure["message"], file=sys.stderr)
         return 2
-    load_pod(root)
-    if arguments[:1] == ["internal"]:
-        from pod.internal import main as internal_main
+    try:
+        load_pod(root)
+        if arguments[:1] == ["internal"]:
+            from pod.internal import main as internal_main
 
-        return internal_main(arguments[1:])
-    from pod.cli import main as cli_main
+            entry = internal_main
+        else:
+            from pod.cli import main as cli_main
 
-    return cli_main(arguments)
+            entry = cli_main
+    except ImportError as exc:
+        # The name check above covers the files needed to start. A module missing deeper in
+        # the package would otherwise surface as a traceback, which is the one thing a
+        # prerequisite failure must never look like.
+        failure = {"code": "bundle_incomplete",
+                   "message": ("Pod bundle at %s is incomplete (%s). Reinstall it: %s"
+                               % (root, exc, REINSTALL))}
+        if "--json" in arguments:
+            print(json.dumps({"schema": "pod-cli/v1", "status": "blocked", "error": failure},
+                             indent=2, sort_keys=True))
+        else:
+            print("pod: " + failure["message"], file=sys.stderr)
+        return 2
+    return entry(arguments[1:] if arguments[:1] == ["internal"] else arguments)
 
 
 if __name__ == "__main__":

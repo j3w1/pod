@@ -22,6 +22,8 @@ LOCAL_KINDS = ("push", "pr_update")
 OUTCOMES = ("pending", "PASS", "FAILED", "UNKNOWN")
 CLASSES = ("authorization", "correctness", "efficiency")
 SETTLED_CLEANUP = ("released", "already_released", "retained")
+# Mirrors the ledger's own threshold: a third correction needs a discriminating diagnosis.
+CORRECTION_THRESHOLD = 2
 MAX_ACTIONS = 256
 AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
 
@@ -37,26 +39,40 @@ def _read_actions(path: Path) -> dict:
     exact(value, {"schema", "revision", "actions"}, {"schema", "revision", "actions"}, name="governor")
     if value["schema"] != "pod-governor/v1":
         raise PodError("state_migration_required", "Governor schema requires explicit migration")
+    if not isinstance(value["actions"], list) or len(value["actions"]) > MAX_ACTIONS:
+        raise PodError("state_migration_required", "Governor journal is malformed")
+    for row in value["actions"]:
+        if (not isinstance(row, dict)
+                or not isinstance(row.get("record_id"), str)
+                or not isinstance(row.get("action"), dict)
+                or not isinstance(row["action"].get("kind"), str)
+                or not isinstance(row["action"].get("candidate"), str)
+                or not isinstance(row["action"].get("target"), str)
+                or row.get("decision") not in ("ALLOW", "WARN", "DEFER")
+                or row.get("outcome") not in OUTCOMES):
+            raise PodError("state_migration_required", "Governor action row is malformed")
     return value
 
 
 def validate_authorization(value: object, *, candidate: str | None = None,
                            kind: str | None = None) -> dict | None:
-    """Accept only a complete owner authorization record bound to this candidate."""
+    """Accept only a complete owner authorization record bound to this candidate.
+
+    The release gate owns the record's shape. Reusing its validator is what keeps a record
+    from passing here and being refused there, or the reverse.
+    """
     if value is None:
         return None
-    record = exact(value, AUTHORIZATION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
-    if record["schema"] != "pod-release-authorization/v1":
-        raise PodError("invalid_authorization", "Authorization schema is unsupported")
-    for key in ("candidate", "tree", "authorized_by", "utc", "reference"):
-        bounded_text(record[key], name=key, limit=256)
-    scope = record["scope"]
-    if (not isinstance(scope, list) or not scope or len(scope) > 16
-            or any(item not in KINDS for item in scope)):
-        raise PodError("invalid_authorization", "Authorization scope is unsupported")
+    from .release import validate_authorization as validate_release_authorization
+
+    record = validate_release_authorization(
+        value, candidate=value.get("candidate") if isinstance(value, dict) else None,
+        tree=value.get("tree") if isinstance(value, dict) else None, require_release=False)
+    if record is None:
+        return None
     if candidate is not None and record["candidate"] != candidate:
         return None
-    if kind is not None and kind not in scope:
+    if kind is not None and kind not in record["scope"]:
         return None
     return record
 
@@ -90,8 +106,10 @@ def _active(state: dict) -> list[str]:
     for key, effect in state.get("effects", {}).items():
         if not isinstance(effect, dict) or effect.get("state") not in ("reserved", "uncertain", "confirmed"):
             continue
-        dispatch = (effect.get("native_binding") or {}).get("dispatchId")
-        cleanup = state.get("cleanup", {}).get(dispatch, {}) if dispatch else {}
+        binding = effect.get("native_binding")
+        dispatch = binding.get("dispatchId") if isinstance(binding, dict) else None
+        row = state.get("cleanup", {}).get(dispatch) if dispatch else None
+        cleanup = row if isinstance(row, dict) else {}
         if cleanup.get("state") in SETTLED_CLEANUP:
             continue
         active.append(key)
@@ -109,9 +127,17 @@ def _unresolved_deliveries(state: dict) -> list[str]:
 
 
 def _pending_interventions(state: dict) -> list[str]:
+    """Tasks that reached the correction threshold with no diagnosis recorded yet.
+
+    The ledger keeps one list of correction rows per Task. Two equivalent corrections
+    without a discriminating diagnosis is the point at which more attempts stop being
+    useful, so the objective is still converging rather than ready to validate.
+    """
     pending = []
-    for task, record in state.get("interventions", {}).items():
-        if isinstance(record, dict) and record.get("dispatch_authorized") is False:
+    for task, history in state.get("interventions", {}).items():
+        if not isinstance(history, list) or len(history) < CORRECTION_THRESHOLD:
+            continue
+        if not any(isinstance(row, dict) and row.get("diagnosis") for row in history):
             pending.append(task)
     return sorted(pending)
 

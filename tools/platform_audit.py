@@ -26,6 +26,8 @@ PATTERNS = (
     re.compile(r"\bLOCALAPPDATA\b|\bAPPDATA\b|\bUSERPROFILE\b"),
     re.compile(r"\.ps1\b|\bcmd\.exe\b|\bwin32\b|PureWindowsPath"),
     re.compile(r"os\.name\s*==\s*[\"\']nt[\"\']"),
+    re.compile(r"sys\.platform\s*(?:==|\.startswith\()\s*[\"\']win"),
+    re.compile(r"os\.sep\s*==\s*[\"\']\\\\|\bimport\s+nt\b|\bnt\.[a-z]"),
     re.compile(r"Scripts/python|Scripts\\\\pod|pod\.exe"),
 )
 # A line that proves an environment is refused is evidence of exclusion, not support.

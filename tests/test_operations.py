@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import checkpoint, read, reconcile, record_delivery, reconcile_delivery_item, reserve
-from pod.operations import (OrcaPort, acknowledge_delivery, guarded_start, reconcile_launch,
-                            reconcile_release, release_once, settle_delivery)
+from pod.operations import (OrcaPort, _quota_snapshot, acknowledge_delivery, guarded_start,
+                            reconcile_launch, reconcile_release, release_once, settle_delivery)
 from pod.config import effective, route_identity
 from pod.records import packet, source_identity, verify_sources
 from pod.internal import run as helper_run
@@ -1691,3 +1691,185 @@ class FencedWorkerRecoveryTests(unittest.TestCase):
             with self.assertRaises(PodError) as caught:
                 release_once(project, "objective", owner="owner", dispatch="dispatch", port=port)
             self.assertEqual(caught.exception.code, "native_release_uncertain")
+
+
+class ReviewFindingRegressions(unittest.TestCase):
+    """Each of these reproduces a defect an independent review found."""
+
+    def start(self, project, assessment, caps, quota, port, **extra):
+        arguments = dict(owner="owner", run="run", task="task", operation_id="op",
+                         assessment=assessment, capabilities=caps, quotas=quota, occupancy={},
+                         plan_revision="plan", port=port, now=NOW)
+        arguments.update(extra)
+        return guarded_start(project, "objective", **arguments)
+
+    def test_recovery_cannot_adopt_a_worker_from_another_run(self):
+        """`run` and `task` arrive in caller JSON; the effect records the Run it holds.
+
+        Without that join, naming a different Run bound the effect to a Dispatch Pod never
+        started, and a later release would have acted on someone else's worker.
+        """
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            port.start_worker = lambda **kwargs: (_ for _ in ()).throw(
+                PodError("native_effect_uncertain", "lost"))
+            with self.assertRaises(PodError):
+                self.start(project, assessment, caps, quota, port)
+            foreign = FixturePort()
+            foreign.started = {"other": {"run": "other-run", "task": "other-task",
+                                         "launch": {"agent": "codex", "model": "gpt-5.6-sol",
+                                                    "effort": "high"},
+                                         "worktree": "current"}}
+            foreign.find_rows = [{"dispatchId": "other", "runId": "other-run",
+                                  "taskId": "other-task"}]
+            with self.assertRaises(PodError) as caught:
+                reconcile_launch(project, "objective", owner="owner", operation_id="op",
+                                 run="other-run", task="other-task", port=foreign)
+            self.assertEqual(caught.exception.code, "effect_identity_mismatch")
+            self.assertEqual(read(project, "objective")["effects"]["op"]["state"], "uncertain")
+
+    def test_recovery_refuses_a_readback_that_names_a_different_run(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            port.start_worker = lambda **kwargs: (_ for _ in ()).throw(
+                PodError("native_effect_uncertain", "lost"))
+            with self.assertRaises(PodError):
+                self.start(project, assessment, caps, quota, port)
+            lying = FixturePort()
+            lying.started = {"dispatch": {"run": "elsewhere", "task": "task",
+                                          "launch": {"agent": "codex", "model": "gpt-5.6-sol",
+                                                     "effort": "high"},
+                                          "worktree": "current"}}
+            lying.find_rows = [{"dispatchId": "dispatch", "runId": "run", "taskId": "task"}]
+            with self.assertRaises(PodError) as caught:
+                reconcile_launch(project, "objective", owner="owner", operation_id="op",
+                                 run="run", task="task", port=lying)
+            self.assertEqual(caught.exception.code, "native_identity_unverified")
+
+    def test_a_replayed_delivery_settles_the_rest_of_its_batch(self):
+        """Orca replays an unacknowledged Delivery, so the natural retry must work.
+
+        Raising on an already-released dispatch stranded every item behind it.
+        """
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            port.release_status = "released"
+            self.start(project, assessment, caps, quota, port)
+            port.settled = True
+            batch = {"id": "delivery-1", "messages": [
+                {"id": "message-1", "type": "worker_done",
+                 "payload": json.dumps({"runId": "run", "taskId": "task",
+                                        "dispatchId": "dispatch"})}]}
+            port.deliveries = [dict(batch)]
+            first = settle_delivery(project, "objective", owner="owner", run="run", port=port)
+            self.assertTrue(first["ack_eligible"])
+            self.assertEqual(port.release_calls, 1)
+            port.deliveries = [dict(batch)]
+            replayed = settle_delivery(project, "objective", owner="owner", run="run", port=port)
+            self.assertTrue(replayed["ack_eligible"])
+            self.assertEqual(port.release_calls, 1, "the release must not be repeated")
+
+    def test_an_acknowledgment_the_runtime_did_not_confirm_is_not_claimed(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = inputs(root)
+            port = FixturePort()
+            port.release_status = "released"
+            self.start(project, assessment, caps, quota, port)
+            port.settled = True
+            port.deliveries = [{"id": "delivery-1", "messages": [
+                {"id": "message-1", "type": "worker_done",
+                 "payload": json.dumps({"runId": "run", "taskId": "task",
+                                        "dispatchId": "dispatch"})}]}]
+            settle_delivery(project, "objective", owner="owner", run="run", port=port)
+            silent = lambda **kwargs: {"runtime": port.runtime}
+            with patch.object(port, "wait_delivery", side_effect=silent):
+                unconfirmed = acknowledge_delivery(project, "objective", owner="owner", run="run",
+                                                   delivery_id="delivery-1", port=port)
+            self.assertEqual(unconfirmed["status"], "acknowledgment_unconfirmed")
+            self.assertFalse(unconfirmed["confirmed_by_runtime"])
+            wrong_runtime = lambda **kwargs: {"runtime": "other", "acknowledged": "delivery-1"}
+            with patch.object(port, "wait_delivery", side_effect=wrong_runtime):
+                with self.assertRaises(PodError) as caught:
+                    acknowledge_delivery(project, "objective", owner="owner", run="run",
+                                         delivery_id="delivery-1", port=port)
+            self.assertEqual(caught.exception.code, "delivery_ack_mismatch")
+
+    def test_the_fleet_scope_names_only_what_was_read(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            page = {"runtime": "r", "scope": {"source": "bound"}, "workers": [], "complete": True}
+            reads = []
+
+            def rows(run=None):
+                reads.append(run)
+                return dict(page)
+
+            with patch("pod.operations.worker_rows", side_effect=rows), \
+                 patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}):
+                port = OrcaPort(root)
+                with patch("pod.operations._ledger_bindings", return_value={}), \
+                     patch("pod.operations._quota_snapshot", return_value=None):
+                    bound = port.read_native("owner", run="run-a")
+                    merged = port.read_native("owner", run="run-a", runs=("run-b", "run-a"))
+            self.assertEqual(bound["scope"], "bound")
+            self.assertEqual(merged["scope"], "bound+ledger_runs")
+            self.assertEqual(reads, ["run-a", "run-a", "run-b"])
+
+    def test_a_descendant_named_by_an_object_is_still_counted(self):
+        """Sibling projection fields are objects; assuming a bare string missed them."""
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            worker = {"dispatchId": "ctx_child", "terminalState": "active",
+                      "projection": {"parent": {"id": "ctx_parent"}, "host": {"id": "local"}}}
+            page = {"runtime": "r", "scope": {"source": "bound"}, "workers": [worker],
+                    "complete": True}
+            bindings = {"ctx_parent": {"account": "account", "objective": "objective",
+                                       "agent": "codex", "bucket": "shared"}}
+            with patch("pod.operations.worker_rows", return_value=page), \
+                 patch("pod.operations._ledger_bindings", return_value=bindings), \
+                 patch("pod.operations._quota_snapshot", return_value=None), \
+                 patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}):
+                native = OrcaPort(root).read_native("owner", run="run")
+            row = native["workers"][0]
+            self.assertTrue(row["descendant"])
+            self.assertFalse(row.get("foreign"))
+            self.assertEqual(row["objective"], "objective")
+
+    def test_a_provider_reading_without_a_timestamp_is_not_a_quota_observation(self):
+        with fixture() as root:
+            metadata = {"providers": {"codex": {"windows": {"weekly": {"usedPercent": 40}},
+                                                "updated_at_ms": None, "freshness": "unknown"}}}
+            with patch("pod.operations.account_metadata_raw", return_value=metadata):
+                self.assertIsNone(_quota_snapshot({"agent": "codex", "account": "a",
+                                                   "model": "gpt-5.6-sol"}))
+
+    def test_a_dated_provider_reading_is_a_usable_quota_observation(self):
+        """`confidence` says where the numbers came from; age decides how much to trust them."""
+        from pod.routing import quota_state
+        with fixture() as root:
+            now = datetime.now(timezone.utc)
+            metadata = {"providers": {"codex": {"windows": {"weekly": {"usedPercent": 40,
+                                                                       "resetsAt": 1}},
+                                                "updated_at_ms": now.timestamp() * 1000,
+                                                "freshness": "fresh"}}}
+            with patch("pod.operations.account_metadata_raw", return_value=metadata):
+                snapshot = _quota_snapshot({"agent": "codex", "account": "a",
+                                            "model": "gpt-5.6-sol", "bucket": "default"})
+            self.assertEqual(snapshot["confidence"], "observed")
+            policy = {"quota_fresh_seconds": 60, "quota_low": 20, "quota_critical": 5}
+            state, _ = quota_state(snapshot, provider="codex", account="a", bucket="default",
+                                   policy=policy, now=now)
+            self.assertEqual(state, "normal")
+            stale = dict(snapshot)
+            stale["observed_at"] = (now - timedelta(hours=3)).isoformat()
+            aged, reason = quota_state(stale, provider="codex", account="a", bucket="default",
+                                       policy=policy, now=now)
+            self.assertEqual(aged, "unknown")
+            self.assertIn("stale", reason)

@@ -203,3 +203,102 @@ class GovernorTests(unittest.TestCase):
             with self.assertRaises(PodError) as foreign:
                 decide(project, "objective", owner="other", action=action(), now=NOW)
             self.assertEqual(foreign.exception.code, "coordinator_conflict")
+
+
+class ReviewFindingRegressions(unittest.TestCase):
+    """Each of these reproduces a defect an independent review found."""
+
+    def prepared(self, root, *, candidate=CANDIDATE, gaps=()):
+        project = root / "project"
+        project.mkdir(exist_ok=True)
+        checkpoint(project, "objective", owner="owner", value=body(candidate, gaps),
+                   native={"runtime": "runtime"})
+        return project
+
+    def correction(self, key):
+        return {"criterion_id": "works", "failure_id": key, "obligation": "make it pass",
+                "failing_example": "the test fails", "hypothesis": "an off-by-one",
+                "last_meaningful_evidence": "the failing assertion",
+                "next_discriminating_check": "run the single test",
+                "correction_key": key}
+
+    def test_a_task_awaiting_a_diagnosis_keeps_the_objective_converging(self):
+        """Interventions are a list of correction rows per Task, never a single record.
+
+        Reading them as a record meant a Task past the correction threshold never held
+        back validation, so a documented DEFER condition was dead code.
+        """
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project = self.prepared(root)
+            route = {"agent": "codex", "model": "m", "account": "a", "bucket": None,
+                     "effort": "high"}
+            reserve(project, "objective", owner="owner", operation_id="op", requested=route,
+                    route_decision={"status": "usable", "selected": route,
+                                    "policy_revision": effective(project)["revision"]},
+                    establishment=establishment(route, runtime="runtime"),
+                    native_reader=lambda: {"runtime": "runtime", "authoritative": True,
+                                           "owner": "owner", "scope": "all", "complete": True,
+                                           "workers": [], "cross_host": False},
+                    capacity=2, run_id="run", plan_revision="p")
+            from pod.ledger import _lock, _path, _read, _write
+            path = _path(project, "objective")
+            with _lock(path):
+                state = _read(path)
+                effect = state["effects"]["op"]
+                effect["state"] = "confirmed"
+                effect["native_binding"] = {"dispatchId": "d", "workerId": "w", "taskId": "t",
+                                            "runId": "run", "worktreeId": "wt",
+                                            "terminalHandle": None, "terminalResourceId": None}
+                state["cleanup"]["d"] = {"schema": "pod-cleanup/v1", "state": "released",
+                                         "binding": effect["native_binding"],
+                                         "runtime": "runtime", "repeat_allowed": False}
+                _write(path, state)
+            self.assertEqual(status(project, "objective")["phase"], "candidate")
+            intervention(project, "objective", owner="owner", task="t",
+                         correction=self.correction("first"))
+            self.assertEqual(status(project, "objective")["phase"], "candidate")
+            intervention(project, "objective", owner="owner", task="t",
+                         correction=self.correction("second"))
+            projection = status(project, "objective")
+            self.assertEqual(projection["phase"], "converging")
+            self.assertEqual(projection["pending_diagnosis"], ["t"])
+            blocked = decide(project, "objective", owner="owner",
+                             action=action(kind="workflow_dispatch", target="ci/linux"), now=NOW)
+            self.assertEqual(blocked["decision"], "DEFER")
+            self.assertIn("integration_unsettled", [r["code"] for r in blocked["reasons"]])
+
+    def test_a_malformed_journal_asks_for_migration_rather_than_raising(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project = self.prepared(root)
+            decide(project, "objective", owner="owner", action=action(), now=NOW)
+            from pod.governor import _record_path
+            from pod.util import atomic_json
+            for broken in ({"schema": "pod-governor/v1", "revision": 1, "actions": [{}]},
+                           {"schema": "pod-governor/v1", "revision": 1,
+                            "actions": [{"record_id": "x", "action": {"kind": "push"},
+                                         "decision": "ALLOW", "outcome": "pending"}]},
+                           {"schema": "pod-governor/v1", "revision": 1, "actions": "not a list"}):
+                with self.subTest(broken=str(broken)[:40]):
+                    atomic_json(_record_path(project, "objective"), broken)
+                    with self.assertRaises(PodError) as caught:
+                        decide(project, "objective", owner="owner", action=action(), now=NOW)
+                    self.assertEqual(caught.exception.code, "state_migration_required")
+
+    def test_the_governor_and_the_release_gate_agree_on_an_authorization(self):
+        """Two validators for one schema let a record pass here and fail at the gate."""
+        from pod.release import validate_authorization as gate_validator
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project = self.prepared(root)
+            for broken in ({**authorization(), "candidate": "short"},
+                           {**authorization(), "utc": "2026-09-21T00:00:00+00:00"},
+                           {**authorization(), "scope": ["publish"]}):
+                with self.subTest(broken=str(broken["scope"])):
+                    with self.assertRaises(PodError):
+                        gate_validator(broken, candidate=CANDIDATE, tree="c" * 40)
+                    with self.assertRaises(PodError):
+                        decide(project, "objective", owner="owner",
+                               action=action(kind="merge", target="main", authorization=broken),
+                               now=NOW)

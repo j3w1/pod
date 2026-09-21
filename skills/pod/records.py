@@ -266,7 +266,13 @@ def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str
                sources: list, dependencies: list, environment: str,
                review_required: bool, hosted_required: bool,
                owner_acceptance: dict | None = None, integration: dict | None = None) -> dict:
-    """Project-criteria projection. Caller records never confer external acceptance."""
+    """Project-criteria projection.
+
+    Caller records never confer a check result. Two facts are deliberately not derived from
+    them: whether the owner accepted the candidate, which arrives as an explicit
+    authorization record, and whether it is merged or released, which is read from Git by
+    `integration_observation` rather than asserted.
+    """
     checks = {}
     for criterion in criteria:
         rows = [e for e in evidence_rows if e.get("criterion") == criterion]

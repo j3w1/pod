@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -19,7 +20,8 @@ CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "reset_credit_v1": "accounts.codex-reset-credit.v1"}
 AGENTS = ("codex", "claude")
 TIERS = ("enforceable_control", "runtime_observation", "owner_route_config", "unavailable")
-IDENTITY_TWINS = {"taskId": "task_id", "runId": "run_id", "lastFailure": "last_failure",
+IDENTITY_TWINS = {"dispatchId": "dispatch_id", "taskId": "task_id", "runId": "run_id",
+                  "lastFailure": "last_failure",
                   "worktreeId": "worktree_id", "agentTerminalHandle": "agent_terminal_handle",
                   "lastError": "last_error"}
 WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:")
@@ -263,7 +265,7 @@ def worker_rows(run: str | None = None) -> dict:
             raise PodError("orca_contract", "Worker fleet page is malformed")
         if runtime is not None and response["runtime"] != runtime:
             raise PodError("orca_runtime_changed", "Runtime changed during fleet read")
-        if scope is not None and result.get("scope") != scope:
+        if runtime is not None and result.get("scope") != scope:
             raise PodError("orca_scope_changed", "Fleet scope changed during read")
         runtime, scope = response["runtime"], result.get("scope")
         all_rows.extend(rows)
@@ -367,9 +369,15 @@ def agent_login_mode(agent: str) -> dict:
                 "reason": "agent_probe_unreadable"}
     if agent == "codex":
         text = output.strip().lower()
-        if "api key" in text:
+        # "logged in" is a substring of "not logged in", so the negative is checked first
+        # and the positive is anchored. Reading this wrong would report an absent login as
+        # an approved subscription and silently defeat the billing hard stop.
+        if re.search(r"\bnot logged in\b|\bnot signed in\b|\blogged out\b", text):
+            return {"auth": "unknown", "subscription": None, "identity_digest": None,
+                    "reason": "agent_not_logged_in"}
+        if re.search(r"\bapi key\b", text):
             return {"auth": "api_key", "subscription": False, "identity_digest": None}
-        if "logged in" in text:
+        if re.match(r"^logged in\b", text):
             return {"auth": "oauth", "subscription": True, "identity_digest": None}
         return {"auth": "unknown", "subscription": None, "identity_digest": None,
                 "reason": "agent_login_unrecognised"}
@@ -421,7 +429,9 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     login_block = login if login is not None else agent_login_mode(agent)
     host_block = fleet if fleet is not None else hosts()
     capabilities = observed.get("capabilities", {})
-    bucket = route.get("bucket") or bucket_for(agent, route.get("model", ""))
+    # Derived from the route's own agent and model. A caller cannot assert this and then
+    # have the record present its assertion back as a runtime observation.
+    bucket = bucket_for(agent, route.get("model", ""))
     managed = account_block.get("managed_accounts", 0)
     mode = "managed_account" if managed else "host_login"
     stamp = account_block.get("active_account") or account_block.get("default_identity") \
@@ -439,11 +449,14 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         "effective_launch": _tier("effective_launch",
                                   "enforceable_control" if capabilities.get("launch_preferences_v1")
                                   else "runtime_observation",
-                                  "worker-launch-preferences with startOptions.launch readback"),
+                                  "Orca applies the requested launch preferences; Pod refuses "
+                                  "the effect unless a readback shows requested equals effective"),
         "descendant_depth": _tier("descendant_depth",
                                   "enforceable_control" if capabilities.get("contract_v1")
                                   else "unavailable",
-                                  "native nested-worker depth limit"),
+                                  "Orca refuses a nested worker past its own depth limit; Pod "
+                                  "observes the depth and does not set the limit",
+                                  limit="unknown_to_pod"),
         "descendant_count": _tier("descendant_count", "runtime_observation",
                                   "worker-list projection.parent and worker-show creatorDispatchId"),
         "child_delegation": _tier("child_delegation", "owner_route_config",
@@ -478,6 +491,9 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         disclosures.append("quota bucket is a Pod label, not a provider-issued identifier")
     if controls["descendant_depth"]["tier"] == "unavailable":
         disclosures.append("installed runtime advertises no nested-worker depth control")
+    else:
+        disclosures.append("the runtime enforces a nested-worker depth limit whose value Pod "
+                           "cannot read; Pod counts descendants rather than assuming one")
     if not child_delegation:
         disclosures.append("worker-initiated delegation is refused by Pod admission, not by a provider sandbox")
     if not host_block.get("local_only", True):

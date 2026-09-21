@@ -57,11 +57,18 @@ def run(operation: str, request: dict) -> dict:
         return {"status": "current"}
     if operation == "acceptance":
         exact(request, {"criteria", "evidence_rows", "candidate", "policy_revision",
-                        "sources", "dependencies", "environment", "review_required", "hosted_required",
-                        "owner_acceptance", "integration"},
+                        "sources", "dependencies", "environment", "review_required",
+                        "hosted_required", "owner_acceptance", "project"},
               {"criteria", "evidence_rows", "candidate", "policy_revision",
-               "sources", "dependencies", "environment", "review_required", "hosted_required"}, name="request")
-        return acceptance(**request)
+               "sources", "dependencies", "environment", "review_required",
+               "hosted_required"}, name="request")
+        arguments = {key: value for key, value in request.items() if key != "project"}
+        # Whether a candidate is merged or released is read from Git here. A caller cannot
+        # hand in that answer, because it is the one the final report rests on.
+        if "project" in request:
+            arguments["integration"] = integration_observation(Path(request["project"]),
+                                                               request["candidate"])
+        return acceptance(**arguments)
     if operation == "integration-observe":
         exact(request, {"project", "candidate", "base_ref"}, {"project", "candidate"}, name="request")
         return integration_observation(Path(request["project"]), request["candidate"],
@@ -119,15 +126,11 @@ def run(operation: str, request: dict) -> dict:
                                 operation_id=request["operation_id"], run=request["run"],
                                 task=request["task"])
     if operation == "delivery":
-        exact(request, {"project", "objective", "owner", "run", "timeout_ms", "retain"},
+        exact(request, {"project", "objective", "owner", "run", "timeout_ms"},
               {"project", "objective", "owner", "run"}, name="request")
         from .operations import settle_delivery
-        retain = request.get("retain") or []
-        if not isinstance(retain, list) or any(not isinstance(item, str) for item in retain):
-            raise PodError("invalid_request", "Retained dispatch identities must be strings")
         return settle_delivery(Path(request["project"]), request["objective"], owner=request["owner"],
-                               run=request["run"], timeout_ms=request.get("timeout_ms"),
-                               retain=tuple(retain))
+                               run=request["run"], timeout_ms=request.get("timeout_ms"))
     if operation == "delivery-ack":
         exact(request, {"project", "objective", "owner", "run", "delivery_id"},
               {"project", "objective", "owner", "run", "delivery_id"}, name="request")

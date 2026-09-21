@@ -59,7 +59,8 @@ def _sanitized_report(value: Any) -> bool:
     return all(part not in ("", ".", "..") for part in match.group("reference").split("/"))
 
 
-def validate_authorization(value: Any, *, candidate: str, tree: str) -> dict | None:
+def validate_authorization(value: Any, *, candidate: str | None, tree: str | None,
+                           require_release: bool = True) -> dict | None:
     """Accept only a complete owner authorization bound to this exact candidate.
 
     Authorization is an input the owner supplies. It is never derived from test
@@ -80,9 +81,11 @@ def validate_authorization(value: Any, *, candidate: str, tree: str) -> dict | N
     if (not isinstance(scope, list) or not scope or len(scope) > 8
             or any(item not in AUTHORIZATION_SCOPES for item in scope)):
         raise PodError("invalid_authorization", "Authorization scope is unsupported")
-    if "release" not in scope:
+    if require_release and "release" not in scope:
         return None
-    if record["candidate"] != candidate or record["tree"] != tree:
+    if candidate is not None and record["candidate"] != candidate:
+        return None
+    if tree is not None and record["tree"] != tree:
         return None
     return record
 
