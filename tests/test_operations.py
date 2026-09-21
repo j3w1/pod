@@ -43,6 +43,10 @@ class FixturePort:
         self.establish_bucket = ...
         self.establish_account = None
         self.hard_stops_override = None
+        self.stopped = False
+        self.worker_state = None
+        self.worker_stage = None
+        self.release_archive = None
         self.descendants_allowed = False
         self.scope = "all"
         self.find_rows = None
@@ -124,7 +128,8 @@ class FixturePort:
             resource = {"ownershipState": "released", "releaseState": "released",
                         "retainedReason": None, "releaseRequestedAt": "2026-09-20T00:00:00+00:00",
                         "releaseCompletedAt": "2026-09-20T00:00:01+00:00", "releaseError": None,
-                        "archive": {"source": "transcript", "status": "captured"}}
+                        "archive": self.release_archive or {"source": "transcript",
+                                                            "status": "captured"}}
             terminal = {"handle": f"term-{dispatch}", "connected": False, "writable": False,
                         "exitCause": {"kind": "operator_close"}}
             observation = {"status": "exited", "exactWorker": True}
@@ -140,8 +145,11 @@ class FixturePort:
                         "retainedReason": None, "releaseRequestedAt": None,
                         "releaseCompletedAt": None, "releaseError": None,
                         "archive": {"source": None, "status": None}}
-            terminal = {"handle": f"term-{dispatch}", "connected": True, "writable": True}
-            observation = {"status": "live", "exactWorker": True}
+            terminal = ({"handle": f"term-{dispatch}", "connected": False, "writable": False,
+                         "exitCause": {"kind": "operator_close"}} if self.stopped
+                        else {"handle": f"term-{dispatch}", "connected": True, "writable": True})
+            observation = ({"status": "exited", "exactWorker": True} if self.stopped
+                           else {"status": "live", "exactWorker": True})
         if resource_state == "not_requested" and not self.terminal_visible:
             terminal = None
         resource.update({"id": f"resource-{dispatch}", "terminalHandle": f"term-{dispatch}",
@@ -153,9 +161,11 @@ class FixturePort:
                                else "active"}
         worker = {"dispatchId": dispatch, "worktreeId": "worktree",
                   "agentTerminalHandle": f"term-{dispatch}",
-                  "state": "succeeded" if self.settled else "ready",
-                  "stage": "settled" if self.settled else "input_accepted",
-                  "lastError": None,
+                  "state": self.worker_state or ("stopped" if self.stopped else
+                                                 "succeeded" if self.settled else "ready"),
+                  "stage": self.worker_stage or ("process_stopped" if self.stopped else
+                                                 "settled" if self.settled else "input_accepted"),
+                  "lastError": "turn start was never observed" if self.stopped else None,
                   "startOptions": {"launch": {"requested": dict(launch),
                                                  "effective": dict(launch)}}}
         if self.release_observation == "missing" and resource_state in ("released", "already_released"):
@@ -170,8 +180,9 @@ class FixturePort:
             projection_resource = None
         result = {"dispatch": {
                     "id": dispatch, "runId": started["run"], "taskId": started["task"],
-                    "status": "completed" if self.settled else "dispatched",
-                    "lastFailure": None},
+                    "status": "failed" if self.stopped else
+                              "completed" if self.settled else "dispatched",
+                    "lastFailure": "stopped" if self.stopped else None},
                 "projection": {"id": f"worker-{dispatch}", "runId": started["run"],
                                "taskId": started["task"], "dispatchId": dispatch,
                                "resource": projection_resource},
@@ -358,7 +369,7 @@ class GuardedOperationTests(unittest.TestCase):
                                                dispatch="dispatch", port=port)["status"], "released")
             self.assertEqual(port.release_calls, 0)
 
-    def test_release_requires_installed_owned_archive_and_connected_terminal_shape(self):
+    def test_release_requires_the_installed_owned_resource_and_matching_terminal(self):
         with fixture() as root, patch.dict(os.environ, {
                 "XDG_STATE_HOME": str(root / "state"), 
                 "XDG_CONFIG_HOME": str(root / "config")}):
@@ -368,8 +379,11 @@ class GuardedOperationTests(unittest.TestCase):
                           operation_id="first", assessment=assessment, capabilities=caps,
                           quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
             port.settled = True
+            # A terminal that is merely closed no longer blocks ownership, because a
+            # coordinator-fenced worker always has one. A terminal belonging to another
+            # worker still does.
             for field, value in (("archive", None), ("terminal", {
-                    "handle": "term-dispatch", "connected": False, "writable": False})):
+                    "handle": "term-someone-else", "connected": True, "writable": True})):
                 wrong = port.show_worker("dispatch")
                 if field == "archive":
                     wrong["result"]["terminalResource"][field] = value
@@ -1583,3 +1597,97 @@ class DelegationPathTests(unittest.TestCase):
             empty = settle_delivery(project, "objective", owner="owner", run="run", port=port)
             self.assertEqual(empty["status"], "empty")
             self.assertFalse(read(project, "objective")["deliveries"])
+
+
+class FencedWorkerRecoveryTests(unittest.TestCase):
+    """A worker the coordinator stopped is a settled outcome, not a leak.
+
+    Every shape here was taken from a live Orca 1.4.206 fence: the agent never proved a
+    turn start, the coordinator stopped it, and its terminal was closed before it wrote a
+    transcript. Pod must be able to adopt, settle and release that worker exactly once.
+    """
+
+    def fenced(self, port, dispatch="dispatch"):
+        port.settled = True
+        port.stopped = True
+        port.resource_state = "not_requested"
+        port.release_status = "released"
+        port.release_archive = {"source": None, "status": "unavailable"}
+        return dispatch
+
+    def prepared(self, root):
+        return inputs(root)
+
+    def test_a_stopped_worker_is_adopted_settled_and_released_once(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.start_worker = lambda **kwargs: (_ for _ in ()).throw(
+                PodError("native_effect_uncertain", "turn start was never observed"))
+            with self.assertRaises(PodError):
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              operation_id="op", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", port=port,
+                              now=NOW)
+            self.assertEqual(read(project, "objective")["effects"]["op"]["state"], "uncertain")
+            live = FixturePort()
+            live.started = {"dispatch": {"run": "run", "task": "task",
+                                         "launch": {"agent": "codex", "model": "gpt-5.6-sol",
+                                                    "effort": "high"},
+                                         "worktree": "current"}}
+            live.find_rows = [{"dispatchId": "dispatch", "runId": "run", "taskId": "task"}]
+            self.fenced(live)
+            adopted = reconcile_launch(project, "objective", owner="owner", operation_id="op",
+                                       run="run", task="task", port=live)
+            self.assertEqual(adopted["action"], "adopted")
+            self.assertEqual(adopted["status"], "confirmed")
+            live.resource_state = None
+            released = release_once(project, "objective", owner="owner", dispatch="dispatch",
+                                    port=live)
+            self.assertEqual(released["status"], "released")
+            self.assertEqual(live.release_calls, 1)
+            with self.assertRaises(PodError) as repeated:
+                release_once(project, "objective", owner="owner", dispatch="dispatch", port=live)
+            self.assertEqual(repeated.exception.code, "release_already_recorded")
+            self.assertEqual(live.release_calls, 1)
+
+    def test_a_worker_that_never_started_is_not_adopted(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            port.start_worker = lambda **kwargs: (_ for _ in ()).throw(
+                PodError("native_effect_uncertain", "lost"))
+            with self.assertRaises(PodError):
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              operation_id="op", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", port=port,
+                              now=NOW)
+            unobserved = FixturePort()
+            unobserved.started = {"dispatch": {"run": "run", "task": "task",
+                                               "launch": {"agent": "codex", "model": "gpt-5.6-sol",
+                                                          "effort": "high"},
+                                               "worktree": "current"}}
+            unobserved.find_rows = [{"dispatchId": "dispatch", "runId": "run", "taskId": "task"}]
+            unobserved.worker_state = "start_unknown"
+            unobserved.worker_stage = "turn_start_unobserved"
+            with self.assertRaises(PodError) as held:
+                reconcile_launch(project, "objective", owner="owner", operation_id="op",
+                                 run="run", task="task", port=unobserved)
+            self.assertEqual(held.exception.code, "native_start_unsettled")
+            self.assertEqual(read(project, "objective")["effects"]["op"]["state"], "uncertain")
+
+    def test_an_unresolved_archive_still_blocks_a_release_claim(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            project, assessment, caps, quota = self.prepared(root)
+            port = FixturePort()
+            guarded_start(project, "objective", owner="owner", run="run", task="task",
+                          operation_id="op", assessment=assessment, capabilities=caps,
+                          quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+            self.fenced(port)
+            port.release_archive = {"source": None, "status": None}
+            with self.assertRaises(PodError) as caught:
+                release_once(project, "objective", owner="owner", dispatch="dispatch", port=port)
+            self.assertEqual(caught.exception.code, "native_release_uncertain")

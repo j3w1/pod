@@ -20,6 +20,8 @@ from .util import bounded_text
 
 DELIVERY_TYPES = ("worker_done", "escalation", "question")
 STRUCTURED_START_FAILURES = ("failed", "outcome_unknown")
+# Native worker states that prove the launch happened, whatever became of it after.
+STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
 
 
 class NativePort(Protocol):
@@ -336,7 +338,12 @@ def _settled_execution(result: dict, binding: dict) -> bool:
     failed = (failed_shape
               and ((failure == "worker_failed" and worker["lastError"] == "worker_failed")
                    or (report_failure and worker["lastError"] is None)))
-    return (succeeded or failed) and worker.get("agentTerminalHandle") == binding["terminalHandle"]
+    # A worker this coordinator fenced is settled too: the stop is the known outcome.
+    # Its lastError carries the diagnostic that prompted the stop, so it is not constrained.
+    stopped = (native_dispatch["status"], failure, worker["state"], worker["stage"]) == (
+        "failed", "stopped", "stopped", "process_stopped")
+    return ((succeeded or failed or stopped)
+            and worker.get("agentTerminalHandle") == binding["terminalHandle"])
 
 
 def _resource_disposition(result: dict, binding: dict, disposition: str) -> bool:
@@ -359,6 +366,9 @@ def _resource_disposition(result: dict, binding: dict, disposition: str) -> bool
     if not required <= set(resource):
         return False
     if disposition == "owned":
+        # Ownership is about the resource, not the process. A worker this coordinator
+        # fenced has a closed terminal and a still-owned resource: exactly the case that
+        # needs releasing. Requiring a live, writable terminal here would leak it.
         terminal = result.get("terminal")
         return (resource["ownershipState"] == "owned"
                 and resource["releaseState"] == "not_requested"
@@ -367,10 +377,9 @@ def _resource_disposition(result: dict, binding: dict, disposition: str) -> bool
                 and resource["releaseCompletedAt"] is None
                 and resource["releaseError"] is None
                 and resource["archive"] == {"source": None, "status": None}
-                and isinstance(terminal, dict)
-                and terminal.get("handle") == binding["terminalHandle"]
-                and terminal.get("connected") is True
-                and terminal.get("writable") is True)
+                and (terminal is None
+                     or (isinstance(terminal, dict)
+                         and terminal.get("handle") == binding["terminalHandle"])))
     archive = resource["archive"]
     if disposition == "released":
         terminal = result.get("terminal")
@@ -398,10 +407,14 @@ def _resource_disposition(result: dict, binding: dict, disposition: str) -> bool
                 and bool(resource["releaseRequestedAt"])
                 and isinstance(resource["releaseCompletedAt"], str)
                 and bool(resource["releaseCompletedAt"])
+                # The archive must be resolved, not necessarily captured. A worker whose
+                # process was stopped before it wrote a transcript reports `unavailable`,
+                # which is a complete native statement; an absent status is not.
                 and isinstance(archive, dict)
-                and isinstance(archive.get("source"), str)
-                and bool(archive["source"])
-                and archive.get("status") == "captured"
+                and ((archive.get("status") == "captured"
+                      and isinstance(archive.get("source"), str) and bool(archive["source"]))
+                     or (archive.get("status") == "unavailable"
+                         and archive.get("source") is None))
                 and isinstance(projected_resource, dict)
                 and projected_resource.get("state") == "released"
                 and projected_resource.get("id") == binding["terminalResourceId"]
@@ -506,10 +519,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     child_delegation = bool(policy["policy"]["policy"].get("child_delegation"))
     native_port = port or OrcaPort()
     establishment = native_port.establish(route, model_policy, child_delegation=child_delegation)
-    established = establishment.get("route", {}) if isinstance(establishment, dict) else {}
-    if route.get("bucket") is None and isinstance(established.get("bucket"), str):
-        route = {**route, "bucket": established["bucket"]}
-        decision = {**decision, "selected": route}
+    # The established bucket is recorded as an observation. It never rewrites the route a
+    # frozen packet was bound to, which the coordinator chose before anything was read.
     intent = reserve(project, objective, owner=owner, operation_id=operation_id, requested=route,
                      route_decision=decision, establishment=establishment,
                      native_reader=lambda: native_port.read_native(owner, run=run, route=route),
@@ -573,10 +584,13 @@ def reconcile_launch(project: Path, objective: str, *, owner: str, operation_id:
     start_options = worker.get("startOptions") if isinstance(worker.get("startOptions"), dict) else {}
     launch = start_options.get("launch") if isinstance(start_options.get("launch"), dict) else {}
     native_dispatch = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
+    # A worker that reached any of these states demonstrably started, whatever it did
+    # next. A worker still unobserved at start has proved nothing and stays uncertain.
+    started = worker.get("state") in STARTED_STATES
     observed = {"runtime": shown.get("runtime"), "operation_id": operation_id,
                 "dispatchId": dispatch, "runId": identity(native_dispatch, "runId"),
                 "taskId": identity(native_dispatch, "taskId"),
-                "state": "ready" if worker.get("state") in ("ready", "running", "succeeded", "failed") else worker.get("state"),
+                "state": "ready" if started else worker.get("state"),
                 "launch": launch, "worker_show": result}
     settled = reconcile(project, objective, owner=owner, operation_id=operation_id, observed=observed)
     return {"status": settled.get("state"), "effect": settled, "action": "adopted",

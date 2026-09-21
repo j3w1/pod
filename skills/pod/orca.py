@@ -360,11 +360,13 @@ def agent_login_mode(agent: str) -> dict:
     except (OSError, subprocess.TimeoutExpired):
         return {"auth": "unknown", "subscription": None, "identity_digest": None,
                 "reason": "agent_probe_failed"}
-    if completed.returncode or len(completed.stdout) > 64 * 1024:
+    # Codex prints its login line on stderr; Claude answers on stdout. Read both.
+    output = (completed.stdout or "") + (completed.stderr or "")
+    if completed.returncode or len(output) > 64 * 1024:
         return {"auth": "unknown", "subscription": None, "identity_digest": None,
                 "reason": "agent_probe_unreadable"}
     if agent == "codex":
-        text = completed.stdout.strip().lower()
+        text = output.strip().lower()
         if "api key" in text:
             return {"auth": "api_key", "subscription": False, "identity_digest": None}
         if "logged in" in text:
@@ -372,7 +374,7 @@ def agent_login_mode(agent: str) -> dict:
         return {"auth": "unknown", "subscription": None, "identity_digest": None,
                 "reason": "agent_login_unrecognised"}
     try:
-        value = json.loads(completed.stdout)
+        value = json.loads(completed.stdout or completed.stderr)
     except ValueError:
         return {"auth": "unknown", "subscription": None, "identity_digest": None,
                 "reason": "agent_probe_unreadable"}

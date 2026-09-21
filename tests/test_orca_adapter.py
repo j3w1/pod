@@ -190,6 +190,18 @@ class RouteEstablishmentTests(unittest.TestCase):
         with self.assertRaises(PodError):
             agent_login_mode("cursor")
 
+    def test_a_login_line_on_stderr_is_still_read(self):
+        """Codex answers `login status` on stderr; only a live probe showed that."""
+        on_stderr = subprocess.CompletedProcess([], 0, "", "Logged in using ChatGPT\n")
+        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
+             patch("pod.orca.subprocess.run", return_value=on_stderr):
+            self.assertEqual(agent_login_mode("codex"),
+                             {"auth": "oauth", "subscription": True, "identity_digest": None})
+        api_on_stderr = subprocess.CompletedProcess([], 0, "", "Logged in using an API key\n")
+        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
+             patch("pod.orca.subprocess.run", return_value=api_on_stderr):
+            self.assertEqual(agent_login_mode("codex")["auth"], "api_key")
+
     def test_login_probes_read_only_the_non_secret_mode(self):
         codex = subprocess.CompletedProcess([], 0, "Logged in using ChatGPT\n", "")
         claude = subprocess.CompletedProcess([], 0, json.dumps({
