@@ -32,6 +32,11 @@ def _git_object_id(value: Any) -> bool:
     return isinstance(value, str) and _GIT_OBJECT_ID.fullmatch(value) is not None
 
 
+def _git_object_pair(candidate: Any, tree: Any) -> bool:
+    return (_git_object_id(candidate) and _git_object_id(tree)
+            and len(candidate) == len(tree))
+
+
 def _utc_timestamp(value: Any) -> bool:
     if not isinstance(value, str) or _UTC_TIMESTAMP.fullmatch(value) is None:
         return False
@@ -52,8 +57,8 @@ def _sanitized_report(value: Any) -> bool:
 
 
 def release_gate(candidate: str, tree: str, records: list[dict]) -> dict:
-    if not _git_object_id(candidate) or not _git_object_id(tree):
-        raise PodError("invalid_validation", "Candidate and tree must be full Git object identities")
+    if not _git_object_pair(candidate, tree):
+        raise PodError("invalid_validation", "Candidate and tree must use one full Git object format")
     if not isinstance(records, list) or len(records) > 128:
         raise PodError("invalid_validation", "Validation records exceed limit")
     matching: dict[str, dict] = {}
@@ -65,8 +70,8 @@ def release_gate(candidate: str, tree: str, records: list[dict]) -> dict:
             raise PodError("invalid_validation", "Invalid gate outcome")
         for field in ("host", "utc", "command", "report"):
             bounded_text(row[field], name=field, limit=512)
-        if not _git_object_id(row["candidate"]) or not _git_object_id(row["tree"]):
-            raise PodError("invalid_validation", "Validation candidate and tree identities are malformed")
+        if not _git_object_pair(row["candidate"], row["tree"]):
+            raise PodError("invalid_validation", "Validation candidate and tree must use one full Git object format")
         if not _utc_timestamp(row["utc"]):
             raise PodError("invalid_validation", "Validation timestamp must be canonical UTC")
         if not _sanitized_report(row["report"]):

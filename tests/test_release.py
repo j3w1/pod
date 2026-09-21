@@ -7,6 +7,8 @@ COMMIT = "1" * 40
 TREE = "2" * 40
 OTHER_COMMIT = "3" * 40
 REPORT_DIGEST = "4" * 64
+SHA256_COMMIT = "5" * 64
+SHA256_TREE = "6" * 64
 
 
 def row(gate, outcome="PASS"):
@@ -95,6 +97,17 @@ class ReleaseGateTests(unittest.TestCase):
                 (COMMIT, "not-a-tree", []),
                 (COMMIT, TREE, [{**row("unit_linux"), "candidate": "short"}]),
                 (COMMIT, TREE, [{**row("unit_linux"), "tree": "F" * 40}])):
+            with self.subTest(candidate=candidate, tree=tree, records=records):
+                with self.assertRaises(PodError) as caught:
+                    release_gate(candidate, tree, records)
+                self.assertEqual(caught.exception.code, "invalid_validation")
+
+    def test_mixed_git_object_formats_are_rejected(self):
+        for candidate, tree, records in (
+                (COMMIT, SHA256_TREE, []),
+                (SHA256_COMMIT, TREE, []),
+                (COMMIT, TREE, [{**row("unit_linux"), "tree": SHA256_TREE}]),
+                (COMMIT, TREE, [{**row("unit_linux"), "candidate": SHA256_COMMIT}])):
             with self.subTest(candidate=candidate, tree=tree, records=records):
                 with self.assertRaises(PodError) as caught:
                     release_gate(candidate, tree, records)
