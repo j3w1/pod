@@ -1,6 +1,6 @@
 # Pod
 
-Pod turns the coding session you are already in into a coordinator. It is an agent skill: you
+Pod turns your Orca coding session into a orca pod coordinator. It is an agent skill: you
 invoke it inside Codex or Claude Code, and that conversation keeps its context, its model and
 its effort while it plans the work, decides what deserves a worker, launches those workers
 through Orca, and verifies what comes back.
