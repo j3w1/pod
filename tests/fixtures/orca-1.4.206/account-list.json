@@ -1,0 +1,159 @@
+{
+  "_meta": {
+    "runtimeId": "uuid-0001"
+  },
+  "id": "uuid-0002",
+  "ok": true,
+  "result": {
+    "claude": {
+      "accounts": [],
+      "activeAccountId": null,
+      "activeAccountIdsByRuntime": {
+        "host": null,
+        "wsl": {}
+      }
+    },
+    "codex": {
+      "accounts": [],
+      "activeAccountId": null,
+      "activeAccountIdsByRuntime": {
+        "host": null,
+        "wsl": {}
+      },
+      "systemDefault": {
+        "authKind": "oauth",
+        "email": "person@example.invalid",
+        "hasAuth": true,
+        "providerAccountId": "acct_0001",
+        "workspaceLabel": "acct_0002"
+      }
+    },
+    "rateLimits": {
+      "antigravity": {
+        "error": "Antigravity usage is not available. Orca can only show shared Google Code Assist quota while a Gemini CLI sign-in is connected.",
+        "provider": "antigravity",
+        "session": null,
+        "status": "unavailable",
+        "updatedAt": 1789992898626,
+        "weekly": null
+      },
+      "claude": {
+        "error": null,
+        "fableWeekly": {
+          "resetDescription": "Wed 3:00 PM",
+          "resetsAt": 1790193600040,
+          "usedPercent": 19,
+          "windowMinutes": 10080
+        },
+        "provider": "claude",
+        "session": {
+          "resetDescription": "7:50 AM",
+          "resetsAt": 1789995000039,
+          "usedPercent": 14,
+          "windowMinutes": 300
+        },
+        "status": "ok",
+        "updatedAt": 1789992899156,
+        "usageMetadata": {
+          "attemptedSources": [
+            "oauth"
+          ],
+          "authProvenance": "system",
+          "credentialSource": "credentials-file",
+          "lastSuccessfulSource": "oauth",
+          "source": "oauth"
+        },
+        "weekly": {
+          "resetDescription": "Wed 3:00 PM",
+          "resetsAt": 1790193600039,
+          "usedPercent": 29,
+          "windowMinutes": 10080
+        }
+      },
+      "claudeTarget": {
+        "runtime": "host",
+        "wslDistro": null
+      },
+      "codex": {
+        "error": null,
+        "provider": "codex",
+        "rateLimitResetCredits": {
+          "availableCount": 1,
+          "credits": [
+            {
+              "expiresAt": 1791173961692,
+              "grantedAt": 1788581961692,
+              "status": "available"
+            }
+          ],
+          "nextExpiresAt": 1791173961692,
+          "totalEarnedCount": 0
+        },
+        "session": null,
+        "status": "ok",
+        "updatedAt": 1789992899523,
+        "usageMetadata": {},
+        "weekly": {
+          "resetDescription": "Tue 7:46 AM",
+          "resetsAt": 1790081180000,
+          "usedPercent": 91,
+          "windowMinutes": 10080
+        }
+      },
+      "codexTarget": {
+        "runtime": "host",
+        "wslDistro": null
+      },
+      "gemini": {
+        "error": "Gemini CLI OAuth is disabled in settings",
+        "provider": "gemini",
+        "session": null,
+        "status": "unavailable",
+        "updatedAt": 1789992898626,
+        "weekly": null
+      },
+      "grok": {
+        "error": "Not signed in to Grok \u2014 run grok login",
+        "provider": "grok",
+        "session": null,
+        "status": "unavailable",
+        "updatedAt": 1789992898625,
+        "weekly": null
+      },
+      "grokAuthConfigured": false,
+      "inactiveClaudeAccounts": [],
+      "inactiveCodexAccounts": [],
+      "kimi": {
+        "error": "Not signed in to Kimi Code",
+        "provider": "kimi",
+        "session": null,
+        "status": "unavailable",
+        "updatedAt": 1789992898638,
+        "weekly": null
+      },
+      "minimax": {
+        "error": "MiniMax session cookie not configured",
+        "provider": "minimax",
+        "session": null,
+        "status": "unavailable",
+        "updatedAt": 1789992898626,
+        "usageMetadata": {
+          "failureKind": "missing-credentials",
+          "source": "web"
+        },
+        "weekly": null
+      },
+      "minimaxApiKeyConfigured": false,
+      "minimaxCookieConfigured": false,
+      "opencodeGo": {
+        "error": "Session cookie not configured",
+        "monthly": null,
+        "provider": "opencode-go",
+        "session": null,
+        "status": "unavailable",
+        "updatedAt": 1789992898626,
+        "weekly": null
+      }
+    }
+  }
+}

@@ -1,105 +1,101 @@
-# Validation evidence
+# Pod validation
 
-Validation is recorded per exact candidate. A passing local suite does not prove live Orca lifecycle, WSL placement, provider behavior, hosted CI, independent review, project acceptance, merge, publication, or release.
+Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Commit and tree values are full lowercase Git object IDs (40 hexadecimal characters for SHA-1 repositories or 64 for SHA-256 repositories). One selected binding or validation record uses one repository-wide object format, so its commit and tree IDs must have the same width. The timestamp is canonical RFC 3339 UTC with a trailing `Z`, including seconds and at most six fractional-second digits. The report value is a repository-neutral relative artifact identifier followed by ` sha256:` and the artifact's full 64-character lowercase SHA-256 digest; the identifier begins with an ASCII letter or digit, and its path components may otherwise use ASCII letters, digits, `.`, `_`, and `-`, but must not be empty, `.` or `..`. Offline fixtures do not prove live Orca, provider behaviour, hosted CI, independent review or acceptance. All new-candidate rows start `NOT_RUN` until a matching result is recorded.
 
-This file defines the evidence matrix and record shape; it is not itself a result record. Every row starts at `NOT_RUN` for a new candidate and changes only when a matching sanitized record exists.
+## Required candidate checks
 
-## Evidence record fields
+| Gate | Command or evidence | Current boundary |
+| --- | --- | --- |
+| Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
+| Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
+| Compile and diff | `python -m compileall -q skills tests install.py`; `git diff --check 474a84a6d5a1f7947abc1e38d232c379adf7ff93 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
+| Supported environment audit | `python tools/platform_audit.py` | No unsupported-platform implementation in the tracked product |
+| Artifact audit | `python tools/artifact_audit.py dist/*` | No personal path, account, runtime identifier, credential or retired-platform reference in a published artifact, outside the files that are history |
+| Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, frontmatter allowlist, helper invocation forms and references |
+| Bundle parity | `python -m pod.skill_validation --wheel dist/*.whl`; `--installed PATH` for a placed copy | The wheel and every placed copy carry the tracked bundle's exact bytes |
+| Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel and sdist there | Exact committed candidate |
+| Fresh isolated install | Install the wheel into a new disposable venv; smoke `pod --help`, each family help, `pod config --check --json`, `pod doctor --json`, then `--installed` parity | No model or Orca mutation |
+| Copied-bundle form | Run `scripts/pod.py doctor --json` from a copy, in an unrelated directory, with no `PYTHONPATH` and no checkout | The installed skill needs nothing outside itself |
+| Skills-CLI install | `npx skills@1.7.0 add SOURCE --skill pod -a codex -a claude-code -g -y` in a disposable home, with `DISABLE_TELEMETRY=1` | The documented installation actually works, and `pod setup` then reports it as externally managed |
+| Hosted Linux | The same suite, incident discovery, audit, frozen build, installs and smokes in one candidate-bound job | Candidate-bound CI |
+| Independent audit | Fresh reviewer of the exact commit and tree with reproducible evidence | Findings only |
+| Live core matrix | Codex and Claude Code, each on Linux: discovery, in-session coordination, authorized native worker and effective route, lifecycle, verification and adoption | Separate live authorization and a disposable project |
+| Orca delegation | Each advertised worker adapter: request construction, account and authentication selection, launch identity, effective launch, delivery, settlement and release | Production adapter against the installed runtime |
+| Project acceptance | Owner governance, merge, release and any publication decisions | External |
 
-Record these fields together:
+For disposable validation, `POD_CONFIG_HOME` may name an absolute directory containing
+`config.yaml`, and `POD_STATE_HOME` may name an absolute Pod state directory. These
+process-scoped Pod-only overrides reject empty, relative, or existing non-directory values;
+they do not change the default personal locations, project YAML authority, `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR`, or Orca's native profile environment.
+Child Orca processes inherit that native profile unchanged. Use fresh owned directories;
+the overrides do not make an existing directory disposable.
 
-- candidate commit and Git tree;
-- host kind, such as Windows, Linux CI, or Windows-coordinated WSL;
-- Orca version when Orca participates, otherwise `not_applicable`;
-- UTC date;
-- outcome: `PASS`, `FAILED`, `NOT_RUN`, or `UNAVAILABLE`; and
-- a sanitized report reference, such as an artifact name plus SHA-256.
+Inferred native homes (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `CODEX_HOME` and
+`CLAUDE_CONFIG_DIR`) must be absolute directories outside the current project,
+both lexically and after resolving existing redirects. A profile home may itself be a symlink,
+as it commonly is on an ordinary machine; only the components Pod would create beneath it must
+be unredirected. Configuration and state access and global setup fail before writes when that
+boundary is not proven. Explicit absolute `POD_CONFIG_HOME` and
+`POD_STATE_HOME` remain Pod-only disposable overrides, and local project-scope setup intentionally
+writes its owned integration beneath the project.
 
-Do not record credentials, private source text, raw environments, personal filesystem paths, terminal or runtime identifiers, or provider billing guesses. A result without exact candidate and tree identity does not fill a candidate row.
+The explicit installer requires pip 22.3 or newer on the invoking interpreter, creates the
+selected environment without pip, and uses isolated bootstrap pip's documented `--python`
+option to manage the exact target interpreter, with script-location warning traversal
+disabled. Process-only controls remove inherited Python and pip control variables, disable
+all pip configuration files for both pip phases and their target re-exec, and disable the
+user site. Before success, the target interpreter runs in isolated mode and verifies the
+installed `j3w1-pod` distribution and `pod` import; no system pip upgrade or profile change
+is attempted.
 
-## Gates
+The [scenario coverage file](pod-coverage.json) lists every acceptance scenario. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised, and a retired scenario is recorded as `RETIRED` with its reason rather than as a pass.
 
-| Gate | Scope / boundary | Evidence record | Status |
-| --- | --- | --- | --- |
-| Fresh full suite | Unit and explicit incident discovery run once with the POSIX provider and again with `ORCHESTRATE_BOOTSTRAP_PROVIDER=simulated-win32`; disposable Git and synthetic command fixtures only | No matching correction-candidate record yet | `NOT_RUN` |
-| Compile and diff checks | `python -m compileall -q src tests` and `git diff --check` | No matching correction-candidate record yet | `NOT_RUN` |
-| Frozen build | Build from a clean `git archive HEAD` export, not the mutable working tree | No matching correction-candidate record yet | `NOT_RUN` |
-| Fresh wheel install | Install the frozen wheel into a new virtual environment, complete one disposable synthetic machine repair from the reviewed source, then invoke the installed console command's default layout against that completed state and require `ready` plus continued project setup with no machine-state rewrite | No matching correction-candidate record yet | `NOT_RUN` |
-| CLI help smoke | Installed `orchestrate --help`, `orchestrate doctor --help`, and `orchestrate-wsl --help` | No matching correction-candidate record yet | `NOT_RUN` |
-| Synthetic machine-bootstrap regressions | The same complete suite under POSIX and simulated-Win32 providers: `.cmd` forms, case-insensitive PATH spelling, file-index-style identity, typed registry state, forced anonymous/named staging and memfd/named-effect branches, read/write/delete share admission and exceptional cleanup, content-bound stage-to-binding and pin-to-effect checks, retained-root owned writes, child-effect post-phase scans, proof-preserving receipt diagnostics, concurrency, and fault seams; the native API wrapper remains Windows-only | No matching correction-candidate record yet | `NOT_RUN` |
-| Live Windows first-machine bootstrap | Reviewed checkout entry through project setup; dedicated Python 3.13 venv, pinned reviewed-source archive install, HKCU user-PATH registration, command resolution, rerun fast path, and recovery exercised on a disposable Windows user profile | No matching correction-candidate record yet | `NOT_RUN` |
-| Live WSL bootstrap launcher | A new WSL shell resolves the generated user-PATH shim and forwards cwd/Unicode argv/exit to the canonical Windows installation without Linux state | No matching correction-candidate record yet | `NOT_RUN` |
-| Read-only discovery trial, CE-governed repository | Discovery functions only; never run `setup`, project hooks, checks, or mutations | No matching correction-candidate record yet | `NOT_RUN` |
-| Read-only discovery trial, `j3w1.github.io` | Discovery functions only; never run `setup`, project hooks, checks, or mutations | No matching correction-candidate record yet | `NOT_RUN` |
-| Disposable Windows multi-worker frontier | More ready work than `maxWorkers`, native dependencies/gates, deterministic waves, and restart reconciliation in a disposable repository | No matching correction-candidate record yet | `NOT_RUN` |
-| Native Linux managed lifecycle | Disposable Linux project; local controller terminal, exact worker preflight, lifecycle, recovery, and bounded milestone flow | No matching correction-candidate record yet | `NOT_RUN` |
-| Per-Run efficiency controls | Omitted/default and explicit ordinary limits; exceptional grant binding; five-ready capacity-two waves; uncertain launch/release occupancy; restart replay; fresh Task sessions; 2h/8h boundaries; strict intervention concurrency; read-only telemetry and historical unknowns | No matching correction-candidate record yet | `NOT_RUN` |
-| Windows-coordinated WSL lifecycle | Prove launcher transport and direct Orca WSL lifecycle separately without claiming WSL as a native worker host | No matching correction-candidate record yet | `NOT_RUN` |
-| Matched direct-versus-orchestrate cost trial | Same disposable starting inputs, roster, objective, and required checks; no provider billing inference | Coordinator cost record | `NOT_RUN` |
-| Hosted Windows/Linux CI | Exact-candidate matrix jobs run their unit and incident suites, explicit incident discovery, an in-checkout wheel build, an isolated install, and the CLI help smokes | No matching correction-candidate record yet | `NOT_RUN` |
-| Final repository verification | Public repository visibility and exact commit/tree readback; no merge or release inference | Coordinator repository record | `NOT_RUN` |
-| Independent final audit | Fresh reviewer bound to the frozen candidate and tree; reviewer reports findings and does not repair | Independent audit record | `NOT_RUN` |
+Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.
 
-Candidate `9ec68be` locally ran 230 tests with 49 expected win32-only skips and 6 explicit incident tests with 1 expected skip. Those results are history for that candidate, not evidence for a correction candidate. One still-earlier full-suite run failed once in `AdmissionTests.test_two_concurrent_public_preflights_cannot_both_receive_fresh_grants` because the test treated a five-second wall-clock window as semantic completion; focused tests did not supersede that historical result.
+Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent source, even one frozen as absent, or a changed source durably rejects that packet assignment when the frozen source had an actual state. A source frozen as unavailable stays unbound: even later readable bytes require a fresh packet with their actual digest, and no historical change or absence is recorded. Current unavailability holds admission without definitive rejection. This is a bounded admission check, not an atomic multi-file snapshot against external writes. Reserved, uncertain and confirmed launches occupy objective and overlapping account capacity, including before cleanup begins and when the fleet omits them or labels them released. Reserved, uncertain and retained cleanup keeps a confirmed worker occupied until exact native resource readback proves release. A confirmed launch without cleanup can also record a settled, exactly bound released resource through read-only reconciliation without repeating release. Fixture tests cover the state/cleanup/fleet matrix, Dispatch deduplication and both read-only paths without proving a live native release. An unproved absent-effect disposition remains an admission hold because the installed adapter has no exact absence proof.
 
-## Known limitations
+The read-only release-reconciliation helper recognizes the immediate predecessor
+`pod-effect/v1` binding that contains only Run, Task, Dispatch and worker identities. It keeps that
+row occupied, requires an exact same-runtime worker/worktree readback plus every available optional
+terminal/resource identity and unchanged launch, then durably upgrades the binding before any
+release projection can settle. Malformed, ambiguous or contradictory predecessor rows remain held;
+the helper never repeats the native start or release effect.
 
-### Native Windows and Linux admission evidence
+`python -m pod.internal release-gate --input RECORD.json` projects these exact rows. Every row
+records host `Linux`, the one supported execution environment. A complete set without an owner
+authorization returns `owner_decision_required`: technical readiness is reported, permission is
+withheld. Supplying a `pod-release-authorization/v1` record naming the exact candidate, tree and
+a scope containing `release` returns `authorized`; an incomplete set stays `blocked` whatever the
+authorization says. Missing live or delegation subchecks remain unavailable even if a top-level
+result says PASS. The gate performs no release.
 
-Managed worker preflight supports native `win32` and `linux` controllers. The common suite now exercises successful admission, controller lifecycle, recovery, and milestone behavior on both CI hosts, while an explicit Linux regression proves a reported Linux terminal and Linux controller are joined into the admission observation. OS-specific installation primitives remain separate: Windows owns the managed first-machine bootstrap, Linux uses a conventional isolated checkout installation, and WSL remains a transport to Windows rather than a native worker host. Synthetic tests are not live Orca evidence; the native Linux and Windows/WSL lifecycle rows remain independently recordable gates above.
+## Evidence record
 
-### First-machine bootstrap evidence boundary
+```json
+{
+  "schema": "pod-validation/v1",
+  "candidate": "1111111111111111111111111111111111111111",
+  "tree": "2222222222222222222222222222222222222222",
+  "host": "Linux",
+  "utc": "2026-09-20T00:00:00Z",
+  "gate": "name",
+  "command": "sanitized command",
+  "outcome": "PASS | FAILED | NOT_RUN | UNAVAILABLE",
+  "report": "reports/unit-linux.txt sha256:4444444444444444444444444444444444444444444444444444444444444444"
+}
+```
 
-Unit coverage injects a memory-only typed user-PATH store, transactional registry adapter, synthetic command resolver and subprocess runner, and disposable installation/source/state roots. A shared provider contract selects bounded reads, retained component descent, target-parent binary staging, exact commit verification, and share admission; native Windows and the simulated provider use different OS primitives at that boundary. The complete unit and incident corpus runs under both the POSIX provider and simulated-Win32 provider. The latter models symmetric writer/reader admission, delete sharing for temporary cleanup, descriptor-identity pruning, and provider-owned close on exceptional paths. Forced branch tests cover anonymous and named staging plus sealed-memfd and named effect snapshots independently of host capability selection. Installed-location regressions under both providers repair once with an explicit reviewed source, then exercise production `default_layout()` from a simulated `site-packages` location and require `ready`, project-setup continuation, no reinstall, and no PATH write. They also cover anchored-record tampering plus the complete persisted-source tree: a nested `EACCES` observation is retryable, creates no mutation lock, and admits after recovery, while a nested symlink is definitive with first-entry recovery and cannot be erased by exact restoration during that public invocation. Four aggregate-digest regressions change bytes, remove a file, replace a file with a directory, or change receipt-bound executable bits; each requires one PATH read, definitive first-entry recovery, unchanged grant records and archive, no installation-parent or installation-root preparation, no mutation lock, and no runner or PATH effect. The isolated-wheel Linux CI smoke selects the simulated provider and exposes only `ORCHESTRATE_BOOTSTRAP_SIMULATED_USER_PATH`, a read-only fixture value available solely under that provider; any attempted PATH repair fails, and no process PATH or registry value is changed. The Windows wheel job additionally runs the installed package's direct repair/reread smoke with the POSIX provider and `--skip-cli`, so it keeps the memory-only PATH store and never selects the registry-backed installed console; installed-console-plus-real-registry coverage remains a separate live gate. Regressions split post-commit proof into non-reparse regular-node status, device/inode/file-type operation identity, stable descriptor mode/size/change-token, and exact bytes; they also prove that path-only command-extension mode synthesis does not reject a correct descriptor identity. Additional coverage proves exact LF bytes, the same-parent `EXDEV` fallback, a content-and-change-token stage-to-binding predicate, and post-effect rejection of a changed-and-restored named snapshot. Native Windows instead proves the stronger strict-pin behavior by denying a second writer during the archive effect.
+Do not store raw environments, credentials, source packets, personal paths or runtime IDs in tracked evidence. A passing offline suite cannot promote live, review, hosted, acceptance, merge or release labels.
 
-Bootstrap-owned directory creation and file writes under the installation root stay anchored to the retained repair root, and the external anchor write stays anchored to its retained parent. The missing-ancestry and root-substitution regressions prove that the exercised controller mutations do not follow a replaced public root. Named-stage regressions additionally distinguish a normal addressable stage from a delete-pending node and require explicit abandonment cleanup. Child effects receive verified descriptor/native paths and working directories, and the recursive scan after every child phase rejects redirects that remain; tests do not claim to sandbox a same-user child or prevent it from deliberately addressing unrelated absolute paths or removing a transient redirect before inspection. These are disposable provider tests, not live native-Windows evidence. Native CreateFile/CreateProcess behavior, real junctions, registry permissions, environment propagation, `py.exe` discovery, pip/network behavior, WSL Windows-PATH import, and mounted-file execution remain separate live `NOT_RUN` gates. The Linux-oriented machine-bootstrap adapters still require verified `/proc/self/fd` for source, interpreter, and venv descriptor effects; archive snapshots accept `/proc/self/fd` or `/dev/fd`. The managed installation phase remains `not_applicable` on Linux; this is separate from the supported native Linux controller and admission paths.
+## Runtime limits
 
-### Managed admission source observation boundary
+Orca caches provider rate-limit metadata and does not refresh it when read: on the machine
+this was measured, the reading was hours old. A quota snapshot therefore records
+`confidence: observed`, meaning the runtime reported these numbers, and its age decides how
+far they are trusted. A reading older than `quota_fresh_seconds` resolves to unknown quota,
+which permits one active worker on that account rather than the usual two. That is
+conservative by design, and it means the documented default of two workers holds only while
+a fresh reading is available.
 
-The earlier missing-source and incomplete-source-record limitations are corrected by public-entry regressions in `tests/test_admission.py`. A bounded canonical packet and every mandatory source-record field are decoded inside the attempt fence before profile/source reads, Git, the CE query, or native Orca readback. A missing packet-bound source records a durable definitive rejection, and restoring the exact bytes cannot grant the same Dispatch admission; nested JSON and removing a mandatory record field such as `authority` likewise record `packet_identity_conflict` without an earlier source or native effect. Removing a mandatory tracked CE query source from the index is likewise a definitive semantic change even when its worktree bytes remain present. In contrast, an unavailable Git/Orca/query subprocess, a nonzero Git object read for a source that a successful listing still proves present, or a still-present source that is temporarily unopenable records an append-only retryable failed-attempt observation without occupying the Dispatch's conclusive admission row. Recovery may retry the same Dispatch, but no retryable result grants editing. Selected and discovered ignore transitions and explicit acknowledgment provenance remain covered by `tests/incidents/test_selected_before_ignored_authority_acknowledgment.py`.
-
-The bounded source reads still do not make a multi-file snapshot atomic and do not constrain hostile or unrelated external writers. The CE query therefore rechecks the exact completed query-source identities immediately before and after its subprocess, while the immutable observation and admission/effect fence continue to order only managed preflight and controller paths.
-
-The tracked milestone plan has explicit controller-bound source membership. A host-neutral public `implement --plan` prelaunch regression reaches `worker-start` only after that non-reader source validates, while native Windows and Linux tests retain responsibility for the subsequent managed-admission lifecycle. Repo-reader routing cannot make an otherwise ineligible packet path readable, and a reference-only source that appears between checks is rejected without a byte read.
-
-### Efficiency evidence boundary
-
-Capacity and intervention coverage uses disposable host-local databases and synthetic public Orca receipts. Public and ledger regressions preserve durable correction/diagnosis history across post-fresh stale replay, multiple productive cycles, restart, concurrent completion, legacy single-digest migration, and prior two-digest migration without inventing unavailable older identities. Milestone recovery coverage includes unresolved-start precedence on either host plus native-Windows public resume cases for success and failure settled before an unjournaled lifecycle Delivery, each with the original worker binding and with exact applied-receipt reconstruction. Those cases retain capacity, consume the later exact Delivery, release the same worker, and issue no duplicate launch; changed Task or reconstructed worker identity remains rejected. Settlement-interval fault cases change the Task title/spec/dependencies, gate identity/status/resolution, or initially observed terminal/resource endpoint/incarnation/agent/worktree/requested-effective launch identities only after the blocking check returns. They hold the journaled Delivery before result read or acceptance, release, local outcome, gate/frontier progress, or acknowledgement; exact restoration resumes success and failure without a duplicate release/start. The applied-release restart case repeats that immutable join for the identities retained after the required terminal detachment before consuming the exact stored release receipt. A table-driven host-neutral contract changes or removes each supported immutable start field, while runtime state changes remain allowed. A historical capacity-four Run without its issue-4 grant reconciles and acknowledges an exact already-owned worker, then holds every ready replacement across restart until explicit flags and reason record the exact grant; only then may a bounded subsequent launch occur. Ledger and public restart coverage also prove that surrounding capacity-reason whitespace is normalized before persistence and comparison, so the same explicit flags are idempotent while a genuinely different normalized reason conflicts. Applied projection with already-queued mail and idempotent interrupted session telemetry remain separately covered. Stable efficiency events record controller-observed Run/session boundaries; they do not inspect transcripts or request provider usage. Session durations are observed wall time and are not compute time. A historical database with the current table contract remains readable after writable migration, but session counts that predate the efficiency start event remain `unknown` rather than being reconstructed from incomplete evidence. Worker tokens, model turns, external coordinator usage, provider billing, and live model behavior remain unavailable unless separately observed by an explicit future contract. The deterministic controller's scoped model-call count does not describe the enclosing agent that invoked it.
-
-### Hosted CI history and unstarted worker attempt
-
-The hosted matrix for exact issue-4 candidate `f34fc08` is historical `FAILED`: run `35133440476` passed Ubuntu, while Windows ran 362 tests with 27 skips and failed only `test_uncertain_milestone_launch_is_not_duplicated_on_resume` because `native_ready_gate_mismatch` masked the required `unknown_external_effect` recovery result. The independent audit's separate prediction about the plan-corruption fixture was not observed in that hosted run; strengthening the fixture remains a portable coverage correction, not attribution of a second hosted failure. This history does not fill a correction-candidate row.
-
-The hosted matrix for exact candidate `9ec68be` is historical `FAILED`: [run 34979019335](https://github.com/j3w1/orchestrate/actions/runs/34979019335) passed Ubuntu but failed Windows after 230 tests with 1 failure and 11 errors. All 12 failures were win32-only milestone/controller cases caused by the candidate rejecting its tracked milestone-plan source. No hosted run has yet filled the correction-candidate row above.
-
-The hosted matrix for exact candidate `f61e226` is also historical `FAILED`: [run 34984041928](https://github.com/j3w1/orchestrate/actions/runs/34984041928) passed Ubuntu but failed Windows after 236 tests with 1 failure and 11 errors. All 12 failures were win32-only milestone/controller paths caused by the strict decoder rejecting the controller's canonical prefixed shared-contract digest in specialist and reviewer packets. This result is history for `f61e226`, not evidence for a later correction candidate.
-
-The hosted matrix for exact candidate `2d0ae0f` is historical `FAILED`: [run 34987878003](https://github.com/j3w1/orchestrate/actions/runs/34987878003) passed Ubuntu but failed Windows after 243 tests with one failure and no errors. The only failure was the new Git-object-read regression's exact path-string matcher failing to intercept the production `git show` call under Windows path spelling; all twelve previously failing Windows milestone/controller tests passed. This result is history for `2d0ae0f`, not evidence for a later correction candidate.
-
-The hosted matrix for exact issue-3 candidate `0a97896` is historical `FAILED`: run `35052303656` passed Ubuntu but failed Windows after 282 tests with 5 failures and 10 errors. The failures grouped into a shared Windows lock regression, path-alias rejection in machine-bootstrap safe reads, and downstream bootstrap expectations blocked by those two defects. Four affected lock/admission tests predated issue #3. This result is history for `0a97896`, not evidence for a later correction candidate.
-
-The hosted matrix for exact issue-3 candidate `2bce451` is historical `FAILED`: run `35054423802` passed Ubuntu but failed Windows after 290 tests with 4 failures and 3 errors. The seven failures were confined to new machine-bootstrap coverage: three fixture/production receipt-identity disagreements, two fault seams that did not intercept the Win32 branch, one launcher verdict masked by receipt checking, and one native interpreter-replacement denial that the metadata-only handle did not enforce. This result is history for `2bce451`, not evidence for a later correction candidate.
-
-The hosted matrix for exact issue-3 candidate `d1acaa1` is historical `FAILED`: run `35056421606` passed Ubuntu but failed Windows after 295 tests with 3 failures and 6 errors. The nine results mapped to four receipt/command-proof errors, two incomplete final verifications, one peer `.cmd` launcher refusal, one venv-error-precedence failure, and one bypassed shim-commit seam. The round-4 provider runs those scenarios locally through the simulated-Win32 seam; that does not promote simulated evidence to native Windows proof.
-
-The diagnostic hosted matrix for exact candidate `9bfd9d4` is historical `FAILED`: run `35061993700` passed Ubuntu and intentionally retained five Windows failures plus seven errors while surfacing bounded proof records. Those records established that the native staging descriptor translated LF to CRLF: the 283-byte staged logical archive became a 285-byte committed target, and canonical receipt bytes were likewise changed. That evidence is history for `9bfd9d4`, not proof for a correction candidate.
-
-The hosted matrix for exact candidate `ae466eb` is historical `FAILED`: run `35064058458` failed both Ubuntu and Windows. Ubuntu's descriptor materialization crossed from procfs to the target filesystem and raised `EXDEV`; Windows ended with 2 failures and 16 errors. This result is history for `ae466eb`, not evidence for a later correction candidate.
-
-The hosted matrix for exact candidate `d89d326` is historical `FAILED`: run `35066800406` passed Ubuntu but Windows ended with 3 failures and 16 errors. The dominant failures were strict bounded-read opens conflicting with the retained read/write staging descriptor, whose `os.open` share mode did not admit the reader; two error-code assertions and the concurrency mismatch were downstream. This result is history for `d89d326`, not evidence for a later correction candidate.
-
-The hosted matrix for exact candidate `d8492f1` is historical `FAILED`: run `35071949495` failed both jobs. Ubuntu's default leg passed, but its simulated-Win32 leg ended with 1 failure and 13 errors from leaked share admissions; native Windows ended with 1 failure and 21 errors, dominated by attempts to unlink the named temporary while the retained writer denied delete sharing. This result is history for `d8492f1`, not evidence for a later correction candidate.
-
-An earlier hosted execution failed on both runners. Its failures were attributed before this correction: all Linux failures and two of three Windows failures reproduced against the accepted second-increment base, while one Windows failure came from that increment's added Git-argument assertion. Those results likewise do not fill a later candidate row.
-
-A dispatched worker's model turn failing to start was observed live. The controller contained the attempt with a single read-only readback and no resend or external effect. Recovery of such an attempt is an explicit owner decision.
-
-## Cost trial record
-
-For the matched trial, record reported worker tokens, reported coordinator tokens, wall time, repeated work such as retries or duplicate checks, and correctness against the same required checks. Keep unknown token usage as `unknown`; reported usage is not provider billing.
-
-## Trial boundaries
-
-The two existing-repository trials are read-only. They may inspect discovered names, source routing, and candidate identities but must not write `.orchestrate.json`, local selection state, Tasks, Runs, Dispatches, gates, comments, or project files. CasaElida and the Pages repository remain external authority domains, not disposable fixtures.
-
-Lifecycle, recovery, and WSL mutation trials use newly created disposable projects only. Hosted CI, independent review, owner acceptance, merge, GitHub publication, release, and PyPI publication remain distinct gates; no earlier row promotes another automatically.
+The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: the effective launch and the native descendant-depth limit are enforceable controls, the billing mode, account identity, descendant count and quota windows are supported observations, route approval and the delegation setting are owner configuration, and anything else is recorded as unavailable. Pod claims no more than those controls prove. Refusing worker-initiated delegation is a Pod admission decision and a behavioural instruction to the worker, not a provider sandbox. The runtime enforces a nested-worker depth limit of its own, which Pod observes but cannot read the value of, so Pod counts descendants rather than assuming that limit is enough. The metadata adapter does not scrape credential stores or undocumented quota endpoints, and it stores a digest of an account identifier rather than the identifier. Reset credits have only an offline intent guard; no redemption transport is installed. Cross-host admission is not atomic and is disclosed as such. Exact live launch and release reconciliation, and the live core and delegation matrices, require separate evidence.

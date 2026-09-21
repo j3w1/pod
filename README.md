@@ -1,270 +1,188 @@
-# orchestrate
+# Pod
 
-orchestrate gives governed software work a small, restartable controller without adding a second scheduler.
+Pod turns the coding session you are already in into a coordinator. It is an agent skill: you
+invoke it inside Codex or Claude Code, and that conversation keeps its context, its model and
+its effort while it plans the work, decides what deserves a worker, launches those workers
+through Orca, and verifies what comes back.
 
-You describe one authorized objective. orchestrate reads the project entrypoints, binds the exact working candidate, prepares compact packets, and starts with one implementation owner. When a bounded milestone has genuinely independent follow-up work, its coordination layer creates Orca-native dependencies and gates instead of building a second scheduler. Orca still owns the Run, Tasks, Dispatches, workers, terminals, and mailbox. Your project still owns its checks, review, acceptance, merge, and release.
+Pod is not a second agent, a scheduler or a daemon. Orca owns Runs, Tasks, Dispatches, worker
+placement, messaging and lifecycle. Your project owns source, checks, review and acceptance.
+Pod owns the policy between them.
 
-The ordinary path is deliberately single-owner-first. When a reviewed milestone really does need specialist and review waves, orchestrate uses a bounded plan and Orca's own lifecycle instead of making parallelism the default.
+Supported execution environment: Linux.
 
-## Table of Contents
+## Table of contents
 
 - [How it works](#how-it-works)
 - [Installation](#installation)
-  - [Windows](#windows)
-  - [Agent skill](#agent-skill)
-  - [Linux and WSL](#linux-and-wsl)
-- [The Basic Workflow](#the-basic-workflow)
-- [What's Inside](#whats-inside)
+- [The basic workflow](#the-basic-workflow)
+- [When something goes wrong](#when-something-goes-wrong)
+- [What's inside](#whats-inside)
 - [Philosophy](#philosophy)
+- [Updating, rolling back and removing](#updating-rolling-back-and-removing)
 - [Contributing](#contributing)
-- [Updating](#updating)
 - [License](#license)
 
 ## How it works
 
-The project keeps one small tracked profile and one host-local database.
+You type `$pod` in Codex or `/pod` in Claude Code. The skill loads into the conversation you
+are already having. Nothing restarts, nothing forks, and your model and effort are unchanged.
 
-First, `orchestrate setup` discovers familiar project entrypoints without running hooks, checks, or models. Conventional `AGENTS.md` and `CLAUDE.md` discovery is a single case-sensitive Git pathspec-filtered inventory: at most 256 tracked and ordinary untracked matches at any depth, with strict UTF-8 and byte limits. Ignored dependency trees do not become authority by accident. Any selected instruction outside the current conventional inventory—including one hidden by a later ignore rule—holds before its bytes are read until you review the profile and run `setup --acknowledge-profile`.
+From there the session reads your objective and decides how to do the work. Trivial work it
+does itself. For substantial work it writes a compact brief that ties each of your criteria
+to a check or to an explicit dependency, then decides whether a worker would actually help.
 
-Next, `orchestrate implement` reads the selected sources, binds the exact candidate, and prepares a compact worker packet. Dirty paths it was not authorized to read remain opaque and hold dispatch. The worker must pass a Dispatch-bound preflight before its result can count.
+When it would, Pod establishes the route before anything is launched: which agent, which
+model, which account, what the installed Orca runtime can actually enforce, and what it can
+only observe. A route that is approved and running on a subscription login launches. A route
+whose billing mode is unknown, or a paid route with no spending grant, does not.
 
-From there, Orca stays in charge of Runs, Tasks, Dispatches, workers, gates, and messages. orchestrate journals mutation intentions and whole Deliveries, checks exact public readbacks, and stops on uncertain effects instead of guessing or retrying blindly. `status`, `explain`, and `resume` use that record after an interruption.
-
-The default workflow has one implementation owner. An explicitly selected milestone plan can add independent verification and review work in deterministic, capacity-bounded waves. Capacity belongs to one Run: plans default to two workers, ordinary limits are one through three, and limits four through eight need an explicit reasoned grant for that exact plan. Worker success, accepted verification, independent review, hosted proof, project acceptance, merge, and release keep separate labels throughout.
-
-Read [Execution contracts and recovery](docs/contracts-and-recovery.md) for the detailed state machine and [Validation evidence](docs/validation.md) for the evidence matrix.
+After launch, Pod reads the worker back rather than trusting the request. It reconciles the
+exact native identity, processes every Delivery item, releases the worker once, and records
+what was proved and what was not.
 
 ## Installation
 
-orchestrate requires Python 3.13 or newer and a reviewed checkout. It is not published to PyPI. Windows has a managed first-machine bootstrap; native Linux uses a conventional isolated installation from that checkout.
-
-### Windows
-
-From the reviewed orchestrate checkout, use its small first-entry script and name the project you want to configure:
-
-```powershell
-py -3.13 .\bootstrap.py setup --project C:\path\to\your-project --json
-```
-
-That one command verifies Python 3.13 and retains a no-follow component chain while it creates installation ancestry. Later installation-root directory creation and file writes stay anchored to that same retained root; POSIX test providers mutate through parent directory descriptors, while native Windows retains a no-delete-shared handle for every component. Child phases receive a verified working directory and bound effect inputs, and a bounded whole-tree scan after each phase rejects redirects that remain. This is containment of orchestrate's paths and acceptance checks, not a sandbox for a child process that deliberately accesses some other absolute path. The command builds a bounded archive from the exact reviewed source bytes and gives that content-bound input—not the mutable checkout pathname—to pip. It then installs the Windows and WSL-facing launchers and puts `%LOCALAPPDATA%\orchestrate\bin` first on the **user** PATH. Windows holds the interpreter and source archive for actual read access without write/delete sharing, passes the interpreter's exact path as the process application name, and checks the same identities before and after every effect; the synthetic provider models read/write/delete share admission. It then continues the requested project setup. It never edits the system PATH and never falls through to another Python environment.
-
-Open a new terminal after the first run. The normal command is now available:
-
-```powershell
-orchestrate doctor
-orchestrate setup --project C:\path\to\another-project --json
-```
-
-Every later `setup` begins with one user-PATH lookup, one command lookup, fixed launcher/receipt reads, and a bounded identity scan of the reviewed checkout. The installed package first loads the reviewed checkout path from the canonical v5 receipt, verifies the separate host-local anchor that authenticates that receipt path and source-tree digest together, and only then opens the recorded checkout; it never guesses from the installed package's `site-packages` location. The private v5 receipt binds its canonical payload, checkout tree, exact source archive, environment, and installed command. The archive builder computes the same framed tree digest from the bytes it writes and refuses any transient mismatch. Every Windows named stage remains a normal addressable node through commit; abandoned stages are closed and explicitly unlinked. Its retained commit record carries exact identity, size, digest, and change token into the archive binding; native Windows retains the archive temporary until a delete-sharing bridge can close the writer, remove only that name, and open the strict read pin without an identity gap. Non-native tests use a sealed `memfd` when available; the named fallback is checked before and after pip for bytes, identity, mode, and change token, and a mutation prevents the install from being receipted even if the bytes are restored. A separate canonical anchor under `%LOCALAPPDATA%\orchestrate-state` binds that receipt digest, source/archive digest, installation nonce, and command digest outside the checkout; its complete directory ancestry is physically pinned and redirected ancestors are refused. Recomputing only checkout-controlled receipt bytes therefore cannot launder a stale command or source path. When the checks are healthy setup performs no environment creation, pip command, install, upgrade, write, or model call and prints no bootstrap message. Missing launchers can be created, while a mismatching existing launcher is preserved and refused for inspection. PATH repair preserves the existing `REG_SZ` or `REG_EXPAND_SZ` kind and unrelated entry text through one transactional compare-and-replace plus read-back. The healthy path requires the one dedicated PATH entry to be first. Concurrent setup commands share one machine-bootstrap lock, so source installation is performed once and the follower reuses it.
-
-Receipt recording preserves the original proof component and expected/observed identity payload when it wraps an anchor-write failure.
-
-Diagnostic values labeled `redacted-string-id:sha256:` identify redacted arbitrary strings. Only a bare `sha256:` value in an explicit digest component represents a content digest.
-
-If bootstrap stops, its error names the failed phase and identity failures report the expected and observed proof component. Correct the reported Python, filesystem, pip/network, or user-registry problem and run the same checkout command again. Safe completed phases are reused; an unreceipted command or source archive left by an interrupted installer is deliberately not guessed to be owned. An incomplete, redirected, or identity-mismatched dedicated venv is never silently overwritten—move that one `%LOCALAPPDATA%\orchestrate\venv` directory aside after inspection, then rerun. Likewise, inspect and move aside an unrecognized receipt, command, anchor, archive, or launcher rather than asking bootstrap to overwrite it. Every included file in the recorded checkout uses the same recovery rule: a temporary access, sharing, or I/O failure is retryable and performs no repair, while a moved, removed, structurally replaced, or updated source is definitive and never falls through to a silent reinstall or fresh source grant. Present files are read through proved handles, and their relative names, executable bits, and exact bytes form the aggregate source digest authenticated by the anchor. When the initial ready scan establishes either classification—including from that aggregate digest—it returns the failure before installation-parent or installation-root preparation and before mutation-lock construction or acquisition. For a retryable result, correct the temporary problem and rerun the installed command; after reviewing a definitive change, move aside `%LOCALAPPDATA%\orchestrate\install.json`, `%LOCALAPPDATA%\orchestrate\installed-source.zip`, `%LOCALAPPDATA%\orchestrate\venv\Scripts\orchestrate.exe`, and `%LOCALAPPDATA%\orchestrate-state\machine-install.json`, then rerun that checkout's `bootstrap.py` first-entry path. The source scan excludes only `.git`, `.venv`, `venv`, names beginning `.venv-` or `venv-`, names ending `-venv` or `.egg-info`, `__pycache__`, `.pytest_cache`, `build`, `dist`, and files ending `.pyc` or `.pyo`. `doctor` is read-only unless you explicitly select an active probe; the active compatibility probe has additional disposable-project requirements and is not needed for normal work.
-
-### Agent skill
-
-The short skill lives at [`skills/orchestrate/SKILL.md`](skills/orchestrate/SKILL.md). Install it explicitly after reviewing it:
-
-```powershell
-$skill = Join-Path $env:USERPROFILE ".codex\skills\orchestrate"
-New-Item -ItemType Directory -Force $skill | Out-Null
-Copy-Item -Recurse -Force .\skills\orchestrate\* $skill
-```
-
-On Linux, use the same explicit copy boundary:
+Pod installs through the agent-skills ecosystem. Pick the agents you use:
 
 ```bash
-skill_root="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate"
-mkdir -p "$skill_root"
-cp -R skills/orchestrate/. "$skill_root/"
+npx skills add j3w1/pod --skill pod
+npx skills add j3w1/pod --skill pod -a codex -a claude-code
+npx skills add j3w1/pod --skill pod -a codex -a claude-code -g
 ```
 
-The package never edits `AGENTS.md`, user prompts, or another agent's configuration behind your back.
-
-### Linux and WSL
-
-Native Linux supports the same controller, managed worker admission, source binding, lifecycle, recovery, and XDG host-local state model as native Windows. Install the reviewed checkout into an isolated environment, activate it, and configure a project normally:
+The first form installs into the current project; `-g` installs for your user. To pin a
+release instead of tracking the default branch, name the tag as a fragment:
 
 ```bash
-python3.13 -m venv /path/to/private/orchestrate-venv
-/path/to/private/orchestrate-venv/bin/python -m pip install /path/to/reviewed/orchestrate
-source /path/to/private/orchestrate-venv/bin/activate
-orchestrate setup --project /path/to/project --json
-orchestrate doctor
+npx skills add j3w1/pod#v0.1.0 --skill pod -a codex -a claude-code -g
 ```
 
-On Linux, the managed Windows machine installer reports `not_applicable`; it does not edit shell startup files or PATH. Runtime state defaults to `${XDG_STATE_HOME:-$HOME/.local/state}/orchestrate`. The controller uses a POSIX shell command, requires a local Orca terminal reporting `hostPlatform=linux` when that field is present, and binds worker preflight to the exact same Python executable by file identity. The Orca CLI resolver uses `ORCA_CLI_COMMAND` in a managed forwarded session, `orca-dev` in a dev checkout, `orca-ide` on Linux outside Orca, and `orca` on packaged Windows.
+### Prerequisites
 
-The CI matrix runs the complete host-neutral and native lifecycle suite on both Windows and Linux. OS-specific machine-bootstrap primitives remain covered on their owning host, and both jobs run explicit incident discovery, wheel build, isolated install, and CLI help smokes. A workflow definition is not proof that a particular candidate passed; [Validation evidence](docs/validation.md) keeps that distinction explicit.
+- **Linux.**
+- **Python 3.13 or newer**, available as `python3`.
+- **PyYAML 6.x**, importable by that interpreter. If it is missing, the helper tells you the
+  one command to run. Pod never installs it for you.
+- **Orca**, on `PATH` as `orca`, or named by `ORCA_CLI_COMMAND`. Needed for routing,
+  delegation and status; `config` works without it.
+- **An authenticated Codex or Claude Code session**, which is the coordinator.
 
-WSL is a separate transport mode, not native Linux operation. A Linux controller or worker preflight running under WSL is rejected; WSL must forward to the canonical Windows installation. The Windows machine bootstrap places an extensionless `orchestrate` shell launcher beside the Windows shim. With WSL's normal Windows-PATH import enabled, it is available in a new WSL shell without a Linux installation:
+Loading the skill installs nothing, edits no shell profile, and overwrites no project file.
+
+### Without Node
+
+The skills CLI is a convenience, not a runtime. To install from a reviewed release instead:
 
 ```bash
-orchestrate status --json
+git clone --branch v0.1.0 --depth 1 https://github.com/j3w1/pod ~/src/pod
+python3 ~/src/pod/install.py --venv ~/.local/share/pod/venv \
+  --expected-commit "$(git -C ~/src/pod rev-parse v0.1.0^{commit})"
+~/.local/share/pod/venv/bin/pod setup --global
 ```
 
-The launcher uses WSL's `python3` only to encode the bounded transport payload. It forwards the exact `WSL_DISTRO_NAME`, absolute Linux working directory, Unicode-safe argument array, inherited streams, and exit code to the Windows executable. It installs no Linux package and creates no Linux state directory; Windows remains the only installation and state owner. Environments that deliberately disable Windows-PATH import must expose the mounted `%LOCALAPPDATA%\orchestrate\bin` directory through their own WSL policy; bootstrap does not edit shell startup files.
+The installer refuses a dirty or unexpected checkout, creates the environment itself, and
+touches nothing outside it. The skill it then places carries its own helpers, so that
+environment is only the installer.
 
-The packaged `orchestrate-wsl` entry point remains the same transport implementation for already configured environments using `ORCHESTRATE_WINDOWS_COMMAND_JSON`. Neither launcher chooses a worker host, translates an Orca recovery command, or replaces Orca placement and lifecycle. A real Windows PATH bootstrap and Windows-coordinated WSL lifecycle are still `NOT_RUN` for this candidate, so synthetic or Linux test success is not a live Windows/WSL claim.
+## The basic workflow
 
-## The Basic Workflow
+1. **Invoke it.** `$pod` or `/pod`, inside the work you are already doing.
+2. **Agree on the objective.** Pod restates your criteria and names the assumptions it is
+   making. Plan-only stays plan-only: it investigates, it does not edit or launch.
+3. **Let it choose the method.** Zero workers when direct work is enough. Two by default.
+   Three needs a reason. Four to eight needs a grant naming the objective, Run and plan.
+   Above eight is refused.
+4. **Watch it delegate.** Each worker gets a frozen packet: scope, actions, bound sources,
+   and the report it owes back. Pod counts what is running, including anything a worker
+   started, and refuses to launch from silence.
+5. **Let it verify.** Worker output is an observation, not an acceptance. Pod binds proof to
+   the exact candidate, source, policy and environment, and keeps "implemented", "locally
+   verified", "reviewed", "hosted", "accepted", "merged" and "released" apart.
+6. **Read the report.** It names what was achieved, what failed, what is uncertain, and what
+   is still blocked.
 
-After the one-time checkout entry above, start in any project you want to configure:
+## When something goes wrong
 
-```powershell
-orchestrate setup --json
+Run the helpers from the skill directory. There is no global command to install:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/pod.py" doctor --json   # Claude Code
+python3 ~/.agents/skills/pod/scripts/pod.py doctor --json     # Codex, global install
+python3 .agents/skills/pod/scripts/pod.py doctor --json       # Codex, project install
 ```
 
-Review `.orchestrate.json`, especially its instruction and task entrypoints, required checks, and any exact dirty paths you deliberately add to `candidateSources`. The initial setup invocation selects the generated bytes operationally. If you later edit the profile, review the diff and explicitly update only this tool's host-local selection:
+- **`doctor`** reports the installed bundle, your prerequisites, which routes the runtime
+  actually establishes, and where your skill copies live. It changes nothing.
+- **`status`** joins a Run's native worker states to your local decision record.
+- **`config`** shows the merged policy and where each value came from.
 
-```powershell
-orchestrate setup --acknowledge-profile --json
-```
+Common answers: a **blocked route** names the control that is missing, not a generic refusal.
+**Unknown quota** is conservative by design, allowing one new worker on that account rather
+than halting the objective. Orca caches its provider quota figures and does not refresh them
+on read, so a reading is often stale enough to count as unknown. That is why two workers is
+the policy default rather than a promise. An **uncertain launch** keeps its slot until native state is read
+back, because a lost response is not proof that nothing started.
 
-Committing the file is ordinary candidate history, not a configuration acknowledgment. The same acknowledgment command records reviewed provenance when the selected profile bytes are unchanged, which is the cure when an existing selected instruction becomes ignored. Then give one concrete, already-authorized objective:
+## What's inside
 
-```powershell
-orchestrate implement "Fix the parser regression and run the profile checks" --json
-```
-
-That command keeps the one-owner default. For an already-authorized bounded milestone, pass a reviewed, tracked `orchestrate-milestone-plan/v1` file explicitly:
-
-```powershell
-orchestrate implement "Integrate the exact bounded milestone" --plan milestone-plan.json --json
-```
-
-The plan names the exact owner objective, specialist outputs, final reviewer, dependencies, gate kinds, settled shared-contract value, and worker limit. orchestrate does not infer that decomposition from objective prose. Follow-up packets bind each native Task to the post-owner candidate and contract digests and name a host-local result-file contract; only an exact admitted, natively settled worker plus an `accepted` result can satisfy verification or review. Resume may reassert the same path with `--plan`, but cannot select a different plan for the Run. The complete strict JSON shape and recovery rules are in [Execution contracts and recovery](docs/contracts-and-recovery.md).
-
-`maxWorkers` may be omitted for the default of two. Values one through three need no extra flag. A reviewed plan that genuinely needs four through eight records its operational grant before the first launch:
-
-```powershell
-orchestrate implement "Integrate the exact bounded milestone" --plan milestone-plan.json `
-  --allow-exceptional-capacity --capacity-reason "Five independent platform fixtures" --json
-```
-
-If that command stops before launch, `resume` accepts the same two flags and binds the grant to the existing Run and exact plan digest. Surrounding reason whitespace is normalized, so repeating the same command remains idempotent; a different normalized reason conflicts. A grant never transfers to a changed plan. Uncertain launches and unresolved releases keep occupying their slots; orchestrate does not launch a replacement merely because local completion was observed.
-
-The command waits in the foreground. Ctrl-C stops controller waiting; it does not pretend the active worker stopped. Continue with the Run ID:
-
-```powershell
-orchestrate status --run <run-id> --json
-orchestrate explain --run <run-id>
-orchestrate resume --run <run-id> --json
-```
-
-When a worker asks a question, answer that exact message and resume:
-
-```powershell
-orchestrate answer --run <run-id> --question <message-id> --text "Use the existing public interface" --json
-orchestrate resume --run <run-id> --json
-```
-
-Inspect the immutable Task packet without consuming mail or calling a model:
-
-```powershell
-orchestrate packet --run <run-id> --task <task-id> --json
-```
-
-`status` and `explain` include an `efficiency` object with the effective Run capacity, any exceptional grant, elapsed wall time, observed session counts and durations, repeated launch attempts, and intervention state. Session duration is observed wall time, not provider compute time. Historical counts, tokens, model turns, and enclosing-coordinator usage stay `unknown` when orchestrate did not observe them; only the deterministic controller's own instrumented model-call count is reported as zero.
-
-When a correction would repeat without new evidence, record the operator's exact proposal instead of starting another Dispatch:
-
-```powershell
-orchestrate intervention --run <run-id> --task <task-id> --record intervention.json --json
-orchestrate intervention --run <run-id> --task <task-id> --diagnosis diagnosis.json --json
-```
-
-The record contains exactly `obligation`, `failing_example`, `hypothesis`, `last_meaningful_evidence`, `next_discriminating_check`, and `correction_key`. A diagnosis file contains exactly `diagnosis_evidence`, as a string when it found new evidence or `null` when it did not. Correction and diagnosis evidence identities remain in durable consumed history, so replaying either identity after any later correction cannot authorize another correction or diagnosis; only genuinely different later evidence can. These commands update only the bounded host-local ledger: they do not create a Dispatch, clear admission, retry work, or override project governance.
-
-Omitting an objective resumes only when one local Run is unambiguous. Multiple Runs always require an explicit selection. A succeeded default owner leaves verification pending by design; a planned milestone reaches `review_accepted` only after every planned verification result and the exact final review are accepted.
-
-For a copyable disposable live exercise, use [Live first-increment exercise](docs/live-first-increment.md).
-
-## What's Inside
-
-- A Python 3.13 standard-library CLI in a conventional `src` layout.
-- A small `orchestrate-profile/v1` project profile.
-- Repository and CE task-registry/context/manifest-first reader boundaries.
-- Exact Git/source identities and one immutable `orchestrate-worker-packet/v3` packet per Task.
-- One immutable managed worker-preflight observation, joined to the native launch before worker claims can count.
-- Strict current-Delivery wire parsing with Dispatch-bound question senders and exact worker-terminal lifecycle senders.
-- Host-local SQLite intentions, Deliveries, questions, evidence, controller locks, and a separate admission/effect fence.
-- A host-local operational-profile selection history that cannot live inside the project or a recognized synchronized root.
-- Deterministic Run creation, Task creation, one-worker launch, supervision, answer, release, acknowledgment, and resume.
-- An explicitly selected bounded native-DAG path for one integration owner, settled shared contracts, independent specialists, journaled native verification/review gates, exact result artifacts, and stale-review invalidation.
-- Host-local owner/specialist/reviewer launch choices with explicit Claude provider IDs and requested/effective receipt validation.
-- Fresh agent sessions for every new Task, while answers and recovery remain on the existing Dispatch session; settled sessions are released with fail-closed `release_unknown` containment.
-- Durable intervention records and one bounded diagnosis before an unchanged correction can repeat without new evidence.
-- Native Windows and Linux controller/admission paths, plus a state-free `orchestrate-wsl` forwarding boundary to the canonical Windows installation.
-- Per-Run capacity grants, conservative occupied-slot accounting, and additive efficiency observations with stable event identities.
-- Non-consuming `status`, model-free `explain`, and exact `packet` output.
-- A focused ordinary-terminal bootstrap with durable result, exit, and exact uncertain-close reconciliation receipts.
-- Passive compatibility diagnostics and a separately contained no-edit active probe.
-- Synthetic practical regressions under `tests/incidents`, including ignored dependency authority, Task-history tampering, and capacity waves.
-- A CI workflow with the common native lifecycle suite on Windows and Linux, plus OS-specific checks, explicit incident discovery, build, and isolated-install smokes on both.
-- A sanitized evidence matrix in [`docs/validation.md`](docs/validation.md).
-
-Detailed role, dependency, review-invalidation, intervention, and uncertain-release shapes live in [Execution contracts and recovery](docs/contracts-and-recovery.md).
-
-There is no parallel task database, worktree manager, provider API, policy engine, automatic retry campaign, dashboard, PyPI release, or governance replacement.
+- **The skill.** One `SKILL.md` of coordination policy, with focused references for
+  [planning](skills/pod/references/planning.md),
+  [routing](skills/pod/references/routing.md),
+  [native effects](skills/pod/references/native-effects.md) and
+  [verification](skills/pod/references/verification.md), loaded only when needed.
+- **Four public helper families.** `setup`, `config`, `doctor` and `status`. Nothing else is
+  a command.
+- **Your policy.** `~/.config/pod/config.yaml` holds your approved routes and limits.
+  A project may narrow them in `.pod/config.yaml`; it can never widen them.
+- **A private record per objective.** What was launched, what settled, what is still
+  uncertain, and enough to resume after an interruption.
 
 ## Philosophy
 
-- **Orca owns lifecycle.** Runs, Tasks, Dispatches, workers, environments, and UI remain native.
-- **Projects own authority.** A candidate policy edit cannot grant itself more power.
-- **One writer first.** Parallelism waits until work is independently useful and shared interfaces are settled.
-- **Fresh Task, fresh session.** A same-agent match never carries context across a new Task; long-lived sessions are reported at two hours and require a fresh-session handoff at eight.
-- **Admission is provenance, not a sandbox.** Managed workers prove exact preflight identity; hostile shell bypass and unrelated external writers remain outside this guarantee.
-- **Effects are replayed, not guessed.** Unknown external effects stop repetition.
-- **Every message counts.** FIFO Deliveries are processed in full and acknowledged as a whole.
-- **Accepted input is not invented progress.** An unproven turn start becomes a bounded diagnostic, never duplicate input.
-- **Evidence keeps its label.** Worker success, local verification, hosted proof, independent review, acceptance, merge, and release are different things.
-- **WIP is a candidate, not clutter.** Dirty status is bound opaquely; only operationally selected or reader-consulted paths are read and hashed, and uncovered paths hold dispatch.
+**Approval, preference and payment are three different things.** A model you like is not a
+model you approved, and an approved model is not permission to spend.
+
+**Claim only what a control proves.** Pod says which controls back a route and how strongly:
+some the runtime enforces, some it merely reports, some you configured, and some are simply
+unavailable. Refusing a worker's own delegation is a policy decision, not a sandbox.
+
+**Unknown stays unknown.** Missing evidence is reported as missing. Passing tests never
+become permission, and a projection never withholds a readiness fact it can prove.
+
+**An effect you cannot see still happened.** A lost response, a delayed output or an absent
+terminal never justifies starting a second worker.
+
+## Updating, rolling back and removing
+
+One manager per installation. If the skills CLI installed it, keep using it:
+
+```bash
+npx skills update pod -g                         # update
+npx skills add j3w1/pod#v0.1.0 --skill pod -g    # roll back to a release
+npx skills remove pod -g -a codex -a claude-code # remove only Pod
+```
+
+If you installed with `install.py`, re-run `pod setup` after upgrading the environment.
+Either way, `pod setup` recognises a copy the skills CLI owns and leaves it alone, and
+repeating setup on a correct copy is a cheap no-op. Your own edits to a placed copy are
+preserved, not overwritten.
 
 ## Contributing
 
-Read [AGENTS.md](AGENTS.md) before changing code. The approved implementation plan was archived outside this repository at final project completion.
+Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md) and the
+[validation gates](docs/validation.md). `skills/pod` is simultaneously the Python package,
+the skill bundle and the wheel payload; keep one authoring source for everything.
 
-Run the repository gates with Python 3.13:
-
-```powershell
-$env:PYTHONPATH = (Resolve-Path .\src).Path
-py -3.13 -m unittest discover -s tests -v
-py -3.13 -m unittest discover -s tests/incidents -t tests -v
-py -3.13 -m compileall -q src tests
-git diff --check
+```bash
+PYTHONPATH=skills python -m unittest discover -s tests -v
+PYTHONPATH=skills python -m pod.skill_validation skills/pod
+python tools/platform_audit.py
 ```
 
-Build and install into an isolated environment for the packaging smoke test:
-
-```powershell
-py -3.13 -m pip install build
-py -3.13 -m build
-py -3.13 -m venv $env:TEMP\orchestrate-smoke
-& $env:TEMP\orchestrate-smoke\Scripts\python -m pip install (Get-ChildItem .\dist\*.whl | Select-Object -First 1)
-& $env:TEMP\orchestrate-smoke\Scripts\orchestrate --help
-```
-
-Live Orca exercises are separate. Use only disposable projects for mutations, never run them from a dispatched worker, and keep CE/application trials read-only. Record each gate using the fields and boundaries in [Validation evidence](docs/validation.md); a local pass does not fill a hosted or live row.
-
-## Updating
-
-Pull a reviewed revision in the same checkout. The source-bound receipt will refuse to bless changed checkout bytes automatically. After review, move aside the prior receipt, pinned archive, installed command, and host-local anchor, then let the checkout entry install a new reviewed-source archive:
-
-```powershell
-git pull --ff-only
-Move-Item "$env:LOCALAPPDATA\orchestrate\install.json" "$env:LOCALAPPDATA\orchestrate\install.json.reviewed-old"
-Move-Item "$env:LOCALAPPDATA\orchestrate\installed-source.zip" "$env:LOCALAPPDATA\orchestrate\installed-source.zip.reviewed-old"
-Move-Item "$env:LOCALAPPDATA\orchestrate\venv\Scripts\orchestrate.exe" "$env:LOCALAPPDATA\orchestrate\venv\Scripts\orchestrate.exe.reviewed-old"
-Move-Item "$env:LOCALAPPDATA\orchestrate-state\machine-install.json" "$env:LOCALAPPDATA\orchestrate-state\machine-install.json.reviewed-old"
-py -3.13 .\bootstrap.py setup --project C:\path\to\your-project --json
-orchestrate doctor
-```
-
-Re-run `doctor` after an Orca update. Public contracts and effective launch behavior are live compatibility inputs, not assumptions frozen into this repository.
+[Migration notes](docs/pod-migration.md) record the cutover from the retired `orchestrate`
+product, whose own documents are preserved unchanged in [docs/history](docs/history/).
 
 ## License
 
-orchestrate is available under the MIT License. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

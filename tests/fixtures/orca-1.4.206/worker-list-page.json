@@ -1,0 +1,256 @@
+{
+  "_meta": {
+    "runtimeId": "uuid-0001"
+  },
+  "id": "uuid-0004",
+  "ok": true,
+  "result": {
+    "counts": {
+      "release_unknown": 1,
+      "released": 149,
+      "retained": 7
+    },
+    "page": {
+      "hasMore": true,
+      "limit": 3,
+      "nextCursor": "eyJ2ZXJzaW9uIjoyLCJzbmFwc2hvdCI6eyJkYXRhYmFzZUlkIjoxNTd9LCJhZnRlciI6eyJjcmVhdGVkQXQiOiIyMDI2LTA5LTIxIDExOjU2OjIzIiwiZGlzcGF0Y2hJZCI6ImN0eF9lNjI3YjY4MmZiMmMiLCJkYXRhYmFzZUlkIjoxNTV9fQ",
+      "total": 157
+    },
+    "scope": {
+      "source": "all"
+    },
+    "warnings": [
+      "Showing 3 of 157 Dispatches, newest first; more are on later pages. Follow page.nextCursor with --cursor."
+    ],
+    "workers": [
+      {
+        "agentTerminalHandle": "term_x0001",
+        "dispatchId": "ctx_x0001",
+        "dispatchStatus": "completed",
+        "projection": {
+          "attention": {
+            "categories": [
+              "root_completion"
+            ],
+            "requiresAction": false
+          },
+          "dispatchId": "ctx_x0001",
+          "evidence": {
+            "durable": true,
+            "lastObservedAt": null,
+            "liveStatus": "unavailable"
+          },
+          "host": {
+            "id": "local",
+            "kind": "local"
+          },
+          "id": "ctx_x0001",
+          "liveness": {
+            "source": "resource_release",
+            "verdict": "exited"
+          },
+          "nextAction": {
+            "argv": [],
+            "kind": "none"
+          },
+          "outcome": "succeeded",
+          "parent": null,
+          "provider": null,
+          "resource": {
+            "state": "released"
+          },
+          "role": "worker",
+          "runId": "run_x0001",
+          "stage": {
+            "activity": "unknown",
+            "detail": "settled",
+            "dispatch": "completed",
+            "worker": "succeeded"
+          },
+          "taskId": "task_x0001",
+          "workspace": {
+            "id": "uuid-0005::/fixture/project",
+            "kind": "folder_or_worktree"
+          }
+        },
+        "resource": {
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          },
+          "endpointId": "uuid-0001",
+          "endpointIncarnation": "uuid-0005::/fixture/project@@efced790:uuid-0006",
+          "id": "wtr_x0001",
+          "lastRecoveryAt": null,
+          "originDispatchId": "ctx_x0001",
+          "ownerDispatchId": "ctx_x0001",
+          "ownershipState": "released",
+          "recoveryAttemptCount": 0,
+          "releaseCompletedAt": "2026-09-21 12:32:35",
+          "releaseError": null,
+          "releaseRequestedAt": "2026-09-21 12:32:35",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_x0001",
+          "worktreeId": "uuid-0005::/fixture/project"
+        },
+        "runId": "run_x0001",
+        "taskId": "task_x0001",
+        "terminalState": "released",
+        "workerState": "succeeded"
+      },
+      {
+        "agentTerminalHandle": "term_x0002",
+        "dispatchId": "ctx_x0002",
+        "dispatchStatus": "completed",
+        "projection": {
+          "attention": {
+            "categories": [
+              "root_completion"
+            ],
+            "requiresAction": false
+          },
+          "dispatchId": "ctx_x0002",
+          "evidence": {
+            "durable": true,
+            "lastObservedAt": null,
+            "liveStatus": "unavailable"
+          },
+          "host": {
+            "id": "local",
+            "kind": "local"
+          },
+          "id": "ctx_x0002",
+          "liveness": {
+            "source": "resource_release",
+            "verdict": "exited"
+          },
+          "nextAction": {
+            "argv": [],
+            "kind": "none"
+          },
+          "outcome": "succeeded",
+          "parent": null,
+          "provider": null,
+          "resource": {
+            "state": "released"
+          },
+          "role": "worker",
+          "runId": "run_x0001",
+          "stage": {
+            "activity": "unknown",
+            "detail": "settled",
+            "dispatch": "completed",
+            "worker": "succeeded"
+          },
+          "taskId": "task_x0002",
+          "workspace": {
+            "id": "uuid-0005::/fixture/project",
+            "kind": "folder_or_worktree"
+          }
+        },
+        "resource": {
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          },
+          "endpointId": "uuid-0001",
+          "endpointIncarnation": "uuid-0005::/fixture/project@@247e0d7a:uuid-0007",
+          "id": "wtr_x0002",
+          "lastRecoveryAt": null,
+          "originDispatchId": "ctx_x0002",
+          "ownerDispatchId": "ctx_x0002",
+          "ownershipState": "released",
+          "recoveryAttemptCount": 0,
+          "releaseCompletedAt": "2026-09-21 12:25:16",
+          "releaseError": null,
+          "releaseRequestedAt": "2026-09-21 12:25:16",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_x0002",
+          "worktreeId": "uuid-0005::/fixture/project"
+        },
+        "runId": "run_x0001",
+        "taskId": "task_x0002",
+        "terminalState": "released",
+        "workerState": "succeeded"
+      },
+      {
+        "agentTerminalHandle": "term_x0003",
+        "dispatchId": "ctx_x0003",
+        "dispatchStatus": "completed",
+        "projection": {
+          "attention": {
+            "categories": [
+              "root_completion"
+            ],
+            "requiresAction": false
+          },
+          "dispatchId": "ctx_x0003",
+          "evidence": {
+            "durable": true,
+            "lastObservedAt": null,
+            "liveStatus": "unavailable"
+          },
+          "host": {
+            "id": "local",
+            "kind": "local"
+          },
+          "id": "ctx_x0003",
+          "liveness": {
+            "source": "resource_release",
+            "verdict": "exited"
+          },
+          "nextAction": {
+            "argv": [],
+            "kind": "none"
+          },
+          "outcome": "succeeded",
+          "parent": null,
+          "provider": null,
+          "resource": {
+            "state": "released"
+          },
+          "role": "worker",
+          "runId": "run_x0001",
+          "stage": {
+            "activity": "unknown",
+            "detail": "settled",
+            "dispatch": "completed",
+            "worker": "succeeded"
+          },
+          "taskId": "task_x0003",
+          "workspace": {
+            "id": "uuid-0005::/fixture/project",
+            "kind": "folder_or_worktree"
+          }
+        },
+        "resource": {
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          },
+          "endpointId": "uuid-0001",
+          "endpointIncarnation": "uuid-0005::/fixture/project@@e367c516:uuid-0008",
+          "id": "wtr_x0003",
+          "lastRecoveryAt": null,
+          "originDispatchId": "ctx_x0003",
+          "ownerDispatchId": "ctx_x0003",
+          "ownershipState": "released",
+          "recoveryAttemptCount": 0,
+          "releaseCompletedAt": "2026-09-21 12:12:03",
+          "releaseError": null,
+          "releaseRequestedAt": "2026-09-21 12:12:03",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_x0003",
+          "worktreeId": "uuid-0005::/fixture/project"
+        },
+        "runId": "run_x0001",
+        "taskId": "task_x0003",
+        "terminalState": "released",
+        "workerState": "succeeded"
+      }
+    ]
+  }
+}
