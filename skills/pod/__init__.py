@@ -1,3 +1,3 @@
 """Pod: bounded local policy helpers for an in-session Orca coordinator."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"

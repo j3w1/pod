@@ -4,7 +4,7 @@ description: Coordinate an authorized software task in the current Claude Code o
 license: MIT
 compatibility: Linux. Python 3.13+ available as python3 with PyYAML 6.x importable. Orca CLI on PATH for routing, delegation and status. An authenticated Claude Code or Codex session acts as the coordinator. No global pod executable is required.
 metadata:
-  version: "0.1.1"
+  version: "0.1.2"
   source: https://github.com/j3w1/pod
 ---
 

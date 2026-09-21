@@ -426,6 +426,39 @@ class SeparateAgentHomeRegressions(unittest.TestCase):
                              "a second active copy must not be created")
             self.assertTrue((canonical_copy / "SKILL.md").is_file())
 
+    def test_a_skill_present_elsewhere_is_reported_where_it_actually_is(self):
+        """Reporting `missing` for an agent that plainly has the skill is worse than
+        unhelpful: it sends an operator to install the duplicate copy setup refuses."""
+        with fixture() as root:
+            canonical_copy = self.install_like_the_skills_cli(root)
+            elsewhere = root / "runtime-home"
+            elsewhere.mkdir()
+            project = root / "project"
+            project.mkdir()
+            with patch.dict(os.environ, {"HOME": str(root),
+                                         "CODEX_HOME": str(elsewhere),
+                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+                report = inspect(project, global_scope=True)
+            codex = report["codex"]
+            self.assertEqual(codex["status"], "present_elsewhere")
+            self.assertEqual(codex["path"], str(canonical_copy))
+            self.assertEqual(codex["configured_path"], str(elsewhere / "skills" / "pod"))
+            self.assertEqual(codex["manager"], "skills_cli")
+            self.assertEqual(codex["version"], version())
+
+    def test_a_genuinely_absent_skill_is_still_missing(self):
+        with fixture() as root:
+            elsewhere = root / "runtime-home"
+            elsewhere.mkdir()
+            project = root / "project"
+            project.mkdir()
+            with patch.dict(os.environ, {"HOME": str(root),
+                                         "CODEX_HOME": str(elsewhere),
+                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+                report = inspect(project, global_scope=True)
+            self.assertEqual(report["codex"]["status"], "missing")
+            self.assertNotIn("configured_path", report["codex"])
+
     def test_a_differing_version_there_is_still_not_duplicated(self):
         """Which copy wins is the operator's call, not something setup decides by writing."""
         with fixture() as root:

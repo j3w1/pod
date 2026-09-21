@@ -198,6 +198,16 @@ def inspect(project: Path, *, global_scope: bool = False) -> dict:
             manager = "unowned"
             status = "redirected"
         elif not target.exists():
+            # An agent reads the conventional agents home as well as its configured one.
+            # Reporting "missing" when the skill is plainly there sends an operator to
+            # install the duplicate copy that setup exists to refuse.
+            if conventional is not None and _installed_somewhere(conventional):
+                status, manager = "present_elsewhere", "skills_cli"
+                declared = installed_version(conventional)
+                report[host] = {"status": status, "path": str(conventional),
+                                "configured_path": str(target), "version": declared,
+                                "manager": manager}
+                continue
             status = "missing"
         elif not target.is_dir():
             status, manager = "conflict", "unowned"
