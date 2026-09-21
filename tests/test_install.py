@@ -70,24 +70,17 @@ class IsolatedInstallTests(unittest.TestCase):
                 builder.assert_not_called()
                 self.assertFalse((root / "venv").exists())
 
-    def test_bootstrap_preflight_ignores_disposable_user_pip_redirect(self):
+    def test_bootstrap_preflight_ignores_explicit_pip_config_redirect(self):
         with fixture() as root:
             configured_python = root / "configured-python-must-not-run"
-            if install.sys.platform == "win32":
-                config_home = root / "appdata"
-                config_file = config_home / "pip" / "pip.ini"
-                user_environment = {"APPDATA": str(config_home)}
-            else:
-                config_home = root / "xdg-config"
-                config_file = config_home / "pip" / "pip.conf"
-                user_environment = {"XDG_CONFIG_HOME": str(config_home)}
-            config_file.parent.mkdir(parents=True)
-            config_file.write_text(f"[global]\npython = {configured_python}\n")
+            config_file = root / "pip-config.ini"
+            config_text = f"[global]\npython = {configured_python}\n"
+            config_file.write_text(config_text)
 
-            with patch.dict(os.environ, user_environment):
+            with patch.dict(os.environ, {"PIP_CONFIG_FILE": str(config_file)}):
                 environment = install._subprocess_environment()
                 unprotected = dict(environment)
-                unprotected.pop("PIP_CONFIG_FILE")
+                unprotected["PIP_CONFIG_FILE"] = os.environ["PIP_CONFIG_FILE"]
                 unisolated = subprocess.run(
                     [install.sys.executable, "-I", "-m", "pip", "--version"],
                     capture_output=True, text=True, env=unprotected,
@@ -97,43 +90,42 @@ class IsolatedInstallTests(unittest.TestCase):
                 self.assertFalse(configured_python.exists())
                 actual = install._bootstrap_pip(environment)
                 self.assertEqual(environment["PIP_CONFIG_FILE"], os.devnull)
+                self.assertEqual(os.environ["PIP_CONFIG_FILE"], str(config_file))
 
             expected_match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", metadata.version("pip"))
             self.assertIsNotNone(expected_match)
             expected = tuple(int(part or 0) for part in expected_match.groups())
             self.assertEqual(actual, expected)
             self.assertFalse(configured_python.exists())
+            self.assertEqual(config_file.read_text(), config_text)
 
-    def test_install_ignores_user_pip_version_false_success(self):
+    def test_install_ignores_explicit_pip_config_version_false_success(self):
         with fixture() as root:
-            if install.sys.platform == "win32":
-                config_home = root / "appdata"
-                config_file = config_home / "pip" / "pip.ini"
-                user_environment = {"APPDATA": str(config_home)}
-            else:
-                config_home = root / "xdg-config"
-                config_file = config_home / "pip" / "pip.conf"
-                user_environment = {"XDG_CONFIG_HOME": str(config_home)}
-            config_file.parent.mkdir(parents=True)
-            config_file.write_text("[global]\nversion = true\n")
+            config_file = root / "pip-config.ini"
+            config_text = "[global]\nversion = true\n"
+            config_file.write_text(config_text)
             target = root / "pipless-target"
             install.venv.EnvBuilder(with_pip=False).create(target)
             target_python = target / ("Scripts/python.exe" if install.sys.platform == "win32" else "bin/python")
+            missing_package = root / "missing-package.whl"
+            self.assertFalse(missing_package.exists())
             command = [install.sys.executable, "-I", "-m", "pip", "--python", str(target_python),
-                       "--isolated", "install", str(root / "missing-package.whl")]
+                       "--isolated", "install", str(missing_package)]
 
-            with patch.dict(os.environ, user_environment):
+            with patch.dict(os.environ, {"PIP_CONFIG_FILE": str(config_file)}):
                 protected = install._subprocess_environment()
                 unprotected = dict(protected)
-                unprotected.pop("PIP_CONFIG_FILE")
+                unprotected["PIP_CONFIG_FILE"] = os.environ["PIP_CONFIG_FILE"]
                 false_success = subprocess.run(command, capture_output=True, text=True, env=unprotected)
                 actual = subprocess.run(command, capture_output=True, text=True, env=protected)
+                self.assertEqual(os.environ["PIP_CONFIG_FILE"], str(config_file))
 
             self.assertEqual(false_success.returncode, 0)
             self.assertRegex(false_success.stdout, r"^pip \d+\.\d+")
             self.assertNotEqual(actual.returncode, 0)
-            self.assertIn("missing-package.whl", actual.stdout + actual.stderr)
+            self.assertIn(str(missing_package), actual.stdout + actual.stderr)
             self.assertEqual(protected["PIP_CONFIG_FILE"], os.devnull)
+            self.assertEqual(config_file.read_text(), config_text)
 
     def test_pipless_target_exact_python_and_process_isolation(self):
         with fixture() as root:
