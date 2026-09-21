@@ -119,9 +119,12 @@ jobs:
           env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
             HOME="$SMOKE" npx --yes skills@1.7.0 add "$POD_EXPORT" \
             --skill pod -a codex -a claude-code -g -y
+          # A local-path source records no lock entry, so assert the shape the installer
+          # actually produces: one canonical copy with every other agent linked at it.
           test -f "$SMOKE/.agents/skills/pod/SKILL.md"
           test -f "$SMOKE/.agents/skills/pod/scripts/pod.py"
-          grep -q '"pod"' "$SMOKE/.agents/.skill-lock.json"
+          test -L "$SMOKE/.claude/skills/pod"
+          test "$(readlink -f "$SMOKE/.claude/skills/pod")" = "$(readlink -f "$SMOKE/.agents/skills/pod")"
           PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
           env -u CODEX_HOME -u CLAUDE_CONFIG_DIR HOME="$SMOKE" \
             python "$SMOKE/.claude/skills/pod/scripts/pod.py" doctor --json > /dev/null
@@ -180,6 +183,14 @@ jobs:
             HOME="$SMOKE" npx --yes skills@1.7.0 add \
             "${GITHUB_REPOSITORY}#${GITHUB_REF_NAME}" --skill pod -a codex -a claude-code -g -y
           PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
+          # A remote source does record a lock entry, pinned to the tag that was installed.
+          python - "$SMOKE/.agents/.skill-lock.json" "$GITHUB_REF_NAME" <<'PY'
+          import json, sys
+          lock = json.load(open(sys.argv[1]))
+          entry = lock["skills"]["pod"]
+          assert entry.get("ref") == sys.argv[2], entry
+          print("lock entry pinned to", entry["ref"])
+          PY
 
       - name: Publish the release
         env:
