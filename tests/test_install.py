@@ -123,7 +123,10 @@ class IsolatedInstallTests(unittest.TestCase):
             self.assertEqual(false_success.returncode, 0)
             self.assertRegex(false_success.stdout, r"^pip \d+\.\d+")
             self.assertNotEqual(actual.returncode, 0)
-            self.assertIn(str(missing_package), actual.stdout + actual.stderr)
+            pip_output = actual.stdout + actual.stderr
+            missing_package_path = str(missing_package)
+            expected_path_spellings = (missing_package_path, repr(missing_package_path)[1:-1])
+            self.assertTrue(any(path in pip_output for path in expected_path_spellings))
             self.assertEqual(protected["PIP_CONFIG_FILE"], os.devnull)
             self.assertEqual(config_file.read_text(), config_text)
 
