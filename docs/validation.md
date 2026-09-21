@@ -10,6 +10,7 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
 | Compile and diff | `python -m compileall -q skills tests install.py`; `git diff --check 474a84a6d5a1f7947abc1e38d232c379adf7ff93 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
 | Supported environment audit | `python tools/platform_audit.py` | No unsupported-platform implementation in the tracked product |
+| Artifact audit | `python tools/artifact_audit.py dist/*` | No personal path, account, runtime identifier, credential or retired-platform reference in a published artifact, outside the files that are history |
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, frontmatter allowlist, helper invocation forms and references |
 | Bundle parity | `python -m pod.skill_validation --wheel dist/*.whl`; `--installed PATH` for a placed copy | The wheel and every placed copy carry the tracked bundle's exact bytes |
 | Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel and sdist there | Exact committed candidate |

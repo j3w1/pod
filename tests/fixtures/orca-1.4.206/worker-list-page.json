@@ -69,7 +69,7 @@
           },
           "taskId": "task_x0001",
           "workspace": {
-            "id": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite",
+            "id": "uuid-0005::/fixture/project",
             "kind": "folder_or_worktree"
           }
         },
@@ -79,7 +79,7 @@
             "status": "captured"
           },
           "endpointId": "uuid-0001",
-          "endpointIncarnation": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite@@efced790:uuid-0006",
+          "endpointIncarnation": "uuid-0005::/fixture/project@@efced790:uuid-0006",
           "id": "wtr_x0001",
           "lastRecoveryAt": null,
           "originDispatchId": "ctx_x0001",
@@ -92,7 +92,7 @@
           "releaseState": "released",
           "retainedReason": null,
           "terminalHandle": "term_x0001",
-          "worktreeId": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite"
+          "worktreeId": "uuid-0005::/fixture/project"
         },
         "runId": "run_x0001",
         "taskId": "task_x0001",
@@ -145,7 +145,7 @@
           },
           "taskId": "task_x0002",
           "workspace": {
-            "id": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite",
+            "id": "uuid-0005::/fixture/project",
             "kind": "folder_or_worktree"
           }
         },
@@ -155,7 +155,7 @@
             "status": "captured"
           },
           "endpointId": "uuid-0001",
-          "endpointIncarnation": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite@@247e0d7a:uuid-0007",
+          "endpointIncarnation": "uuid-0005::/fixture/project@@247e0d7a:uuid-0007",
           "id": "wtr_x0002",
           "lastRecoveryAt": null,
           "originDispatchId": "ctx_x0002",
@@ -168,7 +168,7 @@
           "releaseState": "released",
           "retainedReason": null,
           "terminalHandle": "term_x0002",
-          "worktreeId": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite"
+          "worktreeId": "uuid-0005::/fixture/project"
         },
         "runId": "run_x0001",
         "taskId": "task_x0002",
@@ -221,7 +221,7 @@
           },
           "taskId": "task_x0003",
           "workspace": {
-            "id": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite",
+            "id": "uuid-0005::/fixture/project",
             "kind": "folder_or_worktree"
           }
         },
@@ -231,7 +231,7 @@
             "status": "captured"
           },
           "endpointId": "uuid-0001",
-          "endpointIncarnation": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite@@e367c516:uuid-0008",
+          "endpointIncarnation": "uuid-0005::/fixture/project@@e367c516:uuid-0008",
           "id": "wtr_x0003",
           "lastRecoveryAt": null,
           "originDispatchId": "ctx_x0003",
@@ -244,7 +244,7 @@
           "releaseState": "released",
           "retainedReason": null,
           "terminalHandle": "term_x0003",
-          "worktreeId": "uuid-0005::/fixture/home/worktrees/orchestrate/pod-rewrite"
+          "worktreeId": "uuid-0005::/fixture/project"
         },
         "runId": "run_x0001",
         "taskId": "task_x0003",

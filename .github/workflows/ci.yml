@@ -63,6 +63,9 @@ jobs:
         env:
           PYTHONPATH: skills
 
+      - name: Audit the built distributions
+        run: python tools/artifact_audit.py dist/*
+
       - name: Install the wheel into an isolated environment
         run: |
           python -m venv .venv-smoke
@@ -173,6 +176,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           git archive --format=tar.gz --prefix=pod/ \
             -o "dist/pod-skill-$VERSION.tar.gz" "$GITHUB_REF_NAME:skills/pod"
+          python tools/artifact_audit.py dist/*
           (cd dist && sha256sum ./* > SHA256SUMS)
 
       - name: The published source installs as a skill
