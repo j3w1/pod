@@ -278,7 +278,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_paid_grant_units_are_durably_reserved_before_distinct_starts(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_STATE_HOME": str(root / "state"),
                 "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             config = root / "config" / "pod" / "config.yaml"
@@ -320,7 +320,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_contradictory_release_readback_retains_occupancy(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_STATE_HOME": str(root / "state"),
                 "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
@@ -371,7 +371,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_release_requires_the_installed_owned_resource_and_matching_terminal(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_STATE_HOME": str(root / "state"),
                 "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
@@ -412,7 +412,7 @@ class GuardedOperationTests(unittest.TestCase):
         for effect_state, cleanup_state, fleet, consumer in cases:
             with self.subTest(effect=effect_state, cleanup=cleanup_state,
                               fleet=fleet, consumer=consumer), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -478,7 +478,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_confirmed_dispatch_deduplicates_native_row(self):
         for cleanup_state in ("none", "retained", "released"):
             with self.subTest(cleanup=cleanup_state), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -504,7 +504,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_unproved_effect_disposition_never_releases_capacity(self):
         for disposition in ("absent", "failed", "unrecognized"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, _, _, _ = inputs(root)
                 port = FixturePort()
@@ -537,7 +537,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_confirmed_without_cleanup_reconciles_exact_release_read_only(self):
         for fleet in ("omitted", "coarse_released"):
             with self.subTest(fleet=fleet), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -656,7 +656,7 @@ class GuardedOperationTests(unittest.TestCase):
         }
         for (frozen_state, current_state), code in expected.items():
             with self.subTest(frozen=frozen_state, current=current_state), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 source = project / "notes.txt"
@@ -696,7 +696,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_unavailable_at_freeze_remains_unbound_for_every_current_state(self):
         for current in ("present", "absent", "unavailable"):
             with self.subTest(current=current), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 source = project / "notes.txt"
@@ -728,7 +728,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_frozen_sources_are_checked_at_guarded_admission(self):
         for case in ("changed", "absent", "bound_absent", "unavailable", "context_changed", "unchanged"):
             with self.subTest(case=case), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 source = project / "notes.txt"
@@ -869,7 +869,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_retained_cleanup_occupies_until_exact_release_readback(self):
         for fleet in ("omitted", "coarse_released", "active"):
             with self.subTest(fleet=fleet), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -930,7 +930,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_pending_release_reconciles_positive_retained_readback(self):
         for pending in ("reserved", "uncertain"):
             with self.subTest(pending=pending), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -1030,7 +1030,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_current_failed_settlement_and_headless_release_shapes_reconcile_read_only(self):
         for observation in ("missing", "absent"):
             with self.subTest(observation=observation), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -1063,7 +1063,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_release_pending_and_unknown_are_durable_read_only_recovery_states(self):
         for disposition in ("release_pending", "release_unknown"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -1090,7 +1090,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_predecessor_binding_stays_occupied_and_rebinds_exactly_without_effect_replay(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_STATE_HOME": str(root / "state"),
                 "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
@@ -1136,7 +1136,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_predecessor_cleanup_release_labels_hold_until_exact_rebind(self):
         for disposition in ("released", "already_released"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -1184,7 +1184,7 @@ class GuardedOperationTests(unittest.TestCase):
     def test_predecessor_pending_and_unknown_cleanup_rebind_without_repeating_release(self):
         for disposition in ("release_pending", "release_unknown"):
             with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
-                    "XDG_STATE_HOME": str(root / "state"), 
+                    "XDG_STATE_HOME": str(root / "state"),
                     "XDG_CONFIG_HOME": str(root / "config")}):
                 project, assessment, caps, quota = inputs(root)
                 port = FixturePort()
@@ -1222,7 +1222,7 @@ class GuardedOperationTests(unittest.TestCase):
 
     def test_malformed_predecessor_binding_remains_blocked(self):
         with fixture() as root, patch.dict(os.environ, {
-                "XDG_STATE_HOME": str(root / "state"), 
+                "XDG_STATE_HOME": str(root / "state"),
                 "XDG_CONFIG_HOME": str(root / "config")}):
             project, assessment, caps, quota = inputs(root)
             port = FixturePort()
