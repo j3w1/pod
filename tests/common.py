@@ -18,5 +18,7 @@ def fixture():
                  "LOCALAPPDATA": str(path / "localappdata"),
                  "CODEX_HOME": str(path / "codex-home"),
                  "CLAUDE_CONFIG_DIR": str(path / "claude-home")}
-        with patch.dict(os.environ, homes):
+        with patch.dict(os.environ, homes, clear=False):
+            os.environ.pop("POD_CONFIG_HOME", None)
+            os.environ.pop("POD_STATE_HOME", None)
             yield path

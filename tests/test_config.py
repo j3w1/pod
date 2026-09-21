@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,38 @@ from tests.common import fixture
 
 
 class ConfigTests(unittest.TestCase):
+    def test_fixture_ignores_and_restores_inherited_pod_homes(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get("POD_TEST_ROOT")) as cache_name:
+            cache = Path(cache_name)
+            inherited = {"POD_CONFIG_HOME": str(cache / "inherited-config"),
+                         "POD_STATE_HOME": str(cache / "inherited-state")}
+            with patch.dict(os.environ, {**inherited, "POD_FIXTURE_PRESERVED": "yes"}):
+                with fixture() as root:
+                    self.assertIsNone(os.environ.get("POD_CONFIG_HOME"))
+                    self.assertIsNone(os.environ.get("POD_STATE_HOME"))
+                    self.assertEqual(os.environ["POD_FIXTURE_PRESERVED"], "yes")
+                    project = root / "project"
+                    project.mkdir()
+                    personal = personal_path()
+                    personal.parent.mkdir(parents=True)
+                    personal.write_text("schema: pod/v1\n")
+                    policy = effective(project)
+                    checkpoint(project, "fixture isolation", owner="owner",
+                               native={"runtime": "runtime"},
+                               value={"schema": "pod-checkpoint/v1", "criteria": ["isolated"],
+                                      "plan_revision": "plan", "candidate": "candidate",
+                                      "policy_revision": policy["revision"], "native_refs": [],
+                                      "assignments": [], "questions": [],
+                                      "verification_gaps": ["isolated"],
+                                      "next_safe_action": "verify"})
+                    self.assertTrue(personal.is_relative_to(root))
+                    self.assertTrue(state_root().is_relative_to(root))
+                    self.assertFalse((cache / "inherited-config").exists())
+                    self.assertFalse((cache / "inherited-state").exists())
+                self.assertEqual({key: os.environ[key] for key in inherited}, inherited)
+                self.assertFalse((cache / "inherited-config").exists())
+                self.assertFalse((cache / "inherited-state").exists())
+
     def test_pod_only_homes_isolate_personal_policy_and_state(self):
         with fixture() as root:
             project = root / "project"
