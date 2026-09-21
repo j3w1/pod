@@ -214,9 +214,11 @@ policy:
         with fixture() as root:
             project = root / "project"
             project.mkdir()
-            previous = {name: os.environ[name] for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME")}
-            with patch.dict(os.environ, {"XDG_CONFIG_HOME": "relative-config",
-                                         "XDG_STATE_HOME": "relative-state"}):
+            config_home = "APPDATA" if os.name == "nt" else "XDG_CONFIG_HOME"
+            state_home = "LOCALAPPDATA" if os.name == "nt" else "XDG_STATE_HOME"
+            previous = {name: os.environ[name] for name in (config_home, state_home)}
+            with patch.dict(os.environ, {config_home: "relative-config",
+                                         state_home: "relative-state"}):
                 with self.assertRaises(PodError):
                     personal_path()
                 with self.assertRaises(PodError):
@@ -248,8 +250,10 @@ policy:
             project.mkdir()
             contained_config = project / "config-home"
             contained_state = project / "state-home"
-            overrides = {"XDG_CONFIG_HOME": str(contained_config),
-                         "XDG_STATE_HOME": str(contained_state)}
+            config_home = "APPDATA" if os.name == "nt" else "XDG_CONFIG_HOME"
+            state_home = "LOCALAPPDATA" if os.name == "nt" else "XDG_STATE_HOME"
+            overrides = {config_home: str(contained_config),
+                         state_home: str(contained_state)}
             with chdir(project), patch.dict(os.environ, overrides):
                 with self.assertRaises(PodError):
                     personal_path()

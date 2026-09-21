@@ -212,7 +212,8 @@ class GuardedOperationTests(unittest.TestCase):
                                            "processAction": "none", "recovery": "read back worker"},
                    "_meta": {"runtimeId": "runtime"}}
         completed = subprocess.CompletedProcess([], 1, stdout=json.dumps(payload), stderr="")
-        with patch("pod.operations.subprocess.run", return_value=completed):
+        with (patch("pod.operations.executable", return_value=Path("orca")),
+              patch("pod.operations.subprocess.run", return_value=completed)):
             result = OrcaPort().release_worker("dispatch")
         self.assertEqual(result["status"], "release_unknown")
         self.assertEqual(result["runtime"], "runtime")
