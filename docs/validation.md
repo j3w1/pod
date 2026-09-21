@@ -28,8 +28,10 @@ the overrides do not make an existing directory disposable.
 The explicit installer requires pip 22.3 or newer on the invoking interpreter, creates the
 selected environment without pip, and uses isolated bootstrap pip's documented `--python`
 option to manage the exact target interpreter, with script-location warning traversal
-disabled. Process-only controls remove inherited Python and pip control variables and
-disable the user site across pip's target re-exec; no system pip upgrade or profile change
+disabled. Process-only controls remove inherited Python and pip control variables, disable
+all pip configuration files for both pip phases and their target re-exec, and disable the
+user site. Before success, the target interpreter runs in isolated mode and verifies the
+installed `j3w1-pod` distribution and `pod` import; no system pip upgrade or profile change
 is attempted. The prior ALLY run failed in `ensurepip` with WinError 448 while traversing
 the Codex `bin` mount; this candidate avoids `ensurepip`, but `install.py` end-to-end on
 native Windows remains `NOT_RUN` until an owner-shell rerun. The complete Windows unit,

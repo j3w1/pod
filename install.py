@@ -25,6 +25,7 @@ def _subprocess_environment() -> dict[str, str]:
         if not key.upper().startswith(("PYTHON", "PIP_", "_PIP_"))
     }
     environment["PYTHONNOUSERSITE"] = "1"
+    environment["PIP_CONFIG_FILE"] = os.devnull
     return environment
 
 
@@ -41,13 +42,8 @@ def _run(command: list[str], stage: str, *, env: dict[str, str] | None = None) -
 
 def _bootstrap_pip(environment: dict[str, str]) -> tuple[int, ...]:
     command = [sys.executable, "-I", "-m", "pip", "--isolated", "--version"]
-    preflight_environment = dict(environment)
-    # Pip resolves configured global options before --version exits. Disable
-    # configuration files process-locally so a user "global.python" cannot
-    # redirect even that early public-CLI path.
-    preflight_environment["PIP_CONFIG_FILE"] = os.devnull
     try:
-        result = _run(command, "bootstrap pip preflight", env=preflight_environment)
+        result = _run(command, "bootstrap pip preflight", env=environment)
     except RuntimeError as exc:
         raise RuntimeError(
             f"Bootstrap pip is unavailable; install pip 22.3 or newer for {sys.executable}: {exc}"
@@ -86,7 +82,10 @@ def plan(checkout: Path, environment: Path, expected_commit: str) -> dict:
             "pip_version": pip_version,
             "install_command": [sys.executable, "-I", "-m", "pip", "--python", str(python),
                                 "--isolated", "install",
-                                "--no-input", "--no-warn-script-location", str(checkout)]}
+                                "--no-input", "--no-warn-script-location", str(checkout)],
+            "verification_command": [str(python), "-I", "-c",
+                                     "from importlib.metadata import distribution; "
+                                     "distribution('j3w1-pod'); import pod"]}
 
 
 def execute(checkout: Path, environment: Path, expected_commit: str) -> dict:
@@ -100,7 +99,9 @@ def execute(checkout: Path, environment: Path, expected_commit: str) -> dict:
     target = Path(result["target_python"])
     if not target.is_file():
         raise RuntimeError(f"Target environment creation did not produce its Python interpreter: {target}")
-    _run(result["install_command"], "isolated Pod installation", env=_subprocess_environment())
+    process_environment = _subprocess_environment()
+    _run(result["install_command"], "isolated Pod installation", env=process_environment)
+    _run(result["verification_command"], "installed Pod verification", env=process_environment)
     return result
 
 
