@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+- Global setup no longer installs a second active copy beside the one the skills ecosystem
+  already placed. A host may point `CODEX_HOME` somewhere other than the agents home, as one
+  running Codex inside another tool does; setup now consults the conventional
+  `~/.agents/skills/pod` as well, recognises the canonical copy from either side of the
+  per-agent symlink, and reports `present_elsewhere` rather than writing. Which copy wins is
+  the operator's decision. Found by installing 0.1.0 on such a host.
+
 ## 0.1.0
 
 First release under the name `pod`. This is a rewrite, not an upgrade: the retired
