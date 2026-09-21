@@ -25,10 +25,14 @@ they do not change the default personal locations, project YAML authority, `APPD
 Child Orca processes inherit that native profile unchanged. Use fresh owned directories;
 the overrides do not make an existing directory disposable.
 
-The explicit installer invokes the selected environment's interpreter in isolated mode and
-pip in isolated mode, with script-location warning traversal disabled. The original ALLY
-ensurepip failure remains unattributed and `install.py` end-to-end on native Windows is
-`NOT_RUN` for a new candidate until an owner-shell rerun. The complete Windows unit,
+The explicit installer requires pip 22.3 or newer on the invoking interpreter, creates the
+selected environment without pip, and uses isolated bootstrap pip's documented `--python`
+option to manage the exact target interpreter, with script-location warning traversal
+disabled. Process-only controls remove inherited Python and pip control variables and
+disable the user site across pip's target re-exec; no system pip upgrade or profile change
+is attempted. The prior ALLY run failed in `ensurepip` with WinError 448 while traversing
+the Codex `bin` mount; this candidate avoids `ensurepip`, but `install.py` end-to-end on
+native Windows remains `NOT_RUN` until an owner-shell rerun. The complete Windows unit,
 repeat-setup/global-reuse/doctor, frozen-wheel, installed-CLI, and live rows likewise remain
 `NOT_RUN`; Linux fixtures do not promote them.
 

@@ -7,10 +7,54 @@ installation action; ordinary Pod setup never invokes it.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import venv
+
+
+MINIMUM_PIP = (22, 3)
+
+
+def _subprocess_environment() -> dict[str, str]:
+    """Return process-only isolation that also survives pip's --python re-exec."""
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().startswith(("PYTHON", "PIP_", "_PIP_"))
+    }
+    environment["PYTHONNOUSERSITE"] = "1"
+    return environment
+
+
+def _run(command: list[str], stage: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, capture_output=True, text=True, check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"{stage} failed with exit {exc.returncode}{suffix}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"{stage} failed: {exc}") from exc
+
+
+def _bootstrap_pip(environment: dict[str, str]) -> tuple[int, ...]:
+    command = [sys.executable, "-I", "-m", "pip", "--version"]
+    try:
+        result = _run(command, "bootstrap pip preflight", env=environment)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Bootstrap pip is unavailable; install pip 22.3 or newer for {sys.executable}: {exc}"
+        ) from exc
+    match = re.match(r"^pip\s+(\d+)\.(\d+)(?:\.(\d+))?", result.stdout.strip())
+    if not match:
+        raise RuntimeError("Bootstrap pip reported an unrecognized version; install pip 22.3 or newer for this interpreter")
+    version = tuple(int(part or 0) for part in match.groups())
+    if version < MINIMUM_PIP:
+        rendered = ".".join(str(part) for part in version)
+        raise RuntimeError(f"Bootstrap pip {rendered} is unsupported; install pip 22.3 or newer for this interpreter")
+    return version
 
 
 def plan(checkout: Path, environment: Path, expected_commit: str) -> dict:
@@ -24,16 +68,35 @@ def plan(checkout: Path, environment: Path, expected_commit: str) -> dict:
         raise RuntimeError("Checkout path is not a regular reviewed source tree")
     if environment == checkout or checkout in environment.parents:
         raise RuntimeError("Select an isolated environment outside the checkout")
-    head = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
-                          capture_output=True, text=True, check=True).stdout.strip()
-    dirty = subprocess.run(["git", "-C", str(checkout), "status", "--porcelain"],
-                           capture_output=True, text=True, check=True).stdout
+    head = _run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                "checkout commit inspection").stdout.strip()
+    dirty = _run(["git", "-C", str(checkout), "status", "--porcelain"],
+                 "checkout cleanliness inspection").stdout
     if not head.startswith(expected_commit) or dirty:
         raise RuntimeError("Checkout does not match the reviewed clean commit")
+    process_environment = _subprocess_environment()
+    pip_version = _bootstrap_pip(process_environment)
     python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-    return {"checkout_commit": head, "environment": str(environment),
-            "install_command": [str(python), "-I", "-m", "pip", "--isolated", "install",
+    return {"checkout_commit": head, "environment": str(environment), "target_python": str(python),
+            "pip_version": pip_version,
+            "install_command": [sys.executable, "-I", "-m", "pip", "--python", str(python),
+                                "--isolated", "install",
                                 "--no-input", "--no-warn-script-location", str(checkout)]}
+
+
+def execute(checkout: Path, environment: Path, expected_commit: str) -> dict:
+    result = plan(checkout, environment, expected_commit)
+    if environment.exists():
+        raise RuntimeError("Selected environment already exists; choose a fresh path")
+    try:
+        venv.EnvBuilder(with_pip=False, clear=False).create(environment)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"Target environment creation failed: {exc}") from exc
+    target = Path(result["target_python"])
+    if not target.is_file():
+        raise RuntimeError(f"Target environment creation did not produce its Python interpreter: {target}")
+    _run(result["install_command"], "isolated Pod installation", env=_subprocess_environment())
+    return result
 
 
 def main() -> int:
@@ -45,15 +108,11 @@ def main() -> int:
     checkout = Path(__file__).resolve().parent
     environment = args.venv.expanduser().resolve()
     try:
-        result = plan(checkout, environment, args.expected_commit)
-        if not args.dry_run:
-            if environment.exists():
-                raise RuntimeError("Selected environment already exists; choose a fresh path")
-            venv.EnvBuilder(with_pip=True, clear=False).create(environment)
-            subprocess.run(result["install_command"], check=True)
+        result = (plan(checkout, environment, args.expected_commit) if args.dry_run
+                  else execute(checkout, environment, args.expected_commit))
         print(" ".join(result["install_command"]))
         return 0
-    except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+    except (RuntimeError, OSError) as exc:
         print(f"pod installer: {exc}", file=sys.stderr)
         return 1
 

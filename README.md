@@ -14,14 +14,14 @@ For a personal approval, first enter the exact agent, model and account while le
 
 ## Getting started
 
-Use Python 3.13 or newer on native Linux or Windows. From a clean reviewed checkout, choose a fresh environment outside it:
+Use Python 3.13 or newer on native Linux or Windows. The invoking interpreter must already have pip 22.3 or newer; Pod does not install or upgrade that bootstrap pip. From a clean reviewed checkout, choose a fresh environment outside it:
 
 ```sh
 python install.py --venv /path/to/new-venv --expected-commit REVIEWED_COMMIT
 /path/to/new-venv/bin/pod setup
 ```
 
-On Windows, run the environment's `Scripts\pod.exe`. The installer writes only to the selected environment and prints the install command. `pod setup` enrolls project skills; `pod setup --global` installs user skills without changing the current project. It does not install Orca or repair PATH.
+On Windows, run the environment's `Scripts\pod.exe`. The installer creates the target without pip, then uses the invoking interpreter's isolated pip with `--python` pointed at that exact environment. It removes inherited Python and pip control variables only from installer subprocesses, writes only to the selected environment, and prints the install command. `pod setup` enrolls project skills; `pod setup --global` installs user skills without changing the current project. It does not change global pip configuration, install Orca or repair PATH.
 
 Use `$pod` in Codex or `/pod` in Claude Code after skill discovery. Existing modified skill copies are preserved for review.
 
