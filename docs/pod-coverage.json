@@ -654,7 +654,8 @@
       "required_evidence": [
         "offline_behavior",
         "live_native",
-        "hosted_ci",
+        "hosted_ci_linux",
+        "hosted_ci_windows",
         "external_gate"
       ],
       "offline_test": "tests.test_release.ReleaseGateTests.test_missing_live_core_blocks_even_with_offline_pass",
@@ -672,7 +673,8 @@
       "id": "A81",
       "required_evidence": [
         "offline_behavior",
-        "hosted_ci",
+        "hosted_ci_linux",
+        "hosted_ci_windows",
         "external_gate"
       ],
       "offline_test": "tests.test_release.ReleaseGateTests.test_all_records_only_request_owner_decision",

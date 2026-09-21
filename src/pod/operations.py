@@ -491,26 +491,41 @@ def reconcile_release(project: Path, objective: str, *, owner: str, dispatch: st
         if cleanup.get("state") not in ("reserved", "uncertain", "retained", "released",
                                         "already_released", "release_pending", "release_unknown"):
             raise PodError("state_migration_required", "Cleanup state is unsupported")
-        if cleanup["state"] not in ("reserved", "uncertain", "retained",
-                                    "release_pending", "release_unknown"):
+        effect = _confirmed_release_effect(state, dispatch)
+        binding = cleanup.get("binding")
+        if (effect.get("native_binding") != binding or effect.get("runtime") != cleanup.get("runtime")
+                or binding_version(binding) is None):
+            raise PodError("release_identity_unverified", "Cleanup and launch bindings do not match")
+        predecessor = binding_version(binding) == "predecessor"
+        if (not predecessor and cleanup["state"] not in
+                ("reserved", "uncertain", "retained", "release_pending", "release_unknown")):
             return {"status": cleanup["state"], "dispatch": dispatch}
         shown = native_port.show_worker(dispatch)
+        if predecessor:
+            binding = _upgrade_predecessor_binding(shown, effect, dispatch)
         result = shown.get("result", {})
-        binding = cleanup["binding"]
-        effect = _confirmed_release_effect(state, dispatch)
-        if (effect.get("native_binding") != binding or effect.get("runtime") != cleanup["runtime"]
+        if (effect.get("runtime") != cleanup["runtime"]
                 or not _release_readback_matches(shown, cleanup["runtime"], dispatch, binding)
                 or not _settled_execution(result, binding)
                 or not _release_launch_matches(shown, effect)):
             raise PodError("release_identity_unverified", "Native release readback or launch changed")
-        if _resource_disposition(result, binding, "released"):
-            cleanup["state"] = "released"
-            _write(path, state)
-            return {"status": "released", "dispatch": dispatch, "source": "native_readback"}
-        if (cleanup["state"] in ("reserved", "uncertain", "release_pending", "release_unknown")
-                and _resource_disposition(result, binding, "retained")):
+        claimed_released = cleanup["state"] in ("released", "already_released")
+        native_released = _resource_disposition(result, binding, "released")
+        if claimed_released and not native_released:
+            raise PodError("release_identity_unverified", "Recorded release disposition is unproven")
+        may_settle_retained = cleanup["state"] in (
+            "reserved", "uncertain", "release_pending", "release_unknown")
+        native_retained = may_settle_retained and _resource_disposition(result, binding, "retained")
+        if native_released:
+            cleanup["state"] = "released" if not claimed_released else cleanup["state"]
+        elif native_retained:
             cleanup["state"] = "retained"
+        if predecessor:
+            effect["native_binding"] = binding
+            cleanup["binding"] = binding
+        if predecessor or native_released or native_retained:
             _write(path, state)
-            return {"status": "retained", "dispatch": dispatch, "source": "native_readback"}
+        if native_released or native_retained:
+            return {"status": cleanup["state"], "dispatch": dispatch, "source": "native_readback"}
         return {"status": cleanup["state"], "dispatch": dispatch,
                 "next_safe_action": "inspect native recovery metadata"}

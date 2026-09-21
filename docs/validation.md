@@ -58,7 +58,12 @@ terminal/resource identity and unchanged launch, then durably upgrades the bindi
 release projection can settle. Malformed, ambiguous or contradictory predecessor rows remain held;
 the helper never repeats the native start or release effect.
 
-`python -m pod.internal release-gate --input RECORD.json` projects these exact rows. A complete set returns `owner_decision_required`; it never authorizes publication, merge or installed-state cutover. Missing live subchecks remain unavailable even if a top-level result says PASS.
+`python -m pod.internal release-gate --input RECORD.json` projects these exact rows. Hosted CI
+is represented by independent `hosted_ci_linux` and `hosted_ci_windows` gates. Every gate ending
+in `_linux` requires host `Linux`, every gate ending in `_windows` requires host `Windows`, and
+other gates still require one of those two documented host values. A complete set returns
+`owner_decision_required`; it never authorizes publication, merge or installed-state cutover.
+Missing live subchecks remain unavailable even if a top-level result says PASS.
 
 ## Evidence record
 

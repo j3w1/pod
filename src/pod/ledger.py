@@ -329,7 +329,8 @@ def _local_occupancy(project: Path) -> list[dict]:
                            and effect.get("runtime") == cleanup.get("runtime")]
                 if len(matches) != 1:
                     raise PodError("cleanup_identity_unverified", "Cleanup has no unique exact launch binding")
-                if cleanup_state in ("released", "already_released"):
+                if (cleanup_state in ("released", "already_released")
+                        and binding_version(binding) == "current"):
                     occupied = [row for row in occupied
                                 if not (row["_path"] == path and row["_dispatch"] == dispatch
                                         and row["_key"] == ("dispatch", cleanup["runtime"], dispatch))]

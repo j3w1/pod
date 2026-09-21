@@ -5,8 +5,10 @@ from pod.errors import PodError
 
 
 def row(gate, outcome="PASS"):
+    host = ("Linux" if gate.endswith("_linux") else
+            "Windows" if gate.endswith("_windows") else "Linux")
     value = {"schema": "pod-validation/v1", "candidate": "commit", "tree": "tree",
-             "host": "fixture", "utc": "2026-09-20T00:00:00Z", "gate": gate,
+             "host": host, "utc": "2026-09-20T00:00:00Z", "gate": gate,
              "command": "bounded check", "outcome": outcome, "report": "artifact sha256:abc"}
     if gate.startswith("live_"):
         value["checks"] = {name: "PASS" for name in LIVE_CHECKS}
@@ -35,6 +37,45 @@ class ReleaseGateTests(unittest.TestCase):
         result = release_gate("commit", "tree", records)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["gates"]["skill_validation"], "NOT_RUN")
+
+    def test_hosted_linux_and_windows_are_independently_required(self):
+        self.assertIn("hosted_ci_linux", REQUIRED_GATES)
+        self.assertIn("hosted_ci_windows", REQUIRED_GATES)
+        for missing in ("hosted_ci_linux", "hosted_ci_windows"):
+            with self.subTest(missing=missing):
+                records = [row(gate) for gate in REQUIRED_GATES if gate != missing]
+                result = release_gate("commit", "tree", records)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["gates"][missing], "NOT_RUN")
+        complete = release_gate("commit", "tree", [row(gate) for gate in REQUIRED_GATES])
+        self.assertEqual(complete["status"], "owner_decision_required")
+        self.assertFalse(complete["release_authorized"])
+
+    def test_os_labelled_gates_reject_single_host_spoofing(self):
+        for host in ("Linux", "Windows"):
+            with self.subTest(host=host):
+                records = [row(gate) for gate in REQUIRED_GATES]
+                for record in records:
+                    record["host"] = host
+                with self.assertRaises(PodError) as caught:
+                    release_gate("commit", "tree", records)
+                self.assertEqual(caught.exception.code, "invalid_validation")
+
+    def test_non_os_gate_host_vocabulary_and_duplicate_unknown_validation(self):
+        invalid_host = row("skill_validation")
+        invalid_host["host"] = "fixture"
+        with self.assertRaises(PodError) as caught:
+            release_gate("commit", "tree", [invalid_host])
+        self.assertEqual(caught.exception.code, "invalid_validation")
+        duplicate = row("unit_linux")
+        with self.assertRaises(PodError) as caught:
+            release_gate("commit", "tree", [duplicate, dict(duplicate)])
+        self.assertEqual(caught.exception.code, "duplicate_validation")
+        unknown = row("unit_linux")
+        unknown["gate"] = "unit_other"
+        with self.assertRaises(PodError) as caught:
+            release_gate("commit", "tree", [unknown])
+        self.assertEqual(caught.exception.code, "invalid_validation")
 
     def test_live_record_needs_all_subchecks(self):
         records = [row(gate) for gate in REQUIRED_GATES]

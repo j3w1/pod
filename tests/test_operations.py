@@ -183,6 +183,19 @@ models:
     return project, assessment, caps, quota
 
 
+def downgrade_worker_binding(root, project):
+    context_path = next((root / "state" / "pod").glob("*/context.json"))
+    state = read(project, "objective")
+    binding = state["effects"]["op"]["native_binding"]
+    predecessor = {field: binding[field] for field in
+                   ("dispatchId", "workerId", "taskId", "runId")}
+    state["effects"]["op"]["native_binding"] = predecessor
+    if "dispatch" in state["cleanup"]:
+        state["cleanup"]["dispatch"]["binding"] = predecessor
+    atomic_json(context_path, state)
+    return predecessor
+
+
 def frozen_for(project, *, sources=None, context=None):
     route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
              "account": "account", "bucket": "shared", "effort": "high"}
@@ -1067,6 +1080,93 @@ class GuardedOperationTests(unittest.TestCase):
                                                dispatch="dispatch", port=port)["status"], "released")
             self.assertEqual(port.starts, 1)
             self.assertEqual(port.release_calls, 0)
+
+    def test_predecessor_cleanup_release_labels_hold_until_exact_rebind(self):
+        for disposition in ("released", "already_released"):
+            with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                project, assessment, caps, quota = inputs(root)
+                port = FixturePort()
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              operation_id="op", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+                port.settled = True
+                port.release_status = disposition
+                self.assertEqual(release_once(project, "objective", owner="owner",
+                                              dispatch="dispatch", port=port)["status"], disposition)
+                predecessor = downgrade_worker_binding(root, project)
+                route = frozen_for(project)["body"]["route"]
+                decision = {"status": "usable", "selected": route,
+                            "policy_revision": effective(project)["revision"]}
+                reserve_args = dict(project=project, objective="objective", owner="owner",
+                                    operation_id="replacement", requested=route,
+                                    route_decision=decision,
+                                    capability_contract=port.assurance(route),
+                                    native_reader=lambda: port.read_native("owner"), capacity=1,
+                                    run_id="run", plan_revision="plan", now=NOW)
+                with self.assertRaises(PodError) as occupied:
+                    reserve(**reserve_args)
+                self.assertEqual(occupied.exception.code, "capacity_full")
+                before = read(project, "objective")
+                contradictory = port.show_worker("dispatch")
+                contradictory["result"]["projection"]["id"] = "other-worker"
+                with patch.object(port, "show_worker", return_value=contradictory):
+                    with self.assertRaises(PodError) as mismatch:
+                        reconcile_release(project, "objective", owner="owner",
+                                          dispatch="dispatch", port=port)
+                self.assertEqual(mismatch.exception.code, "release_identity_unverified")
+                self.assertEqual(read(project, "objective"), before)
+                result = reconcile_release(project, "objective", owner="owner",
+                                           dispatch="dispatch", port=port)
+                self.assertEqual(result["status"], disposition)
+                upgraded = read(project, "objective")
+                effect_binding = upgraded["effects"]["op"]["native_binding"]
+                cleanup_binding = upgraded["cleanup"]["dispatch"]["binding"]
+                self.assertNotEqual(effect_binding, predecessor)
+                self.assertEqual(cleanup_binding, effect_binding)
+                self.assertEqual(reserve(**reserve_args)["state"], "reserved")
+                self.assertEqual(port.starts, 1)
+                self.assertEqual(port.release_calls, 1)
+
+    def test_predecessor_pending_and_unknown_cleanup_rebind_without_repeating_release(self):
+        for disposition in ("release_pending", "release_unknown"):
+            with self.subTest(disposition=disposition), fixture() as root, patch.dict(os.environ, {
+                    "XDG_STATE_HOME": str(root / "state"), "LOCALAPPDATA": str(root / "state"),
+                    "XDG_CONFIG_HOME": str(root / "config"), "APPDATA": str(root / "config")}):
+                project, assessment, caps, quota = inputs(root)
+                port = FixturePort()
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              operation_id="op", assessment=assessment, capabilities=caps,
+                              quotas=quota, occupancy={}, plan_revision="plan", port=port, now=NOW)
+                port.settled = True
+                port.release_status = disposition
+                release_once(project, "objective", owner="owner", dispatch="dispatch", port=port)
+                downgrade_worker_binding(root, project)
+                first = reconcile_release(project, "objective", owner="owner",
+                                          dispatch="dispatch", port=port)
+                self.assertEqual(first["status"], disposition)
+                rebound = read(project, "objective")
+                self.assertEqual(rebound["effects"]["op"]["native_binding"],
+                                 rebound["cleanup"]["dispatch"]["binding"])
+                self.assertIn("worktreeId", rebound["effects"]["op"]["native_binding"])
+                route = frozen_for(project)["body"]["route"]
+                decision = {"status": "usable", "selected": route,
+                            "policy_revision": effective(project)["revision"]}
+                with self.assertRaises(PodError) as occupied:
+                    reserve(project, "objective", owner="owner", operation_id="replacement",
+                            requested=route, route_decision=decision,
+                            capability_contract=port.assurance(route),
+                            native_reader=lambda: port.read_native("owner"), capacity=1,
+                            run_id="run", plan_revision="plan", now=NOW)
+                self.assertEqual(occupied.exception.code, "capacity_full")
+                port.resource_state = "released"
+                self.assertEqual(reconcile_release(project, "objective", owner="owner",
+                                                   dispatch="dispatch", port=port)["status"], "released")
+                self.assertEqual(reconcile_release(project, "objective", owner="owner",
+                                                   dispatch="dispatch", port=port)["status"], "released")
+                self.assertEqual(port.starts, 1)
+                self.assertEqual(port.release_calls, 1)
 
     def test_malformed_predecessor_binding_remains_blocked(self):
         with fixture() as root, patch.dict(os.environ, {
