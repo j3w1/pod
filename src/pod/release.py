@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import re
 from typing import Any
 
 from .errors import PodError
@@ -19,11 +21,39 @@ LIVE_CHECKS = ("discovery", "in_session", "authorized_execution", "effective_rou
                "lifecycle", "verification", "adoption")
 ROW_FIELDS = {"schema", "candidate", "tree", "host", "utc", "gate", "command",
               "outcome", "report", "checks"}
+_GIT_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\Z")
+_REPORT_REFERENCE = re.compile(
+    r"(?P<reference>[A-Za-z0-9][A-Za-z0-9._/-]{0,255}) sha256:(?P<digest>[0-9a-f]{64})\Z"
+)
+
+
+def _git_object_id(value: Any) -> bool:
+    return isinstance(value, str) and _GIT_OBJECT_ID.fullmatch(value) is not None
+
+
+def _utc_timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or _UTC_TIMESTAMP.fullmatch(value) is None:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return parsed.utcoffset() is not None and parsed.utcoffset().total_seconds() == 0
+
+
+def _sanitized_report(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    match = _REPORT_REFERENCE.fullmatch(value)
+    if match is None:
+        return False
+    return all(part not in ("", ".", "..") for part in match.group("reference").split("/"))
 
 
 def release_gate(candidate: str, tree: str, records: list[dict]) -> dict:
-    bounded_text(candidate, name="candidate", limit=64)
-    bounded_text(tree, name="tree", limit=64)
+    if not _git_object_id(candidate) or not _git_object_id(tree):
+        raise PodError("invalid_validation", "Candidate and tree must be full Git object identities")
     if not isinstance(records, list) or len(records) > 128:
         raise PodError("invalid_validation", "Validation records exceed limit")
     matching: dict[str, dict] = {}
@@ -35,6 +65,12 @@ def release_gate(candidate: str, tree: str, records: list[dict]) -> dict:
             raise PodError("invalid_validation", "Invalid gate outcome")
         for field in ("host", "utc", "command", "report"):
             bounded_text(row[field], name=field, limit=512)
+        if not _git_object_id(row["candidate"]) or not _git_object_id(row["tree"]):
+            raise PodError("invalid_validation", "Validation candidate and tree identities are malformed")
+        if not _utc_timestamp(row["utc"]):
+            raise PodError("invalid_validation", "Validation timestamp must be canonical UTC")
+        if not _sanitized_report(row["report"]):
+            raise PodError("invalid_validation", "Validation report reference or digest is malformed")
         expected_host = ("Linux" if row["gate"].endswith("_linux") else
                          "Windows" if row["gate"].endswith("_windows") else None)
         if ((expected_host is not None and row["host"] != expected_host)

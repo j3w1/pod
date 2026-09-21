@@ -272,7 +272,9 @@ def _source_identity_windows(root: Path, relative: str, max_bytes: int) -> dict:
     drive, tail = ntpath.splitdrive(absolute)
     if not drive or drive.startswith("\\\\") or not tail.startswith("\\"):
         raise PodError("source_unavailable", "Retained local Windows ancestry is unavailable for this source")
-    components = [drive + "\\"] + [part for part in tail.split("\\") if part] + list(Path(relative).parts)
+    root_components = [drive + "\\"] + [part for part in tail.split("\\") if part]
+    components = root_components + list(Path(relative).parts)
+    source_component_start = len(root_components)
     handles: list[int] = []
     current = components[0]
     invalid = ctypes.c_void_p(-1).value
@@ -284,7 +286,7 @@ def _source_identity_windows(root: Path, relative: str, max_bytes: int) -> dict:
             handle = create(current, read_attributes | (read_data if final else 0), share_read,
                             None, open_existing, backup_semantics | open_reparse, None)
             if handle == invalid:
-                if final and ctypes.get_last_error() in (2, 3):
+                if index >= source_component_start and ctypes.get_last_error() in (2, 3):
                     return {"path": relative, "state": "absent"}
                 return {"path": relative, "state": "unavailable"}
             handles.append(handle)

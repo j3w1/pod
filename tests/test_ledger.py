@@ -321,6 +321,30 @@ class LedgerTests(unittest.TestCase):
                 check_bound_sources(project, "objective", owner="terminal",
                                     assignment="assignment", sources=bound)
             self.assertEqual(second.exception.code, "source_rejected")
+
+    def test_missing_source_parent_rejection_survives_restoration(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                          "LOCALAPPDATA": str(root / "state"),
+                                                          "XDG_CONFIG_HOME": str(root / "config"),
+                                                          "APPDATA": str(root / "config")}):
+            project = root / "project"
+            source = project / "nested" / "a.txt"
+            source.parent.mkdir(parents=True)
+            source.write_text("original")
+            bound = [source_identity(project, "nested/a.txt")]
+            checkpoint(project, "objective", owner="terminal", value=checkpoint_body(),
+                       native={"runtime": "r"})
+            retained = project / "retained"
+            source.parent.rename(retained)
+            with self.assertRaises(PodError) as first:
+                check_bound_sources(project, "objective", owner="terminal",
+                                    assignment="assignment", sources=bound)
+            self.assertEqual(first.exception.code, "source_absent")
+            retained.rename(project / "nested")
+            with self.assertRaises(PodError) as second:
+                check_bound_sources(project, "objective", owner="terminal",
+                                    assignment="assignment", sources=bound)
+            self.assertEqual(second.exception.code, "source_rejected")
     def test_concurrent_objectives_share_unknown_account_allowance(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
                                                           "LOCALAPPDATA": str(root / "state"),

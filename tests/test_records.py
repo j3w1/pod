@@ -3,9 +3,12 @@ import hashlib
 import os
 import subprocess
 import sys
-from unittest.mock import patch
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
-from pod.records import packet, report, source_identity, verify_sources, acceptance
+from pod.records import (_source_identity_windows, acceptance, packet, report,
+                         source_identity, verify_sources)
 from pod.errors import PodError
 from tests.common import fixture
 
@@ -19,6 +22,34 @@ def packet_body():
 
 
 class RecordTests(unittest.TestCase):
+    def test_windows_missing_intermediate_source_parent_is_absent(self):
+        import ctypes
+
+        invalid = ctypes.c_void_p(-1).value
+        create = Mock(side_effect=(101, 102, invalid))
+
+        def directory_info(_handle, _kind, pointer, _size):
+            pointer._obj.attributes = 0x0010
+            return True
+
+        kernel = SimpleNamespace(
+            CreateFileW=create,
+            CloseHandle=Mock(return_value=True),
+            GetFileInformationByHandleEx=Mock(side_effect=directory_info),
+            GetFileInformationByHandle=Mock(),
+            GetFileType=Mock(),
+            ReadFile=Mock(),
+        )
+        with (patch("ctypes.WinDLL", return_value=kernel, create=True),
+              patch("ctypes.get_last_error", return_value=3, create=True),
+              patch("ntpath.abspath", return_value=r"C:\project")):
+            observed = _source_identity_windows(
+                Path("ignored-project"), "nested/file.txt", 1024
+            )
+        self.assertEqual(observed, {"path": "nested/file.txt", "state": "absent"})
+        self.assertEqual(create.call_count, 3)
+        self.assertEqual(kernel.CloseHandle.call_count, 2)
+
     def test_conventional_credential_paths_rejected_before_open_and_packet_admission(self):
         excluded = (
             ".env", ".env.production", "nested/.netrc", "nested/_netrc", "nested\\_netrc",

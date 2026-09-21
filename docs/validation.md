@@ -1,6 +1,6 @@
 # Pod validation
 
-Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Offline fixtures do not prove live Orca, provider behavior, native Windows, hosted CI, independent review or acceptance. All new-candidate rows start `NOT_RUN` until a matching result is recorded.
+Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Commit and tree values are full lowercase Git object IDs (40 hexadecimal characters for SHA-1 repositories or 64 for SHA-256 repositories). The timestamp is canonical RFC 3339 UTC with a trailing `Z`, including seconds and at most six fractional-second digits. The report value is a repository-neutral relative artifact identifier followed by ` sha256:` and the artifact's full 64-character lowercase SHA-256 digest; the identifier begins with an ASCII letter or digit, and its path components may otherwise use ASCII letters, digits, `.`, `_`, and `-`, but must not be empty, `.` or `..`. Offline fixtures do not prove live Orca, provider behavior, native Windows, hosted CI, independent review or acceptance. All new-candidate rows start `NOT_RUN` until a matching result is recorded.
 
 ## Required candidate checks
 
@@ -70,14 +70,14 @@ Missing live subchecks remain unavailable even if a top-level result says PASS.
 ```json
 {
   "schema": "pod-validation/v1",
-  "candidate": "exact Git commit",
-  "tree": "exact Git tree",
+  "candidate": "1111111111111111111111111111111111111111",
+  "tree": "2222222222222222222222222222222222222222",
   "host": "Linux or Windows",
-  "utc": "timestamp",
+  "utc": "2026-09-20T00:00:00Z",
   "gate": "name",
   "command": "sanitized command",
   "outcome": "PASS | FAILED | NOT_RUN | UNAVAILABLE",
-  "report": "sanitized artifact reference and digest"
+  "report": "reports/unit-linux.txt sha256:4444444444444444444444444444444444444444444444444444444444444444"
 }
 ```
 
