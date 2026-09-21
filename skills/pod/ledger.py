@@ -15,6 +15,9 @@ from .quota import validate_snapshot
 from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
+# A read is complete enough for admission when it covered every Run this machine's
+# records bind, or the whole fleet. A single bound Run is not, because another Run could
+# hold a worker on the same account.
 NATIVE_SCOPES = ("all", "bound+ledger_runs")
 _PREDECESSOR_BINDING_FIELDS = {"dispatchId", "workerId", "taskId", "runId"}
 _CURRENT_BINDING_FIELDS = _PREDECESSOR_BINDING_FIELDS | {

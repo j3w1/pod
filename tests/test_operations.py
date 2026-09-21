@@ -1801,7 +1801,12 @@ class ReviewFindingRegressions(unittest.TestCase):
                                          delivery_id="delivery-1", port=port)
             self.assertEqual(caught.exception.code, "delivery_ack_mismatch")
 
-    def test_the_fleet_scope_names_only_what_was_read(self):
+    def test_every_run_the_ledger_binds_is_actually_read(self):
+        """The scope label claimed the ledger's Runs were covered without reading them.
+
+        A worker on the same account in another Run would have gone uncounted while the
+        record told the admission gate the fleet was complete.
+        """
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
                                                         "XDG_CONFIG_HOME": str(root / "config")}):
             page = {"runtime": "r", "scope": {"source": "bound"}, "workers": [], "complete": True}
@@ -1811,16 +1816,27 @@ class ReviewFindingRegressions(unittest.TestCase):
                 reads.append(run)
                 return dict(page)
 
+            bindings = {"ctx_elsewhere": {"account": "a", "objective": "other", "agent": "codex",
+                                          "bucket": None, "run_id": "run-b"}}
             with patch("pod.operations.worker_rows", side_effect=rows), \
+                 patch("pod.operations._ledger_bindings", return_value=bindings), \
+                 patch("pod.operations._quota_snapshot", return_value=None), \
                  patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}):
-                port = OrcaPort(root)
-                with patch("pod.operations._ledger_bindings", return_value={}), \
-                     patch("pod.operations._quota_snapshot", return_value=None):
-                    bound = port.read_native("owner", run="run-a")
-                    merged = port.read_native("owner", run="run-a", runs=("run-b", "run-a"))
-            self.assertEqual(bound["scope"], "bound")
-            self.assertEqual(merged["scope"], "bound+ledger_runs")
-            self.assertEqual(reads, ["run-a", "run-a", "run-b"])
+                native = OrcaPort(root).read_native("owner", run="run-a")
+            self.assertEqual(native["scope"], "bound+ledger_runs")
+            self.assertEqual(reads, ["run-a", "run-b"], "the other Run must actually be read")
+
+    def test_an_unscoped_read_that_is_not_complete_is_refused(self):
+        with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
+                                                        "XDG_CONFIG_HOME": str(root / "config")}):
+            partial = {"runtime": "r", "scope": {"source": "bound"}, "workers": [],
+                       "complete": True}
+            with patch("pod.operations.worker_rows", return_value=partial), \
+                 patch("pod.operations._ledger_bindings", return_value={}), \
+                 patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}):
+                with self.assertRaises(PodError) as caught:
+                    OrcaPort(root).read_native("owner")
+            self.assertEqual(caught.exception.code, "native_occupancy_unverified")
 
     def test_a_descendant_named_by_an_object_is_still_counted(self):
         """Sibling projection fields are objects; assuming a bare string missed them."""

@@ -80,19 +80,27 @@ class OrcaPort:
                     runs: tuple[str, ...] = ()) -> dict:
         handle = os.environ.get("ORCA_TERMINAL_HANDLE")
         authoritative = bool(handle) and handle == owner
-        pages = [worker_rows(run)] if run else [worker_rows()]
-        scope = "all"
-        if run:
-            extra_runs = sorted({extra for extra in runs if extra and extra != run})
-            scope = "bound+ledger_runs" if extra_runs else "bound"
-            for extra in extra_runs:
-                pages.append(worker_rows(extra))
-        runtime = pages[0]["runtime"]
-        raw_scope = pages[0]["scope"]
         if not run:
+            pages = [worker_rows()]
+            runtime = pages[0]["runtime"]
+            raw_scope = pages[0]["scope"]
             source = raw_scope.get("source") if isinstance(raw_scope, dict) else None
-            scope = source if source == "all" else "bound+ledger_runs"
-        bindings = _ledger_bindings(runtime, self.project)
+            if source != "all":
+                raise PodError("native_occupancy_unverified",
+                               "An unscoped fleet read did not report complete scope")
+            scope = "all"
+            bindings = _ledger_bindings(runtime, self.project)
+        else:
+            # A Run-scoped read sees only that Run. Every other Run this machine's records
+            # bind is read too, so the scope this reports is one the read actually covered.
+            first = worker_rows(run)
+            runtime = first["runtime"]
+            bindings = _ledger_bindings(runtime, self.project)
+            extra_runs = sorted({value["run_id"] for value in bindings.values()
+                                 if value.get("run_id") and value["run_id"] != run}
+                                | {extra for extra in runs if extra and extra != run})
+            pages = [first] + [worker_rows(extra) for extra in extra_runs]
+            scope = "bound+ledger_runs"
         rows = []
         cross_host = False
         for page in pages:
@@ -191,8 +199,10 @@ def _ledger_bindings(runtime: str, project: Path | None = None) -> dict:
                 continue
             dispatch = binding.get("dispatchId")
             if isinstance(dispatch, str) and dispatch:
-                bindings[dispatch] = {"account": request.get("account"), "objective": str(path.parent.name),
-                                      "agent": request.get("agent"), "bucket": effect.get("bucket")}
+                bindings[dispatch] = {"account": request.get("account"),
+                                      "objective": str(path.parent.name),
+                                      "agent": request.get("agent"), "bucket": effect.get("bucket"),
+                                      "run_id": effect.get("run_id")}
     return bindings
 
 
