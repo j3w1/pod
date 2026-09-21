@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 
 from .errors import PodError
-from .util import digest, exact
+from .util import digest, exact, explicit_home
 
 SCHEMA = "pod/v1"
 DEFAULT_WORKER_CAPACITY = 2
@@ -202,6 +202,9 @@ def validate(value: Any) -> dict:
 
 
 def personal_path() -> Path:
+    override = explicit_home("POD_CONFIG_HOME")
+    if override is not None:
+        return override / "config.yaml"
     if os.name == "nt":
         root = os.environ.get("APPDATA")
         if not root:

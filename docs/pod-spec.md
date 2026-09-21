@@ -129,6 +129,11 @@ These contracts elaborate R03, R11 and R48–R50, not a second authority.
 
 R10–R16 use personal Linux `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml`,
 personal Windows `%APPDATA%\pod\config.yaml`, optional project `.pod/config.yaml`.
+For disposable validation, an absolute `POD_CONFIG_HOME` may process-locally replace only
+the personal Pod directory containing `config.yaml`, and an absolute `POD_STATE_HOME` may
+process-locally replace only Pod's state directory. Defaults remain unchanged; these
+overrides do not replace agent or Orca profile environment variables and do not expand
+project YAML authority.
 YAML is editable authority; Markdown tables are generated. No live identifiers,
 account credentials or personal machine paths belong in committed examples.
 

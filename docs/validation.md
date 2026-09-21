@@ -17,6 +17,21 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | Live core matrix | Codex and Claude Code, each on native Linux and Windows: discovery, in-session coordination, authorized native worker/effective route, lifecycle, verification and adoption | Separate live authorization and disposable project |
 | Project acceptance | Owner governance, merge, release and any publication decisions | External |
 
+For disposable validation, `POD_CONFIG_HOME` may name an absolute directory containing
+`config.yaml`, and `POD_STATE_HOME` may name an absolute Pod state directory. These
+process-scoped Pod-only overrides reject empty, relative, or existing non-directory values;
+they do not change the default personal locations, project YAML authority, `APPDATA`,
+`LOCALAPPDATA`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or Orca's native profile environment.
+Child Orca processes inherit that native profile unchanged. Use fresh owned directories;
+the overrides do not make an existing directory disposable.
+
+The explicit installer invokes the selected environment's interpreter in isolated mode and
+pip in isolated mode, with script-location warning traversal disabled. The original ALLY
+ensurepip failure remains unattributed and `install.py` end-to-end on native Windows is
+`NOT_RUN` for a new candidate until an owner-shell rerun. The complete Windows unit,
+repeat-setup/global-reuse/doctor, frozen-wheel, installed-CLI, and live rows likewise remain
+`NOT_RUN`; Linux fixtures do not promote them.
+
 The [scenario coverage file](pod-coverage.json) lists all A01–A82. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised. The direct-agent, native-Orca and Pod matched evaluation also remains `NOT_RUN` without bounded live authorization.
 
 Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.

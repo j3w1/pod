@@ -17,7 +17,10 @@ class IsolatedInstallTests(unittest.TestCase):
             with patch("install.subprocess.run", side_effect=outputs) as runner:
                 result = install.plan(checkout, root / "selected environment", "abcdef1")
             self.assertEqual(result["checkout_commit"], "abcdef123456")
-            self.assertEqual(result["install_command"][-1], str(checkout))
+            python = root / "selected environment" / ("Scripts/python.exe" if install.sys.platform == "win32" else "bin/python")
+            self.assertEqual(result["install_command"], [str(python), "-I", "-m", "pip", "--isolated",
+                                                         "install", "--no-input", "--no-warn-script-location",
+                                                         str(checkout)])
             self.assertEqual(runner.call_count, 2)
             with self.assertRaises(RuntimeError):
                 install.plan(checkout, checkout / "venv", "abcdef1")

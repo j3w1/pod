@@ -1,6 +1,6 @@
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import sys
 import unittest
@@ -8,12 +8,17 @@ from unittest.mock import patch
 
 from pod.cli import execute, parser
 from pod.errors import PodError
-from pod.setup import canonical, setup
+from pod.setup import _relative_key, canonical, setup
 from pod.ledger import checkpoint
 from tests.common import fixture
 
 
 class SetupCliTests(unittest.TestCase):
+    def test_nested_windows_skill_paths_use_canonical_manifest_keys(self):
+        root = PureWindowsPath(r"C:\project\.agents\skills\pod")
+        nested = root / "references" / "planning.md"
+        self.assertEqual(_relative_key(nested, root), "references/planning.md")
+
     def test_local_idempotent_and_modified_skill_preserved(self):
         with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "codex"),
                                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):

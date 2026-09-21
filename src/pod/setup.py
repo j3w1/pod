@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePath
 import hashlib
 import os
 import yaml
@@ -30,6 +30,11 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _relative_key(path: PurePath, root: PurePath) -> str:
+    """Canonical manifest/content key; filesystem operations keep native Paths."""
+    return path.relative_to(root).as_posix()
+
+
 def _targets(project: Path, global_scope: bool) -> dict[str, Path]:
     if global_scope:
         codex = (Path(os.environ["CODEX_HOME"]) / "skills" / "pod") if os.environ.get("CODEX_HOME") else Path.home() / ".agents" / "skills" / "pod"
@@ -52,7 +57,7 @@ def inspect(project: Path, *, global_scope: bool = False) -> dict:
             status = "conflict"
         else:
             states = []
-            actual = {str(p.relative_to(target)) for p in target.rglob("*") if p.is_file() or p.is_symlink()}
+            actual = {_relative_key(p, target) for p in target.rglob("*") if p.is_file() or p.is_symlink()}
             if actual - set(source):
                 states.append("extra")
             for name, data in source.items():
@@ -77,11 +82,11 @@ def _install(target: Path, source: dict[str, bytes]) -> str:
     if target.is_symlink() or (target.exists() and not target.is_dir()):
         return "preserved_conflict"
     if target.exists():
-        actual = {str(p.relative_to(target)) for p in target.rglob("*") if p.is_file() or p.is_symlink()}
+        actual = {_relative_key(p, target) for p in target.rglob("*") if p.is_file() or p.is_symlink()}
         if actual - set(source):
             return "preserved_modified"
     existing = [target / name for name in source if (target / name).exists() or (target / name).is_symlink()]
-    if any(path.is_symlink() or not path.is_file() or path.read_bytes() != source[str(path.relative_to(target))] for path in existing):
+    if any(path.is_symlink() or not path.is_file() or path.read_bytes() != source[_relative_key(path, target)] for path in existing):
         return "preserved_modified"
     for name, data in source.items():
         path = target / name
@@ -128,7 +133,7 @@ def setup(project: Path, *, global_scope: bool = False) -> dict:
                 if host in owned and _unredirected(path) and path.is_dir() and all((path / name).is_file() and not (path / name).is_symlink()
                                                            and (path / name).read_bytes() == data
                                                            for name, data in source.items()):
-                    actual = {str(p.relative_to(path)) for p in path.rglob("*") if p.is_file() or p.is_symlink()}
+                    actual = {_relative_key(p, path) for p in path.rglob("*") if p.is_file() or p.is_symlink()}
                     if actual == set(source):
                         for name in source:
                             (path / name).unlink()

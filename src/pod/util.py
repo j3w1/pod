@@ -14,6 +14,24 @@ from .errors import PodError
 MAX_RECORD = 128 * 1024
 
 
+def explicit_home(name: str) -> Path | None:
+    """Return one absolute, process-scoped Pod home override when present."""
+    if name not in os.environ:
+        return None
+    value = os.environ[name]
+    if not value or len(value) > 4096 or "\x00" in value:
+        raise PodError("invalid_location_override", f"{name} must be an absolute directory path")
+    try:
+        path = Path(value)
+    except (OSError, ValueError) as exc:
+        raise PodError("invalid_location_override", f"{name} must be an absolute directory path") from exc
+    if not path.is_absolute():
+        raise PodError("invalid_location_override", f"{name} must be an absolute directory path")
+    if path.exists() and not path.is_dir():
+        raise PodError("invalid_location_override", f"{name} must identify a directory")
+    return path
+
+
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 

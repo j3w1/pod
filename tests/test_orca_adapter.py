@@ -1,4 +1,6 @@
 import json
+import os
+from pathlib import Path
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -8,6 +10,21 @@ from pod.orca import account_metadata, effective_launch, read_command, worker_ro
 
 
 class OrcaAdapterTests(unittest.TestCase):
+    def test_pod_location_overrides_do_not_replace_native_subprocess_profile(self):
+        native = {"APPDATA": "native-appdata", "LOCALAPPDATA": "native-localappdata",
+                  "CODEX_HOME": "native-codex", "CLAUDE_CONFIG_DIR": "native-claude"}
+        overrides = {"POD_CONFIG_HOME": "/isolated/pod-config", "POD_STATE_HOME": "/isolated/pod-state"}
+
+        def completed(*args, **kwargs):
+            self.assertNotIn("env", kwargs)
+            self.assertEqual({key: os.environ[key] for key in native}, native)
+            return subprocess.CompletedProcess(args[0], 0, "orca 1.0\n", "")
+
+        with patch.dict(os.environ, {**native, **overrides}), \
+             patch("pod.orca.executable", return_value=Path("/native/orca")), \
+             patch("pod.orca.subprocess.run", side_effect=completed):
+            self.assertEqual(read_command(["--version"])["version"], "orca 1.0")
+
     def test_read_adapter_rejects_consuming_and_guessed_verbs_before_process(self):
         with patch("pod.orca.subprocess.run") as runner:
             for argv in (

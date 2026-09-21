@@ -3,12 +3,66 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from pod.config import effective, read_yaml, route_identity
+from pod.config import effective, personal_path, read_yaml, route_identity
 from pod.errors import PodError
+from pod.ledger import checkpoint, read, state_root
 from tests.common import fixture
 
 
 class ConfigTests(unittest.TestCase):
+    def test_pod_only_homes_isolate_personal_policy_and_state(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            config_home = root / "pod-config"
+            state_home = root / "pod-state"
+            config_home.mkdir()
+            (config_home / "config.yaml").write_text("schema: pod/v1\n")
+            native = {"APPDATA": str(root / "native-appdata"),
+                      "LOCALAPPDATA": str(root / "native-localappdata"),
+                      "CODEX_HOME": str(root / "native-codex"),
+                      "CLAUDE_CONFIG_DIR": str(root / "native-claude")}
+            overrides = {"POD_CONFIG_HOME": str(config_home), "POD_STATE_HOME": str(state_home)}
+            with patch.dict(os.environ, {**native, **overrides}):
+                policy = effective(project)
+                self.assertEqual(personal_path(), config_home / "config.yaml")
+                self.assertFalse(policy["policy"]["models"]["sol"]["approved"])
+                checkpoint(project, "objective", owner="owner", native={"runtime": "runtime"},
+                           value={"schema": "pod-checkpoint/v1", "criteria": ["works"],
+                                  "plan_revision": "plan", "candidate": "candidate",
+                                  "policy_revision": policy["revision"], "native_refs": [],
+                                  "assignments": [], "questions": [], "verification_gaps": ["works"],
+                                  "next_safe_action": "verify"})
+                self.assertEqual(state_root(), state_home)
+                self.assertIsNotNone(read(project, "objective"))
+                self.assertTrue(any(state_home.glob("*/context.json")))
+                self.assertEqual({key: os.environ[key] for key in native}, native)
+                self.assertFalse((root / "native-appdata").exists())
+                self.assertFalse((root / "native-localappdata").exists())
+
+                (project / ".pod").mkdir()
+                (project / ".pod" / "config.yaml").write_text(
+                    "schema: pod/v1\npolicy: {max_workers: 4}\n")
+                with self.assertRaises(PodError) as expanded:
+                    effective(project)
+                self.assertEqual(expanded.exception.code, "authority_expansion")
+
+    def test_pod_home_overrides_require_absolute_directories(self):
+        with fixture() as root:
+            for name, resolve in (("POD_CONFIG_HOME", personal_path),
+                                  ("POD_STATE_HOME", state_root)):
+                for value in ("", ".", "relative/path"):
+                    with self.subTest(name=name, value=value), patch.dict(os.environ, {name: value}):
+                        with self.assertRaises(PodError) as caught:
+                            resolve()
+                        self.assertEqual(caught.exception.code, "invalid_location_override")
+                existing_file = root / f"{name}.txt"
+                existing_file.write_text("not a directory")
+                with patch.dict(os.environ, {name: str(existing_file)}):
+                    with self.assertRaises(PodError) as caught:
+                        resolve()
+                    self.assertEqual(caught.exception.code, "invalid_location_override")
+
     def test_no_file_is_pending_and_read_only(self):
         with fixture() as root:
             personal = root / "none.yaml"

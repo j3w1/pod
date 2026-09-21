@@ -32,7 +32,8 @@ def plan(checkout: Path, environment: Path, expected_commit: str) -> dict:
         raise RuntimeError("Checkout does not match the reviewed clean commit")
     python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     return {"checkout_commit": head, "environment": str(environment),
-            "install_command": [str(python), "-m", "pip", "install", "--no-input", str(checkout)]}
+            "install_command": [str(python), "-I", "-m", "pip", "--isolated", "install",
+                                "--no-input", "--no-warn-script-location", str(checkout)]}
 
 
 def main() -> int:

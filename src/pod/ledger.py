@@ -12,10 +12,13 @@ from .errors import PodError
 from .orca import effective_launch, require_prelaunch_assurance
 from .quota import validate_snapshot
 from .routing import quota_state
-from .util import atomic_json, bounded_json, bounded_text, digest, exact
+from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home
 
 
 def state_root() -> Path:
+    override = explicit_home("POD_STATE_HOME")
+    if override is not None:
+        return override
     if os.name == "nt":
         root = os.environ.get("LOCALAPPDATA")
         if not root:
