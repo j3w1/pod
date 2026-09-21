@@ -112,17 +112,21 @@ jobs:
 
       - name: Install the skill with the community skills CLI
         run: |
+          # The skills CLI honours CODEX_HOME, CLAUDE_CONFIG_DIR and XDG_STATE_HOME, so a
+          # smoke that only overrides HOME writes into the real profile. Scrub them all.
           SMOKE="$RUNNER_TEMP/skills-home"
           mkdir -p "$SMOKE"
-          HOME="$SMOKE" npx --yes skills@1.7.0 add "$POD_EXPORT" \
+          env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
+            HOME="$SMOKE" npx --yes skills@1.7.0 add "$POD_EXPORT" \
             --skill pod -a codex -a claude-code -g -y
           test -f "$SMOKE/.agents/skills/pod/SKILL.md"
           test -f "$SMOKE/.agents/skills/pod/scripts/pod.py"
           grep -q '"pod"' "$SMOKE/.agents/.skill-lock.json"
           PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
-          HOME="$SMOKE" python "$SMOKE/.claude/skills/pod/scripts/pod.py" doctor --json > /dev/null
+          env -u CODEX_HOME -u CLAUDE_CONFIG_DIR HOME="$SMOKE" \
+            python "$SMOKE/.claude/skills/pod/scripts/pod.py" doctor --json > /dev/null
           HOME="$SMOKE" CODEX_HOME="$SMOKE/.agents" CLAUDE_CONFIG_DIR="$SMOKE/.claude" \
-            XDG_STATE_HOME="$SMOKE/.local/state" \
+            XDG_STATE_HOME="$SMOKE/.local/state" XDG_CONFIG_HOME="$SMOKE/.config" \
             .venv-smoke/bin/pod setup --global --json > setup.json
           python - <<'PY'
           import json, pathlib
@@ -172,7 +176,8 @@ jobs:
         run: |
           SMOKE="$RUNNER_TEMP/release-home"
           mkdir -p "$SMOKE"
-          HOME="$SMOKE" npx --yes skills@1.7.0 add \
+          env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
+            HOME="$SMOKE" npx --yes skills@1.7.0 add \
             "${GITHUB_REPOSITORY}#${GITHUB_REF_NAME}" --skill pod -a codex -a claude-code -g -y
           PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
 

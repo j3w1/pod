@@ -199,6 +199,32 @@ class SkillOwnershipTests(unittest.TestCase):
             self.assertTrue(linked.is_symlink())
             self.assertEqual(linked.resolve(), canonical_copy.resolve())
 
+    def test_the_canonical_copy_behind_a_link_is_also_recognised(self):
+        """The shape `npx skills add` actually produces, including without a lock file."""
+        with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
+                                                        "CLAUDE_CONFIG_DIR": str(root / "claude")}):
+            project = root / "project"
+            project.mkdir()
+            canonical_copy = root / "agents" / "skills" / "pod"
+            canonical_copy.mkdir(parents=True)
+            for name, data in canonical().items():
+                target = canonical_copy / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            linked = root / "claude" / "skills"
+            linked.mkdir(parents=True)
+            (linked / "pod").symlink_to(canonical_copy, target_is_directory=True)
+            report = inspect(project, global_scope=True)
+            self.assertEqual(report["codex"]["status"], "managed_by_skills_cli")
+            self.assertEqual(report["claude"]["status"], "managed_by_skills_cli")
+            before = {name: (canonical_copy / name).read_bytes() for name in BUNDLE_FILES}
+            outcome = setup(project, global_scope=True)
+            self.assertEqual(set(outcome["skills"].values()), {"managed_by_skills_cli"})
+            self.assertEqual(set(outcome["ownership"].values()), {"skills_cli"})
+            after = {name: (canonical_copy / name).read_bytes() for name in BUNDLE_FILES}
+            self.assertEqual(before, after)
+            self.assertTrue((linked / "pod").is_symlink())
+
     def test_a_lock_entry_marks_the_global_copy_as_externally_managed(self):
         with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
                                                         "CLAUDE_CONFIG_DIR": str(root / "claude"),

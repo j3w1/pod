@@ -86,12 +86,25 @@ def _managed_by_skills_cli(host: str, target: Path, targets: dict[str, Path], *,
                            global_scope: bool, entry: dict | None) -> bool:
     """Whether the community skills CLI, not Pod, owns this copy.
 
-    It installs one canonical copy under the agents home and links the other
-    agents at it; a lock entry additionally proves global ownership.
+    That installer places one canonical copy under the agents home and links every
+    other agent at it. Either side of that shape identifies it, so a source without
+    a lock entry is still recognised; a lock entry is additional proof.
     """
+    resolved = _resolved(target)
+    if resolved is None:
+        return False
+    for other, peer in targets.items():
+        if other == host:
+            continue
+        if peer.is_symlink() and _resolved(peer) == resolved:
+            # This target is the canonical copy another agent is linked at.
+            return True
     if target.is_symlink():
+        for other, peer in targets.items():
+            if other != host and _resolved(peer) == resolved:
+                return True
         canonical_target = _resolved(targets["codex"])
-        if canonical_target is not None and _resolved(target) == canonical_target:
+        if canonical_target is not None and resolved == canonical_target:
             return True
     if global_scope and entry is not None and target.is_dir():
         return True
