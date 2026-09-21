@@ -37,6 +37,32 @@ def _targets(project: Path, global_scope: bool) -> dict[str, Path]:
             "claude": project / ".claude" / "skills" / "pod"}
 
 
+def conventional_agents_skill(project: Path | None = None) -> Path | None:
+    """`~/.agents/skills/pod`, where the skills ecosystem keeps its canonical copy.
+
+    A host may point `CODEX_HOME` somewhere else entirely, as one running Codex inside
+    another tool does. Pod still has to see the conventional location, or it will install a
+    second active copy beside one that is already there.
+    """
+    try:
+        home = Path.home() / ".agents"
+    except (OSError, RuntimeError):
+        return None
+    if project is not None:
+        try:
+            if _inside_project(home, project):
+                return None
+        except PodError:
+            return None
+    return home / "skills" / "pod"
+
+
+def _inside_project(candidate: Path, project: Path) -> bool:
+    from .util import _inside
+
+    return _inside(candidate, project)
+
+
 def _roots(project: Path, global_scope: bool) -> dict[str, Path]:
     """The boundary each ancestor-redirection walk stops at.
 
@@ -98,29 +124,27 @@ def _resolved(path: Path) -> Path | None:
 
 
 def _managed_by_skills_cli(host: str, target: Path, targets: dict[str, Path], *,
-                           global_scope: bool, entry: dict | None) -> bool:
+                           global_scope: bool, entry: dict | None,
+                           conventional: Path | None = None) -> bool:
     """Whether the community skills CLI, not Pod, owns this copy.
 
-    That installer places one canonical copy under the agents home and links every
-    other agent at it. Either side of that shape identifies it, so a source without
-    a lock entry is still recognised; a lock entry is additional proof.
+    That installer places one canonical copy under the agents home and links every other
+    agent at it. Either side of that shape identifies it, so a source that records no lock
+    entry is still recognised, and a host whose `CODEX_HOME` points somewhere other than
+    the agents home still sees the canonical copy rather than installing beside it.
     """
     resolved = _resolved(target)
     if resolved is None:
         return False
+    known = [_resolved(peer) for other, peer in targets.items() if other != host]
+    if conventional is not None:
+        known.append(_resolved(conventional))
     for other, peer in targets.items():
-        if other == host:
-            continue
-        if peer.is_symlink() and _resolved(peer) == resolved:
+        if other != host and peer.is_symlink() and _resolved(peer) == resolved:
             # This target is the canonical copy another agent is linked at.
             return True
-    if target.is_symlink():
-        for other, peer in targets.items():
-            if other != host and _resolved(peer) == resolved:
-                return True
-        canonical_target = _resolved(targets["codex"])
-        if canonical_target is not None and resolved == canonical_target:
-            return True
+    if target.is_symlink() and any(resolved == other for other in known if other is not None):
+        return True
     if global_scope and entry is not None and target.is_dir():
         return True
     return False
@@ -161,12 +185,14 @@ def inspect(project: Path, *, global_scope: bool = False) -> dict:
     source = canonical()
     targets = _targets(project, global_scope)
     lock = skills_cli_entry()
+    conventional = conventional_agents_skill(project) if global_scope else None
     owned = set() if global_scope else _owned_hosts(project)
     report = {}
     for host, target in targets.items():
         declared = installed_version(target) if target.is_dir() else None
         manager = None
-        if _managed_by_skills_cli(host, target, targets, global_scope=global_scope, entry=lock["entry"]):
+        if _managed_by_skills_cli(host, target, targets, global_scope=global_scope,
+                                  entry=lock["entry"], conventional=conventional):
             status, manager = "managed_by_skills_cli", "skills_cli"
         elif target.is_symlink():
             manager = "unowned"
@@ -264,6 +290,15 @@ def _upgrade(target: Path, source: dict[str, bytes], prior_files: dict, root: Pa
     return "upgraded"
 
 
+def _installed_somewhere(target: Path) -> bool:
+    """Whether some installation of this skill already sits here, of any version."""
+    try:
+        return (target.is_dir() and not target.is_symlink()
+                and (target / "SKILL.md").is_file())
+    except OSError:
+        return False
+
+
 def _remove_owned(target: Path, source: dict[str, bytes]) -> bool:
     if installed_files(target) != set(source):
         return False
@@ -286,12 +321,22 @@ def setup(project: Path, *, global_scope: bool = False) -> dict:
     targets = _targets(project, global_scope)
     roots = _roots(project, global_scope)
     lock = skills_cli_entry()
+    conventional = conventional_agents_skill(project) if global_scope else None
     ownership = {}
     if global_scope:
         outcomes = {}
         for host, path in targets.items():
-            if _managed_by_skills_cli(host, path, targets, global_scope=True, entry=lock["entry"]):
+            if _managed_by_skills_cli(host, path, targets, global_scope=True,
+                                      entry=lock["entry"], conventional=conventional):
                 outcomes[host] = "managed_by_skills_cli"
+                ownership[host] = "skills_cli"
+                continue
+            if (conventional is not None and _resolved(conventional) != _resolved(path)
+                    and _installed_somewhere(conventional)):
+                # An installation already exists where the ecosystem keeps it. Whether its
+                # version matches is beside the point: adding a second active copy is what
+                # a repeat setup must never do, and which one wins is the operator's call.
+                outcomes[host] = "present_elsewhere"
                 ownership[host] = "skills_cli"
                 continue
             outcomes[host] = _install(path, source, roots[host])
