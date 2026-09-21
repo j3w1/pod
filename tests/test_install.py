@@ -1,4 +1,6 @@
+from importlib import metadata
 import os
+import re
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -25,6 +27,11 @@ class IsolatedInstallTests(unittest.TestCase):
                                                          "--no-input", "--no-warn-script-location", str(checkout)])
             self.assertEqual(result["pip_version"], (26, 2, 1))
             self.assertEqual(runner.call_count, 3)
+            self.assertEqual(
+                runner.call_args_list[2].args[0],
+                [install.sys.executable, "-I", "-m", "pip", "--isolated", "--version"],
+            )
+            self.assertEqual(runner.call_args_list[2].kwargs["env"]["PIP_CONFIG_FILE"], os.devnull)
             with self.assertRaises(RuntimeError):
                 install.plan(checkout, checkout / "venv", "abcdef1")
 
@@ -57,6 +64,38 @@ class IsolatedInstallTests(unittest.TestCase):
                         install.execute(checkout, root / "venv", "abcdef1")
                 builder.assert_not_called()
                 self.assertFalse((root / "venv").exists())
+
+    def test_bootstrap_preflight_ignores_disposable_user_pip_redirect(self):
+        with fixture() as root:
+            configured_python = root / "configured-python-must-not-run"
+            if install.sys.platform == "win32":
+                config_home = root / "appdata"
+                config_file = config_home / "pip" / "pip.ini"
+                user_environment = {"APPDATA": str(config_home)}
+            else:
+                config_home = root / "xdg-config"
+                config_file = config_home / "pip" / "pip.conf"
+                user_environment = {"XDG_CONFIG_HOME": str(config_home)}
+            config_file.parent.mkdir(parents=True)
+            config_file.write_text(f"[global]\npython = {configured_python}\n")
+
+            with patch.dict(os.environ, user_environment):
+                environment = install._subprocess_environment()
+                unisolated = subprocess.run(
+                    [install.sys.executable, "-I", "-m", "pip", "--version"],
+                    capture_output=True, text=True, env=environment,
+                )
+                self.assertNotEqual(unisolated.returncode, 0)
+                self.assertIn(str(configured_python), unisolated.stdout + unisolated.stderr)
+                self.assertFalse(configured_python.exists())
+                actual = install._bootstrap_pip(environment)
+                self.assertNotIn("PIP_CONFIG_FILE", environment)
+
+            expected_match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", metadata.version("pip"))
+            self.assertIsNotNone(expected_match)
+            expected = tuple(int(part or 0) for part in expected_match.groups())
+            self.assertEqual(actual, expected)
+            self.assertFalse(configured_python.exists())
 
     def test_pipless_target_exact_python_and_process_isolation(self):
         with fixture() as root:

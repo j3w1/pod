@@ -40,9 +40,14 @@ def _run(command: list[str], stage: str, *, env: dict[str, str] | None = None) -
 
 
 def _bootstrap_pip(environment: dict[str, str]) -> tuple[int, ...]:
-    command = [sys.executable, "-I", "-m", "pip", "--version"]
+    command = [sys.executable, "-I", "-m", "pip", "--isolated", "--version"]
+    preflight_environment = dict(environment)
+    # Pip resolves configured global options before --version exits. Disable
+    # configuration files process-locally so a user "global.python" cannot
+    # redirect even that early public-CLI path.
+    preflight_environment["PIP_CONFIG_FILE"] = os.devnull
     try:
-        result = _run(command, "bootstrap pip preflight", env=environment)
+        result = _run(command, "bootstrap pip preflight", env=preflight_environment)
     except RuntimeError as exc:
         raise RuntimeError(
             f"Bootstrap pip is unavailable; install pip 22.3 or newer for {sys.executable}: {exc}"
