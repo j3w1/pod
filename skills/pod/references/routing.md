@@ -8,8 +8,10 @@ provenance. Starter model rows remain pending recommendations.
 Approval binds the exact agent, model and redacted native account identity shown
 by the doctor's JSON output; the model alias is the human label. Quota, capacity and
 grants use that same identity, so discovery, relabeling or account rotation cannot
-inherit approval. Managed-account billing proof must belong to the selected account,
-not an unrelated host login. Keep responsibility, application, model and effort
+inherit approval. Identity and billing proof must come from the same selected managed,
+native-default or, only when no native default exists, login context. Pod repeats that
+join just before start or pending replay, even without quota windows; it never relabels
+the observed account. Keep responsibility, application, model and effort
 distinct. Preview/replay evaluates supplied assessment, capability and quota
 snapshots; it does not infer an arbitrary task's difficulty. Bind the packet to
 the resulting route and policy revision.

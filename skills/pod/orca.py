@@ -302,6 +302,29 @@ def run_rows() -> dict:
     raise PodError("orca_pagination", "Run inventory exceeds bounded pages")
 
 
+def current_run() -> dict:
+    """Read this terminal's native coordinator binding without adopting or creating one."""
+    response = read_command(["orchestration", "run-current", "--json"])
+    result = response["result"]
+    if "run" not in result:
+        raise PodError("orca_contract", "Current Run response lacks an explicit binding")
+    row = result["run"]
+    if row is None:
+        return {"runtime": response["runtime"], "run": None}
+    if not isinstance(row, dict):
+        raise PodError("orca_contract", "Current Run binding is malformed")
+    run_id = row.get("id")
+    coordinator = row.get("coordinator_handle")
+    generation = row.get("consumer_generation")
+    if (not isinstance(run_id, str) or not run_id
+            or not isinstance(coordinator, str) or not coordinator
+            or type(generation) is not int or generation < 0):
+        raise PodError("orca_contract", "Current Run ownership proof is incomplete")
+    return {"runtime": response["runtime"], "run": {
+            "id": run_id, "coordinator_handle": coordinator,
+            "consumer_generation": generation}}
+
+
 def hosts() -> dict:
     """Bounded host inventory; a fleet beyond this machine is a disclosed observation."""
     response = read_command(["host", "list", "--json"])
@@ -331,13 +354,78 @@ def selected_account_identity(account_block: dict, login_block: dict) -> dict:
         value = account_block.get("active_account")
         source = "orca_active_managed_account"
     else:
-        value = account_block.get("default_identity")
-        source = "orca_system_default"
-        if not value:
+        default_present = account_block.get("default_present")
+        if default_present is None:
+            default_present = any(account_block.get(key) is not None
+                                  for key in ("default_identity", "default_auth")) \
+                or account_block.get("default_has_auth") is True
+        if default_present:
+            value = account_block.get("default_identity")
+            source = "orca_system_default"
+        else:
             value = login_block.get("identity_digest")
             source = "agent_login_status"
     return {"identity_digest": value if isinstance(value, str) and value else None,
             "source": source if value else "unavailable"}
+
+
+def selected_account_evidence(account_block: dict, login_block: dict) -> dict:
+    """Join identity and billing proof from one selected account context."""
+    identity = selected_account_identity(account_block, login_block)
+    stamp, source = identity["identity_digest"], identity["source"]
+    auth = "unknown"
+    subscription = None
+    proof_source = "unavailable"
+    context_matched = False
+    if source == "orca_active_managed_account":
+        if account_block.get("selected_has_auth"):
+            auth = account_block.get("selected_auth", "unknown")
+            proof_source = source
+            context_matched = auth in ("oauth", "api_key")
+    elif source == "orca_system_default":
+        if account_block.get("default_has_auth"):
+            auth = account_block.get("default_auth", "unknown")
+            proof_source = source
+            context_matched = auth in ("oauth", "api_key")
+    elif source == "agent_login_status" and login_block.get("identity_digest") == stamp:
+        auth = login_block.get("auth", "unknown")
+        subscription = login_block.get("subscription")
+        proof_source = source
+        context_matched = auth in ("oauth", "api_key")
+    if auth == "oauth":
+        if proof_source.startswith("orca_"):
+            subscription = True
+        elif subscription is not True:
+            context_matched = False
+            subscription = None
+    elif auth == "api_key":
+        subscription = False
+    else:
+        auth = "unknown"
+        subscription = None
+        context_matched = False
+    billing = ("subscription" if context_matched and auth == "oauth" and subscription is True
+               else "api" if context_matched and auth == "api_key" else "unknown")
+    return {**identity, "auth": auth, "subscription": subscription,
+            "billing": billing, "proof_source": proof_source,
+            "context_matched": context_matched}
+
+
+def account_evidence_stops(evidence: dict, *, expected_identity: object,
+                           approved_billing: object) -> list[str]:
+    """Apply one fail-closed identity/billing policy to every pre-effect account read."""
+    observed = evidence.get("identity_digest")
+    if (not isinstance(expected_identity, str) or not isinstance(observed, str)
+            or observed != expected_identity):
+        return ["account_binding_unverified"]
+    if evidence.get("context_matched") is not True or evidence.get("billing") == "unknown":
+        return ["billing_mode_unverified"]
+    stops = []
+    if approved_billing == "included" and evidence["billing"] != "subscription":
+        stops.append("billing_mode_unverified")
+    if evidence["billing"] == "api" and approved_billing != "paid":
+        stops.append("paid_route_forbidden")
+    return stops
 
 
 def account_metadata_raw() -> dict:
@@ -353,8 +441,9 @@ def account_metadata_raw() -> dict:
         provider_block = result.get(provider) if isinstance(result.get(provider), dict) else {}
         managed = provider_block.get("accounts")
         managed = managed if isinstance(managed, list) else []
-        default = provider_block.get("systemDefault")
-        default = default if isinstance(default, dict) else {}
+        default_value = provider_block.get("systemDefault")
+        default_present = isinstance(default_value, dict)
+        default = default_value if default_present else {}
         active = provider_block.get("activeAccountId")
         selected = [row for row in managed
                     if isinstance(row, dict) and row.get("id") == active]
@@ -364,6 +453,7 @@ def account_metadata_raw() -> dict:
                   "selected_auth": selected.get("authKind")
                   if isinstance(selected.get("authKind"), str) else None,
                   "selected_has_auth": bool(selected.get("hasAuth")),
+                  "default_present": default_present,
                   "default_identity": digest(default.get("providerAccountId"))
                   if isinstance(default.get("providerAccountId"), str) else None,
                   "default_auth": default.get("authKind") if isinstance(default.get("authKind"), str) else None,
@@ -481,22 +571,12 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     bucket = bucket_for(agent, route.get("model", ""))
     managed = account_block.get("managed_accounts", 0)
     mode = "managed_account" if managed else "host_login"
-    identity_observation = selected_account_identity(account_block, login_block)
-    stamp = identity_observation["identity_digest"]
+    account_evidence = selected_account_evidence(account_block, login_block)
+    stamp = account_evidence["identity_digest"]
     expected_stamp = route.get("account")
-    if managed:
-        selected_auth = account_block.get("selected_auth")
-        auth = selected_auth if account_block.get("selected_has_auth") else "unknown"
-        subscription = True if auth == "oauth" else False if auth == "api_key" else None
-    else:
-        auth = login_block.get("auth", "unknown")
-        if (auth == "unknown" and account_block.get("default_auth") == "oauth"
-                and account_block.get("default_has_auth")):
-            auth, subscription = "oauth", True
-        else:
-            subscription = login_block.get("subscription")
-    observed_billing = "subscription" if auth == "oauth" and subscription else (
-        "api" if auth == "api_key" else "unknown")
+    auth = account_evidence["auth"]
+    subscription = account_evidence["subscription"]
+    observed_billing = account_evidence["billing"]
     approved_billing = model_policy.get("billing") if isinstance(model_policy, dict) else None
     windows = account_block.get("windows", {})
     controls = {
@@ -538,12 +618,9 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     disclosures = []
     if account_snapshot.get("runtime") != observed["runtime"]:
         hard_stops.append("native_authority_unverified")
-    if not expected_stamp or not stamp or stamp != expected_stamp:
-        hard_stops.append("account_binding_unverified")
-    if approved_billing == "included" and observed_billing != "subscription":
-        hard_stops.append("billing_mode_unverified")
-    if observed_billing == "api" and approved_billing != "paid":
-        hard_stops.append("paid_route_forbidden")
+    hard_stops.extend(account_evidence_stops(
+        account_evidence, expected_identity=expected_stamp,
+        approved_billing=approved_billing))
     if not windows:
         disclosures.append("provider quota windows are unavailable to the installed runtime")
     if controls["quota_bucket"]["tier"] == "runtime_observation" and "bucket" not in account_block:
@@ -564,7 +641,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                       "effort": route.get("effort")},
             "controls": controls,
             "login": {"mode": mode, "auth": auth, "subscription": subscription,
-                      "managed_accounts": managed, "identity_digest": stamp},
+                      "managed_accounts": managed, "identity_digest": stamp,
+                      "proof_source": account_evidence["proof_source"]},
             "billing": {"observed": observed_billing, "approved": approved_billing},
             "hard_stops": hard_stops, "disclosures": disclosures}
 

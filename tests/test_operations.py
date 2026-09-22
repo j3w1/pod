@@ -8,7 +8,7 @@ from unittest.mock import patch
 from pod.config import effective, route_identity
 from pod.errors import PodError
 from pod.internal import run as helper_run
-from pod.ledger import checkpoint, read, update_admission
+from pod.ledger import checkpoint, read, state_root, update_admission
 from pod.operations import OrcaPort, guarded_start, recover_admission
 from pod.records import packet
 from tests.common import fixture
@@ -51,12 +51,14 @@ class FakePort:
                           "identity_digest": observed_identity},
                 "billing": {"observed": "subscription", "approved": "included"}}
 
-    def read_native(self, owner, *, route=None):
+    def read_native(self, owner, *, route=None, establishment=None, authority_runs=()):
         rows = []
         for dispatch, item in self.workers.items():
             rows.append({"dispatchId": dispatch, "runId": item["run"],
                          "taskId": item["task"], "terminalState": "active"})
-        return {"runtime": self.runtime, "authoritative": True, "owner": owner,
+        authoritative = bool(authority_runs)
+        return {"runtime": self.runtime, "authoritative": authoritative,
+                "owner": owner if authoritative else None,
                 "scope": "all_runs", "complete": True,
                 "workers": rows, "cross_host": False, "atomic_admission": False,
                 "quota": self.quota}
@@ -269,6 +271,23 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(result["status"], "bound")
         self.assertEqual(port.retry_requests, [REQUEST_UUID])
         self.assertEqual(len(port.starts), 1)
+
+    def test_account_rotation_blocks_pending_replay_but_not_completed_observation(self):
+        project, port, admission_id = self.recovery_case()
+        port.actual_identity = "b" * 64
+        port.request_state = "pending"
+        with self.assertRaises(PodError) as caught:
+            recover_admission(project, "objective", owner="owner",
+                              admission_id=admission_id, worktree="current", port=port)
+        self.assertEqual(caught.exception.code, "account_binding_unverified")
+        self.assertEqual(port.starts, [])
+
+        project, port, admission_id = self.recovery_case()
+        port.actual_identity = "b" * 64
+        observed = recover_admission(project, "objective", owner="owner",
+                                     admission_id=admission_id, worktree="current", port=port)
+        self.assertEqual(observed["status"], "bound")
+        self.assertEqual(port.starts, [])
 
     def test_absent_request_adopts_only_one_exact_attempt(self):
         project, port, admission_id = self.recovery_case()
@@ -567,6 +586,121 @@ class BoundaryTests(unittest.TestCase):
             with self.assertRaises(PodError) as caught:
                 OrcaPort().read_native("owner")
         self.assertEqual(caught.exception.code, "native_occupancy_unverified")
+
+    def test_fresh_account_read_never_relabels_a_rotated_identity(self):
+        route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
+                 "account": ACCOUNT_IDENTITY, "bucket": "default", "effort": "high"}
+        established = FakePort().establish(route, {"billing": "included"})
+        empty_inventory = {"runtime": "runtime", "complete": True, "runs": []}
+        rotated = {"runtime": "runtime", "providers": {"codex": {
+            "managed_accounts": 0, "default_identity": "b" * 64,
+            "default_auth": "oauth", "default_has_auth": True, "windows": {}}}}
+        with patch("pod.operations.run_rows", return_value=empty_inventory), \
+             patch("pod.operations.account_metadata_raw", return_value=rotated), \
+             patch("pod.operations.agent_login_mode", return_value={
+                 "auth": "oauth", "subscription": True, "identity_digest": "b" * 64}), \
+             self.assertRaises(PodError) as caught:
+            OrcaPort().read_native("owner", route=route, establishment=established)
+        self.assertEqual(caught.exception.code, "account_binding_unverified")
+
+        current = {"runtime": "runtime", "providers": {"codex": {
+            "managed_accounts": 0, "default_identity": ACCOUNT_IDENTITY,
+            "default_auth": "oauth", "default_has_auth": True,
+            "updated_at_ms": NOW.timestamp() * 1000,
+            "windows": {"session": {"usedPercent": 20, "resetsAt": None}}}}}
+        with patch("pod.operations.run_rows", return_value=empty_inventory), \
+             patch("pod.operations.account_metadata_raw", return_value=current), \
+             patch("pod.operations.agent_login_mode", return_value={
+                 "auth": "api_key", "subscription": False,
+                 "identity_digest": "b" * 64}):
+            native = OrcaPort().read_native(
+                "owner", route=route, establishment=established)
+        self.assertEqual(native["quota"]["account"], ACCOUNT_IDENTITY)
+
+    def test_production_authority_joins_current_run_owner_and_objective_reference(self):
+        with fixture() as root:
+            project, _, _, _, _ = setup_case(root)
+            checkpoint_value = read(project, "objective")["checkpoint"]
+            checkpoint_value["native_refs"] = [{"runId": "run", "runtime": "runtime"}]
+            checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                       native={"runtime": "runtime"})
+            row = {"id": "run", "coordinator_handle": "owner", "consumer_generation": 3}
+            inventory = {"runtime": "runtime", "complete": True, "runs": [row]}
+            page = {"runtime": "runtime", "scope": {"source": "flag", "run": "run"},
+                    "complete": True, "workers": []}
+            no_run = {"runtime": "runtime", "run": None}
+            base = {"project": str(project), "objective": "objective", "owner": "owner"}
+            with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
+                 patch("pod.operations.run_rows", return_value=inventory), \
+                 patch("pod.operations.worker_rows", return_value=page), \
+                 patch("pod.operations.current_run", return_value=no_run), \
+                 patch("pod.governor.observe_candidate") as observer, \
+                 patch("pod.governor.execute") as executor:
+                with self.assertRaises(PodError) as blocked:
+                    helper_run("governor-prepare", {**base, "unit": "unit"})
+                self.assertEqual(blocked.exception.code, "native_authority_unverified")
+                with self.assertRaises(PodError):
+                    helper_run("governor-execute", {**base, "action": {}})
+                status = helper_run("governor-status", base)
+                observer.assert_not_called()
+                executor.assert_not_called()
+            self.assertEqual(status["schema"], "pod-governor/v2")
+            self.assertEqual(list(state_root(project).rglob("governor.json")), [])
+
+            takeover = {**base, "owner": "new-owner", "unit": "unit"}
+            with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "new-owner"}), \
+                 patch("pod.operations.current_run") as binding, \
+                 patch("pod.governor.observe_candidate") as observer, \
+                 self.assertRaises(PodError) as conflict:
+                helper_run("governor-prepare", takeover)
+            self.assertEqual(conflict.exception.code, "native_authority_unverified")
+            binding.assert_not_called()
+            observer.assert_not_called()
+
+            observation = {"schema": "pod-candidate-observation/v1", "commit": "1" * 40,
+                           "tree": "2" * 40, "dirty_paths": 0, "base": None,
+                           "workflows": {}, "verification": [], "toolchain": {},
+                           "environment": {},
+                           "policy_revision": effective(project)["revision"]}
+            current = {"runtime": "runtime", "run": row}
+            with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
+                 patch("pod.operations.run_rows", return_value=inventory), \
+                 patch("pod.operations.worker_rows", return_value=page), \
+                 patch("pod.operations.current_run", return_value=current), \
+                 patch("pod.governor.observe_candidate", return_value=observation):
+                prepared = helper_run("governor-prepare", {**base, "unit": "unit"})
+            self.assertEqual(prepared["status"], "prepared")
+
+    def test_native_authority_rejects_wrong_run_owner_runtime_and_changing_binding(self):
+        owner_row = {"id": "run", "coordinator_handle": "owner", "consumer_generation": 2}
+        inventory = {"runtime": "runtime", "complete": True, "runs": [owner_row]}
+        page = {"runtime": "runtime", "scope": {"source": "flag", "run": "run"},
+                "complete": True, "workers": []}
+        cases = {
+            "wrong_run": [{"runtime": "runtime", "run": {**owner_row, "id": "other"}}] * 2,
+            "wrong_owner": [{"runtime": "runtime", "run": {
+                **owner_row, "coordinator_handle": "worker"}}] * 2,
+            "changing": [{"runtime": "runtime", "run": owner_row},
+                         {"runtime": "runtime", "run": None}],
+        }
+        for name, bindings in cases.items():
+            with self.subTest(name=name), \
+                 patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
+                 patch("pod.operations.run_rows", return_value=inventory), \
+                 patch("pod.operations.worker_rows", return_value=page), \
+                 patch("pod.operations.current_run", side_effect=bindings):
+                native = OrcaPort().read_native("owner", authority_runs=("run",))
+            self.assertFalse(native["authoritative"])
+            self.assertIsNone(native["owner"])
+        with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
+             patch("pod.operations.run_rows", return_value=inventory), \
+             patch("pod.operations.worker_rows", return_value=page), \
+             patch("pod.operations.current_run", side_effect=[
+                 {"runtime": "other", "run": owner_row},
+                 {"runtime": "other", "run": owner_row}]), \
+             self.assertRaises(PodError) as runtime:
+            OrcaPort().read_native("owner", authority_runs=("run",))
+        self.assertEqual(runtime.exception.code, "orca_runtime_changed")
 
     def test_governor_mutations_require_native_owner_and_runtime_but_status_is_read_only(self):
         with fixture() as root:

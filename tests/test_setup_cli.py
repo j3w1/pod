@@ -175,6 +175,24 @@ class SetupCliTests(unittest.TestCase):
             "identity_digest": None, "source": "unavailable"})
         self.assertEqual(report["account_identities"]["claude"]["identity_digest"], "b" * 64)
 
+    def test_doctor_does_not_fall_through_a_partial_native_default_to_host_login(self):
+        with fixture() as root, \
+             patch("pod.cli.contract", return_value={"status": "observed", "runtime": "runtime",
+                                                       "capabilities": {}}), \
+             patch("pod.cli.account_metadata_raw", return_value={"runtime": "runtime", "providers": {
+                 "codex": {"managed_accounts": 0, "default_present": True,
+                           "default_identity": None, "default_auth": "api_key",
+                           "default_has_auth": True},
+                 "claude": {"managed_accounts": 0, "default_present": False,
+                            "default_identity": None}}}), \
+             patch("pod.cli.agent_login_mode", return_value={"auth": "oauth",
+                                                               "subscription": True,
+                                                               "identity_digest": "b" * 64}):
+            report = execute(parser().parse_args(["doctor", "--json"]), root)
+        self.assertEqual(report["account_identities"]["codex"], {
+            "identity_digest": None, "source": "unavailable"})
+        self.assertEqual(report["account_identities"]["claude"]["identity_digest"], "b" * 64)
+
     def test_status_joins_selected_run_to_checkpoint_compactly(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state")}):
             project = root / "project"

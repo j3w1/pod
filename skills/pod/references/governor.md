@@ -6,6 +6,12 @@ evidence. Orca owns worker lifecycle.
 
 ## Prepare a candidate
 
+Governor mutations require this terminal to own a stable native current Run that
+the objective checkpoint or admissions reference on the same runtime, with the
+same existing Pod owner. Establish or adopt that Run explicitly through Orca's
+installed guide; Pod never creates or adopts one implicitly. Without this proof,
+safe direct work and read-only `internal governor-status` remain available.
+
 Group related corrections into a delivery unit: the work reviewed and delivered
 together. Use `internal governor-prepare` to name its Tasks, branch, base,
 workflow files and verification commands. The helper reads Git and freezes commit,

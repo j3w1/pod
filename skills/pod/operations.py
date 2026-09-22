@@ -12,9 +12,10 @@ from .config import DEFAULT_WORKER_CAPACITY, effective
 from .errors import PodError
 from .ledger import (admission_identity, binding_valid, migrate_v1, read, reserve,
                      update_admission, _spending_grant_binding)
-from .orca import (account_metadata_raw, agent_login_mode, bucket_for, contract, hosts, identity,
-                   mutate_command, read_command, route_establishment, run_rows, worker_rows, worker_show,
-                   worktree_selector)
+from .orca import (account_evidence_stops, account_metadata_raw, agent_login_mode, bucket_for,
+                   contract, current_run, hosts, identity, mutate_command, read_command,
+                   require_route_establishment, route_establishment, run_rows,
+                   selected_account_evidence, worker_rows, worker_show, worktree_selector)
 from .routing import preview
 from .util import bounded_text
 
@@ -24,7 +25,9 @@ STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
 
 class NativePort(Protocol):
     def establish(self, route: dict, model_policy: dict, *, child_delegation: bool) -> dict: ...
-    def read_native(self, owner: str, *, route: dict | None = None) -> dict: ...
+    def read_native(self, owner: str, *, route: dict | None = None,
+                    establishment: dict | None = None,
+                    authority_runs: tuple[str, ...] = ()) -> dict: ...
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
                      worktree: str, retry_request: str | None = None) -> dict: ...
     def request_show(self, request_uuid: str) -> dict: ...
@@ -44,19 +47,49 @@ class OrcaPort:
                                    login=agent_login_mode(route["agent"]), fleet=hosts(),
                                    child_delegation=child_delegation)
 
-    def read_native(self, owner: str, *, route: dict | None = None) -> dict:
+    def read_native(self, owner: str, *, route: dict | None = None,
+                    establishment: dict | None = None,
+                    authority_runs: tuple[str, ...] = ()) -> dict:
         handle = os.environ.get("ORCA_TERMINAL_HANDLE")
-        authoritative = bool(handle) and handle == owner
+        if (not isinstance(authority_runs, tuple)
+                or any(not isinstance(run_id, str) or not run_id for run_id in authority_runs)
+                or len(set(authority_runs)) != len(authority_runs)):
+            raise PodError("native_authority_unverified", "Native authority Run set is malformed")
+        expected_runs = tuple(sorted(authority_runs))
+        binding_before = current_run() if expected_runs else None
         before = run_rows()
         runtime = before["runtime"]
         run_ids = tuple(sorted(row["id"] for row in before["runs"]))
         pages = [(run_id, worker_rows(run_id)) for run_id in run_ids]
         after = run_rows()
+        binding_after = current_run() if expected_runs else None
         after_ids = tuple(sorted(row["id"] for row in after["runs"]))
         if (before.get("complete") is not True or after.get("complete") is not True
                 or after["runtime"] != runtime or after_ids != run_ids):
             raise PodError("native_occupancy_unverified",
                            "Native Run inventory changed during the fleet read")
+        if expected_runs and (binding_before["runtime"] != runtime
+                              or binding_after["runtime"] != runtime):
+            raise PodError("orca_runtime_changed",
+                           "Current Run binding changed Orca runtime during the fleet read")
+        current = binding_before["run"] if binding_before is not None else None
+        stable_current = bool(current is not None and current == binding_after["run"])
+        before_by_id = {row["id"]: row for row in before["runs"]}
+        after_by_id = {row["id"]: row for row in after["runs"]}
+        current_id = current.get("id") if isinstance(current, dict) else None
+        inventory_before = before_by_id.get(current_id)
+        inventory_after = after_by_id.get(current_id)
+        native_binding = ({"id": current_id,
+                           "coordinator_handle": current.get("coordinator_handle"),
+                           "consumer_generation": current.get("consumer_generation")}
+                          if isinstance(current, dict) else None)
+        authoritative = bool(
+            expected_runs and handle and handle == owner and stable_current
+            and current_id in expected_runs
+            and isinstance(inventory_before, dict) and isinstance(inventory_after, dict)
+            and {key: inventory_before.get(key) for key in native_binding} == native_binding
+            and {key: inventory_after.get(key) for key in native_binding} == native_binding
+            and native_binding.get("coordinator_handle") == owner)
         rows = []
         cross_host = False
         for run_id, page in pages:
@@ -76,11 +109,16 @@ class OrcaPort:
                 if host_id not in (None, "local"):
                     cross_host = True
                 rows.append(worker)
+        if (route is None) != (establishment is None):
+            raise PodError("account_binding_unverified",
+                           "Fresh account evidence needs its established route")
+        quota = (_quota_snapshot(route, establishment, runtime=runtime)
+                 if route is not None else None)
         return {"runtime": runtime, "owner": owner if authoritative else None,
                 "authoritative": authoritative,
                 "scope": "all_runs",
                 "complete": True, "workers": rows,
-                "quota": _quota_snapshot(route) if route else None,
+                "quota": quota,
                 "cross_host": cross_host, "atomic_admission": False}
 
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
@@ -116,10 +154,21 @@ class OrcaPort:
         return worker_show(dispatch)
 
 
-def _quota_snapshot(route: dict) -> dict | None:
+def _quota_snapshot(route: dict, establishment: dict, *, runtime: str) -> dict | None:
     metadata = account_metadata_raw()
+    if metadata.get("runtime") != runtime or establishment.get("runtime") != runtime:
+        raise PodError("orca_runtime_changed", "Account evidence belongs to another Orca runtime")
     provider = metadata["providers"].get(route.get("agent"))
-    if not isinstance(provider, dict) or not provider.get("windows"):
+    if not isinstance(provider, dict):
+        raise PodError("account_binding_unverified", "Selected native account is unavailable")
+    evidence = selected_account_evidence(provider, agent_login_mode(route["agent"]))
+    approved_billing = establishment.get("billing", {}).get("approved")
+    stops = account_evidence_stops(evidence, expected_identity=route.get("account"),
+                                   approved_billing=approved_billing)
+    if stops:
+        code = stops[0]
+        raise PodError(code, "Fresh selected-account evidence no longer establishes the route")
+    if not provider.get("windows"):
         return None
     bucket = route.get("bucket") or bucket_for(route.get("agent"), route.get("model", ""))
     windows, unknowns = [], []
@@ -135,7 +184,8 @@ def _quota_snapshot(route: dict) -> dict | None:
     updated = provider.get("updated_at_ms")
     if not windows or type(updated) not in (int, float):
         return None
-    return {"schema": "pod-quota/v1", "provider": route["agent"], "account": route["account"],
+    return {"schema": "pod-quota/v1", "provider": route["agent"],
+            "account": evidence["identity_digest"],
             "bucket": bucket, "windows": windows,
             "observed_at": datetime.fromtimestamp(updated / 1000, tz=timezone.utc).isoformat(),
             "source": "supported_metadata", "confidence": "observed",
@@ -245,7 +295,7 @@ def _record_request(project: Path, objective: str, *, owner: str, admission_id: 
 
 
 def _current_authority(project: Path, objective: str, admission: dict,
-                       *, task_policy: dict | None) -> None:
+                       *, task_policy: dict | None) -> tuple[dict, dict]:
     """A pending replay is still a mutation, so current revocation/spending policy applies."""
     policy = effective(project, task=task_policy)
     if policy["revision"] != admission["route_decision"].get("policy_revision"):
@@ -272,6 +322,7 @@ def _current_authority(project: Path, objective: str, admission: dict,
                                 binding, requested=route,
                                 objective=admission["objective"],
                                 now=datetime.now(timezone.utc))
+    return model, policy["policy"]["policy"]
 
 
 def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -325,7 +376,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": row["state"], "admission": row, "action": "hold"}
     if worktree != admission["worktree"]:
         raise PodError("admission_conflict", "Recovery changed the original worktree")
-    authority = native_port.read_native(owner, route=admission["request"])
+    authority = native_port.read_native(owner, authority_runs=(admission["run_id"],))
     if (authority.get("authoritative") is not True or authority.get("owner") != owner
             or authority.get("runtime") != admission["runtime"]):
         raise PodError("native_authority_unverified", "Recovery caller/runtime authority is unproven")
@@ -345,7 +396,19 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                         port=native_port, request_uuid=request_uuid)
         return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
     if status == "pending":
-        _current_authority(project, objective, admission, task_policy=task_policy)
+        model, current_policy = _current_authority(
+            project, objective, admission, task_policy=task_policy)
+        fresh_establishment = native_port.establish(
+            admission["request"], model,
+            child_delegation=bool(current_policy.get("child_delegation")))
+        require_route_establishment(fresh_establishment, admission["request"])
+        pre_effect = native_port.read_native(
+            owner, route=admission["request"], establishment=fresh_establishment,
+            authority_runs=(admission["run_id"],))
+        if (pre_effect.get("authoritative") is not True or pre_effect.get("owner") != owner
+                or pre_effect.get("runtime") != admission["runtime"]):
+            raise PodError("native_authority_unverified",
+                           "Pending replay lost current Run ownership")
         receipt = native_port.start_worker(run=admission["run_id"], task=admission["task_id"],
                                            owner=owner, route=admission["request"],
                                            worktree=worktree, retry_request=request_uuid)
@@ -405,7 +468,9 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                                                         "policy": policy["policy"]["policy"],
                                                         "task_policy": task_policy},
                         establishment=establishment,
-                        native_reader=lambda: native_port.read_native(owner, route=route),
+                        native_reader=lambda: native_port.read_native(
+                            owner, route=route, establishment=establishment,
+                            authority_runs=(run,)),
                         capacity=capacity, run_id=run, task_id=task,
                         plan_revision=plan_revision, packet_id=validated["packet_id"],
                         worktree=worktree, frozen_packet=validated,

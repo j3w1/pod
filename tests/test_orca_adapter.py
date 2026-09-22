@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, contract,
-                      effective_launch, executable, hosts, identity, mutate_command, read_command,
+                      current_run, effective_launch, executable, hosts, identity,
+                      mutate_command, read_command,
                       require_route_establishment, route_establishment, run_rows, worker_rows,
                       worktree_selector)
 from tests.common import envelope, receipt
@@ -99,6 +100,25 @@ class OrcaAdapterTests(unittest.TestCase):
             run_rows()
         self.assertEqual(repeated.exception.code, "orca_pagination")
 
+    def test_current_run_requires_the_native_coordinator_binding_shape(self):
+        bound = {"runtime": "r", "result": {"run": {
+            "id": "run", "coordinator_handle": "owner", "consumer_generation": 7,
+            "objective": "objective"}}}
+        with patch("pod.orca.read_command", return_value=bound):
+            self.assertEqual(current_run(), {"runtime": "r", "run": {
+                "id": "run", "coordinator_handle": "owner", "consumer_generation": 7}})
+        with patch("pod.orca.read_command", return_value={
+                "runtime": "r", "result": {"run": None}}):
+            self.assertEqual(current_run(), {"runtime": "r", "run": None})
+        for malformed in ({}, {"run": "run"}, {"run": {"id": "run",
+                          "coordinator_handle": "owner"}}):
+            with self.subTest(malformed=malformed), \
+                 patch("pod.orca.read_command", return_value={"runtime": "r",
+                                                               "result": malformed}), \
+                 self.assertRaises(PodError) as caught:
+                current_run()
+            self.assertEqual(caught.exception.code, "orca_contract")
+
     def test_cached_metadata_redacts_accounts_and_keeps_timestamps(self):
         result = {"runtime": "r", "result": {"claude": [{"token": "secret"}], "rateLimits": {
             "claude": {"status": "ok", "updatedAt": 1000,
@@ -186,7 +206,8 @@ class RouteEstablishmentTests(unittest.TestCase):
         route, established = self.established(agent="claude", model="sonnet")
         observed_identity = "a" * 64
         empty = {"runtime": "uuid-0001", "providers": {"claude": {
-                     "managed_accounts": 0, "default_identity": observed_identity, "windows": {},
+                     "managed_accounts": 0, "default_identity": observed_identity,
+                     "default_auth": "oauth", "default_has_auth": True, "windows": {},
                      "account_association": "host_login"}}}
         sparse = route_establishment(route, {"billing": "included"},
                                      snapshot=self.snapshot(),
@@ -237,6 +258,59 @@ class RouteEstablishmentTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught:
             require_route_establishment(established, route)
         self.assertEqual(caught.exception.code, "billing_mode_unverified")
+
+    def test_system_default_billing_cannot_be_overridden_by_another_login_context(self):
+        identity_digest = "a" * 64
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+                 "bucket": "default", "effort": "high"}
+        base = {"runtime": "uuid-0001", "providers": {"codex": {
+            "managed_accounts": 0, "default_identity": identity_digest,
+            "default_auth": "api_key", "default_has_auth": True, "windows": {}}}}
+        unrelated_oauth = {"auth": "oauth", "subscription": True,
+                           "identity_digest": "b" * 64}
+        api = route_establishment(route, {"billing": "included"}, snapshot=self.snapshot(),
+                                  accounts=base, login=unrelated_oauth, fleet=self.fleet())
+        self.assertEqual(api["billing"]["observed"], "api")
+        self.assertIn("billing_mode_unverified", api["hard_stops"])
+        with self.assertRaises(PodError):
+            require_route_establishment(api, route)
+
+        unavailable = json.loads(json.dumps(base))
+        unavailable["providers"]["codex"].update(default_auth=None,
+                                                   default_has_auth=False)
+        unknown = route_establishment(route, {"billing": "included"},
+                                      snapshot=self.snapshot(), accounts=unavailable,
+                                      login=unrelated_oauth, fleet=self.fleet())
+        self.assertEqual(unknown["billing"]["observed"], "unknown")
+        self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
+
+        unavailable["providers"]["codex"].update(default_auth="api_key")
+        same_identity_login = {"auth": "oauth", "subscription": True,
+                               "identity_digest": identity_digest}
+        same_identity = route_establishment(route, {"billing": "included"},
+                                            snapshot=self.snapshot(), accounts=unavailable,
+                                            login=same_identity_login, fleet=self.fleet())
+        self.assertEqual(same_identity["billing"]["observed"], "unknown")
+        self.assertEqual(same_identity["hard_stops"], ["billing_mode_unverified"])
+
+        partial = json.loads(json.dumps(base))
+        partial["providers"]["codex"].update(default_present=True,
+                                               default_identity=None)
+        incomplete = route_establishment(route, {"billing": "included"},
+                                         snapshot=self.snapshot(), accounts=partial,
+                                         login=unrelated_oauth, fleet=self.fleet())
+        self.assertIsNone(incomplete["route"]["account"])
+        self.assertEqual(incomplete["billing"]["observed"], "unknown")
+        self.assertEqual(incomplete["hard_stops"], ["account_binding_unverified"])
+
+        subscribed = json.loads(json.dumps(base))
+        subscribed["providers"]["codex"].update(default_auth="oauth",
+                                                  default_has_auth=True)
+        exact = route_establishment(route, {"billing": "included"},
+                                    snapshot=self.snapshot(), accounts=subscribed,
+                                    login=unrelated_oauth, fleet=self.fleet())
+        self.assertEqual(exact["login"]["proof_source"], "orca_system_default")
+        require_route_establishment(exact, route)
 
     def test_billing_and_paid_fallback_fail_closed(self):
         route, unknown = self.established(login={"auth": "unknown", "subscription": None,

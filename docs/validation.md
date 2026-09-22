@@ -65,10 +65,15 @@ The personal model `account` value is the redacted native identity digest report
 `pod doctor --json`, not a display label. The same digest keys approval, quota, occupancy and
 exceptional/spending/reset grants, so aliases cannot split one account's allowance or transfer a
 grant across account rotation. Route establishment compares that value to the runtime-selected
-account before start. For a managed account, authentication/billing proof must come from that
-selected managed record; an unrelated host OAuth login does not prove subscription billing.
-Missing or mismatched identity and incoherent billing proof fail before a native effect. Missing
-optional quota windows remain a disclosed unknown after identity and billing are established.
+account before start. Identity and authentication/billing proof come from one selected context:
+the active managed record, the native system default, or an agent-login identity only when the
+native default is absent. A present native default with missing/unknown authentication cannot
+borrow OAuth even from a login with the same account digest; distinct authentication contexts
+remain distinct. Reservation re-reads this join even when
+quota windows are absent; the observed digest is compared directly and is never replaced by the
+requested value. The same gate runs before pending same-UUID replay, while completed/absent
+request diagnosis remains observational. Missing, rotated or incoherent proof fails before an
+effect; missing optional quota windows remain a disclosed unknown after the join succeeds.
 
 Request recovery starts from the Orca-issued UUID recorded before worker readback. `request-show`
 completed binds its receipt; pending replays the exact original worker-start command with the same
@@ -105,10 +110,15 @@ the only remote seam is a port whose exact `git` and `gh` argument shapes have t
 motivated it: a still-converging unit crossing the pull-request and CI boundary once per
 intermediate correction. It keeps the shape of the incident and none of its identifiers.
 
-The private production seam proves current native caller ownership and a stable runtime before
-candidate preparation, admission/decision, execution, preflight/outcome/classification/correction
-updates or reconciliation journaling. A copied owner string is insufficient. `governor-status`
-remains read-only and can diagnose the journal when mutation authority is unavailable.
+The private production seam reads this terminal's native `run-current` binding twice around the
+complete fleet read and requires one unchanged Run ID, `coordinator_handle` and
+`consumer_generation`. That binding, the actual terminal handle and runtime must match an exact
+Run reference in the objective's admissions/checkpoint and its existing Pod owner before candidate
+preparation, admission/decision, execution, preflight/outcome/classification/correction updates or
+reconciliation journaling. Terminal self-identity, another owned Run, a worker with no current
+Run, a changed binding or a takeover is insufficient. Refusal occurs before candidate observation,
+journal creation or provider calls. `governor-status` remains read-only and can diagnose the
+journal when mutation authority is unavailable; Pod neither creates nor adopts a Run.
 
 The private operations are `governor-prepare` (freeze a delivery unit's candidate generation
 from Git), `governor-preflight` (bind a local check result to it), `governor` (decide),

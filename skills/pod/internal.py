@@ -21,7 +21,32 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     from .ledger import fresh_projection, read
     from .operations import OrcaPort
 
-    native = OrcaPort(project).read_native(owner)
+    state = read(project, objective)
+    if mutating and (state is None or state.get("owner") != owner):
+        raise PodError("native_authority_unverified",
+                       "Governor mutation does not own this Pod objective context")
+    authority_runs: set[str] = set()
+    runtimes: set[object] = set()
+    if state is not None:
+        for row in state.get("admissions", {}).values():
+            if not isinstance(row, dict):
+                continue
+            if isinstance(row.get("run_id"), str):
+                authority_runs.add(row["run_id"])
+            runtimes.add(row.get("runtime"))
+        checkpoint_value = state.get("checkpoint")
+        refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            run_id = ref.get("runId")
+            ref_runtime = ref.get("runtime")
+            if (isinstance(run_id, str) and run_id
+                    and isinstance(ref_runtime, str) and ref_runtime):
+                authority_runs.add(run_id)
+                runtimes.add(ref_runtime)
+    native = OrcaPort(project).read_native(
+        owner, authority_runs=tuple(sorted(authority_runs)) if mutating else ())
     projection = fresh_projection(project, native, objective=objective)
     if not mutating:
         return projection
@@ -31,17 +56,9 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
             or projection.get("runtime") != native.get("runtime")):
         raise PodError("native_authority_unverified",
                        "Governor mutation requires the current native objective owner")
-    state = read(project, objective)
-    if state is not None:
-        runtimes = {row.get("runtime") for row in state.get("admissions", {}).values()
-                    if isinstance(row, dict)}
-        checkpoint_value = state.get("checkpoint")
-        refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
-        runtimes.update(ref.get("runtime") for ref in refs
-                        if isinstance(ref, dict) and ref.get("runtime") is not None)
-        if any(runtime != native["runtime"] for runtime in runtimes):
-            raise PodError("native_authority_unverified",
-                           "Governor evidence belongs to another Orca runtime")
+    if not authority_runs or any(runtime != native["runtime"] for runtime in runtimes):
+        raise PodError("native_authority_unverified",
+                       "Governor evidence belongs to another Orca Run or runtime")
     return projection
 
 

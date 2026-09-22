@@ -137,7 +137,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_paid_grant_cannot_authorize_a_rotated_native_account",
+      "offline_test": "tests.test_operations.AdmissionTests.test_account_rotation_blocks_pending_replay_but_not_completed_observation",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -454,7 +454,7 @@
         "offline_behavior",
         "external_gate"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_paid_grant_cannot_authorize_a_rotated_native_account",
+      "offline_test": "tests.test_operations.BoundaryTests.test_fresh_account_read_never_relabels_a_rotated_identity",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -515,7 +515,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.BoundaryTests.test_governor_mutations_require_native_owner_and_runtime_but_status_is_read_only",
+      "offline_test": "tests.test_operations.BoundaryTests.test_production_authority_joins_current_run_owner_and_objective_reference",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -712,7 +712,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_orca_adapter.RouteEstablishmentTests.test_an_included_route_survives_an_unavailable_quota_bucket",
+      "offline_test": "tests.test_orca_adapter.RouteEstablishmentTests.test_system_default_billing_cannot_be_overridden_by_another_login_context",
       "candidate_status": "NOT_RUN"
     },
     {

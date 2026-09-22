@@ -19,9 +19,11 @@
 - Package/skill metadata is 0.3.0 and CLI/helper envelopes are v2. The last published install
   pin remains `v0.1.2`; this candidate does not claim a tag or publication.
 - Personal approval, quota, capacity and grants now share Orca's redacted selected-account
-  identity; labels, rotated accounts and unrelated managed/host billing evidence fail before
-  launch. Capacity reads paginate every native Run with a stable double inventory, and Governor
-  mutations require current native owner/runtime authority while read-only status remains usable.
+  identity; one selected context supplies identity and billing at establishment and the final
+  start/replay gate, so labels, partial defaults, rotated accounts and unrelated login evidence
+  fail without relabeling. Capacity reads paginate every native Run with a stable double inventory,
+  and Governor mutations require an unchanged current Run/coordinator/generation joined to the
+  objective refs, runtime and existing owner while read-only status remains usable.
 
 ## 0.2.0 — 2026-09-22
 
