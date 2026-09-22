@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-09-22
 
 - The governor is now a waste-governor kernel: a small deterministic control layer inside the
   existing execution path that prevents a still-converging piece of work from repeatedly
