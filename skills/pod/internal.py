@@ -34,19 +34,24 @@ def run(operation: str, request: dict) -> dict:
     if operation == "packet":
         return packet(request)
     if operation == "report":
-        exact(request, {"report", "packet", "project", "objective", "operation_id"},
-              {"report", "packet", "project", "objective", "operation_id"}, name="request")
+        exact(request, {"report", "packet", "project", "objective", "admission_id"},
+              {"report", "packet", "project", "objective", "admission_id"}, name="request")
         if not isinstance(request["packet"], dict):
             raise PodError("invalid_packet", "Report needs a frozen packet")
         from .ledger import read
         state = read(Path(request["project"]), request["objective"])
-        effect = state.get("effects", {}).get(request["operation_id"]) if state else None
-        if (not effect or effect.get("state") != "confirmed" or not effect.get("native_binding")
-                or effect.get("packet_id") != request["packet"].get("packet_id")):
-            raise PodError("report_attempt_unverified", "No confirmed native attempt binding")
-        binding = effect["native_binding"]
+        admission = state.get("admissions", {}).get(request["admission_id"]) if state else None
+        if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
+                or admission.get("packet_id") != request["packet"].get("packet_id")):
+            raise PodError("report_attempt_unverified", "No exact native admission binding")
+        from .operations import OrcaPort, _binding_from_show
+        binding = admission["native_binding"]
+        shown = OrcaPort(Path(request["project"])).show_worker(binding["dispatchId"])
+        fresh = _binding_from_show(shown, admission, binding["dispatchId"])
+        if fresh != binding:
+            raise PodError("report_attempt_unverified", "Fresh native identity differs from admission")
         return report(request["report"], request["packet"],
-                      {"runtime": effect["runtime"], **{key: binding[key] for key in
+                      {"runtime": admission["runtime"], **{key: binding[key] for key in
                        ("runId", "taskId", "dispatchId", "workerId")}})
     if operation == "source":
         exact(request, {"project", "path"}, {"project", "path"}, name="request")
@@ -91,8 +96,14 @@ def run(operation: str, request: dict) -> dict:
         exact(request, {"project", "objective", "owner", "action", "exception"},
               {"project", "objective", "owner", "action"}, name="request")
         from .governor import decide
+        from .operations import OrcaPort
+        from .ledger import fresh_projection
+        native = OrcaPort(Path(request["project"])).read_native(request["owner"])
+        projection = fresh_projection(Path(request["project"]), native,
+                                      objective=request["objective"])
         return decide(Path(request["project"]), request["objective"], owner=request["owner"],
-                      action=request["action"], exception=request.get("exception"))
+                      action=request["action"], exception=request.get("exception"),
+                      native_projection=projection)
     if operation == "governor-outcome":
         exact(request, {"project", "objective", "owner", "record_id", "outcome", "provider", "evidence", "detail"},
               {"project", "objective", "owner", "record_id", "outcome"}, name="request")
@@ -141,10 +152,15 @@ def run(operation: str, request: dict) -> dict:
         exact(request, {"project", "objective", "owner", "action", "exception", "pull_request"},
               {"project", "objective", "owner", "action"}, name="request")
         from .governor import execute
+        from .operations import OrcaPort
+        from .ledger import fresh_projection
+        native = OrcaPort(Path(request["project"])).read_native(request["owner"])
+        projection = fresh_projection(Path(request["project"]), native,
+                                      objective=request["objective"])
         # The production port is the installed gh and git; request JSON cannot supply one.
         return execute(Path(request["project"]), request["objective"], owner=request["owner"],
                        action=request["action"], exception=request.get("exception"),
-                       pull_request=request.get("pull_request"))
+                       pull_request=request.get("pull_request"), native_projection=projection)
     if operation == "governor-reconcile":
         exact(request, {"project", "objective", "owner", "record_id"},
               {"project", "objective", "owner", "record_id"}, name="request")
@@ -152,60 +168,37 @@ def run(operation: str, request: dict) -> dict:
         return reconcile(Path(request["project"]), request["objective"], owner=request["owner"],
                          record_id=request["record_id"])
     if operation == "governor-status":
-        exact(request, {"project", "objective"}, {"project", "objective"}, name="request")
+        exact(request, {"project", "objective", "owner"}, {"project", "objective", "owner"}, name="request")
         from .governor import status
-        return status(Path(request["project"]), request["objective"])
+        from .operations import OrcaPort
+        from .ledger import fresh_projection
+        native = OrcaPort(Path(request["project"])).read_native(request["owner"])
+        projection = fresh_projection(Path(request["project"]), native,
+                                      objective=request["objective"])
+        return status(Path(request["project"]), request["objective"], native_projection=projection)
     if operation == "admission":
-        exact(request, {"project", "objective", "owner", "run", "task", "operation_id",
+        exact(request, {"project", "objective", "owner", "run", "task",
                         "assessment", "capabilities", "quotas", "occupancy", "plan_revision",
                         "capacity", "capacity_reason", "exceptional_grant", "packet", "worktree"},
-              {"project", "objective", "owner", "run", "task", "operation_id",
+              {"project", "objective", "owner", "run", "task",
                "assessment", "capabilities", "quotas", "occupancy", "plan_revision", "packet"}, name="request")
         from .operations import guarded_start
         # The production port verifies installed controls itself; request JSON
         # can supply assessment snapshots but cannot assert native assurance.
         return guarded_start(Path(request["project"]), request["objective"],
                              owner=request["owner"], run=request["run"], task=request["task"],
-                             operation_id=request["operation_id"], assessment=request["assessment"],
-                             capabilities=request["capabilities"], quotas=request["quotas"],
+                             assessment=request["assessment"], capabilities=request["capabilities"], quotas=request["quotas"],
                              occupancy=request["occupancy"], plan_revision=request["plan_revision"],
                              capacity=request.get("capacity", 2),
                              capacity_reason=request.get("capacity_reason"),
                              exceptional_grant=request.get("exceptional_grant"),
                              frozen_packet=request["packet"],
                              worktree=request.get("worktree", "current"))
-    if operation == "reconcile-launch":
-        exact(request, {"project", "objective", "owner", "operation_id", "run", "task"},
-              {"project", "objective", "owner", "operation_id", "run", "task"}, name="request")
-        from .operations import reconcile_launch
-        return reconcile_launch(Path(request["project"]), request["objective"], owner=request["owner"],
-                                operation_id=request["operation_id"], run=request["run"],
-                                task=request["task"])
-    if operation == "delivery":
-        exact(request, {"project", "objective", "owner", "run", "timeout_ms"},
-              {"project", "objective", "owner", "run"}, name="request")
-        from .operations import settle_delivery
-        return settle_delivery(Path(request["project"]), request["objective"], owner=request["owner"],
-                               run=request["run"], timeout_ms=request.get("timeout_ms"))
-    if operation == "delivery-ack":
-        exact(request, {"project", "objective", "owner", "run", "delivery_id"},
-              {"project", "objective", "owner", "run", "delivery_id"}, name="request")
-        from .operations import acknowledge_delivery
-        return acknowledge_delivery(Path(request["project"]), request["objective"],
-                                    owner=request["owner"], run=request["run"],
-                                    delivery_id=request["delivery_id"])
-    if operation == "release":
-        exact(request, {"project", "objective", "owner", "dispatch"},
-              {"project", "objective", "owner", "dispatch"}, name="request")
-        from .operations import release_once
-        return release_once(Path(request["project"]), request["objective"],
-                            owner=request["owner"], dispatch=request["dispatch"])
-    if operation == "reconcile-release":
-        exact(request, {"project", "objective", "owner", "dispatch"},
-              {"project", "objective", "owner", "dispatch"}, name="request")
-        from .operations import reconcile_release
-        return reconcile_release(Path(request["project"]), request["objective"],
-                                 owner=request["owner"], dispatch=request["dispatch"])
+    if operation == "state-migrate":
+        exact(request, {"project", "objective", "owner"},
+              {"project", "objective", "owner"}, name="request")
+        from .operations import migrate_state
+        return migrate_state(Path(request["project"]), request["objective"], owner=request["owner"])
     raise PodError("unknown_operation", "Unsupported private helper operation")
 
 
@@ -213,9 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
     parser.add_argument("operation", choices=("brief", "preview", "replay", "packet", "report", "source",
                                                "verify-sources", "acceptance", "integration-observe",
-                                               "checkpoint", "admission", "reconcile-launch",
-                                               "delivery", "delivery-ack", "release",
-                                               "reconcile-release", "release-gate",
+                                               "checkpoint", "admission", "state-migrate", "release-gate",
                                                "governor", "governor-outcome", "governor-prepare",
                                                "governor-preflight", "governor-classify",
                                                "governor-correct", "governor-execute",
@@ -225,10 +216,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         value = bounded_json(args.input)
         result = run(args.operation, value)
-        print(json.dumps({"schema": "pod-helper/v1", "status": "ok", "result": result}, sort_keys=True))
+        print(json.dumps({"schema": "pod-helper/v2", "status": "ok", "result": result}, sort_keys=True))
         return 0
     except PodError as exc:
-        print(json.dumps({"schema": "pod-helper/v1", "status": "blocked",
+        print(json.dumps({"schema": "pod-helper/v2", "status": "blocked",
                           "error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
         return 1
 

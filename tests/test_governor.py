@@ -20,8 +20,8 @@ from pod.errors import PodError
 from pod.governor import (classify_failure, decide, discover_triggers, enforcement, execute,
                           observe_candidate, prepare_candidate, reconcile, record_correction,
                           record_outcome, record_preflight, status)
-from pod.ledger import checkpoint, reserve
-from tests.common import establishment, fixture
+from pod.ledger import checkpoint
+from tests.common import fixture
 
 NOW = datetime(2026, 9, 21, tzinfo=timezone.utc)
 COMMIT, TREE = "a" * 40, "c" * 40
@@ -441,27 +441,15 @@ class DecisionTests(GovernorCase):
                                   observation=observation(commit=COMMIT2, tree=TREE2), tasks=["t2"],
                                   branch={"remote": "origin", "branch": "agent/urgent", "base": "main"},
                                   now=NOW)["candidate"]
-        route = {"agent": "codex", "model": "m", "account": "a", "bucket": None, "effort": "high"}
-        reserve(self.project, "objective", owner="owner", operation_id="op", requested=route,
-                route_decision={"status": "usable", "selected": route,
-                                "policy_revision": effective(self.project)["revision"]},
-                establishment=establishment(route, runtime="runtime"),
-                native_reader=lambda: {"runtime": "runtime", "authoritative": True, "owner": "owner",
-                                       "scope": "all", "complete": True, "workers": [], "cross_host": False},
-                capacity=2, run_id="run", plan_revision="p")
-        from pod.ledger import _lock, _path, _read, _write
-        path = _path(self.project, "objective")
-        with _lock(path):
-            state = _read(path)
-            state["effects"]["op"]["state"] = "confirmed"
-            state["effects"]["op"]["native_binding"] = {"dispatchId": "d", "workerId": "w", "taskId": "t1",
-                                                       "runId": "run", "worktreeId": "wt",
-                                                       "terminalHandle": None, "terminalResourceId": None}
-            _write(path, state)
-        release = self.decide(action(candidate=status(self.project, "objective")["units"]["release"]["candidate"]["id"]))
+        projection = {"schema": "pod-native-projection/v1", "runtime": "runtime",
+                      "occupied": [{"task": "t1"}], "occupied_ids": ["d"]}
+        release = self.decide(
+            action(candidate=status(self.project, "objective")["units"]["release"]["candidate"]["id"]),
+            native_projection=projection)
         self.assertIn("integration_unsettled", self.codes(release))
         self.preflight(other["id"], unit="urgent")
-        urgent = self.decide(action(unit="urgent", candidate=other["id"], target="origin/agent/urgent"))
+        urgent = self.decide(action(unit="urgent", candidate=other["id"], target="origin/agent/urgent"),
+                             native_projection=projection)
         self.assertEqual(urgent["decision"], "ALLOW", urgent["explanation"])
         self.assertEqual(self.decide(action(unit="nowhere", candidate=other["id"]))["reasons"][0]["code"],
                          "unit_unknown")

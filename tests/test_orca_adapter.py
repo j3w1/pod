@@ -7,13 +7,27 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, contract,
-                      effective_launch, hosts, identity, mutate_command, read_command,
+                      effective_launch, executable, hosts, identity, mutate_command, read_command,
                       require_route_establishment, route_establishment, worker_rows,
                       worktree_selector)
 from tests.common import envelope, receipt
 
 
 class OrcaAdapterTests(unittest.TestCase):
+    def test_desktop_linux_uses_orca_ide_discovery_without_bare_orca_fallback(self):
+        with patch.dict(os.environ, {}, clear=False):
+            for key in ("ORCA_CLI_COMMAND", "ORCA_DEV_REPO_ROOT", "ORCA_TERMINAL_HANDLE"):
+                os.environ.pop(key, None)
+            with patch("pod.orca.shutil.which", return_value="/fixture/orca-ide") as which, \
+                 patch("pod.orca.Path.is_file", return_value=True):
+                self.assertEqual(executable(), Path("/fixture/orca-ide"))
+            which.assert_called_once_with("orca-ide")
+            with patch("pod.orca.shutil.which", return_value=None) as missing:
+                with self.assertRaises(PodError) as caught:
+                    executable()
+            self.assertEqual(caught.exception.code, "orca_unavailable")
+            missing.assert_called_once_with("orca-ide")
+
     def test_pod_location_overrides_do_not_replace_native_subprocess_profile(self):
         native = {
                   "CODEX_HOME": "native-codex", "CLAUDE_CONFIG_DIR": "native-claude"}
@@ -226,6 +240,7 @@ class MutationAllowlistTests(unittest.TestCase):
     def test_only_known_mutations_reach_a_process(self):
         with patch("pod.orca.subprocess.run") as runner:
             for argv in (["orchestration", "reset", "--json"],
+                         ["orchestration", "worker-release", "--dispatch", "d", "--json"],
                          ["orchestration", "worker-start", "--task", "t", "--json"],
                          ["orchestration", "worker-start", "--task", "t", "--run", "r",
                           "--worktree", "new-child", "--agent", "codex", "--model", "m",
@@ -285,6 +300,8 @@ class MutationAllowlistTests(unittest.TestCase):
             runner.assert_not_called()
         for argv in (["status", "--json"], ["host", "list", "--json"],
                      ["orchestration", "run-current", "--json"],
+                     ["orchestration", "request-show", "--request",
+                      "11111111-1111-4111-8111-111111111111", "--json"],
                      ["orchestration", "task-list", "--run", "r", "--json"],
                      ["orchestration", "worker-read", "--dispatch", "d", "--limit", "50", "--json"]):
             with self.subTest(argv=argv):

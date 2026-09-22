@@ -1,26 +1,30 @@
-# Pod rewrite progress
+# Pod 0.3.0 progress
 
-Specification baseline: `17a2316`. Read-only observations found Orca 1.4.206, Codex CLI 0.155.1 and Claude Code 2.1.278; versions alone do not prove Pod execution. Candidate commit/tree and final gate results are recorded in the sanitized task report after the branch is frozen. This page reports implementation work, not product release.
+Specification baseline: `1b0aa6fc68ee2157f6f67ba4a60076d967791cc4`.
+Read-only observations found Orca 1.4.206, Codex CLI 0.155.1 and Claude Code
+2.1.278; version discovery alone does not prove execution. This page reports candidate
+implementation, not release.
 
-| Phase | State | Evidence / limit |
+| Area | State | Evidence / limit |
 | --- | --- | --- |
-| P00 | DONE | Clean baseline, host doctor, runtime/help readback, legacy keep/adapt/remove inventory in [migration](pod-migration.md). |
-| P01 | DONE for inventory; PARTIAL for behavior | Every requirement and scenario remains in the [spec](pod-spec.md), with the 2026-09-21 owner retirements recorded in place; [coverage](pod-coverage.json) names each scenario's evidence type. Six formerly unmapped cases now have deterministic fixture slices. A02, A03, A04, A40, A41, A44 and A63 still lack complete local behavioral proof; document ID checks prove inventory only. |
-| P02 | IMPLEMENTED, local fixtures | Strict YAML, pending defaults, restrictive merge including quota freshness, provenance, approval, provider/account/bucket/window-bound quota preview and replay pass local fixtures. |
-| P03 | PARTIAL | Admission derives hard capacity and scoped exceptional grants from current effective policy; per-window quota holds preserve the latest exhaustion and require later fresh positive evidence. Global serialized admission projects reserved, uncertain and confirmed launches with reserved, uncertain and retained cleanup into objective and shared-account occupancy, deduplicated by exact runtime/Dispatch where available in synthetic fixtures. Fleet omission and coarse released labels do not free local launch evidence; exact worker readback can reconcile cleanup or a confirmed launch without cleanup without another release effect. Billing and reset guards, the strict read adapter and one-shot effect reconciliation pass synthetic tests. Route establishment now binds each route to the installed runtime's actual controls, so an approved subscription route launches and an unknown billing mode or unbacked paid route still fails closed. |
-| P04 | PARTIAL | Typed bounded packet references, retained no-follow single-file source reads, and guarded packet-source and source/instruction-context checks pass synthetic fixtures at reservation. Proven changed or absent sources durably reject the packet assignment; a source frozen as unavailable stays unbound until a fresh packet binds actual bytes, and current unavailability holds without definitive rejection. Native-bound report observations, per-item durable Delivery effects, and correction history bound to a confirmed Task and accepted criterion pass synthetic tests. A third correction requires diagnosis with a distinct bounded source observation; labels and descriptions cannot reset that threshold. Delivery receipt integration, live supervision, effective launch and cleanup are implemented against the production adapter and remain to be proved live. |
-| P05 | PARTIAL | Criterion-to-check/dependency brief, candidate-bound evidence projection, context binding, private checkpoint, steering, feedback and compact Run status have offline tests. Worker reports and validation records do not confer project acceptance; live adoption remains unverified. |
-| P06 | IMPLEMENTED locally | The package directory is now the skill bundle, with a bundled launcher, skills-CLI ownership detection, version-aware upgrade, the explicit isolated installer and the legacy machinery removed. The canonical repository rename and installed-state cutover remain owner-context steps. |
-| Waste governor | IMPLEMENTED, local fixtures | Delivery units, explicit candidate generations bound to commit, tree, base, workflow digests, verification, toolchain, environment and policy, local preflight receipts, ALLOW/REUSE/DEFER with next actions, failure classification through the ledger's intervention rule, a managed executor over an allowlisted `git`/`gh` port with UNKNOWN rows settled by readback only, conservative cancellation of superseded validation, scoped exception grants, observe mode, and an honest enforcement level pass offline fixtures including the sanitized repeated-pull-request regression. Live `gh` behaviour is `NOT_RUN`. |
-| P07 | OFFLINE IN PROGRESS | The full local suite, incident discovery, compile, supported-environment audit, bundle validation and parity, copied-bundle and installer smokes pass. The private release gate reports technical readiness and takes owner authorization as an input. Hosted, fresh independent review and the live matrices remain `NOT_RUN`. |
+| Runtime boundary | IMPLEMENTED locally | Orca owns Runs, Tasks, Dispatches, requests, messaging, terminals/resources and lifecycle. Pod's mutation adapter exposes only worker start and exact same-request replay. Removed Pod Delivery, cleanup, release and retry state machines have no private helper surface. |
+| Admission | IMPLEMENTED locally | Serialized v2 policy reservations re-read effective approval, route, source, packet, quota, spending and capacity under lock before one native start. Fresh Orca projections count exact admissions, foreign workers and descendants conservatively and deduplicate bindings. |
+| Recovery | IMPLEMENTED locally | The Orca-issued request UUID is persisted before worker readback. Completed, pending and absent request paths record, join or inspect the same immutable admission; missing, invalid, ambiguous and contradictory evidence holds without a fresh start. |
+| State migration | IMPLEMENTED locally | Explicit `state-migrate` validates and archives v1, reads Orca only, preserves spent grants, maps uncertainty to `legacy_hold`, and atomically installs v2. Failure leaves v1 active. Doctor/status only report `migration_required`. |
+| Packets and reports | IMPLEMENTED locally | Existing bounded packet/source/report contracts remain. Report admission joins a fresh worker-show to exact runtime and Dispatch identity. |
+| Waste governor | IMPLEMENTED locally | ALLOW/REUSE/DEFER, candidate/preflight/authorization/failure/correction and remote-action semantics remain. Production decisions now consume fresh read-only Orca occupancy rather than persistent Delivery/cleanup state. |
+| Skill and package | IMPLEMENTED locally | Package and skill are 0.3.0 candidates; CLI/helper envelopes are v2. The lean skill loads the installed Orca guide and on-demand Pod references. The last published installation pin remains `v0.1.2`; no v0.3.0 tag or publication is claimed. |
+| Candidate validation | IN PROGRESS | Focused offline behavior passes. Full suite, incidents, compile, audits, frozen build and install checks are rerun after the candidate is frozen. Hosted CI, live matrices, independent review, project acceptance, merge, release and publication remain distinct external gates. |
 
 ## Candidate evidence
 
-The coordinator receives an exact commit/tree report after frozen archive checks. No earlier commit's result fills that row. The coverage file retains `NOT_RUN` as its initial per-candidate state; test paths are intended offline cases, not proof by themselves.
+The coordinator receives the exact commit and tree after the frozen-candidate checks. Coverage
+rows remain `NOT_RUN` until candidate-bound evidence is recorded; a test path is an intended
+offline case, not proof by itself.
 
-## Release blockers
+## Remaining external gates
 
-- Required Claude Code and Codex live core matrices on Linux, and both Orca delegation adapters, are `NOT_RUN`.
-- Hosted candidate CI, fresh independent review and project acceptance are `NOT_RUN`.
-- Legacy `release_unknown` native resource needs owner/native reconciliation before destructive installed-state cutover. No native identifiers or private paths are tracked here.
-- Canonical repository rename/registration and external release actions are outside this implementation dispatch.
+- Required Codex and Claude Code live core and Orca delegation evidence is `NOT_RUN` here.
+- Hosted candidate CI, fresh independent review and project acceptance are `NOT_RUN` here.
+- Merge, tag, release, deployment and package-registry publication are not authorized by this
+  implementation task.

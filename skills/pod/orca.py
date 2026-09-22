@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 from .errors import PodError
 from .util import digest
@@ -33,8 +34,10 @@ def executable() -> Path:
         found = shutil.which(selected)
     elif os.environ.get("ORCA_DEV_REPO_ROOT"):
         found = shutil.which("orca-dev")
+    elif sys.platform.startswith("linux") and not os.environ.get("ORCA_TERMINAL_HANDLE"):
+        found = shutil.which("orca-ide")
     else:
-        found = shutil.which("orca") or shutil.which("orca-ide")
+        found = shutil.which("orca")
     if not found:
         raise PodError("orca_unavailable", "Configured Orca executable is unavailable")
     path = Path(found).resolve()
@@ -97,7 +100,11 @@ def _envelope(stdout: str) -> dict:
     runtime = value.get("_meta", {}).get("runtimeId")
     if not isinstance(runtime, str) or not runtime:
         raise PodError("orca_contract", "Orca runtime identity is unavailable")
-    return {"runtime": runtime, "result": value["result"]}
+    mutation = value["result"].get("mutation")
+    if not isinstance(mutation, dict):
+        mutation = value.get("mutation")
+    request_uuid = mutation.get("requestId") if isinstance(mutation, dict) else None
+    return {"runtime": runtime, "result": value["result"], "request_uuid": request_uuid}
 
 
 def _worker_list_tail(tail: list[str]) -> bool:
@@ -117,21 +124,14 @@ def _worker_list_tail(tail: list[str]) -> bool:
 def _mutate_allowed(argv: list[str]) -> bool:
     if argv[:2] == ["orchestration", "worker-start"]:
         return _worker_start_shape(argv[2:])
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-release", "--dispatch"]
-            and _argument(argv[3]) and argv[4] == "--json"):
-        return True
-    if argv[:2] == ["orchestration", "check"]:
-        return _check_shape(argv[2:])
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "run-create", "--objective"]
-            and isinstance(argv[3], str) and argv[3].strip() and len(argv[3]) <= 4096
-            and argv[4] == "--json"):
-        return True
-    if argv[:2] == ["orchestration", "task-create"]:
-        return _task_create_shape(argv[2:])
     return False
 
 
 def _worker_start_shape(tail: list[str]) -> bool:
+    retry = None
+    if len(tail) >= 3 and tail[-3] == "--retry-request" and tail[-1] == "--json":
+        retry = tail[-2]
+        tail = tail[:-3] + ["--json"]
     expected = ["--task", None, "--run", None, "--worktree", None,
                 "--agent", None, "--model", None, "--effort", None, "--json"]
     if len(tail) != len(expected):
@@ -142,43 +142,7 @@ def _worker_start_shape(tail: list[str]) -> bool:
                 return False
         elif tail[index] != flag:
             return False
-    return worktree_selector(tail[5]) is not None
-
-
-def _check_shape(tail: list[str]) -> bool:
-    if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
-        return False
-    rest = tail[2:]
-    if rest[:1] == ["--ack"]:
-        if len(rest) < 2 or not _argument(rest[1]):
-            return False
-        rest = rest[2:]
-    if rest[:1] == ["--wait"]:
-        rest = rest[1:]
-        if rest[:1] == ["--types"]:
-            if len(rest) < 2 or not _argument(rest[1]):
-                return False
-            rest = rest[2:]
-        if rest[:1] != ["--timeout-ms"]:
-            return False
-        if len(rest) < 2 or not rest[1].isdigit() or not 1000 <= int(rest[1]) <= 900_000:
-            return False
-        rest = rest[2:]
-    return rest == ["--json"]
-
-
-def _task_create_shape(tail: list[str]) -> bool:
-    if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
-        return False
-    rest = tail[2:]
-    if rest[:1] != ["--spec"] or len(rest) < 2 or not isinstance(rest[1], str) or not rest[1].strip():
-        return False
-    rest = rest[2:]
-    if rest[:1] == ["--task-title"]:
-        if len(rest) < 2 or not isinstance(rest[1], str) or not rest[1].strip():
-            return False
-        rest = rest[2:]
-    return rest == ["--json"]
+    return worktree_selector(tail[5]) is not None and (retry is None or _argument(retry))
 
 
 def worktree_selector(value: object) -> str | None:
@@ -209,7 +173,8 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
     if len(completed.stdout) > MAX_OUTPUT:
         raise PodError("orca_contract", "Native response exceeds bounded output")
     envelope = _envelope(completed.stdout)
-    return {"runtime": envelope["runtime"], "exit": completed.returncode, "result": envelope["result"]}
+    return {"runtime": envelope["runtime"], "exit": completed.returncode,
+            "result": envelope["result"], "request_uuid": envelope.get("request_uuid")}
 
 
 def identity(mapping: object, camel: str) -> object:

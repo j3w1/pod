@@ -1,49 +1,27 @@
-"""Compact private effect journal; native Orca remains the task authority."""
+"""Compact Pod policy/evidence state; Orca remains lifecycle authority."""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
+import hashlib
+import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Callable, Iterator
 
 from .errors import PodError
-from .orca import effective_launch, require_route_establishment
-from .quota import validate_snapshot
+from .orca import require_route_establishment
 from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
-# A read is complete enough for admission when it covered every Run this machine's
-# records bind, or the whole fleet. A single bound Run is not, because another Run could
-# hold a worker on the same account.
+
+ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "legacy_hold")
 NATIVE_SCOPES = ("all", "bound+ledger_runs")
-_PREDECESSOR_BINDING_FIELDS = {"dispatchId", "workerId", "taskId", "runId"}
-_CURRENT_BINDING_FIELDS = _PREDECESSOR_BINDING_FIELDS | {
-    "worktreeId", "terminalHandle", "terminalResourceId",
-}
-
-
-def binding_version(binding: object) -> str | None:
-    """Classify the immediate predecessor or current exact native binding."""
-    if not isinstance(binding, dict):
-        return None
-    if set(binding) == _PREDECESSOR_BINDING_FIELDS:
-        fields = _PREDECESSOR_BINDING_FIELDS
-        version = "predecessor"
-    elif set(binding) == _CURRENT_BINDING_FIELDS:
-        fields = _PREDECESSOR_BINDING_FIELDS | {"worktreeId"}
-        version = "current"
-    else:
-        return None
-    if any(not isinstance(binding.get(field), str) or not binding[field] for field in fields):
-        return None
-    if version == "current":
-        for field in ("terminalHandle", "terminalResourceId"):
-            if binding[field] is not None and (not isinstance(binding[field], str) or not binding[field]):
-                return None
-    return version
+_BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
+_CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
+                   "interventions", "source_rejections", "legacy_archives"}
 
 
 def state_root(project: Path | None = None) -> Path:
@@ -54,13 +32,12 @@ def state_root(project: Path | None = None) -> Path:
                        project=project) / "pod"
 
 
+def objective_root(project: Path, objective: str) -> Path:
+    return state_root(project) / digest({"project": str(project.resolve()), "objective": objective})
+
+
 def _path(project: Path, objective: str) -> Path:
     return objective_root(project, objective) / "context.json"
-
-
-def objective_root(project: Path, objective: str) -> Path:
-    """The private directory that holds every record for one objective."""
-    return state_root(project) / digest({"project": str(project.resolve()), "objective": objective})
 
 
 @contextmanager
@@ -82,17 +59,79 @@ def _lock(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
+def _empty() -> dict:
+    return {"schema": "pod-context/v2", "revision": 0, "owner": None,
+            "admissions": {}, "checkpoint": None, "interventions": {},
+            "source_rejections": {}, "legacy_archives": []}
+
+
+def binding_valid(binding: object) -> bool:
+    if not isinstance(binding, dict) or set(binding) != _BINDING_FIELDS:
+        return False
+    for key in ("runId", "taskId", "dispatchId", "workerId", "worktreeId"):
+        if not isinstance(binding.get(key), str) or not binding[key]:
+            return False
+    terminal = binding.get("terminalHandle")
+    return terminal is None or isinstance(terminal, str) and bool(terminal)
+
+
+def _validate_admission(key: str, row: object) -> None:
+    required = {"schema", "state", "admission_id", "objective", "owner", "request",
+                "route_decision", "effective_evidence", "runtime", "request_uuid",
+                "run_id", "task_id", "plan_revision", "packet_id", "worktree", "bucket",
+                "native_binding", "recovery", "error", "created_at", "updated_at"}
+    value = exact(row, required, required, name="admission")
+    if value["schema"] != "pod-admission/v2" or value["admission_id"] != key:
+        raise PodError("state_migration_required", "Admission identity or schema is unsupported")
+    if value["state"] not in ADMISSION_STATES:
+        raise PodError("state_migration_required", "Admission state is unsupported")
+    for field in ("objective", "owner", "run_id", "task_id", "plan_revision", "packet_id", "worktree"):
+        if not isinstance(value[field], str) or not value[field]:
+            raise PodError("state_migration_required", "Admission binding is incomplete")
+    if not isinstance(value["request"], dict) or not isinstance(value["route_decision"], dict):
+        raise PodError("state_migration_required", "Admission policy evidence is malformed")
+    if not isinstance(value["effective_evidence"], dict):
+        raise PodError("state_migration_required", "Admission effective evidence is malformed")
+    if not isinstance(value["runtime"], str) or not value["runtime"]:
+        raise PodError("state_migration_required", "Admission runtime is unavailable")
+    request_uuid = value["request_uuid"]
+    if request_uuid is not None and (not isinstance(request_uuid, str) or not request_uuid):
+        raise PodError("state_migration_required", "Admission request UUID is malformed")
+    binding = value["native_binding"]
+    if value["state"] in ("bound", "closed") and not binding_valid(binding):
+        raise PodError("state_migration_required", "Bound admission lacks exact native identity")
+    if binding is not None and not binding_valid(binding):
+        raise PodError("state_migration_required", "Admission native identity is malformed")
+
+
+def _validate_v2(value: object) -> dict:
+    state = exact(value, _CONTEXT_FIELDS, _CONTEXT_FIELDS, name="context")
+    if state["schema"] != "pod-context/v2" or type(state["revision"]) is not int or state["revision"] < 0:
+        raise PodError("state_migration_required", "State schema requires explicit migration")
+    if state["owner"] is not None and (not isinstance(state["owner"], str) or not state["owner"]):
+        raise PodError("state_migration_required", "Context owner is malformed")
+    if not isinstance(state["admissions"], dict):
+        raise PodError("state_migration_required", "Admissions are malformed")
+    for key, row in state["admissions"].items():
+        if not isinstance(key, str) or not key:
+            raise PodError("state_migration_required", "Admission key is malformed")
+        _validate_admission(key, row)
+    if not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict):
+        raise PodError("state_migration_required", "Context evidence is malformed")
+    if not isinstance(state["legacy_archives"], list):
+        raise PodError("state_migration_required", "Legacy archive references are malformed")
+    for ref in state["legacy_archives"]:
+        exact(ref, {"path", "sha256", "schema"}, {"path", "sha256", "schema"}, name="legacy_archive")
+    return state
+
+
 def _read(path: Path) -> dict:
     if not path.exists():
-        return {"schema": "pod-context/v1", "revision": 0, "owner": None, "effects": {},
-                "checkpoint": None, "deliveries": {}, "interventions": {},
-                "source_rejections": {}, "cleanup": {}}
+        return _empty()
     value = bounded_json(path)
-    exact(value, {"schema", "revision", "owner", "effects", "checkpoint", "deliveries", "interventions", "source_rejections", "cleanup"},
-          {"schema", "revision", "owner", "effects", "checkpoint", "deliveries", "interventions", "source_rejections", "cleanup"}, name="context")
-    if value["schema"] != "pod-context/v1":
-        raise PodError("state_migration_required", "State schema requires explicit migration")
-    return value
+    if isinstance(value, dict) and value.get("schema") == "pod-context/v1":
+        raise PodError("state_migration_required", "Pod v1 state requires `state-migrate`")
+    return _validate_v2(value)
 
 
 def read(project: Path, objective: str) -> dict | None:
@@ -100,34 +139,47 @@ def read(project: Path, objective: str) -> dict | None:
     return _read(path) if path.exists() else None
 
 
+def _write(path: Path, value: dict) -> None:
+    value["revision"] += 1
+    _validate_v2(value)
+    atomic_json(path, value)
+
+
 def context_root_for_run(run_id: str) -> Path | None:
-    """The private directory of the one objective whose checkpoint binds this Run, if any."""
     root = state_root()
     if not root.exists():
         return None
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
     matches = []
+    migration_required = False
     for path in root.glob("*/context.json"):
-        state = _read(path)
+        try:
+            state = _read(path)
+        except PodError as exc:
+            if exc.code == "state_migration_required":
+                migration_required = True
+                continue
+            raise
         checkpoint_value = state.get("checkpoint")
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
-        if any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs):
+        admission_match = any(row.get("run_id") == run_id for row in state["admissions"].values())
+        if admission_match or any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs):
             matches.append(path.parent)
     if len(matches) > 1:
         raise PodError("ambiguous_context", "Multiple local contexts bind this Run")
+    if not matches and migration_required:
+        raise PodError("state_migration_required", "Legacy state may bind this Run")
     return matches[0] if matches else None
 
 
 def context_for_run(run_id: str) -> dict | None:
-    """Read only a uniquely bound checkpoint; never create or migrate state."""
     root = context_root_for_run(run_id)
     return _read(root / "context.json") if root is not None else None
 
 
 def check_bound_sources(project: Path, objective: str, *, owner: str,
                         assignment: str, sources: list[dict]) -> dict:
-    """Definitive source rejection sticks to the same assignment after restoration."""
     bounded_text(assignment, name="assignment", limit=128)
     path = _path(project, objective)
     with _lock(path):
@@ -139,15 +191,12 @@ def check_bound_sources(project: Path, objective: str, *, owner: str,
 
 def _check_bound_sources_locked(project: Path, path: Path, state: dict,
                                 assignment: str, sources: list[dict]) -> dict:
-    """Check source bytes with the objective lock held, immediately before admission."""
     from .records import source_identity
     if state["source_rejections"].get(assignment):
         raise PodError("source_rejected", "Assignment has a durable definitive source rejection")
     for entry in sources:
         exact(entry, {"path", "state", "sha256"}, {"path", "state"}, name="source")
         if entry["state"] == "unavailable":
-            # No bytes or absence were frozen. A later observation cannot
-            # establish a historical change or bind this assignment.
             raise PodError("source_unbound", "Source needs a fresh actual binding")
         try:
             observed = source_identity(project, entry["path"])
@@ -158,25 +207,15 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
             raise
         if observed["state"] == "unavailable":
             raise PodError("source_unavailable", "Source is temporarily unavailable")
-        if observed["state"] == "absent":
-            reason = "source_absent"
-        elif observed != entry:
-            reason = "source_changed"
-        else:
-            continue
-        state["source_rejections"][assignment] = {"reason": reason, "path": entry["path"]}
-        _write(path, state)
-        raise PodError(reason, "Bound source is absent or changed")
+        reason = "source_absent" if observed["state"] == "absent" else "source_changed" if observed != entry else None
+        if reason:
+            state["source_rejections"][assignment] = {"reason": reason, "path": entry["path"]}
+            _write(path, state)
+            raise PodError(reason, "Bound source is absent or changed")
     return {"status": "current", "assignment": assignment}
 
 
-def _write(path: Path, value: dict) -> None:
-    value["revision"] += 1
-    atomic_json(path, value)
-
-
 def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
-    """Store a bounded recovery pointer after an exact native read."""
     bounded_text(owner, name="owner")
     exact(value, {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
                   "assignments", "questions", "verification_gaps", "next_safe_action",
@@ -194,6 +233,13 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         state["checkpoint"] = value
         _write(path, state)
         return state
+
+
+def admission_identity(*, objective: str, run_id: str, task_id: str, packet_id: str,
+                       plan_revision: str) -> str:
+    """Stable Pod identity for one policy decision, never an Orca request UUID."""
+    return digest({"objective": objective, "run": run_id, "task": task_id,
+                   "packet": packet_id, "plan_revision": plan_revision})
 
 
 def _grant_matches(grant: dict | None, authorized: list, *, objective: str, run_id: str,
@@ -214,11 +260,9 @@ def _grant_matches(grant: dict | None, authorized: list, *, objective: str, run_
 
 def _spending_grant_binding(grants: list, supplied: object, *, requested: dict,
                             objective: str, now: datetime) -> tuple[dict, int]:
-    """Rejoin the previewed exact grant and return its durable unit bound."""
     if not isinstance(supplied, dict):
         raise PodError("spending_grant_required", "Paid launch lacks its exact spending grant")
-    matches = [grant for grant in grants
-               if isinstance(grant, dict) and grant.get("id") == supplied.get("id")]
+    matches = [grant for grant in grants if isinstance(grant, dict) and grant.get("id") == supplied.get("id")]
     if len(matches) != 1:
         raise PodError("spending_grant_required", "Paid launch grant identity is unavailable")
     grant = matches[0]
@@ -239,549 +283,542 @@ def _spending_grant_binding(grants: list, supplied: object, *, requested: dict,
     return expected, grant["max_units"]
 
 
-def _spent_grant_units(binding: dict, requested: dict, project: Path) -> int:
-    """Count durable reservations for one scoped grant across all local objectives."""
-    root = state_root(project)
-    if root.is_symlink():
-        raise PodError("unsafe_state", "State root is redirected")
-    used = 0
-    if not root.exists():
-        return used
-    for path in root.glob("*/context.json"):
-        state = _read(path)
-        for effect in state["effects"].values():
-            if not isinstance(effect, dict) or effect.get("state") not in ("reserved", "uncertain", "confirmed"):
-                continue
-            authorization = effect.get("spending_grant")
-            request = effect.get("request")
-            if authorization is None:
-                if (isinstance(request, dict) and request.get("account") == requested.get("account")
-                        and request.get("model") == requested.get("model")):
-                    raise PodError("spending_history_unverified", "Earlier matching launch lacks grant accounting")
-                continue
-            if not isinstance(authorization, dict):
-                raise PodError("state_migration_required", "Spending grant accounting is malformed")
-            units = authorization.get("units")
-            if type(units) is not int or units < 1 or not isinstance(authorization.get("scope"), str):
-                raise PodError("state_migration_required", "Spending grant accounting is malformed")
-            if authorization["scope"] == binding["scope"]:
-                used += units
-    return used
-
-
 def _bucket_overlap(provider: str, account: str, bucket: str | None, other: dict) -> bool:
     if other.get("account") == account:
         return True
     other_provider = other.get("agent")
     if other_provider is None:
         return True
-    if other_provider is not None and other_provider != provider:
+    if other_provider != provider:
         return False
     other_bucket = other.get("bucket")
     return bucket is None or other_bucket is None or bucket == other_bucket
 
 
-def _local_occupancy(project: Path) -> list[dict]:
-    """Project unresolved launch and release evidence into worker identities."""
+def _native_dispatch(row: dict) -> str | None:
+    value = row.get("dispatchId", row.get("dispatch_id"))
+    return value if isinstance(value, str) and value else None
+
+
+def _native_identity(row: dict, field: str) -> str | None:
+    value = row.get(field, row.get(field[:-2] + "_id" if field.endswith("Id") else field))
+    if isinstance(value, str) and value:
+        return value
+    projection = row.get("projection")
+    value = projection.get(field) if isinstance(projection, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def _native_released(row: dict) -> bool:
+    if row.get("terminalState") == "released" or row.get("state") == "released":
+        return True
+    projection = row.get("projection")
+    resource = projection.get("resource") if isinstance(projection, dict) else None
+    return isinstance(resource, dict) and resource.get("state") == "released"
+
+
+def _all_admissions(project: Path) -> list[tuple[Path, dict]]:
     root = state_root(project)
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
+    rows = []
+    if not root.exists():
+        return rows
+    for path in root.glob("*/context.json"):
+        state = _read(path)
+        rows.extend((path, row) for row in state["admissions"].values())
+    return rows
+
+
+def bound_runs(project: Path, runtime: str) -> tuple[str, ...]:
+    """Every Run referenced by local v2 admissions on the same Orca runtime."""
+    return tuple(sorted({row["run_id"] for _, row in _all_admissions(project)
+                         if row.get("runtime") == runtime and isinstance(row.get("run_id"), str)}))
+
+
+def _occupied_admissions(project: Path, native: dict) -> list[dict]:
+    """Project capacity only from durable policy rows joined to this fresh Orca read."""
+    workers = native.get("workers")
+    if not isinstance(workers, list):
+        raise PodError("native_occupancy_unverified", "Native worker projection is malformed")
+    by_dispatch: dict[str, list[dict]] = {}
+    for row in workers:
+        if not isinstance(row, dict):
+            raise PodError("native_occupancy_unverified", "Native worker projection is malformed")
+        dispatch = _native_dispatch(row)
+        if dispatch:
+            by_dispatch.setdefault(dispatch, []).append(row)
     occupied = []
-    if root.exists():
-        for path in root.glob("*/context.json"):
-            state = _read(path)
-            if not isinstance(state["effects"], dict) or not isinstance(state["cleanup"], dict):
-                raise PodError("state_migration_required", "Effect or cleanup journal is malformed")
-            confirmed = {}
-            for operation_id, effect in state["effects"].items():
-                if not isinstance(effect, dict):
-                    raise PodError("state_migration_required", "Effect row is malformed")
-                status = effect.get("state")
-                if status not in ("reserved", "uncertain", "confirmed"):
-                    # No installed adapter can prove an effect was absent. An
-                    # unfamiliar disposition cannot silently free its slot.
-                    raise PodError("effect_disposition_unverified", "Effect disposition needs exact proof")
-                request = effect.get("request")
-                if (not isinstance(request, dict) or not request.get("account") or not request.get("agent")
-                        or effect.get("bucket") != request.get("bucket")):
-                    raise PodError("state_migration_required", "Effect account binding is malformed")
-                runtime = effect.get("runtime")
-                if not isinstance(runtime, str) or not runtime:
-                    raise PodError("state_migration_required", "Effect runtime binding is malformed")
-                key = ("launch", str(path), operation_id)
-                if status == "confirmed":
-                    binding = effect.get("native_binding")
-                    if binding_version(binding) is None:
-                        raise PodError("effect_identity_unverified", "Confirmed launch lacks exact native binding")
-                    key = ("dispatch", runtime, binding["dispatchId"])
-                    confirmed.setdefault(binding["dispatchId"], []).append(effect)
-                    if len(confirmed[binding["dispatchId"]]) != 1:
-                        raise PodError("effect_identity_unverified", "Dispatch has multiple confirmed launch bindings")
-                occupied.append({**request, "bucket": effect.get("bucket"),
-                                 "_key": key, "_path": path, "_dispatch":
-                                 effect["native_binding"]["dispatchId"] if status == "confirmed" else None})
-            for dispatch, cleanup in state["cleanup"].items():
-                if not isinstance(cleanup, dict):
-                    raise PodError("state_migration_required", "Cleanup row is malformed")
-                cleanup_state = cleanup.get("state")
-                if cleanup_state not in ("reserved", "uncertain", "retained", "released",
-                                         "already_released", "release_pending", "release_unknown"):
-                    raise PodError("state_migration_required", "Cleanup state is unsupported")
-                binding = cleanup.get("binding")
-                matches = [effect for effect in confirmed.get(dispatch, [])
-                           if effect.get("native_binding") == binding
-                           and effect.get("runtime") == cleanup.get("runtime")]
-                if len(matches) != 1:
-                    raise PodError("cleanup_identity_unverified", "Cleanup has no unique exact launch binding")
-                if (cleanup_state in ("released", "already_released")
-                        and binding_version(binding) == "current"):
-                    occupied = [row for row in occupied
-                                if not (row["_path"] == path and row["_dispatch"] == dispatch
-                                        and row["_key"] == ("dispatch", cleanup["runtime"], dispatch))]
+    seen = set()
+    matched_dispatches = set()
+    by_parent = {}
+    for path, admission in _all_admissions(project):
+        state = admission["state"]
+        if state == "closed":
+            continue
+        binding = admission.get("native_binding")
+        key = ("admission", str(path), admission["admission_id"])
+        if state == "bound" and binding_valid(binding):
+            key = ("dispatch", admission["runtime"], binding["dispatchId"])
+            matches = by_dispatch.get(binding["dispatchId"], [])
+            exact_matches = [row for row in matches
+                             if (_native_identity(row, "runId") == binding["runId"]
+                                 and _native_identity(row, "taskId") == binding["taskId"])]
+            matched_dispatches.add(binding["dispatchId"])
+            by_parent[binding["dispatchId"]] = (admission, str(path))
+            if (native.get("runtime") == admission["runtime"] and len(matches) == 1
+                    and len(exact_matches) == 1 and _native_released(exact_matches[0])):
+                continue
+        if key in seen:
+            continue
+        seen.add(key)
+        occupied.append({**admission["request"], "objective": admission["objective"],
+                         "_context": str(path),
+                         "bucket": admission.get("bucket"), "_key": key,
+                         "_task": binding.get("taskId") if isinstance(binding, dict) else None})
+    for index, worker in enumerate(workers):
+        dispatch = _native_dispatch(worker)
+        if dispatch in matched_dispatches or _native_released(worker):
+            continue
+        projection = worker.get("projection") if isinstance(worker.get("projection"), dict) else {}
+        parent = projection.get("parent")
+        if isinstance(parent, dict):
+            parent = parent.get("dispatchId", parent.get("id"))
+        inherited_entry = by_parent.get(parent)
+        inherited = inherited_entry[0] if inherited_entry else None
+        native_key = ("native", native.get("runtime"), dispatch or index)
+        if native_key in seen:
+            continue
+        seen.add(native_key)
+        if inherited:
+            occupied.append({**inherited["request"], "objective": inherited["objective"],
+                             "_context": inherited_entry[1],
+                             "bucket": inherited.get("bucket"), "_key": native_key,
+                             "_task": inherited["task_id"]})
+        else:
+            # An unbound worker cannot be assigned to a route or objective. It therefore
+            # overlaps admission conservatively, while Governor objective filtering does
+            # not let unrelated native work stall a direct-work delivery unit.
+            occupied.append({"agent": None, "account": None, "bucket": None,
+                             "objective": None, "_context": None,
+                             "_key": native_key, "_task": None})
     return occupied
 
 
-def _occupancy_projection(native: dict, objective_path: Path, objective: str,
-                          requested: dict, project: Path) -> tuple[set[tuple], set[tuple], list[dict], list[dict]]:
-    """Use one identity set for objective and overlapping-account admission."""
-    workers = native["workers"]
-    active = []
-    seen = {}
-    foreign = []
-    descendants = []
-    for index, worker in enumerate(workers):
-        status = worker.get("state")
-        if status == "released":
+def fresh_projection(project: Path, native: dict, *, objective: str | None = None,
+                     tasks: list[str] | None = None) -> dict:
+    """Deterministic capacity/governor projection from exact current Orca evidence."""
+    if (native.get("scope") not in NATIVE_SCOPES or native.get("complete") is not True
+            or not isinstance(native.get("runtime"), str)):
+        raise PodError("native_occupancy_unverified", "Fresh native projection is incomplete")
+    occupied = _occupied_admissions(project, native)
+    selected_context = str(_path(project, objective)) if objective is not None else None
+    selected = []
+    for row in occupied:
+        if objective is not None and row.get("_context") != selected_context:
             continue
-        if status not in ("occupied", "active", "launching", "reserved", "uncertain", "confirmed", "retained"):
-            raise PodError("native_occupancy_unverified", "Native worker state is unsupported")
-        if worker.get("foreign"):
-            # A worker this coordinator never launched occupies the host, not Pod's
-            # objective or account budget. It is disclosed, never silently counted.
-            foreign.append(worker.get("dispatchId"))
+        if tasks is not None and row.get("_task") is not None and row["_task"] not in tasks:
             continue
-        if worker.get("descendant"):
-            descendants.append(worker.get("dispatchId"))
-        if not worker.get("account") or not worker.get("objective"):
-            raise PodError("native_occupancy_unverified", "Active worker account/objective binding is unavailable")
-        dispatch = worker.get("dispatchId")
-        key = (("dispatch", native["runtime"], dispatch)
-               if isinstance(dispatch, str) and dispatch else ("native", index))
-        identity = (worker["account"], worker["objective"], worker.get("agent"), worker.get("bucket"))
-        if key in seen and seen[key] != identity:
-            raise PodError("native_occupancy_unverified", "Native Dispatch has conflicting occupancy bindings")
-        seen[key] = identity
-        active.append({**worker, "_key": key})
-    local = _local_occupancy(project)
-    for row in local:
-        if row["_key"] in seen and (row["account"] != seen[row["_key"]][0]
-                                    or (seen[row["_key"]][2] is not None
-                                        and row["agent"] != seen[row["_key"]][2])
-                                    or (seen[row["_key"]][3] is not None
-                                        and row.get("bucket") != seen[row["_key"]][3])):
-            raise PodError("native_occupancy_unverified", "Native and local Dispatch bindings conflict")
-    bucket = requested.get("bucket")
-    overlap = [row for row in [*active, *local]
-               if _bucket_overlap(requested["agent"], requested["account"], bucket, row)]
-    if descendants and native.get("descendants_allowed") is not True:
-        raise PodError("unauthorized_descendant",
-                       "A Pod-managed worker started a descendant that policy does not authorize")
-    objective_keys = {row["_key"] for row in active if row["objective"] == objective}
-    objective_keys.update(row["_key"] for row in local if row["_path"] == objective_path)
-    account_keys = {row["_key"] for row in overlap}
-    native["foreign_active"] = sorted(item for item in foreign if isinstance(item, str))
-    return objective_keys, account_keys, active, overlap
+        selected.append(row)
+    return {"schema": "pod-native-projection/v1", "runtime": native["runtime"],
+            "occupied": [{**{key: value for key, value in row.items() if not key.startswith("_")},
+                          "task": row.get("_task")}
+                         for row in selected],
+            "occupied_ids": [str(row["_key"]) for row in selected]}
 
 
 def _quota_hold(provider: str, account: str, bucket: str | None,
-                snapshot: dict | None, state: str, *, now: datetime, freshness: int,
-                project: Path | None = None) -> bool:
-    """Persist exhaustion until a later fresh positive supported observation."""
-    path = state_root(project) / "quota-holds.json"
-    raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v3", "holds": {}}
-    exact(raw, {"schema", "holds"}, {"schema", "holds"}, name="quota_holds")
-    if raw["schema"] != "pod-quota-holds/v3" or not isinstance(raw["holds"], dict):
-        raise PodError("state_migration_required", "Quota hold schema is unsupported")
+                snapshot: dict | None, state: str, *, now: datetime,
+                freshness: int, project: Path | None = None) -> bool:
+    """Keep exhaustion monotonic until a fresh positive window clears it."""
+    root = state_root(project)
+    path = root / "quota-holds.json"
     key = digest({"provider": provider, "account": account, "bucket": bucket})
-    row = raw["holds"].get(key, {"provider": provider, "account": account,
-                                  "bucket": bucket, "windows": {}})
-    if not isinstance(row, dict) or any(row.get(field) != value for field, value in
-                                        (("provider", provider), ("account", account), ("bucket", bucket))) or not isinstance(row.get("windows"), dict):
-        raise PodError("state_migration_required", "Quota hold identity is malformed")
-    windows = dict(row["windows"])
-    supported = None
-    if state != "unknown" and isinstance(snapshot, dict):
-        try:
-            candidate = validate_snapshot(snapshot)
-            observed = datetime.fromisoformat(candidate["observed_at"].replace("Z", "+00:00"))
-            if (candidate["provider"] == provider and candidate["account"] == account
-                    and candidate["bucket"] == bucket and candidate["source"] in ("supported", "supported_metadata")
-                    and candidate["confidence"] == "observed" and observed.tzinfo is not None
-                    and now.tzinfo is not None and 0 <= (now - observed).total_seconds()):
-                supported = (candidate, observed, (now - observed).total_seconds() <= freshness)
-        except (PodError, TypeError, ValueError, OverflowError):
-            pass
-    if supported:
-        candidate, observed, fresh = supported
-        values = {digest({"window": window["name"]}): window.get("remaining_percent")
-                  for window in candidate["windows"]}
-        if "remaining_percent" in candidate:
-            values[digest({"aggregate": True})] = candidate["remaining_percent"]
-        for name, value in values.items():
-            previous = windows.get(name)
-            if previous is not None:
-                try:
-                    older = datetime.fromisoformat(previous.replace("Z", "+00:00"))
-                except (AttributeError, ValueError) as exc:
-                    raise PodError("state_migration_required", "Quota hold timestamp is malformed") from exc
-                if older.tzinfo is None:
-                    raise PodError("state_migration_required", "Quota hold timestamp has no timezone")
-            if value == 0 and (previous is None or observed > older):
-                windows[name] = observed.isoformat()
-            elif fresh and value is not None and value > 0 and previous is not None and observed > older:
-                windows.pop(name)
-        if windows:
-            raw["holds"][key] = {**row, "windows": windows}
-        else:
-            raw["holds"].pop(key, None)
-        atomic_json(path, raw)
-    if state == "exhausted":
+    with _lock(path):
+        raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v3", "holds": {}}
+        exact(raw, {"schema", "holds"}, {"schema", "holds"}, name="quota_holds")
+        if raw["schema"] != "pod-quota-holds/v3" or not isinstance(raw["holds"], dict):
+            raise PodError("state_migration_required", "Quota hold schema is unsupported")
+        hold = raw["holds"].get(key)
+        if state == "exhausted" and snapshot is not None:
+            exhausted = {row["name"]: row.get("reset_at") for row in snapshot["windows"]
+                         if float(row["remaining_percent"]) <= 0}
+            raw["holds"][key] = {"windows": exhausted, "observed_at": snapshot["observed_at"]}
+            atomic_json(path, raw)
+            return True
+        if not isinstance(hold, dict):
+            return False
+        if snapshot is None or state == "unknown":
+            return True
+        observed = datetime.fromisoformat(snapshot["observed_at"].replace("Z", "+00:00"))
+        if (now - observed).total_seconds() > freshness:
+            return True
+        windows = {row["name"]: row for row in snapshot["windows"]}
+        renewed = all(name in windows and float(windows[name]["remaining_percent"]) > 0
+                      and (reset is None or windows[name].get("reset_at") != reset)
+                      for name, reset in hold.get("windows", {}).items())
+        if renewed:
+            del raw["holds"][key]
+            atomic_json(path, raw)
+            return False
         return True
-    if windows:
-        return True
-    if bucket is None:
-        return any(isinstance(other, dict) and other.get("provider") == provider
-                   and other.get("account") == account and other.get("windows")
-                   for other in raw["holds"].values())
-    return False
 
 
-def reserve(project: Path, objective: str, *, owner: str, operation_id: str, requested: dict,
-            route_decision: dict, establishment: dict, native_reader: Callable[[], dict],
-            capacity: int, run_id: str, plan_revision: str,
+def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
+            requested: dict, route_decision: dict, establishment: dict,
+            native_reader: Callable[[], dict], capacity: int, run_id: str,
+            task_id: str, plan_revision: str, packet_id: str, worktree: str,
+            frozen_packet: dict,
             exceptional_grant: dict | None = None, capacity_reason: str | None = None,
-            frozen_packet: dict | None = None,
-            now: datetime | None = None) -> dict:
-    """Read native state inside global admission lock, then reserve one effect."""
-    bounded_text(operation_id, name="operation_id", limit=128)
-    if route_decision.get("status") != "usable" or route_decision.get("selected") != requested:
-        raise PodError("route_unusable", "Requested launch is not the approved route decision")
+            spending_grant: dict | None = None, now: datetime | None = None) -> dict:
+    """Serialize policy and fresh-capacity validation before the one native start seam."""
+    moment = now or datetime.now(timezone.utc)
+    if not isinstance(admission_id, str) or not admission_id:
+        raise PodError("invalid_admission", "Admission identity is required")
+    if capacity < 1 or capacity > 8:
+        raise PodError("invalid_capacity", "Worker capacity must be between one and eight")
     require_route_establishment(establishment, requested)
-    if type(capacity) is not int or capacity < 1 or capacity > 8:
-        raise PodError("invalid_capacity", "Capacity must be one through eight")
-    packet_id = None
-    if frozen_packet is not None:
-        from .records import packet
-        if (not isinstance(frozen_packet, dict) or not isinstance(frozen_packet.get("body"), dict)
-                or packet(frozen_packet["body"]) != frozen_packet
-                or frozen_packet["body"]["plan_revision"] != plan_revision
-                or frozen_packet["body"]["objective"] != objective
-                or frozen_packet["body"]["policy_revision"] != route_decision.get("policy_revision")
-                or frozen_packet["body"]["route"] != requested):
-            raise PodError("invalid_packet", "Admission packet is not frozen for this plan")
-        packet_id = frozen_packet["packet_id"]
-    from .config import effective
-    effective_policy = effective(project)
-    policy = effective_policy["policy"]["policy"]
-    route_model = effective_policy["policy"]["models"].get(requested.get("alias"))
-    if isinstance(route_model, dict) and (route_model.get("agent") != requested.get("agent")
-            or route_model.get("model") != requested.get("model")
-            or route_model.get("account") != requested.get("account")):
-        raise PodError("route_unusable", "Requested route no longer matches effective policy")
-    current_time = now or datetime.now(timezone.utc)
-    spending_grant = None
-    spending_limit = None
-    if isinstance(route_model, dict) and route_model.get("billing", "unknown") != "included":
-        spending_grant, spending_limit = _spending_grant_binding(
-            policy["spending_grants"], route_decision.get("spending_grant"),
-            requested=requested, objective=objective, now=current_time)
-    elif route_decision.get("spending_grant") is not None:
-        raise PodError("spending_grant_mismatch", "Included route cannot consume a paid grant")
-    if capacity <= 3:
-        if capacity > min(policy["max_workers"], policy["ordinary_max"]):
-            raise PodError("capacity_ceiling", "Capacity exceeds effective personal/ordinary policy")
+    if route_decision.get("status") != "usable" or route_decision.get("selected") != requested:
+        raise PodError("route_unusable", "Admission needs the exact usable route decision")
+    if not isinstance(route_decision.get("policy_revision"), str):
+        raise PodError("route_unusable", "Route decision lacks a policy revision")
+    path = _path(project, objective)
+    with _lock(state_root(project) / "admission" / "state"), _lock(path):
+        from .config import effective
+        current_policy = effective(project)
+        if current_policy["revision"] != route_decision.get("policy_revision"):
+            raise PodError("policy_revision_mismatch", "Admission policy changed after route selection")
+        policy = current_policy["policy"]["policy"]
+        route_model = current_policy["policy"]["models"].get(requested.get("alias"))
+        if (not isinstance(route_model, dict) or not route_model.get("approved")
+                or route_model.get("agent") != requested.get("agent")
+                or route_model.get("model") != requested.get("model")
+                or route_model.get("account") != requested.get("account")):
+            raise PodError("route_unusable", "Requested route is no longer approved and exact")
+        state = _read(path)
+        if state["owner"] not in (None, owner):
+            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        existing = state["admissions"].get(admission_id)
+        if existing:
+            immutable = (existing["objective"], existing["run_id"], existing["task_id"],
+                         existing["packet_id"], existing["plan_revision"], existing["request"],
+                         existing["worktree"])
+            expected = (objective, run_id, task_id, packet_id, plan_revision, requested, worktree)
+            if immutable != expected:
+                raise PodError("admission_conflict", "Admission identity was reused for different work")
+            return {**existing, "existing": True}
+        native = native_reader()
+        if (native.get("authoritative") is not True or native.get("owner") != owner
+                or native.get("runtime") != establishment.get("runtime")
+                or native.get("scope") not in NATIVE_SCOPES or native.get("complete") is not True):
+            raise PodError("native_occupancy_unverified", "Admission lacks a complete authoritative Orca projection")
+        if native.get("cross_host") and native.get("atomic_admission") is not True:
+            raise PodError("distributed_admission_unverified", "Cross-host admission requires native atomic fencing")
+        checkpoint_value = state.get("checkpoint")
+        body = frozen_packet.get("body") if isinstance(frozen_packet, dict) else None
+        if (not isinstance(body, dict) or frozen_packet.get("packet_id") != packet_id
+                or body.get("candidate") != (checkpoint_value or {}).get("candidate")
+                or body.get("criteria") != (checkpoint_value or {}).get("criteria")
+                or body.get("plan_revision") != plan_revision
+                or body.get("policy_revision") != current_policy["revision"]):
+            raise PodError("packet_plan_mismatch", "Packet differs from the current owned checkpoint")
+        if "delegate" in body.get("actions", []) and not policy.get("child_delegation"):
+            raise PodError("delegation_unauthorized", "Worker delegation is not authorized")
+        bound_sources = [*body["sources"], *({"path": ref["path"], "state": "present",
+                          "sha256": ref["sha256"]} for ref in body["context"]
+                         if ref["kind"] in ("source", "instruction"))]
+        _check_bound_sources_locked(project, path, state, packet_id, bound_sources)
+        if capacity <= 3 and capacity > min(policy["max_workers"], policy["ordinary_max"]):
+            raise PodError("capacity_ceiling", "Capacity exceeds effective policy")
         if capacity == 3 and not (isinstance(capacity_reason, str) and capacity_reason.strip()):
-            raise PodError("capacity_reason_required", "Three workers require a concrete reason")
-    elif not _grant_matches(exceptional_grant, policy["exceptional_grants"], objective=objective,
-                            run_id=run_id, plan_revision=plan_revision, account=requested["account"],
-                            capacity=capacity, now=now or datetime.now(timezone.utc)):
-        raise PodError("exceptional_grant_required", "Exceptional capacity requires a current effective personal grant")
-    elif (effective_policy["provenance"].get("policy.max_workers") in ("project", "task")
-          and capacity > policy["max_workers"]):
-        raise PodError("capacity_ceiling", "Local hard capacity restriction remains effective")
-    path = _path(project, objective)
-    # The global lock serializes all local objective/account reservations. It
-    # does not fence other hosts; cross-host admission needs native atomicity.
-    with _lock(state_root(project) / "admission"):
-        with _lock(path):
-            current = effective(project)
-            if current["revision"] != route_decision.get("policy_revision") or current["policy"]["policy"] != policy:
-                raise PodError("policy_revision_mismatch", "Admission policy changed after route selection")
-            native = native_reader()
-            if native.get("runtime") != establishment.get("runtime") or not native.get("authoritative"):
-                raise PodError("native_authority_unverified", "Native runtime/ownership is not proven")
-            if (native.get("owner") != owner or native.get("scope") not in NATIVE_SCOPES
-                    or native.get("complete") is not True):
-                raise PodError("native_occupancy_unverified", "Native owner or complete fleet scope is unproven")
-            if native.get("cross_host") and native.get("atomic_admission") is not True:
-                raise PodError("distributed_admission_unverified", "Cross-host admission requires native atomic fencing")
-            workers = native.get("workers")
-            if not isinstance(workers, list):
-                raise PodError("native_occupancy_unverified", "Native worker inventory is malformed")
-            if any(not isinstance(worker, dict) for worker in workers):
-                raise PodError("native_occupancy_unverified", "Native worker row is malformed")
-            state = _read(path)
-            if state["owner"] != owner:
-                raise PodError("coordinator_conflict", "Coordinator ownership is absent or changed")
-            if frozen_packet is not None:
-                checkpoint_value = state.get("checkpoint")
-                if (not isinstance(checkpoint_value, dict)
-                        or checkpoint_value.get("candidate") != frozen_packet["body"]["candidate"]
-                        or checkpoint_value.get("criteria") != frozen_packet["body"]["criteria"]):
-                    raise PodError("packet_plan_mismatch", "Packet differs from the owned checkpoint")
-                body = frozen_packet["body"]
-                if "delegate" in body.get("actions", []) and not policy.get("child_delegation"):
-                    raise PodError("delegation_unauthorized",
-                                   "Worker-initiated delegation is not authorized by personal policy")
-                bound = [*body["sources"], *({"path": ref["path"], "state": "present", "sha256": ref["sha256"]}
-                                             for ref in body["context"] if ref["kind"] in ("source", "instruction"))]
-                _check_bound_sources_locked(project, path, state, packet_id, bound)
-            prior = state["effects"].get(operation_id)
-            if prior is not None:
-                if (prior["request"] != requested or prior.get("run_id") != run_id
-                        or prior.get("plan_revision") != plan_revision or prior.get("packet_id") != packet_id
-                        or prior.get("spending_grant") != spending_grant):
-                    raise PodError("operation_conflict", "Operation identity was reused with a changed request")
-                return {**prior, "existing": True}
-            if (spending_grant is not None
-                    and _spent_grant_units(spending_grant, requested, project) + 1 > spending_limit):
-                raise PodError("spending_grant_exhausted", "Spending grant has no unreserved units")
-            qstate, _ = quota_state(native.get("quota"), provider=requested["agent"],
-                                    account=requested["account"], bucket=requested.get("bucket"),
-                                    policy=policy,
-                                    now=now or datetime.now(timezone.utc))
-            if _quota_hold(requested["agent"], requested["account"], requested.get("bucket"),
-                           native.get("quota"), qstate, now=now or datetime.now(timezone.utc),
-                           freshness=policy["quota_fresh_seconds"], project=project):
-                raise PodError("quota_exhausted", "Current applicable quota bucket is exhausted")
-            bucket = requested.get("bucket")
-            objective_keys, account_keys, active, overlapping = _occupancy_projection(
-                native, path, objective, requested, project)
-            if bucket is not None and any(not row.get("bucket") for row in overlapping):
-                raise PodError("bucket_occupancy_unverified", "Occupied worker bucket binding is unavailable")
-            if qstate == "unknown" and any(row["account"] != requested["account"]
-                                           for row in active if row in overlapping):
-                raise PodError("bucket_occupancy_unverified", "Shared bucket ownership is unavailable")
-            if len(objective_keys) >= capacity:
-                raise PodError("capacity_full", "Objective capacity is occupied")
-            if qstate == "unknown" and account_keys:
-                raise PodError("unknown_quota_capacity", "Unknown account quota permits one active worker")
-            effect = {"schema": "pod-effect/v1", "state": "reserved", "request": requested,
-                      "runtime": native["runtime"], "operation_id": operation_id,
-                      "route_revision": route_decision["policy_revision"], "native_binding": None,
-                      "run_id": run_id, "plan_revision": plan_revision, "bucket": bucket,
-                      "packet_id": packet_id, "spending_grant": spending_grant,
-                      "created_at": datetime.now(timezone.utc).isoformat()}
-            state["effects"][operation_id] = effect
-            _write(path, state)
-            return {**effect, "existing": False}
-
-
-def reconcile(project: Path, objective: str, *, owner: str, operation_id: str,
-              observed: dict | None, definitive_absence: bool = False,
-              native_failure: dict | None = None) -> dict:
-    """Only exact positive proof settles or frees a reserved/uncertain effect."""
-    path = _path(project, objective)
-    with _lock(state_root(project) / "admission"), _lock(path):
-        state = _read(path)
-        if state["owner"] != owner or operation_id not in state["effects"]:
-            raise PodError("unknown_effect", "No owned effect identity to reconcile")
-        effect = state["effects"][operation_id]
-        if effect["state"] in ("confirmed", "absent"):
-            return effect
-        if native_failure is not None:
-            if observed is not None or definitive_absence:
-                raise PodError("invalid_reconciliation",
-                               "A structured native failure is not a positive readback")
-            # The Dispatch may hold resources. The slot stays occupied and the exact
-            # native metadata is retained for a later readback-driven recovery.
-            effect["state"] = "uncertain"
-            effect["native_failure"] = native_failure
-            _write(path, state)
-            return effect
-        if observed is not None:
-            if observed.get("runtime") != effect["runtime"] or observed.get("operation_id") != operation_id:
-                raise PodError("effect_identity_mismatch", "Native readback does not join exact effect")
-            launch_request = {key: effect["request"][key] for key in ("agent", "model", "effort")}
-            effective_launch(launch_request, observed)
-            worker = observed.get("worker_show")
-            if not isinstance(worker, dict) or worker.get("dispatch", {}).get("id") != observed["dispatchId"]:
-                raise PodError("native_identity_unverified", "Worker readback does not join Dispatch")
-            native_dispatch = worker.get("dispatch")
-            projection = worker.get("projection")
-            if (not isinstance(projection, dict) or not isinstance(projection.get("id"), str)
-                    or projection.get("dispatchId") != observed["dispatchId"]
-                    or projection.get("runId") != observed["runId"]
-                    or projection.get("taskId") != observed["taskId"]):
-                raise PodError("native_identity_unverified", "Worker identity is missing")
-            native_worker = worker.get("worker")
-            resource = worker.get("terminalResource")
-            terminal = worker.get("terminal")
-            terminal_handle = native_worker.get("agentTerminalHandle") if isinstance(native_worker, dict) else None
-            if (not isinstance(native_dispatch, dict)
-                    or native_dispatch.get("runId") != observed["runId"]
-                    or native_dispatch.get("taskId") != observed["taskId"]
-                    or not isinstance(native_worker, dict)
-                    or native_worker.get("dispatchId") != observed["dispatchId"]
-                    or not isinstance(native_worker.get("worktreeId"), str)
-                    or not native_worker["worktreeId"]
-                    or terminal_handle is not None and (not isinstance(terminal_handle, str)
-                                                        or not terminal_handle)):
-                raise PodError("native_identity_unverified", "Worker terminal resource identity is missing or contradictory")
-            if resource is None:
-                if (terminal_handle is None and terminal is not None
-                        or terminal_handle is not None
-                        and terminal is not None
-                        and (not isinstance(terminal, dict)
-                             or terminal.get("handle") != terminal_handle)):
-                    raise PodError("native_identity_unverified", "Terminal-less worker identity is contradictory")
-                resource_id = None
-            else:
-                if (not isinstance(resource, dict)
-                        or not all(isinstance(resource.get(field), str) and resource[field]
-                                   for field in ("id", "terminalHandle", "worktreeId"))
-                        or resource.get("originDispatchId") != observed["dispatchId"]
-                        or resource.get("ownerDispatchId") != observed["dispatchId"]
-                        or resource.get("worktreeId") != native_worker["worktreeId"]
-                        or terminal_handle != resource.get("terminalHandle")
-                        or resource.get("ownershipState") != "owned"
-                        or resource.get("releaseState") != "not_requested"
-                        or resource.get("retainedReason") is not None
-                        or resource.get("releaseRequestedAt") is not None
-                        or resource.get("releaseCompletedAt") is not None
-                        or resource.get("releaseError") is not None
-                        or resource.get("archive") != {"source": None, "status": None}
-                        or (terminal is not None and (not isinstance(terminal, dict)
-                                                      or terminal.get("handle") != terminal_handle))):
-                    raise PodError("native_identity_unverified", "Worker terminal resource identity is missing or contradictory")
-                resource_id = resource["id"]
-            start_options = native_worker.get("startOptions")
-            if not isinstance(start_options, dict) or start_options.get("launch") != observed["launch"]:
-                raise PodError("effective_launch_unverified", "Worker readback launch changed or is unavailable")
-            effect["state"] = "confirmed"
-            effect["native_binding"] = {"dispatchId": observed["dispatchId"], "workerId": projection["id"],
-                                        "taskId": observed["taskId"], "runId": observed["runId"],
-                                        "worktreeId": native_worker["worktreeId"],
-                                        "terminalHandle": terminal_handle,
-                                        "terminalResourceId": resource_id}
-        elif definitive_absence:
-            # Only a native contract capable of proving operation-ID absence may
-            # produce this flag; this API does not infer it from an empty list.
-            raise PodError("absence_proof_unsupported", "Installed adapter has no definitive absence proof")
-        else:
-            effect["state"] = "uncertain"
+            raise PodError("capacity_reason_required", "Three workers needs a reason")
+        if capacity >= 4 and not _grant_matches(exceptional_grant, policy.get("exceptional_grants", []),
+                                                 objective=objective, run_id=run_id,
+                                                 plan_revision=plan_revision,
+                                                 account=requested["account"], capacity=capacity,
+                                                 now=moment):
+            raise PodError("exceptional_capacity_grant_required", "Four to eight workers needs an exact grant")
+        qstate, _ = quota_state(native.get("quota"), provider=requested["agent"],
+                             account=requested["account"], bucket=requested.get("bucket"),
+                             policy=policy, now=moment)
+        if _quota_hold(requested["agent"], requested["account"], requested.get("bucket"),
+                       native.get("quota"), qstate, now=moment,
+                       freshness=policy.get("quota_fresh_seconds", 60), project=project):
+            raise PodError("quota_exhausted", "Current applicable quota bucket is exhausted")
+        occupied = _occupied_admissions(project, native)
+        objective_rows = {row["_key"] for row in occupied
+                          if row.get("_context") in (None, str(path))}
+        overlapping = {row["_key"] for row in occupied
+                       if _bucket_overlap(requested["agent"], requested["account"],
+                                          requested.get("bucket"), row)}
+        if len(objective_rows) >= capacity:
+            raise PodError("capacity_full", "Objective capacity is occupied")
+        if qstate == "unknown" and overlapping:
+            raise PodError("unknown_quota_capacity", "Unknown account quota permits one active worker")
+        grant_binding = None
+        if route_model.get("billing", "unknown") != "included":
+            grant_binding, maximum = _spending_grant_binding(policy.get("spending_grants", []),
+                                                              route_decision.get("spending_grant"), requested=requested,
+                                                              objective=objective, now=moment)
+            used = 0
+            for _, prior in _all_admissions(project):
+                prior_request = prior.get("request")
+                prior_grant = prior.get("recovery", {}).get("spending_grant")
+                if (isinstance(prior_request, dict)
+                        and prior_request.get("account") == requested.get("account")
+                        and prior_request.get("model") == requested.get("model")
+                        and prior_grant is None):
+                    raise PodError("spending_history_unverified",
+                                   "Earlier matching admission lacks grant accounting")
+                if prior_grant is None:
+                    continue
+                if (not isinstance(prior_grant, dict)
+                        or type(prior_grant.get("units")) is not int
+                        or prior_grant["units"] < 1
+                        or not isinstance(prior_grant.get("scope"), str)):
+                    raise PodError("state_migration_required",
+                                   "Spending grant accounting is malformed")
+                if prior_grant["scope"] == grant_binding["scope"]:
+                    used += prior_grant["units"]
+            if used >= maximum:
+                raise PodError("spending_grant_exhausted", "Spending grant units are exhausted")
+        stamp = moment.isoformat()
+        row = {"schema": "pod-admission/v2", "state": "reserved",
+               "admission_id": admission_id, "objective": objective, "owner": owner,
+               "request": requested, "route_decision": route_decision,
+               "effective_evidence": establishment, "runtime": native["runtime"],
+               "request_uuid": None, "run_id": run_id, "task_id": task_id,
+               "plan_revision": plan_revision, "packet_id": packet_id, "worktree": worktree,
+               "bucket": requested.get("bucket"), "native_binding": None,
+               "recovery": {"spending_grant": grant_binding} if grant_binding else {},
+               "error": None, "created_at": stamp, "updated_at": stamp}
+        state["owner"] = owner
+        state["admissions"][admission_id] = row
         _write(path, state)
-        return effect
+        return {**row, "existing": False}
 
 
-def record_delivery(project: Path, objective: str, *, owner: str, delivery: dict) -> dict:
-    """Journal each immutable native item; eligibility reads only durable effects."""
-    exact(delivery, {"id", "messages", "runtime", "runId"},
-          {"id", "messages", "runtime", "runId"}, name="delivery")
-    for key in ("id", "runtime", "runId"):
-        bounded_text(delivery[key], name=key, limit=128)
-    if not isinstance(delivery["messages"], list) or len(delivery["messages"]) > 64:
-        raise PodError("invalid_delivery", "Delivery items are malformed")
-    items = {}
-    for message in delivery["messages"]:
-        item = exact(message, {"id", "type", "runId", "taskId", "dispatchId"},
-                     {"id", "type", "runId"}, name="delivery_item")
-        if item["type"] not in ("worker_done", "question", "escalation", "heartbeat") or item["runId"] != delivery["runId"]:
-            raise PodError("invalid_delivery", "Delivery item type or Run is unsupported")
-        for key, value in item.items():
-            bounded_text(value, name=key, limit=128)
-        if item["type"] == "worker_done" and not all(item.get(key) for key in ("taskId", "dispatchId")):
-            raise PodError("invalid_delivery", "Settlement needs exact Task and Dispatch")
-        if item["id"] in items:
-            raise PodError("invalid_delivery", "Duplicate message identity")
-        items[item["id"]] = {"identity": digest({"runtime": delivery["runtime"], **item}),
-                             "item": item, "effect": None}
+def update_admission(project: Path, objective: str, *, owner: str, admission_id: str,
+                     update: Callable[[dict], None]) -> dict:
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
-        if state["owner"] != owner:
-            raise PodError("coordinator_conflict", "Delivery belongs to another coordinator")
-        prior = state["deliveries"].get(delivery["id"])
-        identity = digest(delivery)
-        if prior and (not isinstance(prior, dict) or prior.get("identity") != identity):
-            raise PodError("delivery_conflict", "Delivery identity changed")
-        if not prior:
-            state["deliveries"][delivery["id"]] = {"identity": identity, "runtime": delivery["runtime"],
-                                                   "runId": delivery["runId"], "items": items}
-            _write(path, state)
-        unresolved = [key for key, row in state["deliveries"][delivery["id"]]["items"].items()
-                      if row["effect"] is None]
-        return {"ack_eligible": not unresolved, "delivery_id": delivery["id"], "unresolved": unresolved}
+        if state["owner"] != owner or admission_id not in state["admissions"]:
+            raise PodError("unknown_admission", "No owned admission identity")
+        row = state["admissions"][admission_id]
+        update(row)
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write(path, state)
+        return row
 
 
-def reconcile_delivery_item(project: Path, objective: str, *, owner: str, delivery_id: str,
-                            message_id: str, native_reader: Callable[[], dict]) -> dict:
-    """Persist an effect from a trusted native readback seam before acknowledgment."""
-    native_effect = native_reader()
-    effect = exact(native_effect, {"runtime", "runId", "messageId", "taskId", "dispatchId",
-                                   "kind", "status", "receiptId"},
-                   {"runtime", "runId", "messageId", "kind", "status", "receiptId"}, name="delivery_effect")
+def migration_inventory(project: Path) -> dict:
+    """Read-only state inventory for doctor/status; it never upgrades records."""
+    root = state_root(project)
+    result = {"v1": 0, "v2": 0, "invalid": 0, "migration_required": False}
+    if not root.exists():
+        return result
+    for path in root.glob("*/context.json"):
+        try:
+            raw = bounded_json(path)
+            schema = raw.get("schema") if isinstance(raw, dict) else None
+            if schema == "pod-context/v1":
+                result["v1"] += 1
+            elif schema == "pod-context/v2":
+                _validate_v2(raw)
+                result["v2"] += 1
+            else:
+                result["invalid"] += 1
+        except (OSError, PodError):
+            result["invalid"] += 1
+    result["migration_required"] = bool(result["v1"] or result["invalid"])
+    return result
+
+
+def _legacy_binding_matches(shown: dict, effect: dict, binding: dict, runtime: str) -> bool:
+    result = shown.get("result") if isinstance(shown, dict) else None
+    dispatch = result.get("dispatch") if isinstance(result, dict) else None
+    projection = result.get("projection") if isinstance(result, dict) else None
+    worker = result.get("worker") if isinstance(result, dict) else None
+    if not (shown.get("runtime") == runtime and isinstance(dispatch, dict)
+            and isinstance(projection, dict) and isinstance(worker, dict)
+            and dispatch.get("id") == binding.get("dispatchId")
+            and dispatch.get("runId") == binding.get("runId")
+            and dispatch.get("taskId") == binding.get("taskId")
+            and projection.get("id") == binding.get("workerId")
+            and worker.get("dispatchId") == binding.get("dispatchId")):
+        return False
+    if "worktreeId" in binding and worker.get("worktreeId") != binding.get("worktreeId"):
+        return False
+    if "terminalHandle" in binding and worker.get("agentTerminalHandle") != binding.get("terminalHandle"):
+        return False
+    request = effect.get("request", {})
+    expected = {key: request.get(key) for key in ("agent", "model", "effort")}
+    launch = worker.get("startOptions", {}).get("launch") if isinstance(worker.get("startOptions"), dict) else None
+    if not isinstance(launch, dict) or launch.get("requested") != expected or launch.get("effective") != expected:
+        return False
+    resource = result.get("terminalResource")
+    if "terminalResourceId" in binding:
+        resource_id = binding.get("terminalResourceId")
+        if resource_id is None:
+            return resource is None
+        return (isinstance(resource, dict) and resource.get("id") == resource_id
+                and resource.get("terminalHandle") == binding.get("terminalHandle")
+                and resource.get("worktreeId") == binding.get("worktreeId")
+                and resource.get("originDispatchId") == binding.get("dispatchId")
+                and resource.get("ownerDispatchId") == binding.get("dispatchId"))
+    return True
+
+
+def _read_legacy_bytes(path: Path, *, limit: int = 1_048_576) -> bytes:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise PodError("state_migration_failed", "Legacy state cannot be opened safely") from exc
+    try:
+        size = os.fstat(fd).st_size
+        if size > limit:
+            raise PodError("state_migration_failed", "Legacy state exceeds the migration bound")
+        chunks = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > limit or len(data) != size:
+            raise PodError("state_migration_failed", "Legacy state changed during migration read")
+        return data
+    finally:
+        os.close(fd)
+
+
+def migrate_v1(project: Path, objective: str, *, owner: str,
+               worker_reader: Callable[[str], dict]) -> dict:
+    """Explicit read-only-native v1 to v2 migration with an immutable source archive."""
     path = _path(project, objective)
-    with _lock(path):
-        state = _read(path)
-        if state["owner"] != owner or delivery_id not in state["deliveries"]:
-            raise PodError("unknown_delivery", "No owned Delivery")
-        delivery = state["deliveries"][delivery_id]
-        row = delivery["items"].get(message_id)
-        if row is None:
-            raise PodError("unknown_delivery_item", "Message is not in this Delivery")
-        item = row["item"]
-        if (effect["runtime"] != delivery["runtime"] or effect["runId"] != delivery["runId"]
-                or effect["messageId"] != message_id or effect.get("taskId") != item.get("taskId")
-                or effect.get("dispatchId") != item.get("dispatchId")):
-            raise PodError("delivery_effect_mismatch", "Effect does not join exact native item")
-        if item["type"] == "worker_done":
-            bindings = [e for e in state["effects"].values() if e.get("state") == "confirmed"
-                        and e.get("runtime") == effect["runtime"] and e.get("native_binding", {}).get("runId") == effect["runId"]
-                        and e.get("native_binding", {}).get("taskId") == effect["taskId"]
-                        and e.get("native_binding", {}).get("dispatchId") == effect["dispatchId"]]
-            cleanup = state["cleanup"].get(effect["dispatchId"], {})
-            if (effect["kind"] != "settlement" or effect["status"] not in ("completed", "failed")
-                    or len(bindings) != 1 or cleanup.get("state") not in ("released", "already_released", "retained")):
-                raise PodError("delivery_unresolved", "Settlement and terminal disposition are not durably reconciled")
-        elif item["type"] == "question":
-            if effect["kind"] != "reply" or effect["status"] != "replied":
-                raise PodError("delivery_unresolved", "Question has no native reply receipt")
-        elif item["type"] == "heartbeat":
-            if effect["kind"] != "observation" or effect["status"] != "recorded":
-                raise PodError("delivery_unresolved", "Heartbeat has no recorded observation")
+    with _lock(state_root(project) / "admission" / "state"), _lock(path):
+        if not path.exists():
+            raise PodError("state_missing", "No state exists for this objective")
+        raw_bytes = _read_legacy_bytes(path)
+        try:
+            old = json.loads(raw_bytes)
+        except (UnicodeError, ValueError) as exc:
+            raise PodError("state_migration_failed", "Legacy state is not valid JSON") from exc
+        required = {"schema", "revision", "owner", "effects", "checkpoint", "deliveries",
+                    "interventions", "source_rejections", "cleanup"}
+        exact(old, required, required, name="legacy_context")
+        if old["schema"] != "pod-context/v1" or not isinstance(old["effects"], dict):
+            raise PodError("state_migration_failed", "Only Pod v1 state can be migrated")
+        if (not isinstance(old["cleanup"], dict) or not isinstance(old["deliveries"], dict)
+                or not isinstance(old["interventions"], dict)
+                or not isinstance(old["source_rejections"], dict)):
+            raise PodError("state_migration_failed", "Legacy state collections are malformed")
+        if old["owner"] not in (None, owner):
+            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        source_digest = hashlib.sha256(raw_bytes).hexdigest()
+        admissions = {}
+        for operation_id, effect in old["effects"].items():
+            if not isinstance(operation_id, str) or not isinstance(effect, dict):
+                raise PodError("state_migration_failed", "Legacy effect row is malformed")
+            request = effect.get("request")
+            runtime = effect.get("runtime")
+            if not isinstance(request, dict) or not isinstance(runtime, str) or not runtime:
+                raise PodError("state_migration_failed", "Legacy effect route or runtime is malformed")
+            admission_id = digest({"archive": source_digest, "legacy_effect": operation_id})
+            binding = effect.get("native_binding")
+            state = "legacy_hold"
+            recovery = {"legacy_effect": operation_id, "reason": "legacy_effect_unresolved"}
+            migrated_binding = None
+            if effect.get("state") == "confirmed" and isinstance(binding, dict):
+                predecessor = set(binding) == {"dispatchId", "workerId", "taskId", "runId"}
+                current = set(binding) == {"dispatchId", "workerId", "taskId", "runId",
+                                            "worktreeId", "terminalHandle", "terminalResourceId"}
+                if predecessor or current:
+                    try:
+                        shown = worker_reader(binding["dispatchId"])
+                    except Exception as exc:
+                        shown = {"error": type(exc).__name__}
+                    if _legacy_binding_matches(shown, effect, binding, runtime):
+                        result = shown["result"]
+                        worker = result["worker"]
+                        worktree = binding.get("worktreeId") or worker.get("worktreeId")
+                        terminal = binding.get("terminalHandle", worker.get("agentTerminalHandle"))
+                        migrated_binding = {"runId": binding["runId"], "taskId": binding["taskId"],
+                                            "dispatchId": binding["dispatchId"], "workerId": binding["workerId"],
+                                            "worktreeId": worktree, "terminalHandle": terminal}
+                        if binding_valid(migrated_binding):
+                            projection = result.get("projection")
+                            resource = projection.get("resource") if isinstance(projection, dict) else None
+                            terminal_resource = result.get("terminalResource")
+                            released = (isinstance(terminal_resource, dict)
+                                        and terminal_resource.get("ownershipState") == "released")
+                            released = released or isinstance(resource, dict) and resource.get("state") == "released"
+                            cleanup = old["cleanup"].get(binding["dispatchId"])
+                            cleanup_state = cleanup.get("state") if isinstance(cleanup, dict) else None
+                            uncertain_cleanup = cleanup_state in (
+                                "reserved", "uncertain", "release_pending", "release_unknown")
+                            state = "closed" if released else "legacy_hold" if uncertain_cleanup else "bound"
+                            recovery = {"legacy_effect": operation_id, "native_read": "exact"}
+                        else:
+                            migrated_binding = None
+            stamp = datetime.now(timezone.utc).isoformat()
+            admissions[admission_id] = {"schema": "pod-admission/v2", "state": state,
+                "admission_id": admission_id, "objective": objective, "owner": owner,
+                "request": request, "route_decision": {"legacy": True,
+                    "policy_revision": effect.get("route_revision")},
+                "effective_evidence": {"legacy": True}, "runtime": runtime,
+                "request_uuid": None, "run_id": effect.get("run_id") or (binding or {}).get("runId") or "legacy-unknown",
+                "task_id": (binding or {}).get("taskId") or "legacy-unknown",
+                "plan_revision": effect.get("plan_revision") or "legacy-unknown",
+                "packet_id": effect.get("packet_id") or "legacy-unknown",
+                "worktree": (binding or {}).get("worktreeId") or "legacy-unknown",
+                "bucket": effect.get("bucket"), "native_binding": migrated_binding,
+                "recovery": {**recovery, "spending_grant": effect.get("spending_grant")},
+                "error": effect.get("native_failure"),
+                "created_at": effect.get("created_at") or stamp, "updated_at": stamp}
+        archive_ref = {"path": f"archives/context-v1-{source_digest}.json",
+                       "sha256": source_digest, "schema": "pod-context/v1"}
+        new = {"schema": "pod-context/v2", "revision": 0, "owner": owner,
+               "admissions": admissions, "checkpoint": old["checkpoint"],
+               "interventions": old["interventions"], "source_rejections": old["source_rejections"],
+               "legacy_archives": [archive_ref]}
+        _validate_v2(new)
+        archive = path.parent / archive_ref["path"]
+        archive.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if archive.parent.is_symlink():
+            raise PodError("state_migration_failed", "Legacy archive directory is redirected")
+        if archive.is_symlink():
+            raise PodError("state_migration_failed", "Legacy archive is redirected")
+        if archive.exists():
+            if hashlib.sha256(_read_legacy_bytes(archive)).hexdigest() != source_digest:
+                raise PodError("state_migration_failed", "Legacy archive identity conflicts")
         else:
-            if effect["kind"] != "decision" or effect["status"] != "recorded":
-                raise PodError("delivery_unresolved", "Escalation has no recorded decision")
-        bounded_text(effect["receiptId"], name="receiptId", limit=128)
-        if row["effect"] and row["effect"] != effect:
-            raise PodError("delivery_effect_conflict", "A different effect was already recorded")
-        if not row["effect"]:
-            row["effect"] = effect
-            _write(path, state)
-        return {"status": "reconciled", "delivery_id": delivery_id, "message_id": message_id}
+            fd = os.open(archive, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            try:
+                view = memoryview(raw_bytes)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise PodError("state_migration_failed", "Legacy archive write was incomplete")
+                    view = view[written:]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        if hashlib.sha256(_read_legacy_bytes(archive)).hexdigest() != source_digest:
+            raise PodError("state_migration_failed", "Legacy archive verification failed")
+        atomic_json(path, new)
+        return {"status": "migrated", "archive": archive_ref,
+                "admissions": {state: sum(row["state"] == state for row in admissions.values())
+                               for state in ADMISSION_STATES}}
 
 
 def intervention(project: Path, objective: str, *, owner: str, correction: dict,
                  task: str | None = None, diagnosis: dict | None = None,
                  unit: str | None = None) -> dict:
-    """Record one correction for a Task or for a delivery unit's remote validation.
-
-    Both scopes share one threshold: after two equivalent corrections without new
-    evidence, a diagnosis naming distinct bounded evidence is required. A unit scope is
-    how the waste governor routes a repeated remote validation failure through this same
-    mechanism rather than a second anti-thrashing rule.
-    """
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -795,23 +832,22 @@ def intervention(project: Path, objective: str, *, owner: str, correction: dict,
 
 def _intervention_locked(project: Path, objective: str, state: dict, *, task: str | None,
                          unit: str | None, correction: dict, diagnosis: dict | None) -> dict:
-    """The correction rule with the objective lock already held; the caller writes."""
     if (task is None) == (unit is None):
         raise PodError("invalid_intervention", "A correction names exactly one Task or delivery unit")
-    exact(correction, {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
-                       "next_discriminating_check", "correction_key"},
-          {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
-           "next_discriminating_check", "correction_key"}, name="correction")
+    exact(correction, {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis",
+                       "last_meaningful_evidence", "next_discriminating_check", "correction_key"},
+          {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis",
+           "last_meaningful_evidence", "next_discriminating_check", "correction_key"}, name="correction")
     for item in correction.values():
         bounded_text(item, name="correction")
     if task is not None:
         bounded_text(task, name="task", limit=128)
         key = task
-        if not any(effect.get("state") == "confirmed" and
-                   isinstance(effect.get("native_binding"), dict) and
-                   effect["native_binding"].get("taskId") == task
-                   for effect in state["effects"].values() if isinstance(effect, dict)):
-            raise PodError("task_unbound", "Correction Task lacks a confirmed native effect binding")
+        if not any(row.get("state") in ("bound", "closed")
+                   and isinstance(row.get("native_binding"), dict)
+                   and row["native_binding"].get("taskId") == task
+                   for row in state["admissions"].values()):
+            raise PodError("task_unbound", "Correction Task lacks an exact native admission binding")
     else:
         bounded_text(unit, name="unit", limit=64)
         key = "unit:" + unit
@@ -826,15 +862,11 @@ def _intervention_locked(project: Path, objective: str, state: dict, *, task: st
     identity = digest(correction)
     if identity in [row["identity"] for row in history]:
         raise PodError("correction_replay", "Equivalent correction was already attempted")
-    # The caller supplies failure labels and evidence descriptions. Neither
-    # changes the durable per-Task threshold. A later attempt needs a new
-    # bounded source observation as explicit discriminating evidence.
     diagnosis_source = None
     if len(history) >= 2:
         if diagnosis is None:
             raise PodError("diagnosis_required", "Two equivalent failures require a discriminating diagnosis")
         exact(diagnosis, {"diagnosis_evidence"}, {"diagnosis_evidence"}, name="diagnosis")
-        bounded_text(diagnosis["diagnosis_evidence"], name="diagnosis_evidence")
         from .records import source_identity
         diagnosis_source = source_identity(project, diagnosis["diagnosis_evidence"])
         if diagnosis_source["state"] != "present":
@@ -845,8 +877,7 @@ def _intervention_locked(project: Path, objective: str, state: dict, *, task: st
         raise PodError("diagnosis_unproductive", "A diagnosis is only recorded after the correction threshold")
     history.append({"identity": identity, "key": correction["correction_key"],
                     "criterion_id": correction["criterion_id"], "failure_id": correction["failure_id"],
-                    "obligation": correction["obligation"],
-                    "failing_example": correction["failing_example"],
+                    "obligation": correction["obligation"], "failing_example": correction["failing_example"],
                     "hypothesis": correction["hypothesis"],
                     "next_discriminating_check": correction["next_discriminating_check"],
                     "evidence": correction["last_meaningful_evidence"],

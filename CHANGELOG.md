@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — candidate
+
+- Orca is now the only runtime and lifecycle authority. Pod retains a serialized policy
+  admission seam, frozen packets, evidence and governance, while its private Delivery,
+  cleanup, release, terminal, liveness and retry state machines are removed.
+- `pod-context/v2` records compact admissions and exact native references. Capacity and the
+  waste governor use fresh Orca projection; missing, ambiguous, retained or unresolved work
+  remains conservative, and exact released projection can free capacity.
+- Native recovery records Orca's request UUID before readback and handles completed, pending
+  and absent request states without a second semantic start. Pod never selects a retry UUID.
+- Explicit `state-migrate` archives and hashes v1, performs read-only native reconciliation,
+  preserves spent grants and uncertain holds, then atomically installs v2. Doctor and status
+  report migration requirements without changing state.
+- Package/skill metadata is 0.3.0 and CLI/helper envelopes are v2. The last published install
+  pin remains `v0.1.2`; this candidate does not claim a tag or publication.
+
 ## 0.2.0 — 2026-09-22
 
 - The governor is now a waste-governor kernel: a small deterministic control layer inside the

@@ -12,6 +12,7 @@ from pod.config import DEFAULT, route_identity
 from pod.context import execution_brief
 from pod.errors import PodError
 from pod.operations import guarded_start
+from pod.records import packet
 from pod.routing import preview
 from pod.util import digest
 from tests.common import fixture
@@ -77,11 +78,21 @@ class ScenarioFixtureTests(unittest.TestCase):
         with fixture() as root, patch.dict(os.environ, {"XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
-            _, assessment, capabilities, quota = scenario_inputs()
+            policy, assessment, capabilities, quota = scenario_inputs()
+            route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
+                     "account": "account", "bucket": "shared", "effort": "high"}
+            frozen = packet({"schema": "pod-packet/v1", "objective": "objective",
+                             "criteria": ["works"], "responsibility": "worker",
+                             "scope": ["notes.txt"], "actions": ["edit"],
+                             "candidate": "candidate", "context": [], "dependencies": [],
+                             "route": route, "policy_revision": policy["revision"],
+                             "plan_revision": "plan", "report_contract": "checks",
+                             "sources": []})
             with self.assertRaises(PodError) as caught:
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
-                              operation_id="op", assessment=assessment, capabilities=capabilities,
-                              quotas=quota, occupancy={}, plan_revision="plan", port=Spy(), now=NOW)
+                              assessment=assessment, capabilities=capabilities,
+                              quotas=quota, occupancy={}, plan_revision="plan",
+                              frozen_packet=frozen, port=Spy(), now=NOW)
             self.assertEqual(caught.exception.code, "route_unusable")
 
     def test_coverage_inventory_is_complete_without_claiming_behavior(self):

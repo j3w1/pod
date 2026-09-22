@@ -1,8 +1,8 @@
 # Pod — consolidated normative specification
 
 Status: accepted implementation contract; not a claim of implementation or verification.
-Baseline: `474a84a6d5a1f7947abc1e38d232c379adf7ff93`.
-Schema/version: Pod v1.
+Baseline: `1b0aa6fc68ee2157f6f67ba4a60076d967791cc4`.
+Schema/version: Pod 0.3.0 candidate; context `pod-context/v2`.
 
 Pod is an adaptive coordination policy for Orca. It turns the coding session already
 in use into the coordinator, choosing tools, agents, models and effort for each part
@@ -55,12 +55,22 @@ passed, and retiring one does not permit removing an applicable correctness chec
 | `release_authorized` projected as a constant | Owner authorization supplied as an input record (R64) | A gate must report technical readiness accurately; authorization is an owner decision, never a test result. |
 | Hosted native-OS matrices and a separate ceremonial owner sign-off | One hosted Linux check; disposable-project acceptance | The remaining ceremony proved nothing the recorded evidence did not already carry. |
 
+### Owner decision of 2026-09-22
+
+Orca is the single source of truth for Runs, Tasks, Dispatches, request recovery,
+worker lifecycle, messaging, placement and terminal/resource disposition. Pod is a thin
+policy, routing and evidence layer. Pod keeps a serialized admission seam and exact native
+references, but it does not copy native lifecycle status or implement Delivery, cleanup,
+liveness, terminal, release or retry state machines. The installed, version-matched Orca
+orchestration guide and its recovery reference govern native mutation semantics. Orca mints
+request UUIDs; Pod only records and reuses them for the same immutable admission.
+
 ## Normative requirements
 
 | ID | Type | Requirement | Sources | Scenarios |
 | --- | --- | --- | --- | --- |
 | R01 | B | Maintain this consolidated requirement/scenario inventory as product authority. Explicitly revise changed requirements and preserve history; implementation results cannot silently redefine them. | F1,8,12; PO–P | A40 |
-| R02 | B | Keep the current conversation as coordinator. Orca owns native execution objects, placement, messaging and lifecycle; projects own governance. Helpers must not become a scheduler, competing task database, autonomous controller or restart daemon. | F1–2,9,15; PA,N | A01,A41 |
+| R02 | B | Keep the current conversation as coordinator. Orca is the sole runtime authority for Runs, Tasks, Dispatches, requests, placement, messaging, terminals/resources and lifecycle; projects own governance. Pod is policy, routing and evidence only. Helpers must not become a scheduler, competing native task/lifecycle database, autonomous controller or restart daemon. | F1–2,9,15; PA,N; owner 2026-09-22 | A01,A41,A101 |
 | R03 | B | Expose only pod setup, pod config, pod doctor and pod status as public command families. Planning, implementation, explanation, steering and continuation remain skill behaviors. Internal operations install no additional global executables. | F3,11; PH | A35,A36,A42 |
 | R04 | B | Maintain one canonical inline skill policy with generated host metadata and relevant-on-demand references. Invocation preserves the conversation and must not set coordinator model/effort or use Claude context: fork. | F2–3,11; PA,H | A01,A32,A43 |
 | R05 | B | Normal invocation inspects objective, criteria, rules and consequential assumptions, then proceeds within existing authorization. Use a compact execution brief when useful; trivial work requires neither workers nor milestone ceremony. | F3; PA | A02,A04 |
@@ -81,32 +91,32 @@ passed, and retiring one does not permit removing an applicable correctness chec
 | R20 | H | Separate model approval from paid usage, premium modes and reset authority. Spending grants must be explicit, scoped, bounded and visible. Exclude routes whose billing eligibility could cause unauthorized charges; uncertainty disclosure is not spending permission or a zero-charge guarantee. | F5; PC | A17,A55 |
 | R21 | H | Reset consumption requires the exact grant, supported idempotency, durable operation identity and subsequent quota readback. An uncertain response cannot authorize another redemption. Passive commands consume nothing. | F5; PC | A17,A22,A56 |
 | R22 | B,H | Account for coordinator work and preserve practical integration, verification, recovery and reporting headroom. Checkpoint before foreseeable exhaustion. Changing workers does not move/replenish the coordinator. A supported coordinator model change must be explicit, session-scoped and visible. | F5,7,9; PC | A31,A39,A57 |
-| R23 | I,H | Resolve and retain the applicable Orca executable/runtime identity. Validate advertised capabilities and installed-version contracts, including backend-specific identities and optional terminals. Do not silently substitute runtimes, execution hosts, accounts or direct provider worker APIs. | F2,5,11; PA,I | A08,A34,A58 |
+| R23 | I,H | Resolve the applicable Orca executable/runtime through installed Orca discovery, load the version-matched orchestration guide, and validate advertised read/start/request-recovery contracts, backend identities and optional terminals. Do not silently substitute runtimes, execution hosts, accounts or direct provider worker APIs. | F2,5,11; PA,I; owner 2026-09-22 | A08,A34,A58,A101 |
 | R24 | H | Validate approval, capability, effort, billing, host restrictions and fan-out controls before dispatch. Compare requested/confirmed effective configuration afterward and at observable changes. Missing proof remains unknown; policy violations hold/quarantine the result. Post-launch detection cannot replace necessary pre-launch spending protection. | F4,6–7; PA–B,J | A08,A20,A59 |
-| R25 | B | Treat accepted input, started reasoning, native settlement and accepted output as different observations. Silence/lost responses do not prove failure, justify resending input or authorize replacement work. | F7,9; PA,L | A22,A60 |
+| R25 | B | Treat accepted input, started reasoning, native settlement and accepted output as different native observations. Silence/lost responses do not prove failure, justify resending input or authorize replacement work. Recover the same immutable admission through Orca request-show: record a completed receipt, join a pending request with Orca's UUID, or inspect exact Run/Task/Dispatch identity after an absent result; missing, ambiguous or contradictory evidence holds and never starts fresh. | F7,9; PA,L; owner 2026-09-22 | A22,A60,A102 |
 | R26 | H | Use zero workers when sufficient, default capacity two, ordinary one–three and justified expansion to three. Four–eight needs an explicit reasoned grant bound to objective, Run, plan/decomposition revision and limit. Reject above eight. Free hardware alone does not justify workers or substitute compute restrictions for decomposition. | F6; PD | A18,A19 |
 | R27 | H | Count investigators, reviewers and authorized descendants under the same objective ceiling across Runs. Children need explicitly delegated authority. Disable hidden fan-out unless authorized and natively accounted. Ultra/ultracode are not ordinary effort values; unverifiable fan-out controls block affected routes. | F6; PD | A16,A19,A20,A21 |
-| R28 | H | Guard admission with native atomic facilities or serialized host-local admission, durable intentions and fresh native reads. Account jointly for objective occupancy/shared buckets. Launching, active, uncertain, retained and unproven-release attempts occupy capacity; reconcile without double-counting. Provider quota reservations are advisory. | F5–6,9; PC–D,L | A18,A21,A22,A61 |
+| R28 | H | Guard admission with native atomic facilities or serialized host-local admission, durable policy reservations and fresh exact Orca projections. Account jointly for objective occupancy/shared buckets, foreign workers and authorized descendants. Reserved, bound, unresolved and legacy-hold admissions occupy conservatively until a unique exact native projection proves release; deduplicate exact bindings. Provider quota reservations are advisory. | F5–6,9; PC–D,L; owner 2026-09-22 | A18,A21,A22,A61,A103 |
 | R29 | H | Establish one authoritative coordinator per objective. Adoption reconciles pending effects/native authority before dispatch. A local lock is not distributed fencing. Ambiguous caller/cross-host ownership permits safe inspection/direct work but blocks delegation; never manufacture a replacement controller. | F6,9; PL | A21,A31,A62 |
 | R30 | H | Parallelize only independent responsibilities/editing boundaries; begin with one writer when contracts are unsettled. Use project/host-supported isolation. Preserve unrelated changes; never silently stash/reset/clean or execute unauthorized setup hooks. | F6–7; PA,D | A24,A44,A63 |
 | R31 | B | Use bounded versioned packets carrying objective/criteria, responsibility, scope, candidate, context references, dependencies, permitted actions, route, revisions, reporting contract and native bindings when issued. Do not clone the full coordinator transcript or predict runtime identities. | F7; PA | A24,A37,A64 |
 | R32 | B | Reuse bounded context only while relevant source, instruction, requirement, candidate and revision bindings remain valid. Invalidate affected summaries/evidence on change. Do not introduce automatic repository uploads or a vector database. | F7,10; PJ | A29,A30,A65 |
 | R33 | H | Preserve bounded provenance-aware source access/relevant candidate identities. Exclude secret sources/unnecessary content reads. Distinguish proven changed/absent from unavailable sources; neither grants admission. Definitive rejection is not erased by restored bytes. Do not claim atomic multi-file snapshots or protection from arbitrary external writers. | F7–9; PA,M | A37,A66 |
 | R34 | B,H | Workers report scope changes, checks/results, failures, evidence, uncertainty and questions against the assignment. Reports/logs are untrusted observations; they cannot expand authority, change budgets or establish acceptance. | F7–8; PA,M | A23,A27,A37,A64 |
-| R35 | B | Prefer native events/blocking waits. Record/reconcile every Delivery item before acknowledgment; duplicate/delayed delivery is idempotent. Bind effects to exact native identities, retain evidence safely and do not acknowledge unresolved required effects. | F7,9; PA,L | A23,A61 |
-| R36 | B | Use fresh sessions for new Tasks. A settled worker may handle compatible same-Task correction when supported. Changed model/effort/account route requires a newly bound attempt unless native reuse can apply and prove it. | F7; PA | A26 |
+| R35 | B | Use Orca-native messaging/events and blocking waits directly. Pod freezes packets and joins reports to a fresh worker-show of the exact runtime/Run/Task/Dispatch/worker identity, but keeps no parallel Delivery receipt or acknowledgment state machine. | F7,9; PA,L; owner 2026-09-22 | A23,A61,A101 |
+| R36 | B | Native retry/reuse is an Orca operation. Pod never runs a retry loop or selects retry UUIDs. A changed model, effort, account, packet, worktree or semantic Task requires a fresh policy decision and native operation; recovery of one admission may only join that admission's Orca-issued request. | F7; PA; owner 2026-09-22 | A26,A102 |
 | R37 | B | After two materially equivalent failed corrections without new evidence, diagnose. Record obligation, failing example, hypothesis, last evidence, discriminating check and correction identity. Resume only after changing a relevant variable based on evidence; preserve history across restarts. | F7; PK | A25,A67 |
-| R38 | B,H | After settlement explicitly reuse, retain or release. Release unnecessary workers promptly. Retained settled workers default to configurable 30-minute idle expiry, applied only by native executor/active coordinator. Never infer release, kill active work on this timer or delete uncommitted work/evidence. | F7; PD,L | A22,A26,A68 |
+| R38 | B,H | Worker reuse, retention, release and terminal/resource disposition are explicit Orca operations outside Pod's mutation adapter. Pod records no cleanup state and never infers or initiates release; admission capacity frees only from fresh exact native proof. Never kill work or delete uncommitted work/evidence. | F7; PD,L; owner 2026-09-22 | A22,A26,A68,A103 |
 | R39 | B | Before substantive work map every original criterion to a planned check or explicit human/provider dependency. Preserve criteria through decomposition; update evidence rather than redefine success to fit output. | F8; PA,J,M | A27,A28,A30,A45 |
 | R40 | B,H | Run cheap discriminating checks early, focused checks during development and required complete gates at milestones. Honor project review rules; otherwise independently review substantial/high-risk changes. Review receives exact candidate/reproducible evidence without being primed to approve. | F8; PF,J | A28,A69 |
 | R41 | B | Bind verification to commit/tree where applicable, relevant dirty/source identity, policy/configuration, dependencies, environment, commands/results and reviewer attempt. Material changes invalidate affected evidence. Reuse unaffected proof only when bindings/project rules permit. | F8; PM | A27,A29,A70 |
 | R42 | H | Keep implemented, locally verified, independently reviewed, hosted proof complete, accepted, merged and deployed/released distinct. The coordinator assesses the objective under project acceptance authority; worker success/synthetic fixtures cannot promote later labels. | F8; PA,M | A27,A28,A71 |
 | R43 | B | Final reports state objective, achieved criteria, exact blockers, candidate/check evidence, failures, material route exceptions, uncertainty and release state. Partial results remain partial; unobserved usage/cost remains unknown. | F8,14; PA,M | A39,A71 |
-| R44 | I,H | Persist only compact decision context, provenance, checkpoints, effects/reconciliation records and evidence references. Use private OS-appropriate host-local storage, explicit versions, atomic writes and bounded retention. Keep live identifiers/private material out of Git; never expire unresolved effects/required evidence. | F9; PA,L | A31,A37,A41,A72 |
-| R45 | B | Recovery selects the objective, reads native state before deciding actions and distinguishes active, completed-awaiting-integration, failed, uncertain, stale and stopped coordination. Missing local records do not justify relaunch. No daemon/automatic conversation migration. | F9; PL | A22,A31,A62,A72 |
+| R44 | I,H | Persist only compact `pod-context/v2` policy/evidence: admissions (`reserved`, `bound`, `unresolved`, `closed`, `legacy_hold`), owner, checkpoint, interventions, source rejections and immutable legacy archive references. Store native IDs and request UUIDs as references with route/packet/grant/request/effective evidence, never copied native lifecycle status. Use private host-local storage, explicit versions and atomic bounded writes; keep live identifiers/private material out of Git. | F9; PA,L; owner 2026-09-22 | A31,A37,A41,A72,A104 |
+| R45 | B | Recovery selects the objective and reads native state before action. Native request-show governs completed/pending/absent request recovery; exact Run/Task/Dispatch readback may bind only one matching attempt. Missing, ambiguous or unresolved evidence remains occupied and never justifies relaunch. There is no Pod retry, release or lifecycle loop and no daemon/automatic conversation migration. | F9; PL; owner 2026-09-22 | A22,A31,A62,A72,A102 |
 | R46 | B,H | Steering creates a new revision, reconciles affected assignments at safe native boundaries, preserves useful unaffected work and prevents obsolete reports/proof satisfying revised work. Material acceptance changes require explicit authorization. | F8–9; PJ,M | A30,A45,A70 |
 | R47 | B,H | Record relevant observed outcomes and suggest preferences only after a meaningful pattern. Never silently rewrite preferences, infer savings from model labels or launch paid A/B experiments automatically. | F10,14; PJ | A39,A73 |
-| R48 | B | Read-only tools show effective policy/provenance, approval, runtime/capability/version issues, quota visibility and compact native work/verification context. Ambiguous status requires selection. Reads must not create/migrate state, repair integrations, run hooks/models, dispatch or spend. | F3,10; PH,J | A36,A42,A51,A74 |
+| R48 | B | Read-only tools show effective policy/provenance, approval, runtime/capability/version issues, quota visibility, compact fresh native work/verification context and `migration_required`. Ambiguous status requires selection. Reads must not create/migrate state, repair integrations, run hooks/models, dispatch or spend. | F3,10; PH,J; owner 2026-09-22 | A36,A42,A51,A74,A104 |
 | R49 | B,H | Local setup enrolls the project/reconciles owned skills. Global setup installs user skills without changing the current project. Reuse compatible global installations; diagnose duplicate/shadowed copies. Remove redundant local copies only during local setup when owned/unchanged; preserve modified copies. | F3,11; PH | A32,A33,A36,A43,A75 |
 | R50 | I,H | Support explicit isolated installation from a reviewed checkout on Linux with Python 3.13+. Bootstrap installs only into the selected environment and reports the command. Normal setup performs no implicit machine installation, automatic PATH repair, Orca installation, billing change or project hook. | F3,11; PI | A34,A76 |
 | R51 | B,H | RETIRED 2026-09-21. Supported execution environment: Linux. The skill's instruction format is portable; its executable dependencies are not, and no support is promised elsewhere. Unknown ownership or an unsupported transport still fails conservatively, with no silent local fallback. | F11; PI | A34,A58,A62 |
@@ -120,11 +130,11 @@ passed, and retiring one does not permit removing an applicable correctness chec
 | R59 | H | Preserve project authority over source selection, checks, review, acceptance, merge and release. Repository instructions may constrain work but cannot expand personal provider/spending approval. Explicit user scope/host rules remain authoritative; reports/configuration cannot manufacture grants. | F1,8,11–12; PF–G,O | A09,A37,A71 |
 | R60 | B,I | Install through the existing agent-skills ecosystem. Publish one discoverable `skills/pod` bundle whose `SKILL.md`, references, helpers and resources are the same authoring source the Python distribution packages, with a parity check rather than divergent copies. Document a release-pinned source form and a Node-free install from the reviewed release. Do not create an npm package, require a publication registry, or recommend an unrelated package. | O1 | A82,A83 |
 | R61 | B,H | The installed skill carries its own first-party helpers. Loading it never installs tools or dependencies, edits shell profiles, installs Orca, changes billing or overwrites project files. Declare the actual prerequisites and supply one explicit user-space bootstrap step when one is needed. Never depend on a source checkout, an editable install, `PYTHONPATH`, a broken link or a path outside the distributed skill. | O2 | A83,A84 |
-| R62 | B,H | Establish each route against the installed runtime instead of demanding a universal attestation. Distinguish an enforceable control, a supported runtime observation, owner route configuration and unavailable metadata, and claim no more than those controls prove. An unresolved authentication or billing route that could incur an unauthorized charge must not launch; unknown optional metadata is disclosed, not treated as installation failure. | O3 | A85,A86 |
+| R62 | B,H | Establish each route against the installed runtime instead of demanding a universal attestation. Load the installed Orca guide before native effects and use its recovery semantics. Distinguish an enforceable control, supported runtime observation, owner route configuration and unavailable metadata, claiming no more than those controls prove. An unresolved authentication or billing route that could incur an unauthorized charge must not launch; unknown optional metadata is disclosed, not treated as installation failure. | O3; owner 2026-09-22 | A85,A86,A101,A102 |
 | R63 | B | Before a Pod-mediated push, pull-request update, workflow dispatch, rerun, remote diagnostic, merge, release, deployment or cancellation, return an explainable ALLOW, REUSE or DEFER from durable objective records. Revised 2026-09-21: WARN is an annotation, never a fourth state, and a duplicate action attaches to the running one or reuses its evidence rather than deferring. Defer a superseded candidate and validation that is premature while the unit is unsettled; permit a justified bounded remote diagnostic. A scoped efficiency exception replaces the generic override and never lifts an authorization, spending or correctness restriction. These controls cover Pod-mediated operations, not arbitrary shell commands. | O7,O9 | A87,A88 |
 | R64 | H | Derive release authorization from an owner record naming the exact candidate, tree and scope. Report technical readiness accurately and separately; passing checks never grant permission, and a projection never withholds a readiness fact it has evidence for. | O8 | A89 |
 | R65 | B,H | Keep host integration optional. Pod works on a suitable Linux environment without the owner's host tooling, paths, accounts or evidence, detecting and respecting host policies when present. | O2 | A84 |
-| R66 | B,H | Govern expensive Pod-mediated remote actions with one deterministic, event-driven kernel inside the existing execution path, evaluated at boundaries with zero model calls and bounded state reads. Bind each request to a delivery unit's explicitly prepared candidate generation, which freezes commit, tree, base, workflow digests, verification commands, toolchain, environment and policy revision; judge what an action triggers, never its verb; require the configured local preflight before remote validation; reuse compatible evidence and attach to an equivalent running action; classify a remote failure before another attempt and route repeated code defects through the existing intervention rule; execute an admitted action against the bound commit with a journaled intention, restart-safe receipts and readback-only reconciliation of a lost response; cancel only a pending, cancel-safe validation of a superseded candidate. Report enforcement as advisory unless the host restricts mutation routes. Project policy may only narrow governor authority; scoped exceptions rejoin a personal grant; Orca keeps worker lifecycle and project governance keeps merge, release and deployment. | O9 | A90–A99 |
+| R66 | B,H | Govern expensive Pod-mediated remote actions with one deterministic kernel inside the existing execution path, evaluated at boundaries with zero model calls and bounded state reads. Bind each request to a delivery unit's explicitly prepared candidate generation, which freezes commit, tree, base, workflow digests, verification commands, toolchain, environment and policy revision; judge effects, require configured local preflight, reuse compatible evidence, classify failures, journal admitted actions and reconcile lost responses read-only. ALLOW/REUSE/DEFER decisions consume a fresh read-only Orca projection for relevant native occupancy rather than persistent Pod Delivery/cleanup state. Report enforcement as advisory unless host controls prove otherwise; project policy may only narrow authority; Orca keeps worker lifecycle and project governance keeps merge, release and deployment. | O9; owner 2026-09-22 | A90–A99,A101,A103 |
 
 ## Public interfaces
 
@@ -244,8 +254,8 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A19 | Three requires justification; four–eight requires bound grant; above eight rejected. |
 | A20 | Hidden/native descendants disabled or expressly authorized/counted; unverifiable compliance blocks route. |
 | A21 | Concurrent managed admissions/coordinators do not over-admit; ambiguous cross-host authority blocks dispatch. |
-| A22 | Lost launch/release responses retain occupancy and reconcile exact identities without blind replacements/repeated effects. |
-| A23 | Duplicate/multi-item Deliveries process all required effects idempotently before acknowledgment. |
+| A22 | Lost start/request responses retain occupancy and recover the same immutable admission through exact Orca request/native identity without a blind replacement or repeated semantic start. |
+| A23 | Native duplicate/delayed messaging remains Orca-owned; Pod report ingestion joins a frozen packet and exact fresh Dispatch identity without a parallel acknowledgment ledger. |
 | A24 | Overlapping writes/existing dirtiness isolate or serialize while preserving owner changes. |
 | A25 | Two equivalent failed corrections trigger diagnosis/discriminating check before another attempt. |
 | A26 | New Tasks get fresh sessions; compatible corrections may reuse; unsupported route changes get fresh bound attempts. |
@@ -283,7 +293,7 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A58 | Current native workers without terminals use worker identity/lifecycle APIs; missing terminal alone is not failure. |
 | A59 | Missing required pre-dispatch billing/fan-out assurance rejects before launch; requested settings alone are not effective proof. |
 | A60 | Accepted but unproven submission triggers observation, not automatic Enter/resend/replacement/acceptance. |
-| A61 | Faults around reservation/effect/receipt/Delivery preserve uncertainty and prevent double-counting/duplicate effects. |
+| A61 | Faults around reservation/start/request receipt preserve uncertainty, exact identity and request recovery without double-counting or a duplicate start. |
 | A62 | Missing caller, conflicting ownership or a partial handover blocks delegation; valid adoption preserves the work without a proxy coordinator. |
 | A63 | Unsettled contracts start one writer; project isolation/hooks honored without weakening host protection. |
 | A64 | Packets/reports enforce bounded fields, criterion/candidate/scope/runtime-issued identity; reject transcript cloning and report permissions. |
@@ -323,6 +333,10 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A98 | A project file that relaxes the governor mode, widens the retry budget, enables cancellation, declares host control or adds an exception grant is refused as authority expansion. |
 | A99 | The enforcement level is reported as advisory unless the owner's personal policy declares a host control, and it is never reported as a proven control. |
 | A100 | A `pod-governor/v1` row carried forward by the upgrade is marked and never reused as evidence, because the migration cannot supply the candidate and context binding v1 never froze; one left pending or UNKNOWN defers as an unresolved effect rather than attaching to a run with no provider identity. |
+| A101 | Pod exposes no private Delivery, cleanup, release, terminal or lifecycle mutation operation; Orca owns those states, while reports and Governor decisions use fresh exact native projection. |
+| A102 | Completed, pending and absent Orca request recovery binds the same immutable admission without a second semantic start; invalid UUID, changed authority/worktree, contradictory receipt or ambiguous native attempt holds. |
+| A103 | Exact released projection frees capacity; retained, missing, ambiguous, foreign and unresolved work remains conservative, while exact bindings and descendants are counted once. |
+| A104 | Explicit v1 migration archives and hashes the untouched source, reads Orca without mutation, binds only exact proven effects, converts uncertainty to `legacy_hold`, atomically installs v2, and leaves v1 untouched on failure; doctor/status never migrate. |
 
 ## Implementation sequence and verification
 
@@ -331,7 +345,7 @@ verify capabilities or specify conservative failures. P01: preserve this specifi
 supersession/traceability and structured contracts; add executable failing scenarios
 with meaningful failure causes. P02: configuration/approval/routing/preview/replay.
 P03: native adapters, metadata/quota/billing, effective checks, admission/uncertainty.
-P04: inline skill/direct/planning/adaptive packets, supervision, diagnosis/reuse/cleanup.
+P04: inline skill/direct/planning/adaptive packets, report joining and diagnosis/reuse.
 P05: acceptance maps/context/evidence/checkpoints/steering/adoption/feedback/status.
 P06: isolated installation, scope reconciliation, package/CLI rename and owned cleanup.
 P07: frozen-candidate offline/fault/packaging/hosted/independent/live gates, matched
@@ -340,8 +354,8 @@ evaluation and owner-managed cutover. Phases are not fixed worker waves.
 Python 3.13+, standard src packaging, minimal safe YAML dependency and standard-library
 facilities where practical. Keep one canonical skill, ideally about 250 lines or less,
 with relevant-on-demand references and generated host metadata. No empty abstractions.
-Preserve source access, candidate binding, uncertain effects, requested/effective checks
-and Delivery replay; replace controller/managed-installer assumptions.
+Preserve source access, candidate binding, uncertain admission evidence and
+requested/effective checks; Orca owns Delivery and lifecycle recovery.
 
 One writer owns overlapping source. Repository-specific ownership: Sol/high implementation,
 fresh Sol/xhigh final audit. Reviews bind a frozen candidate, report findings, and do not
@@ -359,7 +373,8 @@ discovery, in-session coordination, authorized native execution and effective ro
 supervision and lifecycle, verification and interruption/adoption. Real Orca delegation
 through the production adapter is proved separately for each advertised worker adapter,
 covering request construction, account and authentication selection, launch identity,
-effective launch, delivery, settlement and release. Missing live PASS for any required
+effective launch and request recovery. Native messaging, settlement and disposition remain
+Orca evidence rather than Pod state. Missing live PASS for any required
 combination blocks release despite offline PASS. Optional unsupported capabilities fail
 conservatively and are not advertised operational.
 
@@ -379,7 +394,7 @@ public dual interface. Supported execution environment: Linux.
 ## Evidence boundary at reconciliation
 
 Baseline is clean main at the commit above. Read-only observations found reachable Orca
-1.4.205 advertising orchestration.contract.v1 and worker-launch-preferences, Codex CLI
+1.4.206 advertising orchestration.contract.v1 and worker-launch-preferences, Codex CLI
 0.155.1 and Claude Code 2.1.278. Native help describes optional worker terminals.
 These facts are not Pod lifecycle, quota, billing, permission/fan-out or recovery proof.
 Host workspace doctor passed, but canonical pod registration is an owner-admin cutover

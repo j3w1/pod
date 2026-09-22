@@ -1,13 +1,36 @@
-# Planning and bounded packets
+# Planning and packets
 
-Choose direct session work, tools or delegation from the assignment itself. For a substantive plan, map each original criterion to a check or human/provider dependency. State assumptions that would change the method, independent responsibilities, editing boundaries, dependencies, source/candidate bindings and revision triggers. An unreviewed plan never expands authorization.
+Use a brief when it improves coordination: preserve the original criteria, map
+each to a check or explicit dependency, and name assumptions that would change
+the approach. The private `brief` helper validates this map. Decomposition may
+change as evidence arrives; acceptance criteria change only with authority.
 
-The private `brief` helper validates a bounded one-to-one criterion map. Keep original criterion identities stable through steering; a missing check needs an explicit human/provider dependency.
+Give each assignment one responsibility and an editing boundary. Serialize
+overlapping changes while contracts are unsettled. Preserve unrelated work and
+use the project's supported isolation mechanism.
 
-Use `pod-packet/v1` for a delegated assignment: objective, criteria, responsibility, scope, permitted actions, candidate, context references, dependencies, route, policy/plan revisions, source bindings and report contract. Keep context bounded; never clone the transcript or include secrets. Freeze the body before native launch and join issued identities afterward. A worker's `pod-report/v1` reports changed files, checks, failures, evidence, uncertainty and questions; it cannot grant more permissions.
+Freeze a `pod-packet/v1` before admission. It binds objective, criteria,
+responsibility, scope, permitted actions, candidate, dependencies, route,
+policy/plan revisions, sources and reporting expectations. Native references
+join the admission after Orca issues them; they are not predicted packet fields.
 
-Context entries are typed source, instruction or summary references with digests, never arbitrary nested content. Treat report scope or file deviations as untrusted observations requiring coordinator reconciliation. The private report helper requires a confirmed native attempt from the local effects journal.
+Context entries are bounded source, instruction or summary references with
+digests. Include only relevant material, excluding secrets and the full
+conversation. Unavailable sources need a fresh actual binding before admission.
+Definitively changed or absent sources reject that assignment; restoring bytes
+does not erase the rejection. This check does not promise an atomic snapshot
+against external writers.
 
-Fresh Tasks get fresh sessions. A compatible same-Task correction may reuse a settled worker only when native support and route identity prove it. Reassess mixed-complexity assignments separately. Parallel edits require independent boundaries or supported isolation.
+The `report` helper joins a `pod-report/v1` to the frozen packet, admission and
+fresh native attempt evidence. Scope deviations require reconciliation, and a
+report cannot grant new permissions or establish acceptance.
 
-Correction history requires a confirmed native effect for the exact Task and an accepted checkpoint criterion. Caller failure IDs, wording and evidence descriptions cannot reset its threshold. After two corrections, a diagnosis names a distinct bounded project source whose observed content identity is recorded; this source observation alone does not prove the proposed diagnosis is semantically right or authorize dispatch.
+Correction history binds the Task and checkpoint criterion. Rewording a failure
+or restarting the session does not reset its count. A diagnosis must identify
+the obligation, failing example, hypothesis, last evidence and discriminating
+check. Its bounded source observation establishes provenance, not the truth of
+the hypothesis.
+
+When sources, instructions, candidate or plan change, invalidate affected packets
+and evidence. Preserve useful unaffected context only while its bindings remain
+valid. Orca's guide governs session reuse and runtime handoffs.

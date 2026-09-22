@@ -57,3 +57,7 @@ proposal is never policy until it is written here. The target is no unnecessary 
 validation of one candidate and context, not exactly one workflow run regardless of what the
 repository requires: local preflight receipts are preparation evidence and never replace an
 independently required remote proof.
+
+Pod 0.3.0 also supplies Governor decisions with a fresh read-only Orca projection for the
+selected objective and Tasks. That projection affects whether related native work is still
+active; Pod does not reconstruct worker lifecycle from its remote-action journal.
