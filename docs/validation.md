@@ -112,10 +112,34 @@ being attached to a run nothing can read back.
 What it does not prove: that a worker or shell
 holding the same credentials used the governed path. The enforcement level says `advisory`
 until the owner's personal policy declares a host control, and it is recorded at the
-owner-configuration tier because Pod cannot verify it. Live `gh` behaviour against a real
-repository, required-check reporting and merge-queue semantics remain `NOT_RUN` until
-exercised; the reference contract in [github-ci-contract](github-ci-contract.md) is documentation
-of a pattern, not evidence that a repository follows it.
+owner-configuration tier because Pod cannot verify it.
+
+Live `gh` behaviour against a real repository was exercised on 2026-09-22 against
+`j3w1/pod`, on a throwaway branch since deleted along with its pull request.
+
+A push targeted the bound candidate commit and the receipt's `remote_head` came back equal
+to it. A pull request was opened through the port; asking again for the same candidate
+returned `REUSE` / `already_done` and opened no second one. The admission transaction was
+observed by misusing it: a bare decide followed by an execute returned `REUSE` / `attach`
+rather than pushing twice, and the remote confirmed nothing had been pushed.
+
+**A92.** A publication journalled a derived validation row for the workflow it would
+trigger, pending and with no provider, because the run had not appeared in the seconds
+before the readback. Reconciliation later found run `35713804508` by workflow and commit,
+bound its id, url and conclusion, and settled the row `PASS`: the run that was started but
+never answered was found rather than resubmitted. Reconciling an admission that was never
+performed returned `pending` with a null provider instead of inventing a settlement.
+
+**A96.** A fourth candidate superseded a third whose validation run `35714053830` was
+`in_progress`. Preparing the new generation reported the superseded row, the superseding
+push issued the cancellation, the action settled `PASS`, and GitHub reports that run
+`completed / cancelled`; the superseded row is `CANCELED` and the counter reads one. An
+earlier attempt cancelled a run that had already finished: it settled `UNKNOWN` rather than
+claiming success, and the push that followed was not stranded.
+
+Required-check reporting and merge-queue semantics remain `NOT_RUN` until exercised; the
+reference contract in [github-ci-contract](github-ci-contract.md) is documentation of a
+pattern, not evidence that a repository follows it.
 
 ## Evidence record
 
