@@ -63,7 +63,7 @@ class SafetyBoundaryIncidents(unittest.TestCase):
                     with self.assertRaises(PodError) as caught:
                         run("admission", {"project": ".", "objective": "o", "owner": "t", "run": "r",
                                           "task": "t", "operation_id": "op", "assessment": {},
-                                          "capabilities": {}, "quotas": {}, "occupancy": {},
+                                          "capabilities": {}, "quotas": {},
                                           "plan_revision": "p",
                                           forbidden: {"billing_preflight": True, "fanout_control": True}})
                     self.assertEqual(caught.exception.code, "invalid_request")

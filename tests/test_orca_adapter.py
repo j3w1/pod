@@ -9,7 +9,7 @@ from pod.errors import PodError
 from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, contract,
                       current_run, effective_launch, executable, hosts, identity,
                       mutate_command, read_command,
-                      require_route_establishment, route_establishment, run_rows, worker_rows,
+                      require_route_establishment, route_establishment, worker_rows,
                       worktree_selector)
 from tests.common import envelope, receipt
 
@@ -56,49 +56,31 @@ class OrcaAdapterTests(unittest.TestCase):
                     read_command(argv)
             runner.assert_not_called()
 
-    def test_paginated_worker_list_requires_stable_runtime_and_complete_pages(self):
+    def test_paginated_exact_run_worker_list_requires_stable_runtime_and_complete_pages(self):
         pages = [
-            {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [{"dispatchId": "a"}],
+            {"runtime": "r", "result": {"scope": {"source": "run"}, "workers": [{"dispatchId": "a"}],
                                          "page": {"hasMore": True, "nextCursor": "next"}}},
-            {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [{"dispatchId": "b"}],
+            {"runtime": "r", "result": {"scope": {"source": "run"}, "workers": [{"dispatchId": "b"}],
                                          "page": {"hasMore": False}}},
         ]
         with patch("pod.orca.read_command", side_effect=pages) as reader:
-            fleet = worker_rows()
-            self.assertEqual([x["dispatchId"] for x in fleet["workers"]], ["a", "b"])
-            self.assertTrue(fleet["complete"])
+            run_workers = worker_rows("run")
+            self.assertEqual([x["dispatchId"] for x in run_workers["workers"]], ["a", "b"])
+            self.assertTrue(run_workers["complete"])
             self.assertIn("--cursor", reader.call_args.args[0])
 
-    def test_paginated_run_inventory_requires_stable_runtime_and_unique_ids(self):
-        pages = [
-            {"runtime": "r", "result": {"runs": [{"id": "run-a"}], "nextCursor": "next"}},
-            {"runtime": "r", "result": {"runs": [{"id": "run-b"}], "nextCursor": None}},
-        ]
-        with patch("pod.orca.read_command", side_effect=pages) as reader:
-            inventory = run_rows()
-        self.assertEqual([row["id"] for row in inventory["runs"]], ["run-a", "run-b"])
-        self.assertTrue(inventory["complete"])
-        self.assertIn("--cursor", reader.call_args.args[0])
-        with patch("pod.orca.read_command", side_effect=[pages[0],
-                  {"runtime": "other", "result": {"runs": [], "nextCursor": None}}]):
-            with self.assertRaises(PodError) as changed:
-                run_rows()
-        self.assertEqual(changed.exception.code, "orca_runtime_changed")
-        with patch("pod.orca.read_command", return_value={
-                "runtime": "r", "result": {"runs": []}}), \
-             self.assertRaises(PodError) as missing:
-            run_rows()
-        self.assertEqual(missing.exception.code, "orca_pagination")
-        looping = [
-            {"runtime": "r", "result": {"runs": [{"id": "run-a"}],
-                                           "nextCursor": "next"}},
-            {"runtime": "r", "result": {"runs": [{"id": "run-b"}],
-                                           "nextCursor": "next"}},
-        ]
-        with patch("pod.orca.read_command", side_effect=looping), \
-             self.assertRaises(PodError) as repeated:
-            run_rows()
-        self.assertEqual(repeated.exception.code, "orca_pagination")
+    def test_unscoped_worker_and_all_run_enumeration_are_not_adapter_reads(self):
+        with patch("pod.orca.subprocess.run") as runner:
+            for argv in (["orchestration", "run-list", "--limit", "100", "--json"],
+                         ["orchestration", "worker-list", "--include-remote", "--json",
+                          "--limit", "100"]):
+                with self.subTest(argv=argv), self.assertRaises(PodError) as caught:
+                    read_command(argv)
+                self.assertEqual(caught.exception.code, "unsupported_orca_read")
+            runner.assert_not_called()
+        with self.assertRaises(PodError) as caught:
+            worker_rows("")
+        self.assertEqual(caught.exception.code, "orca_contract")
 
     def test_current_run_requires_the_native_coordinator_binding_shape(self):
         bound = {"runtime": "r", "result": {"run": {
@@ -187,10 +169,11 @@ class RouteEstablishmentTests(unittest.TestCase):
         tiers = {name: control["tier"] for name, control in established["controls"].items()}
         self.assertEqual(tiers["effective_launch"], "enforceable_control")
         self.assertEqual(tiers["descendant_depth"], "enforceable_control")
-        self.assertEqual(tiers["descendant_count"], "runtime_observation")
+        self.assertEqual(tiers["descendant_count"], "owner_route_config")
         self.assertEqual(tiers["child_delegation"], "owner_route_config")
         self.assertEqual(tiers["billing_mode"], "runtime_observation")
         self.assertEqual(tiers["quota_bucket"], "runtime_observation")
+        self.assertEqual(tiers["physical_capacity"], "unavailable")
         self.assertEqual(established["login"]["mode"], "host_login")
         self.assertEqual(established["billing"], {"observed": "subscription", "approved": "included"})
         self.assertEqual(established["hard_stops"], [])
@@ -423,6 +406,36 @@ class MutationAllowlistTests(unittest.TestCase):
                 mutate_command(argv)
             self.assertEqual(unexpected.exception.code, "native_effect_uncertain")
 
+    def test_capacity_full_error_envelope_preserves_runtime_and_request(self):
+        request_id = "11111111-1111-4111-8111-111111111111"
+        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full"},
+                   "mutation": {"requestId": request_id},
+                   "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
+                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["runtime"], "runtime")
+        self.assertEqual(receipt_value["request_uuid"], request_id)
+        self.assertEqual(receipt_value["result"]["error"]["code"], "capacity_full")
+
+    def test_capacity_full_error_envelope_preserves_partial_effect_evidence(self):
+        request_id = "11111111-1111-4111-8111-111111111111"
+        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full"},
+                   "result": {"dispatchId": "dispatch", "workerId": "worker"},
+                   "mutation": {"requestId": request_id},
+                   "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
+                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["result"]["dispatchId"], "dispatch")
+        self.assertEqual(receipt_value["result"]["workerId"], "worker")
+
     def test_worktree_selectors_accept_existing_placements_only(self):
         for value in ("current", "path:/fixture/repo", "id:abc", "name:task", "branch:main"):
             self.assertEqual(worktree_selector(value), value)
@@ -514,14 +527,14 @@ class ReviewFindingRegressions(unittest.TestCase):
             require_route_establishment(established, asserted)
         self.assertEqual(caught.exception.code, "account_binding_unverified")
 
-    def test_a_fleet_page_cannot_introduce_a_scope_the_first_page_lacked(self):
+    def test_a_run_worker_page_cannot_introduce_a_scope_the_first_page_lacked(self):
         pages = [{"runtime": "r", "result": {"scope": None, "workers": [],
                                              "page": {"hasMore": True, "nextCursor": "next"}}},
                  {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [],
                                              "page": {"hasMore": False}}}]
         with patch("pod.orca.read_command", side_effect=pages):
             with self.assertRaises(PodError) as caught:
-                worker_rows()
+                worker_rows("run")
         self.assertEqual(caught.exception.code, "orca_scope_changed")
 
     def test_a_dispatch_identity_is_read_across_both_spellings(self):

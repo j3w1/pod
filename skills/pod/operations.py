@@ -14,20 +14,53 @@ from .ledger import (admission_identity, binding_valid, migrate_v1, read, reserv
                      update_admission, _spending_grant_binding)
 from .orca import (account_evidence_stops, account_metadata_raw, agent_login_mode, bucket_for,
                    contract, current_run, hosts, identity, mutate_command, read_command,
-                   require_route_establishment, route_establishment, run_rows,
+                   require_route_establishment, route_establishment,
                    selected_account_evidence, worker_rows, worker_show, worktree_selector)
 from .routing import preview
 from .util import bounded_text
 
 
 STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
+SETTLED_STATES = ("succeeded", "failed", "stopped", "canceled", "cancelled", "abandoned")
+
+
+def _assignment_evidence(shown: dict, admission: dict) -> dict:
+    """Project settlement for one already-bound assignment, never terminal ownership."""
+    binding = admission.get("native_binding")
+    if not binding_valid(binding) or shown.get("runtime") != admission.get("runtime"):
+        raise PodError("native_assignment_unverified", "Exact assignment runtime or binding differs")
+    result = shown.get("result") if isinstance(shown, dict) else None
+    dispatch = result.get("dispatch") if isinstance(result, dict) else None
+    projection = result.get("projection") if isinstance(result, dict) else None
+    worker = result.get("worker") if isinstance(result, dict) else None
+    if not all(isinstance(row, dict) for row in (dispatch, projection, worker)):
+        raise PodError("native_assignment_unverified", "Exact assignment readback is incomplete")
+    if (dispatch.get("id") != binding["dispatchId"]
+            or dispatch.get("runId") != binding["runId"]
+            or dispatch.get("taskId") != binding["taskId"]
+            or projection.get("id") != binding["workerId"]
+            or projection.get("dispatchId") != binding["dispatchId"]
+            or projection.get("runId") != binding["runId"]
+            or projection.get("taskId") != binding["taskId"]
+            or worker.get("dispatchId") != binding["dispatchId"]
+            or worker.get("worktreeId") != binding["worktreeId"]):
+        raise PodError("native_assignment_unverified", "Exact assignment identity differs")
+    stage = projection.get("stage") if isinstance(projection.get("stage"), dict) else {}
+    states = {dispatch.get("status"), projection.get("outcome"), worker.get("state"),
+              stage.get("dispatch"), stage.get("worker")}
+    settled = bool(states.intersection(SETTLED_STATES) or stage.get("detail") == "settled")
+    return {"admission_id": admission["admission_id"], "runtime": shown["runtime"],
+            "run_id": binding["runId"], "task_id": binding["taskId"],
+            "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
+            "settled": settled}
 
 
 class NativePort(Protocol):
     def establish(self, route: dict, model_policy: dict, *, child_delegation: bool) -> dict: ...
     def read_native(self, owner: str, *, route: dict | None = None,
                     establishment: dict | None = None,
-                    authority_runs: tuple[str, ...] = ()) -> dict: ...
+                    authority_runs: tuple[str, ...] = (),
+                    assignments: tuple[dict, ...] = ()) -> dict: ...
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
                      worktree: str, retry_request: str | None = None) -> dict: ...
     def request_show(self, request_uuid: str) -> dict: ...
@@ -49,66 +82,43 @@ class OrcaPort:
 
     def read_native(self, owner: str, *, route: dict | None = None,
                     establishment: dict | None = None,
-                    authority_runs: tuple[str, ...] = ()) -> dict:
+                    authority_runs: tuple[str, ...] = (),
+                    assignments: tuple[dict, ...] = ()) -> dict:
         handle = os.environ.get("ORCA_TERMINAL_HANDLE")
         if (not isinstance(authority_runs, tuple)
                 or any(not isinstance(run_id, str) or not run_id for run_id in authority_runs)
                 or len(set(authority_runs)) != len(authority_runs)):
             raise PodError("native_authority_unverified", "Native authority Run set is malformed")
         expected_runs = tuple(sorted(authority_runs))
+        if (not isinstance(assignments, tuple)
+                or any(not isinstance(row, dict) for row in assignments)):
+            raise PodError("native_assignment_unverified", "Assignment evidence request is malformed")
         binding_before = current_run() if expected_runs else None
-        before = run_rows()
-        runtime = before["runtime"]
-        run_ids = tuple(sorted(row["id"] for row in before["runs"]))
-        pages = [(run_id, worker_rows(run_id)) for run_id in run_ids]
-        after = run_rows()
+        evidence = [_assignment_evidence(self.show_worker(row["native_binding"]["dispatchId"]), row)
+                    for row in assignments]
         binding_after = current_run() if expected_runs else None
-        after_ids = tuple(sorted(row["id"] for row in after["runs"]))
-        if (before.get("complete") is not True or after.get("complete") is not True
-                or after["runtime"] != runtime or after_ids != run_ids):
-            raise PodError("native_occupancy_unverified",
-                           "Native Run inventory changed during the fleet read")
+        observed = binding_before or binding_after
+        if observed is not None:
+            runtime = observed["runtime"]
+        elif evidence:
+            runtime = evidence[0]["runtime"]
+        else:
+            snapshot = contract()
+            runtime = snapshot.get("runtime")
+            if snapshot.get("status") != "observed" or not isinstance(runtime, str):
+                raise PodError("native_authority_unverified", "Orca runtime identity is unavailable")
+        if any(row["runtime"] != runtime for row in evidence):
+            raise PodError("orca_runtime_changed", "Exact assignment evidence changed Orca runtime")
         if expected_runs and (binding_before["runtime"] != runtime
                               or binding_after["runtime"] != runtime):
-            raise PodError("orca_runtime_changed",
-                           "Current Run binding changed Orca runtime during the fleet read")
+            raise PodError("orca_runtime_changed", "Current Run binding changed Orca runtime")
         current = binding_before["run"] if binding_before is not None else None
         stable_current = bool(current is not None and current == binding_after["run"])
-        before_by_id = {row["id"]: row for row in before["runs"]}
-        after_by_id = {row["id"]: row for row in after["runs"]}
         current_id = current.get("id") if isinstance(current, dict) else None
-        inventory_before = before_by_id.get(current_id)
-        inventory_after = after_by_id.get(current_id)
-        native_binding = ({"id": current_id,
-                           "coordinator_handle": current.get("coordinator_handle"),
-                           "consumer_generation": current.get("consumer_generation")}
-                          if isinstance(current, dict) else None)
         authoritative = bool(
             expected_runs and handle and handle == owner and stable_current
             and current_id in expected_runs
-            and isinstance(inventory_before, dict) and isinstance(inventory_after, dict)
-            and {key: inventory_before.get(key) for key in native_binding} == native_binding
-            and {key: inventory_after.get(key) for key in native_binding} == native_binding
-            and native_binding.get("coordinator_handle") == owner)
-        rows = []
-        cross_host = False
-        for run_id, page in pages:
-            if page["runtime"] != runtime or page["complete"] is not True:
-                raise PodError("orca_runtime_changed", "Orca projection changed during admission read")
-            scope = page.get("scope")
-            if (not isinstance(scope, dict) or scope.get("source") != "flag"
-                    or scope.get("run") != run_id):
-                raise PodError("native_occupancy_unverified",
-                               "Run-scoped worker projection does not prove its exact Run")
-            for worker in page["workers"]:
-                if not isinstance(worker, dict):
-                    raise PodError("orca_contract", "Worker projection is malformed")
-                projection = worker.get("projection") if isinstance(worker.get("projection"), dict) else {}
-                host = projection.get("host")
-                host_id = host.get("id") if isinstance(host, dict) else host
-                if host_id not in (None, "local"):
-                    cross_host = True
-                rows.append(worker)
+            and current.get("coordinator_handle") == owner)
         if (route is None) != (establishment is None):
             raise PodError("account_binding_unverified",
                            "Fresh account evidence needs its established route")
@@ -116,10 +126,9 @@ class OrcaPort:
                  if route is not None else None)
         return {"runtime": runtime, "owner": owner if authoritative else None,
                 "authoritative": authoritative,
-                "scope": "all_runs",
-                "complete": True, "workers": rows,
-                "quota": quota,
-                "cross_host": cross_host, "atomic_admission": False}
+                "scope": "objective_assignments", "complete": True,
+                "assignments": evidence, "quota": quota,
+                "physical_capacity": "unavailable"}
 
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
                      worktree: str = "current", retry_request: str | None = None) -> dict:
@@ -294,6 +303,42 @@ def _record_request(project: Path, objective: str, *, owner: str, admission_id: 
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
+def _native_capacity_full(receipt: dict) -> bool:
+    error = receipt.get("error")
+    if (receipt.get("exit") == 0 or receipt.get("state") != "deferred"
+            or not isinstance(error, dict) or error.get("code") != "capacity_full"):
+        return False
+    if any(identity(receipt, field) is not None for field in ("dispatchId", "workerId")):
+        return False
+    residual = receipt.get("residualResources")
+    return residual in (None, [], {})
+
+
+def _defer_capacity(project: Path, objective: str, *, owner: str, admission_id: str,
+                    receipt: dict) -> dict:
+    request_uuid = receipt.get("request_uuid")
+    if request_uuid is not None:
+        request_uuid = _valid_request_uuid(request_uuid)
+    def apply(row: dict) -> None:
+        row["state"] = "deferred"
+        row["request_uuid"] = request_uuid
+        row["native_binding"] = None
+        row["error"] = {"code": "capacity_full", "detail": receipt.get("error")}
+        row["recovery"] = {**row.get("recovery", {}),
+                           "native_start_state": "deferred",
+                           "next": "explicit new policy admission after native capacity changes"}
+    return update_admission(project, objective, owner=owner,
+                            admission_id=admission_id, update=apply)
+
+
+def _bound_assignments(state: dict | None) -> tuple[dict, ...]:
+    if not isinstance(state, dict):
+        return ()
+    return tuple(row for row in state.get("admissions", {}).values()
+                 if isinstance(row, dict) and row.get("state") == "bound"
+                 and binding_valid(row.get("native_binding")))
+
+
 def _current_authority(project: Path, objective: str, admission: dict,
                        *, task_policy: dict | None) -> tuple[dict, dict]:
     """A pending replay is still a mutation, so current revocation/spending policy applies."""
@@ -360,8 +405,9 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
     admission = state["admissions"].get(admission_id) if state else None
     if not isinstance(admission, dict) or admission.get("owner") != owner:
         raise PodError("unknown_admission", "No owned admission identity")
-    if admission["state"] in ("bound", "closed"):
-        return {"status": admission["state"], "admission": admission, "action": "reuse"}
+    if admission["state"] in ("bound", "closed", "deferred"):
+        action = "defer" if admission["state"] == "deferred" else "reuse"
+        return {"status": admission["state"], "admission": admission, "action": action}
     request_uuid = admission.get("request_uuid")
     if request_uuid is None:
         row = _hold(project, objective, owner=owner, admission_id=admission_id,
@@ -426,7 +472,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
 
 
 def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
-                  assessment: dict, capabilities: dict, quotas: dict, occupancy: dict,
+                  assessment: dict, capabilities: dict, quotas: dict,
                   plan_revision: str, frozen_packet: dict, capacity: int = DEFAULT_WORKER_CAPACITY,
                   capacity_reason: str | None = None, exceptional_grant: dict | None = None,
                   worktree: str = "current", port: NativePort | None = None,
@@ -453,7 +499,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                 "establishment": recovered["admission"]["effective_evidence"]}
     policy = effective(project, task=task_policy)
     decision = preview(assessment, policy, capabilities=capabilities, quotas=quotas,
-                       occupancy=occupancy, objective=objective, now=now)
+                       objective=objective, now=now)
     if decision.get("status") != "usable":
         raise PodError("route_unusable", "Routing preview did not produce a usable route")
     route = decision["selected"]
@@ -470,7 +516,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                         establishment=establishment,
                         native_reader=lambda: native_port.read_native(
                             owner, route=route, establishment=establishment,
-                            authority_runs=(run,)),
+                            authority_runs=(run,),
+                            assignments=_bound_assignments(existing_state)),
                         capacity=capacity, run_id=run, task_id=task,
                         plan_revision=plan_revision, packet_id=validated["packet_id"],
                         worktree=worktree, frozen_packet=validated,
@@ -485,6 +532,22 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     try:
         receipt = native_port.start_worker(run=run, task=task, owner=owner, route=route,
                                            worktree=worktree)
+        if _native_capacity_full(receipt):
+            row = _defer_capacity(project, objective, owner=owner,
+                                  admission_id=admission_id, receipt=receipt)
+            return {"status": "deferred", "admission": row, "decision": decision,
+                    "establishment": establishment}
+        if isinstance(receipt.get("error"), dict) and receipt["error"].get("code") == "capacity_full":
+            request_uuid = receipt.get("request_uuid")
+            try:
+                request_uuid = _valid_request_uuid(request_uuid) if request_uuid is not None else None
+            except PodError:
+                request_uuid = None
+            row = _hold(project, objective, owner=owner, admission_id=admission_id,
+                        request_uuid=request_uuid, code="native_capacity_refusal_unverified",
+                        detail="capacity_full receipt also carried possible effect evidence")
+            return {"status": "unresolved", "admission": row, "decision": decision,
+                    "establishment": establishment}
         request_uuid = _valid_request_uuid(receipt.get("request_uuid"))
         _record_request(project, objective, owner=owner, admission_id=admission_id,
                         request_uuid=request_uuid, receipt=receipt)

@@ -17,7 +17,6 @@ from .util import digest
 MAX_OUTPUT = 2_000_000
 CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1",
-                   "fleet_snapshot_v1": "orchestration.federation-fleet-snapshot.v1",
                    "reset_credit_v1": "accounts.codex-reset-credit.v1"}
 AGENTS = ("codex", "claude")
 TIERS = ("enforceable_control", "runtime_observation", "owner_route_config", "unavailable")
@@ -55,8 +54,6 @@ def _read_allowed(argv: list[str]) -> bool:
                 ["account", "list", "--json"],
                 ["orchestration", "run-current", "--json"]):
         return True
-    if argv[:2] == ["orchestration", "run-list"]:
-        return _run_list_tail(argv[2:])
     if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
@@ -109,38 +106,55 @@ def _envelope(stdout: str) -> dict:
     return {"runtime": runtime, "result": value["result"], "request_uuid": request_uuid}
 
 
+def _mutation_envelope(stdout: str) -> dict:
+    """Decode a mutation receipt, including Orca's authoritative no-start refusal."""
+    try:
+        value = json.loads(stdout)
+    except ValueError as exc:
+        raise PodError("native_effect_uncertain", "Native response is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise PodError("native_effect_uncertain", "Native response is malformed")
+    runtime = value.get("_meta", {}).get("runtimeId")
+    if not isinstance(runtime, str) or not runtime:
+        raise PodError("native_effect_uncertain", "Native response has no runtime identity")
+    if value.get("ok") is True and isinstance(value.get("result"), dict):
+        result = value["result"]
+        error = None
+    elif value.get("ok") is False and isinstance(value.get("error"), dict):
+        error = value["error"]
+        if error.get("code") != "capacity_full":
+            raise PodError("native_effect_uncertain", "Native refusal is not a supported no-start result")
+        native_result = value.get("result")
+        if native_result is not None and not isinstance(native_result, dict):
+            raise PodError("native_effect_uncertain", "Native refusal carries a malformed result")
+        result = dict(native_result or {})
+        result.setdefault("state", "deferred")
+        result["error"] = error
+        for key in ("dispatchId", "dispatch_id", "workerId", "worker_id",
+                    "residualResources", "failedStage"):
+            if key in value and key not in result:
+                result[key] = value[key]
+    else:
+        raise PodError("native_effect_uncertain", "Native response does not prove an effect or refusal")
+    mutation = result.get("mutation")
+    if not isinstance(mutation, dict):
+        mutation = value.get("mutation")
+    request_uuid = mutation.get("requestId") if isinstance(mutation, dict) else None
+    return {"runtime": runtime, "result": result, "request_uuid": request_uuid,
+            "error": error}
+
+
 def _worker_list_tail(tail: list[str]) -> bool:
     if tail[:2] == ["--limit", "100"]:
         tail = tail[2:]
-    if len(tail) >= 2 and tail[0] == "--run":
-        if not _argument(tail[1]):
-            return False
-        tail = tail[2:]
+    if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
+        return False
+    tail = tail[2:]
     if len(tail) >= 2 and tail[0] == "--cursor":
         if not _argument(tail[1]):
             return False
         tail = tail[2:]
     return not tail
-
-
-def _run_list_tail(tail: list[str]) -> bool:
-    """Accept only bounded all-Run pagination; the cursor is runtime-issued."""
-    limit = False
-    cursor = False
-    output = False
-    while tail:
-        if tail[:2] == ["--limit", "100"] and not limit:
-            limit = True
-            tail = tail[2:]
-        elif len(tail) >= 2 and tail[0] == "--cursor" and not cursor and _argument(tail[1]):
-            cursor = True
-            tail = tail[2:]
-        elif tail[0] == "--json" and not output:
-            output = True
-            tail = tail[1:]
-        else:
-            return False
-    return limit and output
 
 
 def _mutate_allowed(argv: list[str]) -> bool:
@@ -194,9 +208,10 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
         raise PodError("native_effect_uncertain", "Native command returned an unsupported exit status")
     if len(completed.stdout) > MAX_OUTPUT:
         raise PodError("orca_contract", "Native response exceeds bounded output")
-    envelope = _envelope(completed.stdout)
+    envelope = _mutation_envelope(completed.stdout)
     return {"runtime": envelope["runtime"], "exit": completed.returncode,
-            "result": envelope["result"], "request_uuid": envelope.get("request_uuid")}
+            "result": envelope["result"], "request_uuid": envelope.get("request_uuid"),
+            "error": envelope.get("error")}
 
 
 def identity(mapping: object, camel: str) -> object:
@@ -234,10 +249,12 @@ def contract() -> dict:
     return snapshot
 
 
-def worker_rows(run: str | None = None) -> dict:
+def worker_rows(run: str) -> dict:
+    """Read workers for one exact Run; unscoped fleet enumeration is forbidden."""
+    if not _argument(run):
+        raise PodError("orca_contract", "Exact Run identity is required for worker reads")
     prefix = ["orchestration", "worker-list", "--include-remote", "--json", "--limit", "100"]
-    if run:
-        prefix += ["--run", run]
+    prefix += ["--run", run]
     all_rows: list[dict] = []
     cursor = None
     seen = set()
@@ -249,11 +266,11 @@ def worker_rows(run: str | None = None) -> dict:
         page = result.get("page", {})
         rows = result.get("workers")
         if not isinstance(rows, list) or not isinstance(page, dict):
-            raise PodError("orca_contract", "Worker fleet page is malformed")
+            raise PodError("orca_contract", "Run worker page is malformed")
         if runtime is not None and response["runtime"] != runtime:
-            raise PodError("orca_runtime_changed", "Runtime changed during fleet read")
+            raise PodError("orca_runtime_changed", "Runtime changed during Run worker read")
         if runtime is not None and result.get("scope") != scope:
-            raise PodError("orca_scope_changed", "Fleet scope changed during read")
+            raise PodError("orca_scope_changed", "Run worker scope changed during read")
         runtime, scope = response["runtime"], result.get("scope")
         all_rows.extend(rows)
         if not page.get("hasMore"):
@@ -261,45 +278,9 @@ def worker_rows(run: str | None = None) -> dict:
                     "complete": True, "page_count": len(seen) + 1}
         cursor = page.get("nextCursor")
         if not isinstance(cursor, str) or cursor in seen:
-            raise PodError("orca_pagination", "Worker fleet cursor is missing or repeated")
+            raise PodError("orca_pagination", "Run worker cursor is missing or repeated")
         seen.add(cursor)
-    raise PodError("orca_pagination", "Worker fleet exceeds bounded pages")
-
-
-def run_rows() -> dict:
-    """Enumerate every native Run with bounded, runtime-stable pagination."""
-    prefix = ["orchestration", "run-list", "--limit", "100", "--json"]
-    all_rows: list[dict] = []
-    identifiers: set[str] = set()
-    cursors: set[str] = set()
-    cursor = None
-    runtime = None
-    for _ in range(100):
-        response = read_command(prefix + (["--cursor", cursor] if cursor else []))
-        result = response["result"]
-        rows = result.get("runs")
-        if not isinstance(rows, list):
-            raise PodError("orca_contract", "Run inventory page is malformed")
-        if runtime is not None and response["runtime"] != runtime:
-            raise PodError("orca_runtime_changed", "Runtime changed during Run inventory")
-        runtime = response["runtime"]
-        for row in rows:
-            run_id = row.get("id") if isinstance(row, dict) else None
-            if not isinstance(run_id, str) or not run_id or run_id in identifiers:
-                raise PodError("orca_contract", "Run inventory identity is missing or repeated")
-            identifiers.add(run_id)
-            all_rows.append(row)
-        if "nextCursor" not in result:
-            raise PodError("orca_pagination", "Run inventory completion marker is absent")
-        next_cursor = result["nextCursor"]
-        if next_cursor is None:
-            return {"runtime": runtime, "runs": all_rows, "complete": True,
-                    "page_count": len(cursors) + 1}
-        if not isinstance(next_cursor, str) or not next_cursor or next_cursor in cursors:
-            raise PodError("orca_pagination", "Run inventory cursor is missing or repeated")
-        cursors.add(next_cursor)
-        cursor = next_cursor
-    raise PodError("orca_pagination", "Run inventory exceeds bounded pages")
+    raise PodError("orca_pagination", "Run worker read exceeds bounded pages")
 
 
 def current_run() -> dict:
@@ -591,8 +572,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                                   "Orca refuses a nested worker past its own depth limit; Pod "
                                   "observes the depth and does not set the limit",
                                   limit="unknown_to_pod"),
-        "descendant_count": _tier("descendant_count", "runtime_observation",
-                                  "worker-list projection.parent and worker-show creatorDispatchId"),
+        "descendant_count": _tier("descendant_count", "owner_route_config",
+                                  "objective-local Pod admissions for delegated assignments"),
         "child_delegation": _tier("child_delegation", "owner_route_config",
                                   "policy child_delegation with packet action refusal",
                                   enabled=bool(child_delegation),
@@ -613,6 +594,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                               "provider rate-limit windows reported by Orca", bucket=bucket),
         "cross_host": _tier("cross_host", "runtime_observation", "host inventory",
                             local_only=bool(host_block.get("local_only", True))),
+        "physical_capacity": _tier("physical_capacity", "unavailable",
+                                   "Orca owns placement and runtime capacity; Pod reads no capacity census"),
     }
     hard_stops = []
     disclosures = []
@@ -629,11 +612,12 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         disclosures.append("installed runtime advertises no nested-worker depth control")
     else:
         disclosures.append("the runtime enforces a nested-worker depth limit whose value Pod "
-                           "cannot read; Pod counts descendants rather than assuming one")
+                           "cannot read; Pod requires a logical admission for each delegated assignment")
     if not child_delegation:
         disclosures.append("worker-initiated delegation is refused by Pod admission, not by a provider sandbox")
     if not host_block.get("local_only", True):
-        disclosures.append("the fleet reaches beyond this host; cross-host admission is not atomic")
+        disclosures.append("the runtime reports more than one host; Pod does not infer capacity from it")
+    disclosures.append("physical worker capacity is unavailable to Pod and enforced by Orca/CE")
     return {"schema": "pod-route-establishment/v1", "runtime": observed["runtime"],
             "version": observed.get("version"), "executable": observed.get("executable"),
             "route": {"agent": agent, "model": route.get("model"), "account": stamp,

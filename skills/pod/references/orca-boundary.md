@@ -9,9 +9,19 @@ procedure or lifecycle journal.
 ## Pod admission
 
 The `admission` helper serializes policy reservations before a native start:
-owner, approved route, spending, quota, capacity, frozen packet and source
+owner, approved route, spending, quota, logical fan-out, frozen packet and source
 bindings. It retains native references and effective launch evidence so Pod
 decisions can be checked. Runtime state is read fresh.
+
+The objective lock reserves one slot per assignment. Exact native settlement of
+an already-bound assignment frees that slot even if its terminal is retained.
+An unresolved own request stays outstanding. Do not enumerate all Runs or
+workers, reconstruct foreign resources, infer terminal liveness, or deduplicate
+occupancy. Orca owns actual workers and capacity; CE owns physical limits.
+
+Treat an authoritative native `capacity_full` no-start receipt as durable
+`deferred`: record it without a successful binding and do not retry or audit the
+fleet. A malformed, lost or partial-effect receipt remains unresolved.
 
 A repeated admission must preserve its original request. Orca-issued mutation
 UUIDs are recovery references, never Pod-generated operation IDs. Use the same
@@ -29,14 +39,14 @@ provider worker API. Host-local serialization is not distributed fencing.
 
 `pod-context/v2` stores policy admissions, checkpoints, source rejections,
 interventions and legacy archive references. Admission reservations and
-unresolved migration holds count conservatively against policy limits.
-Orca remains authoritative for current workers and resource occupancy.
+unresolved migration holds count conservatively against objective policy limits.
+Orca remains authoritative for current workers and lifecycle.
 
 Use `internal state-migrate` explicitly for v1 records. It archives old state
 and inspects Orca before producing v2; it does not perform lifecycle actions.
 Old Delivery and cleanup records remain historical evidence. An unresolved
 legacy record becomes a hold, not permission to repeat an action.
-Exact native release evidence can clear a bound hold; unbound ambiguity stays held.
+Exact native assignment settlement can clear a bound hold; unbound ambiguity stays held.
 Read-only diagnostics never migrate automatically.
 
 On continuation, recover the objective's decisions, relevant evidence gaps and

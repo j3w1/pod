@@ -399,16 +399,16 @@ def _unit_tasks(unit: dict | None) -> list[str] | None:
 
 
 def _active(native_projection: dict | None, tasks: list[str] | None = None) -> list[str]:
-    """Fresh read-only Orca projection supplied at the governor boundary."""
+    """Objective-local logical assignments supplied at the governor boundary."""
     if not isinstance(native_projection, dict):
         return []
-    rows = native_projection.get("occupied")
+    rows = native_projection.get("outstanding")
     if not isinstance(rows, list):
-        raise PodError("native_occupancy_unverified", "Governor native projection is malformed")
+        raise PodError("native_assignment_unverified", "Governor logical projection is malformed")
     active = []
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
-            raise PodError("native_occupancy_unverified", "Governor native projection is malformed")
+            raise PodError("native_assignment_unverified", "Governor logical projection is malformed")
         task = row.get("task")
         if tasks is not None and task is not None and task not in tasks:
             continue
@@ -451,8 +451,8 @@ def _phase(state: dict, actions: list[dict], unit: dict | None, candidate: str |
            native_projection: dict | None = None) -> str:
     checkpoint = _checkpoint(state)
     if native_projection is None and (state.get("admissions") or checkpoint.get("native_refs")):
-        raise PodError("native_occupancy_unverified",
-                       "Governor needs a fresh Orca projection for native-bound work")
+        raise PodError("native_assignment_unverified",
+                       "Governor needs exact objective assignment evidence for native-bound work")
     tasks = _unit_tasks(unit)
     if not candidate or _active(native_projection, tasks):
         return "working"
@@ -647,7 +647,7 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
                     "two remote validation failures were corrected without new evidence")
         else:
             _reason(reasons, "efficiency", "integration_unsettled",
-                    "fresh native projection still shows occupied work" if phase == "working"
+                    "objective assignments are still outstanding" if phase == "working"
                     else "corrections are still unsettled")
 
     # 5. Readiness, or the diagnostic exception.

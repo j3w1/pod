@@ -17,8 +17,8 @@ from .context import execution_brief
 
 
 def _governor_projection(project: Path, objective: str, owner: str, *, mutating: bool) -> dict:
-    """Join Governor work to the actual caller and one stable native runtime."""
-    from .ledger import fresh_projection, read
+    """Join Governor work to stable current-Run authority and objective assignments."""
+    from .ledger import binding_valid, logical_projection, read
     from .operations import OrcaPort
 
     state = read(project, objective)
@@ -27,6 +27,7 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
                        "Governor mutation does not own this Pod objective context")
     authority_runs: set[str] = set()
     runtimes: set[object] = set()
+    assignments = []
     if state is not None:
         for row in state.get("admissions", {}).values():
             if not isinstance(row, dict):
@@ -34,6 +35,8 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
             if isinstance(row.get("run_id"), str):
                 authority_runs.add(row["run_id"])
             runtimes.add(row.get("runtime"))
+            if row.get("state") == "bound" and binding_valid(row.get("native_binding")):
+                assignments.append(row)
         checkpoint_value = state.get("checkpoint")
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
         for ref in refs:
@@ -46,8 +49,9 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
                 authority_runs.add(run_id)
                 runtimes.add(ref_runtime)
     native = OrcaPort(project).read_native(
-        owner, authority_runs=tuple(sorted(authority_runs)) if mutating else ())
-    projection = fresh_projection(project, native, objective=objective)
+        owner, authority_runs=tuple(sorted(authority_runs)) if mutating else (),
+        assignments=tuple(assignments))
+    projection = logical_projection(project, native, objective=objective)
     if not mutating:
         return projection
     if (native.get("authoritative") is not True or native.get("owner") != owner
@@ -67,12 +71,12 @@ def run(operation: str, request: dict) -> dict:
         exact(request, {"criteria", "coverage"}, {"criteria", "coverage"}, name="request")
         return execution_brief(request["criteria"], request["coverage"])
     if operation == "preview":
-        exact(request, {"project", "assessment", "capabilities", "quotas", "occupancy", "strict_pin",
+        exact(request, {"project", "assessment", "capabilities", "quotas", "strict_pin",
                         "safety_refusal", "objective", "task_policy"},
               {"project", "assessment"}, name="request")
         policy = effective(Path(request["project"]), task=request.get("task_policy"))
         return preview(request["assessment"], policy, capabilities=request.get("capabilities"),
-                       quotas=request.get("quotas"), occupancy=request.get("occupancy"),
+                       quotas=request.get("quotas"),
                        strict_pin=request.get("strict_pin"), safety_refusal=request.get("safety_refusal", False),
                        objective=request.get("objective"))
     if operation == "replay":
@@ -229,18 +233,18 @@ def run(operation: str, request: dict) -> dict:
         return status(project, request["objective"], native_projection=projection)
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task",
-                        "assessment", "capabilities", "quotas", "occupancy", "plan_revision",
+                        "assessment", "capabilities", "quotas", "plan_revision",
                         "capacity", "capacity_reason", "exceptional_grant", "packet", "worktree",
                         "task_policy"},
               {"project", "objective", "owner", "run", "task",
-               "assessment", "capabilities", "quotas", "occupancy", "plan_revision", "packet"}, name="request")
+               "assessment", "capabilities", "quotas", "plan_revision", "packet"}, name="request")
         from .operations import guarded_start
         # The production port verifies installed controls itself; request JSON
         # can supply assessment snapshots but cannot assert native assurance.
         return guarded_start(Path(request["project"]), request["objective"],
                              owner=request["owner"], run=request["run"], task=request["task"],
                              assessment=request["assessment"], capabilities=request["capabilities"], quotas=request["quotas"],
-                             occupancy=request["occupancy"], plan_revision=request["plan_revision"],
+                             plan_revision=request["plan_revision"],
                              capacity=request.get("capacity", 2),
                              capacity_reason=request.get("capacity_reason"),
                              exceptional_grant=request.get("exceptional_grant"),

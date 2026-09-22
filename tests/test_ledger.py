@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.ledger import (ADMISSION_STATES, _path, checkpoint, fresh_projection,
+from pod.ledger import (ADMISSION_STATES, _path, checkpoint, logical_projection,
                         migrate_v1, migration_inventory, read, _quota_hold)
 from pod.records import source_identity
 from tests.common import fixture
@@ -43,13 +43,16 @@ def shown(binding, *, released=False, launch=None):
                 "ownershipState": "released" if released else "owned"}
     return {"runtime": "runtime", "result": {
         "dispatch": {"id": binding["dispatchId"], "runId": binding["runId"],
-                     "taskId": binding["taskId"]},
+                     "taskId": binding["taskId"],
+                     **({"status": "completed"} if released else {})},
         "projection": {"id": binding["workerId"], "dispatchId": binding["dispatchId"],
                        "runId": binding["runId"], "taskId": binding["taskId"],
+                       **({"outcome": "succeeded"} if released else {}),
                        "resource": {"state": "released" if released else "owned"}},
         "worker": {"dispatchId": binding["dispatchId"],
                    "worktreeId": binding.get("worktreeId", "worktree"),
                    "agentTerminalHandle": binding.get("terminalHandle", "terminal"),
+                   "state": "succeeded" if released else "running",
                    "startOptions": {"launch": {"requested": launch, "effective": launch}}},
         "terminalResource": resource}}
 
@@ -110,17 +113,7 @@ class V2StateTests(unittest.TestCase):
             for retired in ("effects", "deliveries", "cleanup"):
                 self.assertNotIn(retired, state)
 
-    def test_run_subset_cannot_be_promoted_to_complete_fleet_capacity(self):
-        with fixture() as root:
-            project = root / "project"
-            project.mkdir()
-            with self.assertRaises(PodError) as caught:
-                fresh_projection(project, {"runtime": "runtime",
-                                            "scope": "bound+ledger_runs",
-                                            "complete": True, "workers": []})
-            self.assertEqual(caught.exception.code, "native_occupancy_unverified")
-
-    def test_fresh_projection_releases_only_on_one_exact_native_row(self):
+    def test_logical_projection_frees_only_one_exact_settled_assignment(self):
         with fixture() as root:
             project = root / "project"
             project.mkdir()
@@ -139,76 +132,34 @@ class V2StateTests(unittest.TestCase):
             state["admissions"] = {"a": admission}
             from pod.util import atomic_json
             atomic_json(path, state)
-            base = {"runtime": "runtime", "scope": "all", "complete": True}
-            released = {"dispatchId": "dispatch", "runId": "run", "taskId": "task",
-                        "terminalState": "released"}
-            self.assertEqual(fresh_projection(project, {**base, "workers": [released]},
-                                              objective="objective")["occupied"], [])
-            missing = fresh_projection(project, {**base, "workers": []}, objective="objective")
-            self.assertEqual(len(missing["occupied"]), 1)
-            ambiguous = fresh_projection(project, {**base, "workers": [released, released]},
-                                          objective="objective")
-            self.assertEqual(len(ambiguous["occupied"]), 1)
-            wrong = {**released, "taskId": "other"}
-            self.assertEqual(len(fresh_projection(project, {**base, "workers": [wrong]},
-                                                  objective="objective")["occupied"]), 1)
+            base = {"runtime": "runtime", "scope": "objective_assignments",
+                    "complete": True, "physical_capacity": "unavailable"}
+            settled = {"admission_id": "a", "runtime": "runtime", "run_id": "run",
+                       "task_id": "task", "dispatch_id": "dispatch",
+                       "worker_id": "worker-dispatch", "settled": True}
+            self.assertEqual(logical_projection(project, {**base, "assignments": [settled]},
+                                                objective="objective")["outstanding"], [])
+            missing = logical_projection(project, {**base, "assignments": []},
+                                         objective="objective")
+            self.assertEqual(len(missing["outstanding"]), 1)
+            ambiguous = logical_projection(project, {**base, "assignments": [settled, settled]},
+                                           objective="objective")
+            self.assertEqual(len(ambiguous["outstanding"]), 1)
+            wrong = {**settled, "task_id": "other"}
+            self.assertEqual(len(logical_projection(project, {**base, "assignments": [wrong]},
+                                                    objective="objective")["outstanding"]), 1)
 
-    def test_exact_released_projection_frees_a_bound_legacy_hold_only(self):
+    def test_projection_rejects_fleet_or_caller_completion_shapes(self):
         with fixture() as root:
             project = root / "project"
             project.mkdir()
-            binding = old_binding()
-            path = _path(project, "objective")
-            path.parent.mkdir(parents=True)
-            path.write_text(json.dumps(legacy(
-                {"op": effect("confirmed", binding=binding)},
-                cleanup={"dispatch": {"state": "release_unknown"}})))
-            migrate_v1(project, "objective", owner="owner",
-                       worker_reader=lambda dispatch: shown(binding, released=False))
-            self.assertEqual(next(iter(read(project, "objective")["admissions"].values()))["state"],
-                             "legacy_hold")
-            native = {"runtime": "runtime", "scope": "all_runs", "complete": True,
-                      "workers": [{"dispatchId": "dispatch", "runId": "run",
-                                   "taskId": "task", "terminalState": "released"}]}
-            self.assertEqual(fresh_projection(project, native, objective="objective")["occupied"], [])
-
-    def test_foreign_and_descendant_rows_are_not_lost(self):
-        with fixture() as root:
-            project = root / "project"
-            project.mkdir()
-            checkpoint(project, "objective", owner="owner", value=checkpoint_body(),
-                       native={"runtime": "runtime"})
-            path = _path(project, "objective")
-            state = read(project, "objective")
-            binding = {key: value for key, value in old_binding("parent").items()
-                       if key != "terminalResourceId"}
-            state["admissions"] = {"a": {
-                "schema": "pod-admission/v2", "state": "bound", "admission_id": "a",
-                "objective": "objective", "owner": "owner", "request": request(),
-                "route_decision": {"policy_revision": "policy"}, "effective_evidence": {},
-                "runtime": "runtime", "request_uuid": None, "run_id": "run",
-                "task_id": "task", "plan_revision": "plan", "packet_id": "packet",
-                "worktree": "current", "bucket": "shared", "native_binding": binding,
-                "recovery": {}, "error": None, "created_at": "x", "updated_at": "x"}}
-            from pod.util import atomic_json
-            atomic_json(path, state)
-            native = {"runtime": "runtime", "scope": "all", "complete": True,
-                      "workers": [
-                          {"dispatchId": "parent", "runId": "run", "taskId": "task",
-                           "terminalState": "active", "projection": {"dispatchId": "parent"}},
-                          {"dispatchId": "child", "terminalState": "active",
-                           "projection": {"dispatchId": "child", "parent": "parent"}},
-                          {"dispatchId": "foreign", "terminalState": "active",
-                           "projection": {"dispatchId": "foreign"}}]}
-            projection = fresh_projection(project, native, objective=None)
-            self.assertEqual(len(projection["occupied"]), 3)
-            self.assertEqual(sum(row["objective"] == "objective"
-                                 for row in projection["occupied"]), 2)
-            # Objective filtering retains the bound parent and descendant, but unrelated
-            # native work cannot stall this direct-work Governor unit.
-            selected = fresh_projection(project, native, objective="objective")["occupied"]
-            self.assertEqual(len(selected), 2)
-            self.assertTrue(all(row["objective"] == "objective" for row in selected))
+            for native in ({"runtime": "runtime", "scope": "all_runs", "complete": True,
+                            "workers": []},
+                           {"runtime": "runtime", "scope": "objective_assignments",
+                            "complete": True, "completed": True}):
+                with self.subTest(native=native), self.assertRaises(PodError) as caught:
+                    logical_projection(project, native, objective="objective")
+                self.assertEqual(caught.exception.code, "native_assignment_unverified")
 
     def test_source_rejection_remains_durable(self):
         from pod.ledger import check_bound_sources
@@ -312,7 +263,7 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original)
             self.assertEqual(list(outside.iterdir()), [])
 
-    def test_uncertain_release_holds_without_exact_release_proof(self):
+    def test_retention_cleanup_history_does_not_change_exact_assignment_binding(self):
         with fixture() as root:
             project = root / "project"
             project.mkdir()
@@ -322,10 +273,10 @@ class MigrationTests(unittest.TestCase):
             migrate_v1(project, "objective", owner="owner",
                        worker_reader=lambda dispatch: shown(binding, released=False))
             row = next(iter(read(project, "objective")["admissions"].values()))
-            self.assertEqual(row["state"], "legacy_hold")
+            self.assertEqual(row["state"], "bound")
 
-    def test_worktree_terminal_resource_or_launch_contradiction_never_promotes(self):
-        for contradiction in ("worktree", "terminal_resource", "launch"):
+    def test_worktree_or_launch_contradiction_never_promotes(self):
+        for contradiction in ("worktree", "launch"):
             with self.subTest(contradiction=contradiction), fixture() as root:
                 project = root / "project"
                 project.mkdir()
@@ -334,8 +285,6 @@ class MigrationTests(unittest.TestCase):
                 observed = shown(binding)
                 if contradiction == "worktree":
                     observed["result"]["worker"]["worktreeId"] = "other"
-                elif contradiction == "terminal_resource":
-                    observed["result"]["terminalResource"]["id"] = "other"
                 else:
                     wrong = {"agent": "codex", "model": "other", "effort": "high"}
                     observed = shown(binding, launch=wrong)
@@ -380,4 +329,4 @@ class MigrationTests(unittest.TestCase):
 
     def test_state_enum_is_exact(self):
         self.assertEqual(ADMISSION_STATES,
-                         ("reserved", "bound", "unresolved", "closed", "legacy_hold"))
+                         ("reserved", "bound", "unresolved", "closed", "deferred", "legacy_hold"))

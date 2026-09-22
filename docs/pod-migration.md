@@ -9,12 +9,12 @@ work.
 
 Pod 0.3 removes its parallel native lifecycle machinery. Orca is authoritative for Runs,
 Tasks, Dispatches, requests, messaging, worker state, terminals/resources and disposition.
-Pod retains routing approval, quota/capacity/spending admission, frozen packets, source
+Pod retains routing approval, quota/logical-fan-out/spending admission, frozen packets, source
 bindings, reports, checkpoints, interventions, acceptance evidence and the waste governor.
 
 `pod-context/v2` contains exactly owner, admissions, checkpoint, interventions,
 source-rejections and legacy-archive references. An admission is `reserved`, `bound`,
-`unresolved`, `closed` or `legacy_hold`. Native identifiers and Orca-issued request UUIDs are
+`unresolved`, `closed`, `deferred` or `legacy_hold`. Native identifiers and Orca-issued request UUIDs are
 references, never copied lifecycle authority. v1 Delivery and cleanup collections survive only
 inside the immutable archive.
 
@@ -27,7 +27,7 @@ operation:
    bounded, nonblocking, no-follow descriptor;
 2. validates the complete v1 shape before native reads;
 3. uses worker-show only to validate exact runtime, Run, Task, Dispatch, worker, worktree,
-   terminal/resource and effective-launch evidence;
+   assignment settlement and effective-launch evidence; terminal/resource disposition is ignored;
 4. constructs and validates v2, writes and boundedly verifies an immutable digest-named
    archive, then atomically replaces the active context.
 
@@ -46,9 +46,9 @@ Choose the objective reported by `pod status`/`pod doctor` and the current coord
 The helper discovers and reads the installed Orca runtime; the request must not contain a Run,
 Task, Dispatch, release instruction or user-selected request UUID.
 
-Confirmed exact active effects become `bound`. Only exact native released proof becomes
-`closed`. Reserved, uncertain, malformed, absent, ambiguous and pending/unknown-release rows
-become `legacy_hold`. Spent-grant evidence is preserved whether the admission is active or
+Confirmed exact unsettled assignments become `bound`. Exact native assignment settlement becomes
+`closed` regardless of retained terminal state. Reserved, uncertain, malformed, absent and
+ambiguous rows become `legacy_hold`. Spent-grant evidence is preserved whether the admission is active or
 closed. A failure before the atomic replacement leaves v1 active and unchanged. Doctor and
 status are read-only and report `migration_required`; new admissions for an affected objective
 remain blocked.

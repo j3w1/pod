@@ -43,13 +43,16 @@ quota](references/routing.md) for approval, spending and availability decisions.
 
 Freeze the packet, then use `internal preview` and `internal admission` before a
 Pod-managed start. Admission enforces current authority, route, spending,
-capacity and source bindings and checks native effective launch evidence.
+objective-local logical fan-out and source bindings and checks native effective
+launch evidence. Pod does not inspect or infer physical worker capacity.
 Unproven required controls block the affected route; optional gaps remain visible.
 
-Use zero workers when sufficient, otherwise default capacity two. Three needs a
+Use zero workers when sufficient, otherwise default logical fan-out two. Three needs a
 reason; four through eight needs a grant bound to the objective, Run and plan;
 above eight is prohibited. Investigators, reviewers and authorized descendants
-share the ceiling. Worker-initiated delegation requires explicit authority.
+share the ceiling through one reservation per assignment. Worker-initiated
+delegation requires explicit authority. Native `capacity_full` defers that
+delegation; do not retry it blindly or audit the fleet to challenge Orca.
 
 ## Integrate and verify
 

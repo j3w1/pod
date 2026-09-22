@@ -64,10 +64,10 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(),
                                  safety_refusal=True, now=NOW)["status"], "blocked")
 
-    def test_unknown_quota_one_account_and_exhausted(self):
+    def test_unknown_quota_is_left_to_objective_admission_and_exhausted_blocks(self):
         e = setup()
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas={},
-                                 occupancy={ACCOUNT_IDENTITY: 1}, now=NOW)["status"], "blocked")
+                                 now=NOW)["status"], "usable")
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(0),
                                  now=NOW)["status"], "blocked")
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(4),
@@ -85,11 +85,11 @@ class RoutingTests(unittest.TestCase):
         snapshot[ACCOUNT_IDENTITY]["windows"][1]["remaining_percent"] = 70
         snapshot[ACCOUNT_IDENTITY]["provider"] = "claude"
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
-                                 occupancy={ACCOUNT_IDENTITY: 1}, now=NOW)["status"], "blocked")
+                                 now=NOW)["status"], "usable")
         snapshot[ACCOUNT_IDENTITY]["provider"] = "codex"
         snapshot[ACCOUNT_IDENTITY]["bucket"] = "other"
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
-                                 occupancy={ACCOUNT_IDENTITY: 1}, now=NOW)["status"], "blocked")
+                                 now=NOW)["status"], "usable")
 
     def test_changed_alias_and_paid_route_need_separate_grants(self):
         e = setup()

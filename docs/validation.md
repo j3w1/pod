@@ -59,10 +59,10 @@ The [scenario coverage file](pod-coverage.json) lists every acceptance scenario.
 
 Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.
 
-Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent or changed source durably rejects that packet assignment; an unavailable source holds admission until a fresh packet binds actual bytes. This is a bounded admission check, not an atomic multi-file snapshot against external writes. `pod-context/v2` persists only policy/evidence admissions: `reserved`, `bound`, `unresolved`, `closed` and `legacy_hold`. Fresh Orca projection determines occupancy. A complete projection paginates the native Run inventory to an explicit `nextCursor: null`, reads every exact Run through stable worker pagination, then repeats the Run inventory and requires the same runtime and Run set. A caller-bound/local-ledger subset is never promoted to global completeness. A unique exact runtime/Run/Task/Dispatch binding with released resource projection frees capacity, including an exactly bound `legacy_hold`; an unbound legacy row and missing, ambiguous, retained or contradictory projection remain occupied. Foreign workers and authorized descendants are included conservatively and exact native identities are deduplicated. Paid grant units remain spent even after closure or migration. Account-wide admission is serialized only on the local host, so discovered cross-host workers make delegation fail closed until native atomic admission exists.
+Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent or changed source durably rejects that packet assignment; an unavailable source holds admission until a fresh packet binds actual bytes. This is a bounded admission check, not an atomic multi-file snapshot against external writes. `pod-context/v2` persists only policy/evidence admissions: `reserved`, `bound`, `unresolved`, `closed`, `deferred` and `legacy_hold`. The same objective lock serializes one logical reservation per Pod assignment. Reserved, unresolved and unbound legacy rows remain outstanding; one exact already-bound runtime/Run/Task/Dispatch/worker read whose assignment has settled frees a logical slot regardless of retained terminal or resource disposition. Missing, ambiguous or contradictory evidence does not free it. Independent objectives and foreign historical workers are not reconstructed or counted for runtime capacity. There is no all-Run pagination, fleet completeness prerequisite, terminal-liveness inference or occupancy deduplication in admission. Unknown quota conservatively limits the objective's own overlapping logical admissions. Paid grant units remain spent after settlement, closure, deferral or migration.
 
 The personal model `account` value is the redacted native identity digest reported by
-`pod doctor --json`, not a display label. The same digest keys approval, quota, occupancy and
+`pod doctor --json`, not a display label. The same digest keys approval, quota and
 exceptional/spending/reset grants, so aliases cannot split one account's allowance or transfer a
 grant across account rotation. Route establishment compares that value to the runtime-selected
 account before start. Identity and authentication/billing proof come from one selected context:
@@ -87,10 +87,10 @@ terminal or lifecycle state.
 `internal state-migrate` is the only v1-to-v2 state transition. It locks and validates a
 bounded nonblocking regular-file, no-follow v1 context, uses only Orca reads to resolve exact
 bindings, validates the constructed v2 context, writes and boundedly verifies an immutable
-digest-named archive, then atomically replaces the active file. Reserved, uncertain,
-pending/unknown-release and otherwise unproven
-effects become `legacy_hold`; exact active bindings become `bound`; only exact released proof
-becomes `closed`. Historical Delivery/cleanup collections remain only in the archive. Any
+digest-named archive, then atomically replaces the active file. Reserved, uncertain and otherwise unproven
+effects become `legacy_hold`; exact unsettled bindings become `bound`; exact native assignment
+settlement becomes `closed` without consulting terminal release or cleanup state. Historical
+Delivery/cleanup collections remain only in the archive. Any
 failure leaves v1 active. `doctor` and `status` report `migration_required` without migrating.
 There is no automatic downgrade; restore the archive only before any v2 admissions are made.
 
@@ -110,12 +110,12 @@ the only remote seam is a port whose exact `git` and `gh` argument shapes have t
 motivated it: a still-converging unit crossing the pull-request and CI boundary once per
 intermediate correction. It keeps the shape of the incident and none of its identifiers.
 
-The private production seam reads this terminal's native `run-current` binding twice around the
-complete fleet read and requires one unchanged Run ID, `coordinator_handle` and
-`consumer_generation`. That binding, the actual terminal handle and runtime must match an exact
+The private production seam reads this terminal's native `run-current` binding twice around
+bounded exact objective-assignment reads and requires one unchanged Run ID,
+`coordinator_handle` and `consumer_generation`. That binding, the actual terminal handle and runtime must match an exact
 Run reference in the objective's admissions/checkpoint and its existing Pod owner before candidate
 preparation, admission/decision, execution, preflight/outcome/classification/correction updates or
-reconciliation journaling. Terminal self-identity, another owned Run, a worker with no current
+reconciliation journaling. It never enumerates all Runs or the worker fleet. Terminal self-identity, another owned Run, a worker with no current
 Run, a changed binding or a takeover is insufficient. Refusal occurs before candidate observation,
 journal creation or provider calls. `governor-status` remains read-only and can diagnose the
 journal when mutation authority is unavailable; Pod neither creates nor adopts a Run.
@@ -201,8 +201,9 @@ Orca caches provider rate-limit metadata and does not refresh it when read: on t
 this was measured, the reading was hours old. A quota snapshot therefore records
 `confidence: observed`, meaning the runtime reported these numbers, and its age decides how
 far they are trusted. A reading older than `quota_fresh_seconds` resolves to unknown quota,
-which permits one active worker on that account rather than the usual two. That is
+which permits one outstanding logical assignment on the objective's overlapping account route
+rather than the usual two. That is
 conservative by design, and it means the documented default of two workers holds only while
 a fresh reading is available.
 
-The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: effective launch and native descendant-depth limit are enforceable controls; billing mode, exact redacted account identity, descendant count and quota windows are supported observations; route approval and delegation setting are owner configuration; anything else is unavailable. Pod claims no more. Refusing worker-initiated delegation is a Pod admission decision and behavioural instruction, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints and exposes only a digest of the runtime-selected account for personal approval. Reset credits have only an offline intent guard; no redemption transport is installed. Cross-host admission is not atomic and is disclosed. Exact live start/request recovery and the live core and delegation matrices require separate evidence; worker lifecycle and disposition remain Orca-owned.
+The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: effective launch and native descendant-depth limit are enforceable controls; billing mode, exact redacted account identity and quota windows are supported observations; route approval, child delegation and logical descendant reservations are owner policy; physical capacity is unavailable. Pod claims no more. Refusing worker-initiated delegation is a Pod admission decision and behavioural instruction, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints and exposes only a digest of the runtime-selected account for personal approval. Reset credits have only an offline intent guard; no redemption transport is installed. An authoritative native `capacity_full` refusal is recorded as durable deferred evidence with no binding and no blind retry; a malformed or partial-effect response remains unresolved. This branch is synthetically covered unless a genuine runtime refusal is observed. Exact live start/request recovery and the live core and delegation matrices require separate evidence; worker lifecycle, disposition and actual capacity remain Orca/CE-owned.

@@ -95,7 +95,7 @@ class ScenarioFixtureTests(unittest.TestCase):
             with self.assertRaises(PodError) as caught:
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
                               assessment=assessment, capabilities=capabilities,
-                              quotas=quota, occupancy={}, plan_revision="plan",
+                              quotas=quota, plan_revision="plan",
                               frozen_packet=frozen, port=Spy(), now=NOW)
             self.assertEqual(caught.exception.code, "route_unusable")
 

@@ -441,8 +441,9 @@ class DecisionTests(GovernorCase):
                                   observation=observation(commit=COMMIT2, tree=TREE2), tasks=["t2"],
                                   branch={"remote": "origin", "branch": "agent/urgent", "base": "main"},
                                   now=NOW)["candidate"]
-        projection = {"schema": "pod-native-projection/v1", "runtime": "runtime",
-                      "occupied": [{"task": "t1"}], "occupied_ids": ["d"]}
+        projection = {"schema": "pod-logical-projection/v1", "runtime": "runtime",
+                      "outstanding": [{"task": "t1"}], "outstanding_ids": ["d"],
+                      "physical_capacity": "unavailable"}
         release = self.decide(
             action(candidate=status(self.project, "objective")["units"]["release"]["candidate"]["id"]),
             native_projection=projection)

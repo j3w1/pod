@@ -6,7 +6,7 @@ approval or spending. The `config` helper displays the effective policy and
 provenance. Starter model rows remain pending recommendations.
 
 Approval binds the exact agent, model and redacted native account identity shown
-by the doctor's JSON output; the model alias is the human label. Quota, capacity and
+by the doctor's JSON output; the model alias is the human label. Quota and
 grants use that same identity, so discovery, relabeling or account rotation cannot
 inherit approval. Identity and billing proof must come from the same selected managed,
 native-default or, only when no native default exists, login context. Pod repeats that
@@ -25,8 +25,10 @@ Invalid policy blocks new admission without preventing read-only diagnosis.
 Quota follows provider/account/bucket windows, with source, time and uncertainty.
 Defaults are 20% low, 5% critical and 60-second freshness. Low quota calls for a
 bounded task and reserved integration/reporting headroom. Stale or unknown quota
-allows one active managed worker on the overlapping route, including reservations
-and uncertain admissions. Unknown buckets may overlap; known distinct buckets
+allows one outstanding logical assignment on the objective's overlapping route,
+including reservations and uncertain admissions. It does not require a foreign-worker
+census or let historical work in an independent objective occupy the slot.
+Unknown buckets may overlap; known distinct buckets
 remain independent. An exhausted window needs fresh positive evidence for that
 same route before new work. Switching model labels replenishes nothing.
 

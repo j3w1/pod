@@ -29,12 +29,13 @@ routes and checks tied to your original criteria.
 | Layer | Responsibility |
 | --- | --- |
 | **Orca** | Runs, Tasks, Dispatches, messages, environments and worker lifecycle, including Delivery and request recovery. |
-| **Pod** | Coordination policy, routing, spending and capacity limits, task packets, evidence and waste control. |
+| **Pod** | Coordination policy, routing, spending and objective fan-out limits, task packets, evidence and waste control. |
 | **Your project** | Source, verification, review, acceptance and release decisions. |
 
 Pod checks policy before a worker starts and verifies the effective route
 afterward. It stores the admission decision and evidence bindings; Orca supplies
-the current runtime facts. The coordinator follows Orca's installed,
+the current runtime facts and enforces actual worker capacity. Pod never infers
+physical capacity from a fleet census. The coordinator follows Orca's installed,
 version-matched [orchestration guide](https://www.onorca.dev/docs/cli/orchestration)
 for supervision and lifecycle.
 
@@ -97,9 +98,9 @@ carries its own helpers and does not depend on that checkout.
 1. **State the task.** Give Pod your objective and criteria. A planning request
    stays in planning; an approved implementation proceeds within its scope.
 2. **Choose useful help.** Pod assesses each assignment and selects an approved,
-   usable route. Capacity defaults to two workers; unknown quota permits one on
-   the affected account route. Larger groups require the appropriate justification
-   or scoped grant.
+   usable route. Logical fan-out defaults to two assignments per objective; unknown
+   quota permits one outstanding assignment on the affected objective/account route.
+   Larger groups require the appropriate justification or scoped grant.
 3. **Coordinate the pod.** Workers receive bounded packets with scope, sources
    and reporting expectations. Orca owns their execution and supervision.
 4. **Verify the result.** Bind checks and review to the candidate. Related
@@ -127,6 +128,8 @@ decisions. These reads do not dispatch workers, spend credits or repair state.
 For runtime recovery, follow the installed Orca guide and the native receipt's
 next action. An unavailable response is not proof that a start failed. Pod keeps
 unresolved admissions conservative until native evidence resolves them.
+An authoritative native `capacity_full` refusal is recorded as deferred without
+a successful binding or blind retry; actual capacity remains an Orca/CE fact.
 
 A `migration_required` result needs the explicit state migration described in
 the [migration notes](docs/pod-migration.md). Diagnostics never migrate silently.

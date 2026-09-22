@@ -19,7 +19,7 @@ from .config import DEFAULT, effective, personal_path, route_identity
 from .errors import PodError
 from .ledger import context_root_for_run, migration_inventory
 from .orca import (account_metadata, account_metadata_raw, agent_login_mode, contract, executable,
-                   hosts, route_establishment, run_rows, selected_account_identity, worker_rows)
+                   current_run, hosts, route_establishment, selected_account_identity, worker_rows)
 from .setup import inspect, setup, skills_cli_entry
 
 
@@ -63,15 +63,13 @@ def _edit(path: Path, *, project_scope: bool) -> None:
 def _status(root: Path, run: str | None) -> dict:
     if run is None:
         try:
-            listing = run_rows()
+            binding = current_run()
         except PodError as exc:
             return {"status": "unavailable", "reason": exc.code, "selection_required": True}
-        runs = listing["runs"]
-        if len(runs) != 1:
-            return {"status": "selection_required", "run_count": len(runs) if isinstance(runs, list) else "unknown"}
-        run = runs[0].get("id") if isinstance(runs[0], dict) else None
-        if not run:
-            return {"status": "selection_required", "reason": "native Run identity unavailable"}
+        current = binding.get("run")
+        run = current.get("id") if isinstance(current, dict) else None
+        if not isinstance(run, str) or not run:
+            return {"status": "selection_required", "reason": "no current native Run; pass --run"}
     try:
         workers = worker_rows(run)
     except PodError as exc:
@@ -92,14 +90,21 @@ def _status(root: Path, run: str | None) -> dict:
         if context_root is not None:
             from .governor import status_at
             from .operations import OrcaPort
-            from .ledger import fresh_projection
-            native = OrcaPort(root).read_native(context.get("owner"))
+            from .ledger import binding_valid, logical_projection
+            assignments = tuple(row for row in context.get("admissions", {}).values()
+                                if isinstance(row, dict) and row.get("state") == "bound"
+                                and binding_valid(row.get("native_binding")))
+            native = OrcaPort(root).read_native(context.get("owner"), assignments=assignments)
             objective_names = {row.get("objective") for row in context.get("admissions", {}).values()
                                if isinstance(row, dict) and row.get("objective")}
             selected_objective = next(iter(objective_names)) if len(objective_names) == 1 else None
+            projection = (logical_projection(root, native, objective=selected_objective)
+                          if selected_objective is not None else {
+                              "schema": "pod-logical-projection/v1", "runtime": native["runtime"],
+                              "authoritative": False, "owner": None, "outstanding": [],
+                              "outstanding_ids": [], "physical_capacity": "unavailable"})
             governor = _governor_projection(status_at(
-                context_root, project=root,
-                native_projection=fresh_projection(root, native, objective=selected_objective)))
+                context_root, project=root, native_projection=projection))
     except PodError as exc:
         context = {"error": exc.code}
     checkpoint_value = context.get("checkpoint") if isinstance(context, dict) else None

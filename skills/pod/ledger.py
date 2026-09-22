@@ -19,8 +19,7 @@ from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
 
-ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "legacy_hold")
-NATIVE_SCOPES = ("all", "all_runs")
+ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred", "legacy_hold")
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
                    "interventions", "source_rejections", "legacy_archives"}
@@ -297,28 +296,6 @@ def _bucket_overlap(provider: str, account: str, bucket: str | None, other: dict
     return bucket is None or other_bucket is None or bucket == other_bucket
 
 
-def _native_dispatch(row: dict) -> str | None:
-    value = row.get("dispatchId", row.get("dispatch_id"))
-    return value if isinstance(value, str) and value else None
-
-
-def _native_identity(row: dict, field: str) -> str | None:
-    value = row.get(field, row.get(field[:-2] + "_id" if field.endswith("Id") else field))
-    if isinstance(value, str) and value:
-        return value
-    projection = row.get("projection")
-    value = projection.get(field) if isinstance(projection, dict) else None
-    return value if isinstance(value, str) and value else None
-
-
-def _native_released(row: dict) -> bool:
-    if row.get("terminalState") == "released" or row.get("state") == "released":
-        return True
-    projection = row.get("projection")
-    resource = projection.get("resource") if isinstance(projection, dict) else None
-    return isinstance(resource, dict) and resource.get("state") == "released"
-
-
 def _all_admissions(project: Path) -> list[tuple[Path, dict]]:
     root = state_root(project)
     if root.is_symlink():
@@ -332,97 +309,48 @@ def _all_admissions(project: Path) -> list[tuple[Path, dict]]:
     return rows
 
 
-def _occupied_admissions(project: Path, native: dict) -> list[dict]:
-    """Project capacity only from durable policy rows joined to this fresh Orca read."""
-    workers = native.get("workers")
-    if not isinstance(workers, list):
-        raise PodError("native_occupancy_unverified", "Native worker projection is malformed")
-    by_dispatch: dict[str, list[dict]] = {}
-    for row in workers:
-        if not isinstance(row, dict):
-            raise PodError("native_occupancy_unverified", "Native worker projection is malformed")
-        dispatch = _native_dispatch(row)
-        if dispatch:
-            by_dispatch.setdefault(dispatch, []).append(row)
-    occupied = []
-    seen = set()
-    matched_dispatches = set()
-    by_parent = {}
-    for path, admission in _all_admissions(project):
-        state = admission["state"]
-        if state == "closed":
+def logical_projection(project: Path, native: dict, *, objective: str,
+                       tasks: list[str] | None = None) -> dict:
+    """Project objective-local outstanding assignments from exact attempt settlement."""
+    if (native.get("scope") != "objective_assignments" or native.get("complete") is not True
+            or not isinstance(native.get("runtime"), str)
+            or not isinstance(native.get("assignments"), list)):
+        raise PodError("native_assignment_unverified", "Objective assignment evidence is incomplete")
+    state = read(project, objective)
+    admissions = state.get("admissions", {}) if isinstance(state, dict) else {}
+    evidence_by_admission: dict[str, list[dict]] = {}
+    for row in native["assignments"]:
+        if isinstance(row, dict) and isinstance(row.get("admission_id"), str):
+            evidence_by_admission.setdefault(row["admission_id"], []).append(row)
+    outstanding = []
+    for admission_id, admission in admissions.items():
+        if admission["state"] in ("closed", "deferred"):
             continue
         binding = admission.get("native_binding")
-        key = ("admission", str(path), admission["admission_id"])
-        if state in ("bound", "legacy_hold") and binding_valid(binding):
-            key = ("dispatch", admission["runtime"], binding["dispatchId"])
-            matches = by_dispatch.get(binding["dispatchId"], [])
-            exact_matches = [row for row in matches
-                             if (_native_identity(row, "runId") == binding["runId"]
-                                 and _native_identity(row, "taskId") == binding["taskId"])]
-            matched_dispatches.add(binding["dispatchId"])
-            by_parent[binding["dispatchId"]] = (admission, str(path))
-            if (native.get("runtime") == admission["runtime"] and len(matches) == 1
-                    and len(exact_matches) == 1 and _native_released(exact_matches[0])):
-                continue
-        if key in seen:
+        settled = False
+        matches = evidence_by_admission.get(admission_id, [])
+        if admission["state"] == "bound" and binding_valid(binding) and len(matches) == 1:
+            observed = matches[0]
+            settled = (observed.get("settled") is True
+                       and observed.get("runtime") == admission["runtime"] == native["runtime"]
+                       and observed.get("run_id") == binding["runId"]
+                       and observed.get("task_id") == binding["taskId"]
+                       and observed.get("dispatch_id") == binding["dispatchId"]
+                       and observed.get("worker_id") == binding["workerId"])
+        if settled:
             continue
-        seen.add(key)
-        occupied.append({**admission["request"], "objective": admission["objective"],
-                         "_context": str(path),
-                         "bucket": admission.get("bucket"), "_key": key,
-                         "_task": binding.get("taskId") if isinstance(binding, dict) else None})
-    for index, worker in enumerate(workers):
-        dispatch = _native_dispatch(worker)
-        if dispatch in matched_dispatches or _native_released(worker):
+        task = binding.get("taskId") if isinstance(binding, dict) else admission["task_id"]
+        if tasks is not None and task not in tasks:
             continue
-        projection = worker.get("projection") if isinstance(worker.get("projection"), dict) else {}
-        parent = projection.get("parent")
-        if isinstance(parent, dict):
-            parent = parent.get("dispatchId", parent.get("id"))
-        inherited_entry = by_parent.get(parent)
-        inherited = inherited_entry[0] if inherited_entry else None
-        native_key = ("native", native.get("runtime"), dispatch or index)
-        if native_key in seen:
-            continue
-        seen.add(native_key)
-        if inherited:
-            occupied.append({**inherited["request"], "objective": inherited["objective"],
-                             "_context": inherited_entry[1],
-                             "bucket": inherited.get("bucket"), "_key": native_key,
-                             "_task": inherited["task_id"]})
-        else:
-            # An unbound worker cannot be assigned to a route or objective. It therefore
-            # overlaps admission conservatively, while Governor objective filtering does
-            # not let unrelated native work stall a direct-work delivery unit.
-            occupied.append({"agent": None, "account": None, "bucket": None,
-                             "objective": None, "_context": None,
-                             "_key": native_key, "_task": None})
-    return occupied
-
-
-def fresh_projection(project: Path, native: dict, *, objective: str | None = None,
-                     tasks: list[str] | None = None) -> dict:
-    """Deterministic capacity/governor projection from exact current Orca evidence."""
-    if (native.get("scope") not in NATIVE_SCOPES or native.get("complete") is not True
-            or not isinstance(native.get("runtime"), str)):
-        raise PodError("native_occupancy_unverified", "Fresh native projection is incomplete")
-    occupied = _occupied_admissions(project, native)
-    selected_context = str(_path(project, objective)) if objective is not None else None
-    selected = []
-    for row in occupied:
-        if objective is not None and row.get("_context") != selected_context:
-            continue
-        if tasks is not None and row.get("_task") is not None and row["_task"] not in tasks:
-            continue
-        selected.append(row)
-    return {"schema": "pod-native-projection/v1", "runtime": native["runtime"],
+        outstanding.append({**admission["request"], "objective": objective,
+                            "admission_id": admission_id, "task": task,
+                            "state": admission["state"], "bucket": admission.get("bucket")})
+    return {"schema": "pod-logical-projection/v1", "runtime": native["runtime"],
             "authoritative": native.get("authoritative") is True,
             "owner": native.get("owner") if native.get("authoritative") is True else None,
-            "occupied": [{**{key: value for key, value in row.items() if not key.startswith("_")},
-                          "task": row.get("_task")}
-                         for row in selected],
-            "occupied_ids": [str(row["_key"]) for row in selected]}
+            "outstanding": outstanding,
+            "outstanding_ids": [row["admission_id"] for row in outstanding],
+            "physical_capacity": native.get("physical_capacity", "unavailable")}
 
 
 def _quota_hold(provider: str, account: str, bucket: str | None,
@@ -503,7 +431,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             exceptional_grant: dict | None = None, capacity_reason: str | None = None,
             spending_grant: dict | None = None, task_policy: dict | None = None,
             now: datetime | None = None) -> dict:
-    """Serialize policy and fresh-capacity validation before the one native start seam."""
+    """Serialize policy and logical fan-out validation before the native start seam."""
     moment = now or datetime.now(timezone.utc)
     if not isinstance(admission_id, str) or not admission_id:
         raise PodError("invalid_admission", "Admission identity is required")
@@ -542,10 +470,10 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         native = native_reader()
         if (native.get("authoritative") is not True or native.get("owner") != owner
                 or native.get("runtime") != establishment.get("runtime")
-                or native.get("scope") not in NATIVE_SCOPES or native.get("complete") is not True):
-            raise PodError("native_occupancy_unverified", "Admission lacks a complete authoritative Orca projection")
-        if native.get("cross_host") and native.get("atomic_admission") is not True:
-            raise PodError("distributed_admission_unverified", "Cross-host admission requires native atomic fencing")
+                or native.get("scope") != "objective_assignments"
+                or native.get("complete") is not True):
+            raise PodError("native_authority_unverified",
+                           "Admission lacks stable current-Run authority")
         checkpoint_value = state.get("checkpoint")
         body = frozen_packet.get("body") if isinstance(frozen_packet, dict) else None
         if (not isinstance(body, dict) or frozen_packet.get("packet_id") != packet_id
@@ -581,16 +509,16 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                        native.get("quota"), qstate, now=moment,
                        freshness=policy.get("quota_fresh_seconds", 60), project=project):
             raise PodError("quota_exhausted", "Current applicable quota bucket is exhausted")
-        occupied = _occupied_admissions(project, native)
-        objective_rows = {row["_key"] for row in occupied
-                          if row.get("_context") in (None, str(path))}
-        overlapping = {row["_key"] for row in occupied
+        projection = logical_projection(project, native, objective=objective)
+        outstanding = projection["outstanding"]
+        overlapping = [row for row in outstanding
                        if _bucket_overlap(requested["agent"], requested["account"],
-                                          requested.get("bucket"), row)}
-        if len(objective_rows) >= capacity:
-            raise PodError("capacity_full", "Objective capacity is occupied")
+                                          requested.get("bucket"), row)]
+        if len(outstanding) >= capacity:
+            raise PodError("logical_capacity_full", "Objective fan-out limit is occupied")
         if qstate == "unknown" and overlapping:
-            raise PodError("unknown_quota_capacity", "Unknown account quota permits one active worker")
+            raise PodError("unknown_quota_capacity",
+                           "Unknown quota permits one outstanding logical assignment on this objective route")
         grant_binding = None
         if route_model.get("billing", "unknown") != "included":
             grant_binding, maximum = _spending_grant_binding(policy.get("spending_grants", []),
@@ -697,17 +625,21 @@ def _legacy_binding_matches(shown: dict, effect: dict, binding: dict, runtime: s
     launch = worker.get("startOptions", {}).get("launch") if isinstance(worker.get("startOptions"), dict) else None
     if not isinstance(launch, dict) or launch.get("requested") != expected or launch.get("effective") != expected:
         return False
-    resource = result.get("terminalResource")
-    if "terminalResourceId" in binding:
-        resource_id = binding.get("terminalResourceId")
-        if resource_id is None:
-            return resource is None
-        return (isinstance(resource, dict) and resource.get("id") == resource_id
-                and resource.get("terminalHandle") == binding.get("terminalHandle")
-                and resource.get("worktreeId") == binding.get("worktreeId")
-                and resource.get("originDispatchId") == binding.get("dispatchId")
-                and resource.get("ownerDispatchId") == binding.get("dispatchId"))
     return True
+
+
+def _legacy_assignment_settled(shown: dict) -> bool:
+    result = shown.get("result") if isinstance(shown, dict) else None
+    dispatch = result.get("dispatch") if isinstance(result, dict) else None
+    projection = result.get("projection") if isinstance(result, dict) else None
+    worker = result.get("worker") if isinstance(result, dict) else None
+    if not all(isinstance(row, dict) for row in (dispatch, projection, worker)):
+        return False
+    stage = projection.get("stage") if isinstance(projection.get("stage"), dict) else {}
+    terminal = {"succeeded", "failed", "stopped", "canceled", "cancelled", "abandoned"}
+    return bool({dispatch.get("status"), projection.get("outcome"), worker.get("state"),
+                 stage.get("dispatch"), stage.get("worker")}.intersection(terminal)
+                or stage.get("detail") == "settled")
 
 
 def _read_legacy_bytes(path: Path, *, limit: int = 1_048_576) -> bytes:
@@ -795,18 +727,9 @@ def migrate_v1(project: Path, objective: str, *, owner: str,
                                             "dispatchId": binding["dispatchId"], "workerId": binding["workerId"],
                                             "worktreeId": worktree, "terminalHandle": terminal}
                         if binding_valid(migrated_binding):
-                            projection = result.get("projection")
-                            resource = projection.get("resource") if isinstance(projection, dict) else None
-                            terminal_resource = result.get("terminalResource")
-                            released = (isinstance(terminal_resource, dict)
-                                        and terminal_resource.get("ownershipState") == "released")
-                            released = released or isinstance(resource, dict) and resource.get("state") == "released"
-                            cleanup = old["cleanup"].get(binding["dispatchId"])
-                            cleanup_state = cleanup.get("state") if isinstance(cleanup, dict) else None
-                            uncertain_cleanup = cleanup_state in (
-                                "reserved", "uncertain", "release_pending", "release_unknown")
-                            state = "closed" if released else "legacy_hold" if uncertain_cleanup else "bound"
-                            recovery = {"legacy_effect": operation_id, "native_read": "exact"}
+                            state = "closed" if _legacy_assignment_settled(shown) else "bound"
+                            recovery = {"legacy_effect": operation_id,
+                                        "native_read": "exact_assignment"}
                         else:
                             migrated_binding = None
             stamp = datetime.now(timezone.utc).isoformat()

@@ -105,7 +105,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_concurrent_objectives_share_one_unknown_account_allowance",
+      "offline_test": "tests.test_routing.RoutingTests.test_unknown_quota_is_left_to_objective_admission_and_exhausted_blocks",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -113,7 +113,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_concurrent_objectives_share_one_unknown_account_allowance",
+      "offline_test": "tests.test_operations.AdmissionTests.test_independent_objectives_ignore_foreign_history_under_unknown_quota",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -129,7 +129,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_ledger.V2StateTests.test_foreign_and_descendant_rows_are_not_lost",
+      "offline_test": "tests.test_operations.AdmissionTests.test_objective_fanout_admits_two_blocks_third_and_settlement_frees_slot",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -146,7 +146,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_policy_precedes_one_start_and_exact_binding",
+      "offline_test": "tests.test_operations.AdmissionTests.test_objective_fanout_admits_two_blocks_third_and_settlement_frees_slot",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -173,7 +173,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.BoundaryTests.test_native_read_enumerates_every_stable_run_before_claiming_complete_fleet",
+      "offline_test": "tests.test_operations.BoundaryTests.test_policy_evidence_never_enumerates_the_fleet",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -561,11 +561,11 @@
     {
       "id": "A68",
       "required_evidence": [
-        "offline_behavior",
-        "live_native"
+        "offline_behavior"
       ],
-      "offline_test": "tests.test_ledger.V2StateTests.test_fresh_projection_releases_only_on_one_exact_native_row",
-      "candidate_status": "NOT_RUN"
+      "offline_test": null,
+      "candidate_status": "RETIRED",
+      "retired": "2026-09-22: terminal retention and release are Orca lifecycle concerns and no longer determine Pod logical fan-out"
     },
     {
       "id": "A69",
@@ -860,11 +860,11 @@
     {
       "id": "A103",
       "required_evidence": [
-        "offline_behavior",
-        "live_native"
+        "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.BoundaryTests.test_native_read_enumerates_every_stable_run_before_claiming_complete_fleet",
-      "candidate_status": "NOT_RUN"
+      "offline_test": null,
+      "candidate_status": "RETIRED",
+      "retired": "2026-09-22: fleet occupancy, resource-release reconstruction and deduplication were removed because Orca and CE own runtime capacity"
     },
     {
       "id": "A104",
@@ -872,6 +872,15 @@
         "offline_behavior"
       ],
       "offline_test": "tests.test_ledger.MigrationTests.test_all_legacy_states_archive_and_exact_confirmed_bind",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A105",
+      "required_evidence": [
+        "offline_behavior",
+        "live_native"
+      ],
+      "offline_test": "tests.test_operations.AdmissionTests.test_native_capacity_full_is_durable_deferred_not_a_binding_or_retry",
       "candidate_status": "NOT_RUN"
     }
   ]

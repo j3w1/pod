@@ -11,6 +11,9 @@ the objective checkpoint or admissions reference on the same runtime, with the
 same existing Pod owner. Establish or adopt that Run explicitly through Orca's
 installed guide; Pod never creates or adopts one implicitly. Without this proof,
 safe direct work and read-only `internal governor-status` remain available.
+Authority joins only the stable current-Run binding and exact objective
+assignment evidence when relevant. It never requires an all-Run or worker-fleet
+scan.
 
 Group related corrections into a delivery unit: the work reviewed and delivered
 together. Use `internal governor-prepare` to name its Tasks, branch, base,

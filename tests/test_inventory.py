@@ -49,7 +49,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         spec = (root / "docs" / "pod-spec.md").read_text()
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
-        retired_in_spec = {match for match in re.findall(r"^\| (A\d{2}) \| RETIRED", spec, flags=re.M)}
+        retired_in_spec = {match for match in re.findall(r"^\| (A\d{2,3}) \| RETIRED", spec, flags=re.M)}
         retired_in_coverage = {row["id"] for row in coverage["scenarios"]
                                if row["candidate_status"] == "RETIRED"}
         self.assertEqual(retired_in_spec, retired_in_coverage)

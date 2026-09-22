@@ -32,11 +32,12 @@ class FakePort:
         self.find_rows = None
         self.quota = {"schema": "pod-quota/v1", "provider": "codex",
                       "account": ACCOUNT_IDENTITY, "bucket": "shared",
-                      "observed_at": NOW.isoformat(), "source": "fixture",
+                      "observed_at": NOW.isoformat(), "source": "supported_metadata",
                       "confidence": "observed", "unknowns": [],
                       "windows": [{"name": "hour", "remaining_percent": 80}]}
         self.headless = False
         self.actual_identity = None
+        self.start_receipt = None
 
     def establish(self, route, model_policy, *, child_delegation=False):
         observed_identity = self.actual_identity or route.get("account")
@@ -51,25 +52,35 @@ class FakePort:
                           "identity_digest": observed_identity},
                 "billing": {"observed": "subscription", "approved": "included"}}
 
-    def read_native(self, owner, *, route=None, establishment=None, authority_runs=()):
+    def read_native(self, owner, *, route=None, establishment=None, authority_runs=(),
+                    assignments=()):
         rows = []
-        for dispatch, item in self.workers.items():
-            rows.append({"dispatchId": dispatch, "runId": item["run"],
-                         "taskId": item["task"], "terminalState": "active"})
+        for admission in assignments:
+            binding = admission["native_binding"]
+            item = self.workers.get(binding["dispatchId"])
+            if item is None:
+                continue
+            rows.append({"admission_id": admission["admission_id"], "runtime": self.runtime,
+                         "run_id": binding["runId"], "task_id": binding["taskId"],
+                         "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
+                         "settled": item.get("state") in
+                         ("succeeded", "failed", "stopped", "canceled", "abandoned")})
         authoritative = bool(authority_runs)
         return {"runtime": self.runtime, "authoritative": authoritative,
                 "owner": owner if authoritative else None,
-                "scope": "all_runs", "complete": True,
-                "workers": rows, "cross_host": False, "atomic_admission": False,
+                "scope": "objective_assignments", "complete": True,
+                "assignments": rows, "physical_capacity": "unavailable",
                 "quota": self.quota}
 
     def start_worker(self, *, run, task, owner, route, worktree="current", retry_request=None):
         if retry_request is not None:
             self.retry_requests.append(retry_request)
         self.starts.append((run, task, worktree))
+        if self.start_receipt is not None:
+            return dict(self.start_receipt)
         dispatch = "dispatch" if not self.workers else f"dispatch-{len(self.workers) + 1}"
         self.workers[dispatch] = {"run": run, "task": task, "route": dict(route),
-                                  "worktree": worktree}
+                                  "worktree": worktree, "state": "ready"}
         return {"runtime": self.runtime, "request_uuid": retry_request or REQUEST_UUID,
                 "runId": run, "taskId": task, "dispatchId": dispatch, "state": "ready"}
 
@@ -99,7 +110,7 @@ class FakePort:
         item = self.workers[dispatch]
         requested = {key: item["route"][key] for key in ("agent", "model", "effort")}
         worker = {"dispatchId": dispatch, "worktreeId": item["worktree"],
-                  "state": "ready",
+                  "state": item["state"],
                   "startOptions": {"launch": {"requested": requested,
                                                   "effective": requested}}}
         if not self.headless:
@@ -173,7 +184,7 @@ models:
 def start(project, assessment, capabilities, quotas, frozen, port, *, task="task"):
     return guarded_start(project, "objective", owner="owner", run="run", task=task,
                          assessment=assessment, capabilities=capabilities, quotas=quotas,
-                         occupancy={}, plan_revision="plan", frozen_packet=frozen,
+                         plan_revision="plan", frozen_packet=frozen,
                          worktree="current", port=port, now=NOW)
 
 
@@ -197,6 +208,51 @@ class AdmissionTests(unittest.TestCase):
             row = result["admission"]
             self.assertEqual(row["request_uuid"], REQUEST_UUID)
             self.assertEqual(row["native_binding"]["dispatchId"], "dispatch")
+
+    def test_objective_fanout_admits_two_blocks_third_and_settlement_frees_slot(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            first = start(project, assessment, capabilities, quotas, frozen, port, task="one")
+            start(project, assessment, capabilities, quotas, frozen, port, task="two")
+            with self.assertRaises(PodError) as full:
+                start(project, assessment, capabilities, quotas, frozen, port, task="three")
+            self.assertEqual(full.exception.code, "logical_capacity_full")
+            dispatch = first["admission"]["native_binding"]["dispatchId"]
+            port.workers[dispatch]["state"] = "succeeded"
+            third = start(project, assessment, capabilities, quotas, frozen, port, task="three")
+            self.assertEqual(third["status"], "bound")
+            self.assertIn("terminal-" + dispatch,
+                          port.show_worker(dispatch)["result"]["worker"]["agentTerminalHandle"])
+
+    def test_native_capacity_full_is_durable_deferred_not_a_binding_or_retry(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            port.start_receipt = {"runtime": "runtime", "exit": 1,
+                                  "request_uuid": REQUEST_UUID, "state": "deferred",
+                                  "error": {"code": "capacity_full", "message": "full"}}
+            first = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(first["status"], "deferred")
+            self.assertIsNone(first["admission"]["native_binding"])
+            self.assertEqual(first["admission"]["request_uuid"], REQUEST_UUID)
+            second = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(second["status"], "deferred")
+            self.assertEqual(len(port.starts), 1)
+
+    def test_capacity_full_with_partial_effect_evidence_remains_unresolved(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            port.start_receipt = {"runtime": "runtime", "exit": 1,
+                                  "request_uuid": REQUEST_UUID, "state": "deferred",
+                                  "dispatchId": "partial-dispatch",
+                                  "error": {"code": "capacity_full", "message": "full"}}
+            result = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(result["status"], "unresolved")
+            self.assertIsNone(result["admission"]["native_binding"])
+            self.assertEqual(result["admission"]["error"]["code"],
+                             "native_capacity_refusal_unverified")
 
     def test_unapproved_policy_stops_before_native_effect(self):
         with fixture() as root:
@@ -361,7 +417,7 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(PodError) as task_limit:
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
                               assessment=assessment, capabilities=capabilities, quotas=quotas,
-                              occupancy={}, plan_revision="plan", frozen_packet=frozen,
+                              plan_revision="plan", frozen_packet=frozen,
                               task_policy={"schema": "pod/v1", "policy": {"max_workers": 0}},
                               port=port, now=NOW)
             self.assertEqual(task_limit.exception.code, "policy_revision_mismatch")
@@ -428,7 +484,7 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(PodError) as caught:
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
                               assessment=assessment, capabilities=capabilities, quotas=quotas,
-                              occupancy={}, plan_revision="plan", frozen_packet=frozen,
+                              plan_revision="plan", frozen_packet=frozen,
                               capacity=4, exceptional_grant=grant, task_policy=task_policy,
                               port=port, now=NOW)
             self.assertEqual(caught.exception.code, "capacity_ceiling")
@@ -437,7 +493,7 @@ class AdmissionTests(unittest.TestCase):
             personal_packet = packet({**frozen["body"], "policy_revision": personal_revision})
             allowed = guarded_start(project, "objective", owner="owner", run="run",
                                     task="task-positive", assessment=assessment,
-                                    capabilities=capabilities, quotas=quotas, occupancy={},
+                                    capabilities=capabilities, quotas=quotas,
                                     plan_revision="plan", frozen_packet=personal_packet,
                                     capacity=4, exceptional_grant=grant, port=port, now=NOW)
             self.assertEqual(allowed["status"], "bound")
@@ -469,7 +525,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "source_unbound")
             self.assertEqual(port.starts, [])
 
-    def test_concurrent_objectives_share_one_unknown_account_allowance(self):
+    def test_independent_objectives_ignore_foreign_history_under_unknown_quota(self):
         with fixture() as root:
             project, assessment, capabilities, _, frozen = setup_case(root)
             revision = effective(project)["revision"]
@@ -487,7 +543,7 @@ class AdmissionTests(unittest.TestCase):
                 try:
                     guarded_start(project, objective, owner="owner", run="run", task=task_name,
                                   assessment=assessment, capabilities=capabilities, quotas={},
-                                  occupancy={}, plan_revision="plan", frozen_packet=selected_packet,
+                                  plan_revision="plan", frozen_packet=selected_packet,
                                   port=port, now=NOW)
                     return "admitted"
                 except PodError as exc:
@@ -496,7 +552,7 @@ class AdmissionTests(unittest.TestCase):
                 futures = [pool.submit(attempt, row) for row in (
                     ("objective", "task-one", frozen), ("second", "task-two", second_packet))]
                 outcomes = [future.result(timeout=5) for future in futures]
-            self.assertEqual(sorted(outcomes), ["admitted", "unknown_quota_capacity"])
+            self.assertEqual(outcomes, ["admitted", "admitted"])
 
     def test_worker_identity_or_launch_contradiction_cannot_bind(self):
         with fixture() as root:
@@ -533,69 +589,25 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(result["request_uuid"], REQUEST_UUID)
         self.assertIn("--retry-request", command.call_args.args[0])
 
-    def test_native_read_enumerates_every_stable_run_before_claiming_complete_fleet(self):
-        with fixture() as root:
-            project, assessment, capabilities, quotas, frozen = setup_case(root)
-            port = FakePort()
-            start(project, assessment, capabilities, quotas, frozen, port)
-            checkpoint_value = read(project, "objective")["checkpoint"]
-            checkpoint_value["native_refs"] = [{"runId": "checkpoint-run"}]
-            checkpoint(project, "objective", owner="owner", value=checkpoint_value,
-                       native={"runtime": "runtime"})
-            pages = {
-                "checkpoint-run": {"runtime": "runtime", "scope": {"source": "flag"},
-                                   "complete": True, "workers": []},
-                "foreign-run": {"runtime": "runtime", "scope": {"source": "flag"},
-                                "complete": True, "workers": [
-                                    {"dispatchId": "foreign", "runId": "foreign-run",
-                                     "taskId": "foreign-task", "terminalState": "active"}]},
-                "run": {"runtime": "runtime", "scope": {"source": "flag"},
-                        "complete": True, "workers": []},
-            }
-            for selected, page in pages.items():
-                page["scope"]["run"] = selected
-            inventory = {"runtime": "runtime", "complete": True,
-                         "runs": [{"id": selected} for selected in pages]}
-            with (patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}),
-                  patch("pod.operations.run_rows", return_value=inventory) as run_inventory,
-                  patch("pod.operations.worker_rows", side_effect=lambda selected: pages[selected])
-                  as rows,
-                  patch("pod.operations._quota_snapshot", return_value=None)):
-                native = OrcaPort(project).read_native("owner")
-            self.assertEqual(native["scope"], "all_runs")
-            self.assertEqual({call.args[0] for call in rows.call_args_list},
-                             {"checkpoint-run", "foreign-run", "run"})
-            self.assertEqual(run_inventory.call_count, 2)
-            self.assertEqual(native["workers"][0]["dispatchId"], "foreign")
-
-    def test_native_read_fails_closed_on_run_inventory_or_scope_change(self):
-        inventory = {"runtime": "runtime", "complete": True, "runs": [{"id": "run"}]}
-        changed = {"runtime": "runtime", "complete": True,
-                   "runs": [{"id": "run"}, {"id": "foreign-run"}]}
-        with patch("pod.operations.run_rows", side_effect=[inventory, changed]), \
-             patch("pod.operations.worker_rows", return_value={
-                 "runtime": "runtime", "scope": {"source": "flag", "run": "run"},
-                 "complete": True, "workers": []}):
-            with self.assertRaises(PodError) as caught:
-                OrcaPort().read_native("owner")
-        self.assertEqual(caught.exception.code, "native_occupancy_unverified")
-        with patch("pod.operations.run_rows", return_value=inventory), \
-             patch("pod.operations.worker_rows", return_value={
-                 "runtime": "runtime", "scope": {"source": "bound", "run": "run"},
-                 "complete": True, "workers": []}):
-            with self.assertRaises(PodError) as caught:
-                OrcaPort().read_native("owner")
-        self.assertEqual(caught.exception.code, "native_occupancy_unverified")
+    def test_policy_evidence_never_enumerates_the_fleet(self):
+        row = {"id": "run", "coordinator_handle": "owner", "consumer_generation": 3}
+        current = {"runtime": "runtime", "run": row}
+        with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
+             patch("pod.operations.current_run", return_value=current), \
+             patch("pod.operations.worker_rows", side_effect=AssertionError("fleet read forbidden")):
+            native = OrcaPort().read_native("owner", authority_runs=("run",))
+        self.assertEqual(native["scope"], "objective_assignments")
+        self.assertEqual(native["assignments"], [])
+        self.assertEqual(native["physical_capacity"], "unavailable")
 
     def test_fresh_account_read_never_relabels_a_rotated_identity(self):
         route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
                  "account": ACCOUNT_IDENTITY, "bucket": "default", "effort": "high"}
         established = FakePort().establish(route, {"billing": "included"})
-        empty_inventory = {"runtime": "runtime", "complete": True, "runs": []}
         rotated = {"runtime": "runtime", "providers": {"codex": {
             "managed_accounts": 0, "default_identity": "b" * 64,
             "default_auth": "oauth", "default_has_auth": True, "windows": {}}}}
-        with patch("pod.operations.run_rows", return_value=empty_inventory), \
+        with patch("pod.operations.contract", return_value={"status": "observed", "runtime": "runtime"}), \
              patch("pod.operations.account_metadata_raw", return_value=rotated), \
              patch("pod.operations.agent_login_mode", return_value={
                  "auth": "oauth", "subscription": True, "identity_digest": "b" * 64}), \
@@ -608,7 +620,7 @@ class BoundaryTests(unittest.TestCase):
             "default_auth": "oauth", "default_has_auth": True,
             "updated_at_ms": NOW.timestamp() * 1000,
             "windows": {"session": {"usedPercent": 20, "resetsAt": None}}}}}
-        with patch("pod.operations.run_rows", return_value=empty_inventory), \
+        with patch("pod.operations.contract", return_value={"status": "observed", "runtime": "runtime"}), \
              patch("pod.operations.account_metadata_raw", return_value=current), \
              patch("pod.operations.agent_login_mode", return_value={
                  "auth": "api_key", "subscription": False,
@@ -625,15 +637,11 @@ class BoundaryTests(unittest.TestCase):
             checkpoint(project, "objective", owner="owner", value=checkpoint_value,
                        native={"runtime": "runtime"})
             row = {"id": "run", "coordinator_handle": "owner", "consumer_generation": 3}
-            inventory = {"runtime": "runtime", "complete": True, "runs": [row]}
-            page = {"runtime": "runtime", "scope": {"source": "flag", "run": "run"},
-                    "complete": True, "workers": []}
             no_run = {"runtime": "runtime", "run": None}
             base = {"project": str(project), "objective": "objective", "owner": "owner"}
             with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
-                 patch("pod.operations.run_rows", return_value=inventory), \
-                 patch("pod.operations.worker_rows", return_value=page), \
                  patch("pod.operations.current_run", return_value=no_run), \
+                 patch("pod.operations.contract", return_value={"status": "observed", "runtime": "runtime"}), \
                  patch("pod.governor.observe_candidate") as observer, \
                  patch("pod.governor.execute") as executor:
                 with self.assertRaises(PodError) as blocked:
@@ -664,18 +672,14 @@ class BoundaryTests(unittest.TestCase):
                            "policy_revision": effective(project)["revision"]}
             current = {"runtime": "runtime", "run": row}
             with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
-                 patch("pod.operations.run_rows", return_value=inventory), \
-                 patch("pod.operations.worker_rows", return_value=page), \
                  patch("pod.operations.current_run", return_value=current), \
+                 patch("pod.operations.worker_rows", side_effect=AssertionError("fleet read forbidden")), \
                  patch("pod.governor.observe_candidate", return_value=observation):
                 prepared = helper_run("governor-prepare", {**base, "unit": "unit"})
             self.assertEqual(prepared["status"], "prepared")
 
     def test_native_authority_rejects_wrong_run_owner_runtime_and_changing_binding(self):
         owner_row = {"id": "run", "coordinator_handle": "owner", "consumer_generation": 2}
-        inventory = {"runtime": "runtime", "complete": True, "runs": [owner_row]}
-        page = {"runtime": "runtime", "scope": {"source": "flag", "run": "run"},
-                "complete": True, "workers": []}
         cases = {
             "wrong_run": [{"runtime": "runtime", "run": {**owner_row, "id": "other"}}] * 2,
             "wrong_owner": [{"runtime": "runtime", "run": {
@@ -686,27 +690,23 @@ class BoundaryTests(unittest.TestCase):
         for name, bindings in cases.items():
             with self.subTest(name=name), \
                  patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
-                 patch("pod.operations.run_rows", return_value=inventory), \
-                 patch("pod.operations.worker_rows", return_value=page), \
                  patch("pod.operations.current_run", side_effect=bindings):
                 native = OrcaPort().read_native("owner", authority_runs=("run",))
             self.assertFalse(native["authoritative"])
             self.assertIsNone(native["owner"])
         with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}), \
-             patch("pod.operations.run_rows", return_value=inventory), \
-             patch("pod.operations.worker_rows", return_value=page), \
              patch("pod.operations.current_run", side_effect=[
                  {"runtime": "other", "run": owner_row},
-                 {"runtime": "other", "run": owner_row}]), \
-             self.assertRaises(PodError) as runtime:
-            OrcaPort().read_native("owner", authority_runs=("run",))
-        self.assertEqual(runtime.exception.code, "orca_runtime_changed")
+                 {"runtime": "other", "run": owner_row}]):
+            native = OrcaPort().read_native("owner", authority_runs=("run",))
+        self.assertEqual(native["runtime"], "other")
 
     def test_governor_mutations_require_native_owner_and_runtime_but_status_is_read_only(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
             unowned = {"runtime": "runtime", "authoritative": False, "owner": None,
-                       "scope": "all_runs", "complete": True, "workers": []}
+                       "scope": "objective_assignments", "complete": True,
+                       "assignments": [], "physical_capacity": "unavailable"}
             requests = {
                 "governor-prepare": {"unit": "unit"},
                 "governor": {"action": {}},
