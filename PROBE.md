@@ -6,3 +6,5 @@ Deleted after its evidence is recorded.
 Second probe commit: creates a validation that a third commit supersedes.
 
 Third probe commit: supersedes the second.
+
+Fourth probe commit: supersedes a run that is still in flight.
