@@ -151,7 +151,10 @@ def _upgrade_legacy(value: dict) -> dict:
             "cancel_safe": False, "effects": [],
             "receipt": {"started_at": row.get("at"), "finished_at": None, "observed_elapsed_s": None,
                         "provider": None, "evidence": [], "detail": None},
-            "classification": None, "classifications": [], "attached_to": None})
+            "classification": None, "classifications": [], "attached_to": None,
+            # Marked at the point the binding is discarded, so nothing downstream has to
+            # infer from a null candidate whether a row was bound or merely carried over.
+            "legacy": True})
     return journal
 
 
@@ -602,7 +605,19 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
             _reason(reasons, "efficiency", "publication_unsettled",
                     f"{starting[-1]['action']['kind']} {starting[-1]['record_id'][:12]} will start this workflow "
                     "once it lands; settle it first")
-    if latest is not None and not superseded:
+    if latest is not None and not superseded and latest.get("legacy"):
+        # A pod-governor/v1 row records that something happened, not what it was bound to:
+        # the upgrade discards commit, workflow, base and environment because v1 never froze
+        # them. Reusing it would answer "is doing this again useful?" with evidence that
+        # cannot show it is the same work, so the row stays visible and the action proceeds.
+        _warn(warnings, "legacy_evidence_ignored",
+              f"{latest['record_id'][:12]} was carried forward from a pod-governor/v1 journal; "
+              "it binds no candidate or context, so it is history rather than proof")
+        if latest["outcome"] in ("pending", "UNKNOWN"):
+            _reason(reasons, "correctness", "effect_unresolved",
+                    f"attempt {latest['attempt']} of this action was carried forward from a "
+                    "pod-governor/v1 journal with no settled outcome and no provider to read back")
+    elif latest is not None and not superseded:
         if latest["outcome"] == "pending":
             reuse = {"record_id": latest["record_id"], "kind": "attach",
                      "detail": "an identical action is already running"}

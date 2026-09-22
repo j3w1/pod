@@ -28,6 +28,8 @@ A publication that triggers a workflow is itself the validation: when a push or 
 
 After a remote failure, classify it with `internal governor-classify` before considering another expensive attempt: `code_defect` returns to local convergence and is recorded as a correction through the ledger's own intervention rule, so a third equivalent correction requires a diagnosis naming distinct bounded evidence; `remote_only` asks for a bounded diagnostic naming the question, the local limitation, the smallest discriminating check and its stopping condition; `transient` permits the configured bounded retry; `external` reports a blocker instead of treating application code as broken. An unclassified failure defers the next attempt.
 
+A `pod-governor/v1` journal is carried forward in place, but its rows are marked and never reused: the upgrade cannot supply the commit, tree, workflow digests, base or environment that v1 never froze, so such a row records that something happened rather than what it covered. A matching logical key therefore yields `ALLOW` with a `legacy_evidence_ignored` warning rather than `REUSE`, and a v1 row still `pending` or `UNKNOWN` defers as an unresolved effect, because v1 recorded no provider or run identity to read back.
+
 Supersedence cancels only a pending, cancel-safe validation of a superseded candidate in the same unit, and only when `waste_governor.cancel_superseded_validation` allows it. A deployment, migration, merge, release or worker is never canceled this way; worker lifecycle stays with Orca. A superseded run's result can never approve the newer candidate, because evidence is keyed by candidate identity.
 
 ## Exceptions, modes and enforcement

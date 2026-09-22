@@ -103,7 +103,13 @@ workflow it triggers, so the run a push starts is attached to rather than double
 dispatch. Every row carries its own commit, so a superseded generation is read back by that
 commit and never by the unit's current candidate. The journal keeps at most 96 rows within a
 256 KB record; a `pod-governor/v1` journal above that bound is carried forward by keeping
-every open row and the newest settled ones, and the number dropped is recorded in its counters. What it does not prove: that a worker or shell
+every open row and the newest settled ones, and the number dropped is recorded in its
+counters. A carried-forward v1 row is history, not proof: the upgrade has no commit, tree,
+workflow or environment to bind it to, so such a row is marked and never reused as evidence
+even when its logical key matches, and one left running defers as unresolved rather than
+being attached to a run nothing can read back.
+
+What it does not prove: that a worker or shell
 holding the same credentials used the governed path. The enforcement level says `advisory`
 until the owner's personal policy declares a host control, and it is recorded at the
 owner-configuration tier because Pod cannot verify it. Live `gh` behaviour against a real

@@ -829,6 +829,14 @@
       ],
       "offline_test": "tests.test_governor.PolicyTests.test_enforcement_is_advisory_unless_the_host_declares_control",
       "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A100",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.RecoveryTests.test_a_v1_pass_is_not_promoted_to_v2_proof",
+      "candidate_status": "NOT_RUN"
     }
   ]
 }

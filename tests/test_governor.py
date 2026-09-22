@@ -911,6 +911,61 @@ class ExecutorTests(GovernorCase):
 
 
 class RecoveryTests(GovernorCase):
+    def legacy_journal(self, kind, outcome, target=TARGET):
+        """Replace the journal with a pod-governor/v1 one holding a row for this action.
+
+        The row is spelled so the upgrade produces the *same* logical key the request
+        below computes — same kind, unit, candidate, target and effects. That collision is
+        the whole risk: a v1 row that could not be matched could never be misused.
+        """
+        from pod.governor import _record_path
+        from pod.util import atomic_json
+        atomic_json(_record_path(self.project, "objective"), {
+            "schema": "pod-governor/v1", "revision": 1, "actions": [
+                {"record_id": "carried-forward", "action": {"kind": kind, "candidate": COMMIT,
+                                                            "target": target, "reason": "v1"},
+                 "decision": "ALLOW", "phase": "candidate", "at": "2026-09-20T00:00:00+00:00",
+                 "outcome": outcome, "inputs": "i", "override": None, "reasons": []}]})
+
+    def settled_objective(self):
+        """A converged unit with nothing outstanding, so only the v1 row is under test."""
+        binding = self.prepared()["candidate"]
+        self.preflight(binding["id"])
+        pushed = self.decide(action(candidate=binding["id"]))
+        record_outcome(self.project, "objective", owner="owner",
+                       record_id=pushed["record_id"], outcome="PASS")
+
+    def test_a_v1_pass_is_not_promoted_to_v2_proof(self):
+        """The upgrade nulls commit, workflow, base and environment, because v1 froze none
+        of them. A row that cannot show it covers the same work is not evidence that the
+        work need not be repeated, however exactly the logical key happens to match."""
+        self.settled_objective()
+        self.legacy_journal("workflow_dispatch", "PASS", target="ci.yml")
+        decided = self.decide(dispatch(unit="default"))
+        self.assertEqual(decided["decision"], "ALLOW")
+        self.assertIsNone(decided["reuse"])
+        self.assertIn("legacy_evidence_ignored", [w["code"] for w in decided["warnings"]])
+
+    def test_a_v1_completed_publication_is_not_reused_either(self):
+        self.settled_objective()
+        self.legacy_journal("push", "PASS")
+        decided = self.decide(action(unit="default"))
+        self.assertEqual((decided["decision"], decided["reuse"]), ("ALLOW", None))
+        self.assertIn("legacy_evidence_ignored", [w["code"] for w in decided["warnings"]])
+
+    def test_a_v1_row_left_running_is_unresolved_rather_than_attached(self):
+        """v1 recorded no provider or run identity, so there is nothing to attach to and
+        nothing reconciliation could read back. Deferring says so instead of pretending."""
+        for outcome in ("pending", "UNKNOWN"):
+            with self.subTest(outcome):
+                self.setUp()
+                self.settled_objective()
+                self.legacy_journal("workflow_dispatch", outcome, target="ci.yml")
+                decided = self.decide(dispatch(unit="default"))
+                self.assertEqual(decided["decision"], "DEFER")
+                self.assertIn("effect_unresolved", [r["code"] for r in decided["reasons"]])
+                self.assertIsNone(decided["reuse"])
+
     def test_state_survives_a_restart_and_a_legacy_journal(self):
         binding = self.prepared()["candidate"]
         self.preflight(binding["id"])
@@ -939,6 +994,8 @@ class RecoveryTests(GovernorCase):
         upgraded = status(self.project, "objective")
         self.assertEqual(upgraded["actions"][0]["decision"], "ALLOW")
         self.assertEqual(upgraded["units"], {})
+        # effects=[] differs from the null the upgrade writes, so this request does not
+        # collide with the carried-forward row at all; the colliding case is covered above.
         self.assertEqual(self.decide(action(unit="default", effects=[]))["decision"], "ALLOW")
         self.assertEqual(status(self.project, "objective")["actions"][0]["record_id"], "old")
         crowded = {**legacy, "actions": [{**legacy["actions"][0], "record_id": f"old{index}",

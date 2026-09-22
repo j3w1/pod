@@ -322,6 +322,7 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A97 | An independent or urgent delivery unit is admitted while another unit's workers, deliveries or corrections are unsettled. |
 | A98 | A project file that relaxes the governor mode, widens the retry budget, enables cancellation, declares host control or adds an exception grant is refused as authority expansion. |
 | A99 | The enforcement level is reported as advisory unless the owner's personal policy declares a host control, and it is never reported as a proven control. |
+| A100 | A `pod-governor/v1` row carried forward by the upgrade is marked and never reused as evidence, because the migration cannot supply the candidate and context binding v1 never froze; one left pending or UNKNOWN defers as an unresolved effect rather than attaching to a run with no provider identity. |
 
 ## Implementation sequence and verification
 
