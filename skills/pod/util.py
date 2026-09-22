@@ -91,9 +91,9 @@ def bounded_json(path: Path, *, limit: int = MAX_RECORD) -> Any:
         raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
 
 
-def atomic_json(path: Path, value: Any) -> None:
+def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD) -> None:
     data = json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False).encode() + b"\n"
-    if len(data) > MAX_RECORD:
+    if len(data) > limit:
         raise PodError("record_too_large", "Record exceeds its size limit")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.parent.is_symlink():

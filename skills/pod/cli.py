@@ -17,7 +17,7 @@ import yaml
 from .bundle import bundle_root, version
 from .config import DEFAULT, effective, personal_path, route_identity
 from .errors import PodError
-from .ledger import context_for_run
+from .ledger import context_root_for_run
 from .orca import (account_metadata, account_metadata_raw, agent_login_mode, contract, executable,
                    hosts, read_command, route_establishment, worker_rows)
 from .setup import inspect, setup, skills_cli_entry
@@ -86,8 +86,13 @@ def _status(root: Path, run: str | None) -> dict:
         attention_value = projection.get("attention") if isinstance(projection, dict) else None
         if isinstance(attention_value, dict) and attention_value.get("requiresAction"):
             attention += 1
+    governor = "unknown"
     try:
-        context = context_for_run(run)
+        context_root = context_root_for_run(run)
+        context = _read_context(context_root)
+        if context_root is not None:
+            from .governor import status_at
+            governor = _governor_projection(status_at(context_root, project=root))
     except PodError as exc:
         context = {"error": exc.code}
     checkpoint_value = context.get("checkpoint") if isinstance(context, dict) else None
@@ -100,7 +105,33 @@ def _status(root: Path, run: str | None) -> dict:
             "route_decisions": checkpoint_value.get("route_decisions", "unknown") if checkpoint_value else "unknown",
             "quota_visibility": checkpoint_value.get("quota_visibility", "unknown") if checkpoint_value else "unknown",
             "next_safe_action": checkpoint_value.get("next_safe_action") if checkpoint_value else "inspect native Run",
+            "governor": governor,
             "usage": "unknown", "cost": "unknown"}
+
+
+def _read_context(context_root: Path | None) -> dict | None:
+    from .ledger import _read
+
+    return _read(context_root / "context.json") if context_root is not None else None
+
+
+def _governor_projection(projection: dict) -> dict:
+    """The compact governor facts a status reader acts on: unit, candidate, blocker, activity."""
+    units = {}
+    for name, unit in projection.get("units", {}).items():
+        candidate = unit.get("candidate")
+        units[name] = {"generation": unit["generation"],
+                       "candidate": candidate["commit"][:12] if candidate else None,
+                       "preflight": unit["preflight"],
+                       "last_decision": (unit["last_decision"] or {}).get("decision"),
+                       "blocker": unit.get("blocker"), "next_action": unit.get("next_action"),
+                       "active_validation": len(unit["active_validation"]),
+                       "unresolved": len(unit["unresolved"])}
+    return {"mode": projection.get("mode"), "enforcement": projection.get("enforcement", {}).get("level"),
+            "phase": projection["phase"], "units": units,
+            "counters": {key: projection["counters"][key] for key in
+                         ("decisions", "attachments", "evidence_reused", "cancellations",
+                          "failures_interrupted", "observed_deferrals")}}
 
 
 def _bundle_report() -> dict:

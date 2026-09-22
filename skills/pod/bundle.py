@@ -12,9 +12,10 @@ from .errors import PodError
 
 BUNDLE_TEXT = ("SKILL.md", "agents/openai.yaml", "scripts/pod.py",
                "references/planning.md", "references/routing.md",
-               "references/native-effects.md", "references/verification.md")
+               "references/native-effects.md", "references/verification.md",
+               "references/governor.md")
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "bundle.py", "cli.py", "config.py", "context.py",
-                  "errors.py", "governor.py", "internal.py", "ledger.py", "operations.py",
+                  "errors.py", "github.py", "governor.py", "internal.py", "ledger.py", "operations.py",
                   "orca.py", "quota.py", "records.py", "release.py", "routing.py", "setup.py",
                   "skill_validation.py", "util.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))

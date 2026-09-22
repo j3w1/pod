@@ -88,17 +88,73 @@ def run(operation: str, request: dict) -> dict:
         return checkpoint(Path(request["project"]), request["objective"], owner=request["owner"],
                           value=request["value"], native={"runtime": snapshot["runtime"]})
     if operation == "governor":
-        exact(request, {"project", "objective", "owner", "action", "override"},
+        exact(request, {"project", "objective", "owner", "action", "exception"},
               {"project", "objective", "owner", "action"}, name="request")
         from .governor import decide
         return decide(Path(request["project"]), request["objective"], owner=request["owner"],
-                      action=request["action"], override=request.get("override"))
+                      action=request["action"], exception=request.get("exception"))
     if operation == "governor-outcome":
-        exact(request, {"project", "objective", "owner", "record_id", "outcome"},
+        exact(request, {"project", "objective", "owner", "record_id", "outcome", "provider", "evidence", "detail"},
               {"project", "objective", "owner", "record_id", "outcome"}, name="request")
         from .governor import record_outcome
         return record_outcome(Path(request["project"]), request["objective"], owner=request["owner"],
-                              record_id=request["record_id"], outcome=request["outcome"])
+                              record_id=request["record_id"], outcome=request["outcome"],
+                              provider=request.get("provider"), evidence=request.get("evidence"),
+                              detail=request.get("detail"))
+    if operation == "governor-prepare":
+        exact(request, {"project", "objective", "owner", "unit", "branch", "tasks", "base_ref",
+                        "workflows", "verification", "toolchain", "environment"},
+              {"project", "objective", "owner", "unit"}, name="request")
+        from .governor import observe_candidate, prepare_candidate
+        project = Path(request["project"])
+        # Commit and tree are read from Git here. A caller cannot hand in the candidate it
+        # wants validated, because that identity is what every later reuse rests on.
+        observation = observe_candidate(project, base_ref=request.get("base_ref", "origin/main"),
+                                        workflows=request.get("workflows"),
+                                        verification=request.get("verification"),
+                                        toolchain=request.get("toolchain"),
+                                        environment=request.get("environment"))
+        return prepare_candidate(project, request["objective"], owner=request["owner"], unit=request["unit"],
+                                 observation=observation, branch=request.get("branch"),
+                                 tasks=request.get("tasks"))
+    if operation == "governor-preflight":
+        exact(request, {"project", "objective", "owner", "unit", "candidate", "check", "status", "report"},
+              {"project", "objective", "owner", "unit", "candidate", "check", "status"}, name="request")
+        from .governor import record_preflight
+        return record_preflight(Path(request["project"]), request["objective"], owner=request["owner"],
+                                unit=request["unit"], candidate=request["candidate"], check=request["check"],
+                                status=request["status"], report=request.get("report"))
+    if operation == "governor-classify":
+        exact(request, {"project", "objective", "owner", "record_id", "classification"},
+              {"project", "objective", "owner", "record_id", "classification"}, name="request")
+        from .governor import classify_failure
+        return classify_failure(Path(request["project"]), request["objective"], owner=request["owner"],
+                                record_id=request["record_id"], classification=request["classification"])
+    if operation == "governor-correct":
+        exact(request, {"project", "objective", "owner", "unit", "correction", "diagnosis"},
+              {"project", "objective", "owner", "unit", "correction"}, name="request")
+        from .governor import record_correction
+        return record_correction(Path(request["project"]), request["objective"], owner=request["owner"],
+                                 unit=request["unit"], correction=request["correction"],
+                                 diagnosis=request.get("diagnosis"))
+    if operation == "governor-execute":
+        exact(request, {"project", "objective", "owner", "action", "exception", "pull_request"},
+              {"project", "objective", "owner", "action"}, name="request")
+        from .governor import execute
+        # The production port is the installed gh and git; request JSON cannot supply one.
+        return execute(Path(request["project"]), request["objective"], owner=request["owner"],
+                       action=request["action"], exception=request.get("exception"),
+                       pull_request=request.get("pull_request"))
+    if operation == "governor-reconcile":
+        exact(request, {"project", "objective", "owner", "record_id"},
+              {"project", "objective", "owner", "record_id"}, name="request")
+        from .governor import reconcile
+        return reconcile(Path(request["project"]), request["objective"], owner=request["owner"],
+                         record_id=request["record_id"])
+    if operation == "governor-status":
+        exact(request, {"project", "objective"}, {"project", "objective"}, name="request")
+        from .governor import status
+        return status(Path(request["project"]), request["objective"])
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task", "operation_id",
                         "assessment", "capabilities", "quotas", "occupancy", "plan_revision",
@@ -160,7 +216,10 @@ def main(argv: list[str] | None = None) -> int:
                                                "checkpoint", "admission", "reconcile-launch",
                                                "delivery", "delivery-ack", "release",
                                                "reconcile-release", "release-gate",
-                                               "governor", "governor-outcome"))
+                                               "governor", "governor-outcome", "governor-prepare",
+                                               "governor-preflight", "governor-classify",
+                                               "governor-correct", "governor-execute",
+                                               "governor-reconcile", "governor-status"))
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
