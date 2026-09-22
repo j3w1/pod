@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0 — 2026-09-22
+
+- The governor is now a waste-governor kernel: a small deterministic control layer inside the
+  existing execution path that prevents a still-converging piece of work from repeatedly
+  crossing the pull-request, CI and release boundary. Work is grouped into delivery units,
+  each with explicitly prepared candidate generations bound to commit, tree, base, workflow
+  digests, verification commands, toolchain, environment and policy revision, so a changed
+  workflow or base is a new candidate even on the same commit. Decisions are ALLOW, REUSE or
+  DEFER with the reason and the next useful action; WARN is an annotation. What an action
+  triggers is judged rather than its verb, so a push that starts CI is validation and needs
+  the configured local preflight first.
+- `internal governor-execute` admits and performs push, pull-request reuse or creation,
+  workflow dispatch, rerun and cancellation against the bound commit through an exact `git`
+  and `gh` allowlist; a lost response stays UNKNOWN and `internal governor-reconcile` settles
+  it from readback without resubmitting. Two callers requesting the same validation admit one
+  execution. A push that triggers CI journals the run it started, so a later dispatch of the
+  same workflow attaches to it instead of doubling it. Supersedence cancels only a pending,
+  cancel-safe validation, never a deployment or a worker.
+- A remote failure is classified before another attempt: a code defect goes through the
+  ledger's existing intervention rule, so a third equivalent correction needs a diagnosis; a
+  remote-only question gets a bounded diagnostic; a transient failure gets the configured
+  retry; an external blocker is reported as one.
+- `waste_governor` joins the personal and project policy: mode, consolidation, cancellation
+  authority, retry budget, preflight checks, trigger mapping, a host-control declaration and
+  scoped exception grants. A project may only narrow it. The enforcement level is reported
+  as advisory unless the owner declares a host control, and never as a proven sandbox.
+- `status` and `internal governor-status` show units, candidates, preflight, the last decision
+  and blocker, active and unresolved validation, counters, enforcement and a read-only trigger
+  proposal discovered from the repository's workflows.
+
 ## 0.1.2
 
 - `doctor` reports a skill where it actually is. An agent reads the conventional

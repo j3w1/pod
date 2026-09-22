@@ -20,6 +20,16 @@ EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approval_route", "billing", "efforts", "capabilities", "locations"}
 POLICY_FIELDS = {"max_workers", "ordinary_max", "allowed_agents", "allowed_accounts", "allowed_locations", "quota_low", "quota_critical", "quota_fresh_seconds", "retain_idle_minutes", "child_delegation", "review", "spending_grants", "reset_grants", "exceptional_grants"}
 ROUTE_FIELDS = {"model", "effort", "strict"}
+# The waste governor's operator surface. Verification and trigger mappings are project
+# knowledge; the mode, cancellation authority, retry budget, host declaration and exception
+# grants are personal authority that a project file may narrow but never widen.
+WASTE_GOVERNOR_FIELDS = {"mode", "consolidate_related_changes", "cancel_superseded_validation",
+                         "preflight", "triggers", "transient_retries", "host_control", "exceptions"}
+GOVERNOR_MODES = ("enforce", "observe")
+GOVERNED_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "remote_diagnostic",
+                  "merge", "release", "deploy", "cancel_validation")
+TRIGGER_KINDS = ("push", "pr_update")
+EFFECT_PREFIXES = ("workflow:", "deploy:", "release:")
 STARTER = {
     "luna": {"agent": "codex", "model": "gpt-5.6-luna", "approved": False, "billing": "unknown"},
     "sonnet": {"agent": "claude", "model": "sonnet", "approved": False, "billing": "unknown"},
@@ -47,6 +57,11 @@ DEFAULT = {
         "retain_idle_minutes": 30, "child_delegation": False,
         "review": "independent",
         "spending_grants": [], "reset_grants": [], "exceptional_grants": [],
+    },
+    "waste_governor": {
+        "mode": "enforce", "consolidate_related_changes": True,
+        "cancel_superseded_validation": True, "preflight": [], "triggers": {},
+        "transient_retries": 1, "exceptions": [],
     },
 }
 
@@ -114,8 +129,70 @@ def _strings(value: Any, name: str) -> list[str]:
     return value
 
 
+def validate_effects(value: Any, *, name: str = "effects") -> list[str]:
+    """A declared list of downstream effects: what an action actually triggers."""
+    if not isinstance(value, list) or len(value) > 16 or len(set(value)) != len(value):
+        raise PodError("invalid_" + name, f"{name} must be a bounded unique list")
+    for item in value:
+        if (not isinstance(item, str) or not item.startswith(EFFECT_PREFIXES)
+                or len(item) > 256 or len(item) == len(item.split(":", 1)[0]) + 1):
+            raise PodError("invalid_" + name, f"{name} entries name a workflow, deploy or release target")
+    return value
+
+
+def _validate_waste_governor(value: Any) -> dict:
+    wg = exact(value, WASTE_GOVERNOR_FIELDS, name="waste_governor")
+    if "mode" in wg and wg["mode"] not in GOVERNOR_MODES:
+        raise PodError("invalid_config", "waste_governor.mode must be enforce or observe")
+    for field in ("consolidate_related_changes", "cancel_superseded_validation"):
+        if field in wg and not isinstance(wg[field], bool):
+            raise PodError("invalid_config", f"waste_governor.{field} must be boolean")
+    if "preflight" in wg:
+        _strings(wg["preflight"], "preflight")
+    if "triggers" in wg:
+        if not isinstance(wg["triggers"], dict) or set(wg["triggers"]) - set(TRIGGER_KINDS):
+            raise PodError("invalid_config", "waste_governor.triggers maps push and pr_update only")
+        for kind, effects in wg["triggers"].items():
+            validate_effects(effects, name=f"triggers.{kind}")
+    if "transient_retries" in wg and (type(wg["transient_retries"]) is not int
+                                      or not 0 <= wg["transient_retries"] <= 3):
+        raise PodError("invalid_config", "waste_governor.transient_retries must be 0 through 3")
+    if "host_control" in wg and (not isinstance(wg["host_control"], str)
+                                 or not wg["host_control"].strip() or len(wg["host_control"]) > 512):
+        raise PodError("invalid_config", "waste_governor.host_control must name a host policy reference")
+    if "exceptions" in wg:
+        if not isinstance(wg["exceptions"], list) or len(wg["exceptions"]) > 32:
+            raise PodError("invalid_config", "waste_governor.exceptions must be a bounded list")
+        ids = [grant.get("id") for grant in wg["exceptions"] if isinstance(grant, dict)]
+        if len(ids) != len(set(ids)):
+            raise PodError("invalid_config", "waste_governor.exceptions grant ids must be unique")
+        for grant in wg["exceptions"]:
+            exact(grant, {"id", "action", "objective", "unit", "kinds", "candidate", "reason", "valid_until"},
+                  {"id", "action", "objective", "kinds", "reason", "valid_until"}, name="exception_grant")
+            for field in ("id", "objective", "reason", "valid_until"):
+                if not isinstance(grant[field], str) or not grant[field].strip() or len(grant[field]) > 512:
+                    raise PodError("invalid_config", "Exception grant identity, objective, reason and validity must be text")
+            for field in ("unit", "candidate"):
+                if field in grant and (not isinstance(grant[field], str) or not grant[field]
+                                       or len(grant[field]) > 256):
+                    raise PodError("invalid_config", f"Exception grant {field} must be text")
+            if grant["action"] != "efficiency_exception":
+                raise PodError("invalid_config", "Exception grant action must be efficiency_exception")
+            if (not isinstance(grant["kinds"], list) or not grant["kinds"] or len(grant["kinds"]) > 8
+                    or any(kind not in GOVERNED_KINDS for kind in grant["kinds"])):
+                raise PodError("invalid_config", "Exception grant kinds must name governed action kinds")
+            try:
+                expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise PodError("invalid_config", "Exception grant validity is not an ISO timestamp") from exc
+            if expiry.tzinfo is None:
+                raise PodError("invalid_config", "Exception grant validity needs a timezone")
+    return wg
+
+
 def validate(value: Any) -> dict:
-    obj = exact(value, {"schema", "models", "routing", "policy", "context"}, {"schema"}, name="config")
+    obj = exact(value, {"schema", "models", "routing", "policy", "context", "waste_governor"}, {"schema"},
+                name="config")
     if obj["schema"] != SCHEMA:
         raise PodError("invalid_config", "Unsupported configuration schema")
     models = obj.get("models", {})
@@ -201,6 +278,8 @@ def validate(value: Any) -> dict:
         exact(obj["context"], {"references", "checks"}, name="context")
         for field in obj["context"]:
             _strings(obj["context"][field], field)
+    if "waste_governor" in obj:
+        _validate_waste_governor(obj["waste_governor"])
     return obj
 
 
@@ -257,6 +336,26 @@ def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
     if "context" in layer:
         base["context"] = layer["context"]
         provenance["context"] = scope
+    for key, val in layer.get("waste_governor", {}).items():
+        prior = base["waste_governor"].get(key)
+        if scope != "personal":
+            if key == "mode" and val == "observe" and prior == "enforce":
+                raise PodError("authority_expansion", "Local policy cannot relax governor enforcement")
+            if key == "consolidate_related_changes" and prior and not val:
+                raise PodError("authority_expansion", "Local policy cannot disable consolidation")
+            if key == "cancel_superseded_validation" and val and not prior:
+                raise PodError("authority_expansion", "Local policy cannot authorize remote cancellation")
+            if key == "transient_retries" and val > prior:
+                raise PodError("authority_expansion", "Local policy cannot widen the retry budget")
+            if key == "host_control":
+                raise PodError("authority_expansion", "Only personal policy can declare a host control")
+            if key == "exceptions":
+                if val:
+                    raise PodError("authority_expansion", "Local grants cannot create authority")
+                # An empty local list grants nothing and revokes nothing.
+                continue
+        base["waste_governor"][key] = val
+        provenance[f"waste_governor.{key}"] = scope
 
 
 def effective(project: Path, *, personal: Path | None = None, task: dict | None = None) -> dict:

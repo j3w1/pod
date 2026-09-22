@@ -100,8 +100,8 @@ def read(project: Path, objective: str) -> dict | None:
     return _read(path) if path.exists() else None
 
 
-def context_for_run(run_id: str) -> dict | None:
-    """Read only a uniquely bound checkpoint; never create or migrate state."""
+def context_root_for_run(run_id: str) -> Path | None:
+    """The private directory of the one objective whose checkpoint binds this Run, if any."""
     root = state_root()
     if not root.exists():
         return None
@@ -113,10 +113,16 @@ def context_for_run(run_id: str) -> dict | None:
         checkpoint_value = state.get("checkpoint")
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
         if any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs):
-            matches.append(state)
+            matches.append(path.parent)
     if len(matches) > 1:
         raise PodError("ambiguous_context", "Multiple local contexts bind this Run")
     return matches[0] if matches else None
+
+
+def context_for_run(run_id: str) -> dict | None:
+    """Read only a uniquely bound checkpoint; never create or migrate state."""
+    root = context_root_for_run(run_id)
+    return _read(root / "context.json") if root is not None else None
 
 
 def check_bound_sources(project: Path, objective: str, *, owner: str,
@@ -766,59 +772,85 @@ def reconcile_delivery_item(project: Path, objective: str, *, owner: str, delive
         return {"status": "reconciled", "delivery_id": delivery_id, "message_id": message_id}
 
 
-def intervention(project: Path, objective: str, *, owner: str, task: str, correction: dict,
-                 diagnosis: dict | None = None) -> dict:
-    bounded_text(task, name="task", limit=128)
+def intervention(project: Path, objective: str, *, owner: str, correction: dict,
+                 task: str | None = None, diagnosis: dict | None = None,
+                 unit: str | None = None) -> dict:
+    """Record one correction for a Task or for a delivery unit's remote validation.
+
+    Both scopes share one threshold: after two equivalent corrections without new
+    evidence, a diagnosis naming distinct bounded evidence is required. A unit scope is
+    how the waste governor routes a repeated remote validation failure through this same
+    mechanism rather than a second anti-thrashing rule.
+    """
+    path = _path(project, objective)
+    with _lock(path):
+        state = _read(path)
+        if state["owner"] != owner:
+            raise PodError("coordinator_conflict", "Correction belongs to another coordinator")
+        result = _intervention_locked(project, objective, state, task=task, unit=unit,
+                                      correction=correction, diagnosis=diagnosis)
+        _write(path, state)
+        return result
+
+
+def _intervention_locked(project: Path, objective: str, state: dict, *, task: str | None,
+                         unit: str | None, correction: dict, diagnosis: dict | None) -> dict:
+    """The correction rule with the objective lock already held; the caller writes."""
+    if (task is None) == (unit is None):
+        raise PodError("invalid_intervention", "A correction names exactly one Task or delivery unit")
     exact(correction, {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
                        "next_discriminating_check", "correction_key"},
           {"criterion_id", "failure_id", "obligation", "failing_example", "hypothesis", "last_meaningful_evidence",
            "next_discriminating_check", "correction_key"}, name="correction")
     for item in correction.values():
         bounded_text(item, name="correction")
-    path = _path(project, objective)
-    with _lock(path):
-        state = _read(path)
-        if state["owner"] != owner:
-            raise PodError("coordinator_conflict", "Correction belongs to another coordinator")
+    if task is not None:
+        bounded_text(task, name="task", limit=128)
+        key = task
         if not any(effect.get("state") == "confirmed" and
                    isinstance(effect.get("native_binding"), dict) and
                    effect["native_binding"].get("taskId") == task
                    for effect in state["effects"].values() if isinstance(effect, dict)):
             raise PodError("task_unbound", "Correction Task lacks a confirmed native effect binding")
-        checkpoint_value = state.get("checkpoint")
-        criteria = checkpoint_value.get("criteria") if isinstance(checkpoint_value, dict) else None
-        if not isinstance(criteria, list) or correction["criterion_id"] not in criteria:
-            raise PodError("criterion_unbound", "Correction criterion is absent from the accepted checkpoint")
-        history = state["interventions"].setdefault(task, [])
-        identity = digest(correction)
-        if identity in [row["identity"] for row in history]:
-            raise PodError("correction_replay", "Equivalent correction was already attempted")
-        # The caller supplies failure labels and evidence descriptions. Neither
-        # changes the durable per-Task threshold. A later attempt needs a new
-        # bounded source observation as explicit discriminating evidence.
-        diagnosis_source = None
-        if len(history) >= 2:
-            if diagnosis is None:
-                raise PodError("diagnosis_required", "Two equivalent failures require a discriminating diagnosis")
-            exact(diagnosis, {"diagnosis_evidence"}, {"diagnosis_evidence"}, name="diagnosis")
-            bounded_text(diagnosis["diagnosis_evidence"], name="diagnosis_evidence")
-            from .records import source_identity
-            diagnosis_source = source_identity(project, diagnosis["diagnosis_evidence"])
-            if diagnosis_source["state"] != "present":
-                raise PodError("diagnosis_unproductive", "Diagnosis needs a present bounded evidence source")
-            if diagnosis_source["sha256"] in [row.get("diagnosis_source_digest") for row in history]:
-                raise PodError("diagnosis_replay", "Diagnosis evidence was already consumed")
-        elif diagnosis is not None:
-            raise PodError("diagnosis_unproductive", "A diagnosis is only recorded after the correction threshold")
-        history.append({"identity": identity, "key": correction["correction_key"],
-                        "criterion_id": correction["criterion_id"], "failure_id": correction["failure_id"],
-                        "obligation": correction["obligation"],
-                        "failing_example": correction["failing_example"],
-                        "hypothesis": correction["hypothesis"],
-                        "next_discriminating_check": correction["next_discriminating_check"],
-                        "evidence": correction["last_meaningful_evidence"],
-                        "diagnosis": digest(diagnosis) if diagnosis else None,
-                        "diagnosis_source": diagnosis_source,
-                        "diagnosis_source_digest": diagnosis_source["sha256"] if diagnosis_source else None})
-        _write(path, state)
-        return {"correction_identity": identity, "dispatch_authorized": False}
+    else:
+        bounded_text(unit, name="unit", limit=64)
+        key = "unit:" + unit
+        from .governor import unit_bound
+        if not unit_bound(project, objective, state, unit):
+            raise PodError("unit_unbound", "Correction unit has no prepared candidate")
+    checkpoint_value = state.get("checkpoint")
+    criteria = checkpoint_value.get("criteria") if isinstance(checkpoint_value, dict) else None
+    if not isinstance(criteria, list) or correction["criterion_id"] not in criteria:
+        raise PodError("criterion_unbound", "Correction criterion is absent from the accepted checkpoint")
+    history = state["interventions"].setdefault(key, [])
+    identity = digest(correction)
+    if identity in [row["identity"] for row in history]:
+        raise PodError("correction_replay", "Equivalent correction was already attempted")
+    # The caller supplies failure labels and evidence descriptions. Neither
+    # changes the durable per-Task threshold. A later attempt needs a new
+    # bounded source observation as explicit discriminating evidence.
+    diagnosis_source = None
+    if len(history) >= 2:
+        if diagnosis is None:
+            raise PodError("diagnosis_required", "Two equivalent failures require a discriminating diagnosis")
+        exact(diagnosis, {"diagnosis_evidence"}, {"diagnosis_evidence"}, name="diagnosis")
+        bounded_text(diagnosis["diagnosis_evidence"], name="diagnosis_evidence")
+        from .records import source_identity
+        diagnosis_source = source_identity(project, diagnosis["diagnosis_evidence"])
+        if diagnosis_source["state"] != "present":
+            raise PodError("diagnosis_unproductive", "Diagnosis needs a present bounded evidence source")
+        if diagnosis_source["sha256"] in [row.get("diagnosis_source_digest") for row in history]:
+            raise PodError("diagnosis_replay", "Diagnosis evidence was already consumed")
+    elif diagnosis is not None:
+        raise PodError("diagnosis_unproductive", "A diagnosis is only recorded after the correction threshold")
+    history.append({"identity": identity, "key": correction["correction_key"],
+                    "criterion_id": correction["criterion_id"], "failure_id": correction["failure_id"],
+                    "obligation": correction["obligation"],
+                    "failing_example": correction["failing_example"],
+                    "hypothesis": correction["hypothesis"],
+                    "next_discriminating_check": correction["next_discriminating_check"],
+                    "evidence": correction["last_meaningful_evidence"],
+                    "diagnosis": digest(diagnosis) if diagnosis else None,
+                    "diagnosis_source": diagnosis_source,
+                    "diagnosis_source_digest": diagnosis_source["sha256"] if diagnosis_source else None})
+    return {"correction_identity": identity, "dispatch_authorized": False, "scope": key}

@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# One group per pull request or ref: a newer push replaces the pull-request run it
+# superseded, and a push to main or a release tag is never canceled by anything.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHONDONTWRITEBYTECODE: "1"
   DISABLE_TELEMETRY: "1"

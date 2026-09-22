@@ -31,7 +31,9 @@ class InventoryIntegrityTests(unittest.TestCase):
         spec = (root / "docs" / "pod-spec.md").read_text()
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
         requirements = re.findall(r"^\| (R\d{2}) \|", spec, flags=re.M)
-        scenarios = re.findall(r"^\| (A\d{2}) \|", spec, flags=re.M)
+        # Two digits was the original width; the list reached A99, and f"A{i:02}" already
+        # spells the next one A100, so only the pattern needed to admit it.
+        scenarios = re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M)
         self.assertEqual(requirements, [f"R{i:02}" for i in range(1, len(requirements) + 1)])
         self.assertEqual(scenarios, [f"A{i:02}" for i in range(1, len(scenarios) + 1)])
         self.assertEqual([row["id"] for row in coverage["scenarios"]], scenarios)

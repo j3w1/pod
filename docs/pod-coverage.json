@@ -727,7 +727,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_governor.GovernorTests.test_duplicate_action_defers_and_unchanged_state_is_a_no_op",
+      "offline_test": "tests.test_governor.DecisionTests.test_reuse_attaches_to_a_running_action_and_returns_evidence",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -735,7 +735,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_governor.GovernorTests.test_override_softens_only_an_efficiency_deferral",
+      "offline_test": "tests.test_governor.PolicyTests.test_an_exception_rejoins_a_personal_grant_and_lifts_only_efficiency",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -745,6 +745,97 @@
         "external_gate"
       ],
       "offline_test": "tests.test_release.ReleaseGateTests.test_owner_authorization_is_an_input_not_a_test_result",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A90",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.incidents.test_repeated_pr_cycle.RepeatedPullRequestCycle.test_a_converging_unit_crosses_the_boundary_once_per_ready_candidate",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A91",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.ExecutorTests.test_two_callers_admit_one_execution",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A92",
+      "required_evidence": [
+        "offline_behavior",
+        "live_native"
+      ],
+      "offline_test": "tests.test_governor.ExecutorTests.test_a_lost_submission_is_reconciled_before_another_one",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A93",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.CandidateTests.test_context_changes_invalidate_evidence_even_on_the_same_commit",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A94",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.DecisionTests.test_a_remote_only_question_gets_a_bounded_diagnostic_without_readiness",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A95",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.FailureTests.test_repeated_code_defects_go_through_the_intervention_rule",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A96",
+      "required_evidence": [
+        "offline_behavior",
+        "live_native"
+      ],
+      "offline_test": "tests.test_governor.ExecutorTests.test_supersedence_cancels_only_safe_validation",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A97",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.DecisionTests.test_unrelated_work_does_not_block_an_independent_unit",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A98",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.PolicyTests.test_a_project_file_cannot_widen_governor_authority",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A99",
+      "required_evidence": [
+        "offline_behavior",
+        "external_gate"
+      ],
+      "offline_test": "tests.test_governor.PolicyTests.test_enforcement_is_advisory_unless_the_host_declares_control",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A100",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_governor.RecoveryTests.test_a_v1_pass_is_not_promoted_to_v2_proof",
       "candidate_status": "NOT_RUN"
     }
   ]

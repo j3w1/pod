@@ -1,0 +1,6 @@
+schema: pod/v1
+waste_governor:
+  preflight: [unit-and-incident-suite, skill-validation, compile]
+  triggers:
+    push: ["workflow:ci.yml"]
+    pr_update: ["workflow:ci.yml"]
