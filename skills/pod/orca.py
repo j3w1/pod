@@ -52,9 +52,11 @@ def _argument(value: object, *, limit: int = 4096) -> bool:
 
 def _read_allowed(argv: list[str]) -> bool:
     if argv in (["--version"], ["status", "--json"], ["host", "list", "--json"],
-                ["account", "list", "--json"], ["orchestration", "run-list", "--json"],
+                ["account", "list", "--json"],
                 ["orchestration", "run-current", "--json"]):
         return True
+    if argv[:2] == ["orchestration", "run-list"]:
+        return _run_list_tail(argv[2:])
     if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
@@ -119,6 +121,26 @@ def _worker_list_tail(tail: list[str]) -> bool:
             return False
         tail = tail[2:]
     return not tail
+
+
+def _run_list_tail(tail: list[str]) -> bool:
+    """Accept only bounded all-Run pagination; the cursor is runtime-issued."""
+    limit = False
+    cursor = False
+    output = False
+    while tail:
+        if tail[:2] == ["--limit", "100"] and not limit:
+            limit = True
+            tail = tail[2:]
+        elif len(tail) >= 2 and tail[0] == "--cursor" and not cursor and _argument(tail[1]):
+            cursor = True
+            tail = tail[2:]
+        elif tail[0] == "--json" and not output:
+            output = True
+            tail = tail[1:]
+        else:
+            return False
+    return limit and output
 
 
 def _mutate_allowed(argv: list[str]) -> bool:
@@ -244,6 +266,42 @@ def worker_rows(run: str | None = None) -> dict:
     raise PodError("orca_pagination", "Worker fleet exceeds bounded pages")
 
 
+def run_rows() -> dict:
+    """Enumerate every native Run with bounded, runtime-stable pagination."""
+    prefix = ["orchestration", "run-list", "--limit", "100", "--json"]
+    all_rows: list[dict] = []
+    identifiers: set[str] = set()
+    cursors: set[str] = set()
+    cursor = None
+    runtime = None
+    for _ in range(100):
+        response = read_command(prefix + (["--cursor", cursor] if cursor else []))
+        result = response["result"]
+        rows = result.get("runs")
+        if not isinstance(rows, list):
+            raise PodError("orca_contract", "Run inventory page is malformed")
+        if runtime is not None and response["runtime"] != runtime:
+            raise PodError("orca_runtime_changed", "Runtime changed during Run inventory")
+        runtime = response["runtime"]
+        for row in rows:
+            run_id = row.get("id") if isinstance(row, dict) else None
+            if not isinstance(run_id, str) or not run_id or run_id in identifiers:
+                raise PodError("orca_contract", "Run inventory identity is missing or repeated")
+            identifiers.add(run_id)
+            all_rows.append(row)
+        if "nextCursor" not in result:
+            raise PodError("orca_pagination", "Run inventory completion marker is absent")
+        next_cursor = result["nextCursor"]
+        if next_cursor is None:
+            return {"runtime": runtime, "runs": all_rows, "complete": True,
+                    "page_count": len(cursors) + 1}
+        if not isinstance(next_cursor, str) or not next_cursor or next_cursor in cursors:
+            raise PodError("orca_pagination", "Run inventory cursor is missing or repeated")
+        cursors.add(next_cursor)
+        cursor = next_cursor
+    raise PodError("orca_pagination", "Run inventory exceeds bounded pages")
+
+
 def hosts() -> dict:
     """Bounded host inventory; a fleet beyond this machine is a disclosed observation."""
     response = read_command(["host", "list", "--json"])
@@ -254,16 +312,32 @@ def hosts() -> dict:
             "local_only": names in ([], ["local"])}
 
 
-def account_metadata() -> dict:
+def account_metadata(raw: dict | None = None) -> dict:
     """Redacted provider rate-limit projection. Account identifiers never leave this call."""
-    raw = account_metadata_raw()
+    raw = raw or account_metadata_raw()
     out = {}
     for provider in AGENTS:
         block = raw["providers"].get(provider, {})
         out[provider] = {key: block[key] for key in
-                         ("status", "updated_at_ms", "freshness", "windows", "account_association", "source")
+                         ("status", "updated_at_ms", "freshness", "windows", "account_association",
+                          "identity_digest", "source")
                          if key in block}
     return {"runtime": raw["runtime"], "providers": out}
+
+
+def selected_account_identity(account_block: dict, login_block: dict) -> dict:
+    """Choose the one redacted identity that approval, accounting and grants share."""
+    if account_block.get("managed_accounts"):
+        value = account_block.get("active_account")
+        source = "orca_active_managed_account"
+    else:
+        value = account_block.get("default_identity")
+        source = "orca_system_default"
+        if not value:
+            value = login_block.get("identity_digest")
+            source = "agent_login_status"
+    return {"identity_digest": value if isinstance(value, str) and value else None,
+            "source": source if value else "unavailable"}
 
 
 def account_metadata_raw() -> dict:
@@ -282,13 +356,20 @@ def account_metadata_raw() -> dict:
         default = provider_block.get("systemDefault")
         default = default if isinstance(default, dict) else {}
         active = provider_block.get("activeAccountId")
+        selected = [row for row in managed
+                    if isinstance(row, dict) and row.get("id") == active]
+        selected = selected[0] if len(selected) == 1 else {}
         record = {"managed_accounts": len(managed),
                   "active_account": digest(active) if isinstance(active, str) and active else None,
+                  "selected_auth": selected.get("authKind")
+                  if isinstance(selected.get("authKind"), str) else None,
+                  "selected_has_auth": bool(selected.get("hasAuth")),
                   "default_identity": digest(default.get("providerAccountId"))
                   if isinstance(default.get("providerAccountId"), str) else None,
                   "default_auth": default.get("authKind") if isinstance(default.get("authKind"), str) else None,
                   "default_has_auth": bool(default.get("hasAuth")),
                   "reset_credits": None}
+        record["identity_digest"] = selected_account_identity(record, {})["identity_digest"]
         credits = raw.get("rateLimitResetCredits") if isinstance(raw, dict) else None
         if isinstance(credits, dict) and isinstance(credits.get("availableCount"), int):
             record["reset_credits"] = credits["availableCount"]
@@ -390,7 +471,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                 "hard_stops": ["native_authority_unverified"],
                 "disclosures": ["installed Orca runtime identity is unavailable"]}
     agent = route.get("agent")
-    account_block = (accounts or account_metadata_raw())["providers"].get(agent, {})
+    account_snapshot = accounts or account_metadata_raw()
+    account_block = account_snapshot.get("providers", {}).get(agent, {})
     login_block = login if login is not None else agent_login_mode(agent)
     host_block = fleet if fleet is not None else hosts()
     capabilities = observed.get("capabilities", {})
@@ -399,13 +481,20 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     bucket = bucket_for(agent, route.get("model", ""))
     managed = account_block.get("managed_accounts", 0)
     mode = "managed_account" if managed else "host_login"
-    stamp = account_block.get("active_account") or account_block.get("default_identity") \
-        or login_block.get("identity_digest")
-    auth = login_block.get("auth", "unknown")
-    if auth == "unknown" and account_block.get("default_auth") == "oauth" and account_block.get("default_has_auth"):
-        auth, subscription = "oauth", True
+    identity_observation = selected_account_identity(account_block, login_block)
+    stamp = identity_observation["identity_digest"]
+    expected_stamp = route.get("account")
+    if managed:
+        selected_auth = account_block.get("selected_auth")
+        auth = selected_auth if account_block.get("selected_has_auth") else "unknown"
+        subscription = True if auth == "oauth" else False if auth == "api_key" else None
     else:
-        subscription = login_block.get("subscription")
+        auth = login_block.get("auth", "unknown")
+        if (auth == "unknown" and account_block.get("default_auth") == "oauth"
+                and account_block.get("default_has_auth")):
+            auth, subscription = "oauth", True
+        else:
+            subscription = login_block.get("subscription")
     observed_billing = "subscription" if auth == "oauth" and subscription else (
         "api" if auth == "api_key" else "unknown")
     approved_billing = model_policy.get("billing") if isinstance(model_policy, dict) else None
@@ -434,7 +523,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                               observed=observed_billing),
         "account_identity": _tier("account_identity",
                                   "runtime_observation" if stamp else "unavailable",
-                                  "digest of the provider account or organisation identifier"),
+                                  "digest of the active provider account or organisation identifier",
+                                  matched=bool(stamp and expected_stamp and stamp == expected_stamp)),
         "route_approval": _tier("route_approval", "owner_route_config",
                                 "personal policy approval provenance",
                                 billing=approved_billing),
@@ -446,6 +536,10 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     }
     hard_stops = []
     disclosures = []
+    if account_snapshot.get("runtime") != observed["runtime"]:
+        hard_stops.append("native_authority_unverified")
+    if not expected_stamp or not stamp or stamp != expected_stamp:
+        hard_stops.append("account_binding_unverified")
     if approved_billing == "included" and observed_billing != "subscription":
         hard_stops.append("billing_mode_unverified")
     if observed_billing == "api" and approved_billing != "paid":
@@ -465,8 +559,9 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         disclosures.append("the fleet reaches beyond this host; cross-host admission is not atomic")
     return {"schema": "pod-route-establishment/v1", "runtime": observed["runtime"],
             "version": observed.get("version"), "executable": observed.get("executable"),
-            "route": {"agent": agent, "model": route.get("model"), "account": route.get("account"),
-                      "bucket": bucket, "effort": route.get("effort")},
+            "route": {"agent": agent, "model": route.get("model"), "account": stamp,
+                      "bucket": bucket,
+                      "effort": route.get("effort")},
             "controls": controls,
             "login": {"mode": mode, "auth": auth, "subscription": subscription,
                       "managed_accounts": managed, "identity_digest": stamp},
@@ -486,9 +581,19 @@ def require_route_establishment(establishment: dict, route: dict) -> None:
             raise PodError("account_binding_unverified", "Established route differs from the requested route")
     if route.get("bucket") is not None and established.get("bucket") != route["bucket"]:
         raise PodError("account_binding_unverified", "Established quota bucket differs from the requested one")
+    identity_control = establishment.get("controls", {}).get("account_identity")
+    expected_identity = route.get("account")
+    observed_identity = establishment.get("login", {}).get("identity_digest")
+    if (not isinstance(expected_identity, str) or not isinstance(observed_identity, str)
+            or expected_identity != observed_identity or not isinstance(identity_control, dict)
+            or identity_control.get("tier") != "runtime_observation"
+            or identity_control.get("matched") is not True):
+        raise PodError("account_binding_unverified",
+                       "Native account identity does not match personal route approval")
     for stop in establishment.get("hard_stops", []):
         raise PodError(stop if stop in ("billing_mode_unverified", "paid_route_forbidden",
-                                        "native_authority_unverified") else "route_establishment_failed",
+                                        "native_authority_unverified", "account_binding_unverified")
+                       else "route_establishment_failed",
                        "Route establishment refuses this launch: " + str(stop))
 
 

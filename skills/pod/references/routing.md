@@ -5,8 +5,11 @@ may refine preferences and tighten restrictions; it cannot grant model/provider
 approval or spending. The `config` helper displays the effective policy and
 provenance. Starter model rows remain pending recommendations.
 
-Approval binds the exact agent, model and account route. Discovery or changing an
-alias cannot inherit approval. Keep responsibility, application, model and effort
+Approval binds the exact agent, model and redacted native account identity shown
+by the doctor's JSON output; the model alias is the human label. Quota, capacity and
+grants use that same identity, so discovery, relabeling or account rotation cannot
+inherit approval. Managed-account billing proof must belong to the selected account,
+not an unrelated host login. Keep responsibility, application, model and effort
 distinct. Preview/replay evaluates supplied assessment, capability and quota
 snapshots; it does not infer an arbitrary task's difficulty. Bind the packet to
 the resulting route and policy revision.

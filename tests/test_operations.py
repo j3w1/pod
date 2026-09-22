@@ -16,6 +16,7 @@ from tests.common import fixture
 
 NOW = datetime(2026, 9, 22, 12, tzinfo=timezone.utc)
 REQUEST_UUID = "11111111-1111-4111-8111-111111111111"
+ACCOUNT_IDENTITY = "a" * 64
 
 
 class FakePort:
@@ -30,29 +31,33 @@ class FakePort:
         self.show_error = None
         self.find_rows = None
         self.quota = {"schema": "pod-quota/v1", "provider": "codex",
-                      "account": "account", "bucket": "shared",
+                      "account": ACCOUNT_IDENTITY, "bucket": "shared",
                       "observed_at": NOW.isoformat(), "source": "fixture",
                       "confidence": "observed", "unknowns": [],
                       "windows": [{"name": "hour", "remaining_percent": 80}]}
         self.headless = False
+        self.actual_identity = None
 
     def establish(self, route, model_policy, *, child_delegation=False):
+        observed_identity = self.actual_identity or route.get("account")
         return {"schema": "pod-route-establishment/v1", "runtime": self.runtime,
                 "version": "1.4.206", "executable": "/fixture/orca", "hard_stops": [],
-                "disclosures": [], "route": {key: route.get(key) for key in
-                ("agent", "model", "account", "bucket", "effort")}, "controls": {},
+                "disclosures": [], "route": {**{key: route.get(key) for key in
+                ("agent", "model", "bucket", "effort")}, "account": observed_identity},
+                "controls": {"account_identity": {"tier": "runtime_observation",
+                                                     "matched": observed_identity == route.get("account")}},
                 "login": {"mode": "host_login", "auth": "oauth", "subscription": True,
-                          "managed_accounts": 0, "identity_digest": None},
+                          "managed_accounts": 0,
+                          "identity_digest": observed_identity},
                 "billing": {"observed": "subscription", "approved": "included"}}
 
-    def read_native(self, owner, *, run=None, route=None, runs=()):
+    def read_native(self, owner, *, route=None):
         rows = []
         for dispatch, item in self.workers.items():
-            if run is None or item["run"] == run:
-                rows.append({"dispatchId": dispatch, "runId": item["run"],
-                             "taskId": item["task"], "terminalState": "active"})
+            rows.append({"dispatchId": dispatch, "runId": item["run"],
+                         "taskId": item["task"], "terminalState": "active"})
         return {"runtime": self.runtime, "authoritative": True, "owner": owner,
-                "scope": "all" if run is None else "bound+ledger_runs", "complete": True,
+                "scope": "all_runs", "complete": True,
                 "workers": rows, "cross_host": False, "atomic_admission": False,
                 "quota": self.quota}
 
@@ -110,12 +115,12 @@ def setup_case(root, *, paid=False):
     config = Path(os.environ["XDG_CONFIG_HOME"]) / "pod"
     config.mkdir(parents=True)
     binding = route_identity({"agent": "codex", "model": "gpt-5.6-sol",
-                              "account": "account"})
-    paid_policy = """policy:
+                              "account": ACCOUNT_IDENTITY})
+    paid_policy = f"""policy:
   spending_grants:
     - id: paid-once
       action: paid_usage
-      account: account
+      account: {ACCOUNT_IDENTITY}
       model: gpt-5.6-sol
       objective: objective
       valid_until: '2026-09-23T00:00:00Z'
@@ -126,7 +131,7 @@ models:
   sol:
     agent: codex
     model: gpt-5.6-sol
-    account: account
+    account: {ACCOUNT_IDENTITY}
     approved: true
     approval_ref: review-1
     approval_route: {binding}
@@ -140,7 +145,7 @@ models:
         "assignments": [], "questions": [], "verification_gaps": ["works"],
         "next_safe_action": "inspect"}, native={"runtime": "runtime"})
     route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
-             "account": "account", "bucket": "shared", "effort": "high"}
+             "account": ACCOUNT_IDENTITY, "bucket": "shared", "effort": "high"}
     frozen = packet({"schema": "pod-packet/v1", "objective": "objective",
                      "criteria": ["works"], "responsibility": "writer",
                      "scope": ["notes.txt"], "actions": ["edit"],
@@ -152,10 +157,10 @@ models:
                   "uncertainty": "low", "verifiability": "unit", "capabilities": [],
                   "context": [], "reason": "independent", "bounded": True}
     capabilities = {"sol": {"agent": "codex", "model": "gpt-5.6-sol",
-                             "account": "account", "efforts": ["high"],
+                             "account": ACCOUNT_IDENTITY, "efforts": ["high"],
                              "capabilities": [], "bucket": "shared"}}
-    quotas = {"account": {"schema": "pod-quota/v1", "provider": "codex",
-                           "account": "account", "bucket": "shared",
+    quotas = {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
+                           "account": ACCOUNT_IDENTITY, "bucket": "shared",
                            "observed_at": NOW.isoformat(), "source": "fixture",
                            "confidence": "observed", "unknowns": [],
                            "windows": [{"name": "hour", "remaining_percent": 80}],
@@ -199,6 +204,16 @@ class AdmissionTests(unittest.TestCase):
             port = FakePort()
             with self.assertRaises(PodError):
                 start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(port.starts, [])
+
+    def test_paid_grant_cannot_authorize_a_rotated_native_account(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root, paid=True)
+            port = FakePort()
+            port.actual_identity = "b" * 64
+            with self.assertRaises(PodError) as caught:
+                start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(caught.exception.code, "account_binding_unverified")
             self.assertEqual(port.starts, [])
 
     def test_uuid_is_persisted_before_worker_readback_failure(self):
@@ -376,14 +391,14 @@ class AdmissionTests(unittest.TestCase):
     def test_exceptional_grant_cannot_bypass_task_max_workers(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
-            grant = {"id": "wide", "action": "exceptional_capacity", "account": "account",
+            grant = {"id": "wide", "action": "exceptional_capacity", "account": ACCOUNT_IDENTITY,
                      "objective": "objective", "run": "run", "plan_revision": "plan",
                      "limit": 4, "reason": "four independent checks",
                      "valid_until": "2026-09-23T00:00:00Z"}
             config = Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml"
             config.write_text(config.read_text() + "\npolicy:\n  exceptional_grants:\n"
                               "    - id: wide\n      action: exceptional_capacity\n"
-                              "      account: account\n      objective: objective\n      run: run\n"
+                              f"      account: {ACCOUNT_IDENTITY}\n      objective: objective\n      run: run\n"
                               "      plan_revision: plan\n      limit: 4\n"
                               "      reason: four independent checks\n"
                               "      valid_until: '2026-09-23T00:00:00Z'\n")
@@ -499,7 +514,7 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(result["request_uuid"], REQUEST_UUID)
         self.assertIn("--retry-request", command.call_args.args[0])
 
-    def test_governor_native_read_resolves_bound_and_checkpoint_runs_explicitly(self):
+    def test_native_read_enumerates_every_stable_run_before_claiming_complete_fleet(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
             port = FakePort()
@@ -511,21 +526,80 @@ class BoundaryTests(unittest.TestCase):
             pages = {
                 "checkpoint-run": {"runtime": "runtime", "scope": {"source": "flag"},
                                    "complete": True, "workers": []},
-                "current-run": {"runtime": "runtime", "scope": {"source": "flag"},
-                                "complete": True, "workers": []},
-                "run": {"runtime": "runtime", "scope": {"source": "bound"},
+                "foreign-run": {"runtime": "runtime", "scope": {"source": "flag"},
+                                "complete": True, "workers": [
+                                    {"dispatchId": "foreign", "runId": "foreign-run",
+                                     "taskId": "foreign-task", "terminalState": "active"}]},
+                "run": {"runtime": "runtime", "scope": {"source": "flag"},
                         "complete": True, "workers": []},
             }
+            for selected, page in pages.items():
+                page["scope"]["run"] = selected
+            inventory = {"runtime": "runtime", "complete": True,
+                         "runs": [{"id": selected} for selected in pages]}
             with (patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}),
-                  patch("pod.operations.read_command", return_value={
-                      "runtime": "runtime", "result": {"run": {"id": "current-run"}}}),
+                  patch("pod.operations.run_rows", return_value=inventory) as run_inventory,
                   patch("pod.operations.worker_rows", side_effect=lambda selected: pages[selected])
                   as rows,
                   patch("pod.operations._quota_snapshot", return_value=None)):
                 native = OrcaPort(project).read_native("owner")
-            self.assertEqual(native["scope"], "bound+ledger_runs")
+            self.assertEqual(native["scope"], "all_runs")
             self.assertEqual({call.args[0] for call in rows.call_args_list},
-                             {"checkpoint-run", "current-run", "run"})
+                             {"checkpoint-run", "foreign-run", "run"})
+            self.assertEqual(run_inventory.call_count, 2)
+            self.assertEqual(native["workers"][0]["dispatchId"], "foreign")
+
+    def test_native_read_fails_closed_on_run_inventory_or_scope_change(self):
+        inventory = {"runtime": "runtime", "complete": True, "runs": [{"id": "run"}]}
+        changed = {"runtime": "runtime", "complete": True,
+                   "runs": [{"id": "run"}, {"id": "foreign-run"}]}
+        with patch("pod.operations.run_rows", side_effect=[inventory, changed]), \
+             patch("pod.operations.worker_rows", return_value={
+                 "runtime": "runtime", "scope": {"source": "flag", "run": "run"},
+                 "complete": True, "workers": []}):
+            with self.assertRaises(PodError) as caught:
+                OrcaPort().read_native("owner")
+        self.assertEqual(caught.exception.code, "native_occupancy_unverified")
+        with patch("pod.operations.run_rows", return_value=inventory), \
+             patch("pod.operations.worker_rows", return_value={
+                 "runtime": "runtime", "scope": {"source": "bound", "run": "run"},
+                 "complete": True, "workers": []}):
+            with self.assertRaises(PodError) as caught:
+                OrcaPort().read_native("owner")
+        self.assertEqual(caught.exception.code, "native_occupancy_unverified")
+
+    def test_governor_mutations_require_native_owner_and_runtime_but_status_is_read_only(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            unowned = {"runtime": "runtime", "authoritative": False, "owner": None,
+                       "scope": "all_runs", "complete": True, "workers": []}
+            requests = {
+                "governor-prepare": {"unit": "unit"},
+                "governor": {"action": {}},
+                "governor-execute": {"action": {}},
+                "governor-preflight": {"unit": "unit", "candidate": "candidate",
+                                        "check": "unit", "status": "PASS"},
+                "governor-outcome": {"record_id": "record", "outcome": "PASS"},
+                "governor-classify": {"record_id": "record", "classification": "code_defect"},
+                "governor-correct": {"unit": "unit", "correction": {}},
+                "governor-reconcile": {"record_id": "record"},
+            }
+            base = {"project": str(project), "objective": "objective", "owner": "owner"}
+            with patch("pod.operations.OrcaPort.read_native", return_value=unowned):
+                for operation, extra in requests.items():
+                    with self.subTest(operation=operation), self.assertRaises(PodError) as caught:
+                        helper_run(operation, {**base, **extra})
+                    self.assertEqual(caught.exception.code, "native_authority_unverified")
+                status = helper_run("governor-status", base)
+            self.assertEqual(status["schema"], "pod-governor/v2")
+            port = FakePort()
+            start(project, assessment, capabilities, quotas, frozen, port)
+            wrong_runtime = {**unowned, "runtime": "other", "authoritative": True,
+                             "owner": "owner"}
+            with patch("pod.operations.OrcaPort.read_native", return_value=wrong_runtime), \
+                 self.assertRaises(PodError) as changed:
+                helper_run("governor", {**base, "action": {}})
+            self.assertEqual(changed.exception.code, "native_authority_unverified")
 
     def test_report_joins_a_fresh_exact_worker_read(self):
         with fixture() as root:

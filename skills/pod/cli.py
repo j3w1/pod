@@ -19,7 +19,7 @@ from .config import DEFAULT, effective, personal_path, route_identity
 from .errors import PodError
 from .ledger import context_root_for_run, migration_inventory
 from .orca import (account_metadata, account_metadata_raw, agent_login_mode, contract, executable,
-                   hosts, read_command, route_establishment, worker_rows)
+                   hosts, route_establishment, run_rows, selected_account_identity, worker_rows)
 from .setup import inspect, setup, skills_cli_entry
 
 
@@ -63,12 +63,11 @@ def _edit(path: Path, *, project_scope: bool) -> None:
 def _status(root: Path, run: str | None) -> dict:
     if run is None:
         try:
-            listing = read_command(["orchestration", "run-list", "--json"])
+            listing = run_rows()
         except PodError as exc:
             return {"status": "unavailable", "reason": exc.code, "selection_required": True}
-        result = listing["result"]
-        runs = result.get("runs", result.get("items", []))
-        if not isinstance(runs, list) or len(runs) != 1 or result.get("nextCursor"):
+        runs = listing["runs"]
+        if len(runs) != 1:
             return {"status": "selection_required", "run_count": len(runs) if isinstance(runs, list) else "unknown"}
         run = runs[0].get("id") if isinstance(runs[0], dict) else None
         if not run:
@@ -94,7 +93,7 @@ def _status(root: Path, run: str | None) -> dict:
             from .governor import status_at
             from .operations import OrcaPort
             from .ledger import fresh_projection
-            native = OrcaPort(root).read_native(context.get("owner"), run=run)
+            native = OrcaPort(root).read_native(context.get("owner"))
             objective_names = {row.get("objective") for row in context.get("admissions", {}).values()
                                if isinstance(row, dict) and row.get("objective")}
             selected_objective = next(iter(objective_names)) if len(objective_names) == 1 else None
@@ -225,9 +224,15 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
         except PodError as exc:
             config = {"status": "invalid", "reason": exc.code}
         try:
-            quota = account_metadata()["providers"]
+            raw_accounts = account_metadata_raw()
+            quota = account_metadata(raw_accounts)["providers"]
+            account_identities = {}
+            for agent in ("codex", "claude"):
+                account_identities[agent] = selected_account_identity(
+                    raw_accounts["providers"].get(agent, {}), agent_login_mode(agent))
         except PodError as exc:
             quota = {"status": "unavailable", "reason": exc.code}
+            account_identities = {"status": "unavailable", "reason": exc.code}
         local_skills = inspect(root)
         global_skills = inspect(root, global_scope=True)
         overlap = {}
@@ -257,7 +262,8 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
         return {"schema": "pod-cli/v2", "status": "observed", "config": config,
                 "orca": snapshot, "project_skills": local_skills,
                 "global_skills": global_skills, "integration_overlap": overlap,
-                "quota": quota, "bundle": _bundle_report(),
+                "quota": quota, "account_identities": account_identities,
+                "bundle": _bundle_report(),
                 "prerequisites": _prerequisites(snapshot),
                 "routes": _route_report(root, snapshot),
                 "skills_cli": skills_cli_entry(), "native_probe": "not_run",

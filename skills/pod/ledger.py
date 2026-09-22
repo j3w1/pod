@@ -20,7 +20,7 @@ from .util import atomic_json, bounded_json, bounded_text, digest, exact, explic
 
 
 ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "legacy_hold")
-NATIVE_SCOPES = ("all", "bound+ledger_runs")
+NATIVE_SCOPES = ("all", "all_runs")
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
                    "interventions", "source_rejections", "legacy_archives"}
@@ -332,25 +332,6 @@ def _all_admissions(project: Path) -> list[tuple[Path, dict]]:
     return rows
 
 
-def bound_runs(project: Path, runtime: str) -> tuple[str, ...]:
-    """Every Run referenced by local v2 policy evidence for this Orca runtime."""
-    runs = {row["run_id"] for _, row in _all_admissions(project)
-            if row.get("runtime") == runtime and isinstance(row.get("run_id"), str)}
-    root = state_root(project)
-    if root.exists():
-        for path in root.glob("*/context.json"):
-            state = _read(path)
-            checkpoint_value = state.get("checkpoint")
-            refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
-            for ref in refs:
-                if not isinstance(ref, dict) or ref.get("runtime") not in (None, runtime):
-                    continue
-                run_id = ref.get("runId", ref.get("run_id"))
-                if isinstance(run_id, str) and run_id:
-                    runs.add(run_id)
-    return tuple(sorted(runs))
-
-
 def _occupied_admissions(project: Path, native: dict) -> list[dict]:
     """Project capacity only from durable policy rows joined to this fresh Orca read."""
     workers = native.get("workers")
@@ -436,6 +417,8 @@ def fresh_projection(project: Path, native: dict, *, objective: str | None = Non
             continue
         selected.append(row)
     return {"schema": "pod-native-projection/v1", "runtime": native["runtime"],
+            "authoritative": native.get("authoritative") is True,
+            "owner": native.get("owner") if native.get("authoritative") is True else None,
             "occupied": [{**{key: value for key, value in row.items() if not key.startswith("_")},
                           "task": row.get("_task")}
                          for row in selected],

@@ -81,7 +81,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_config.ConfigTests.test_changed_model_identity_invalidates_prior_approval_binding",
+      "offline_test": "tests.test_config.ConfigTests.test_account_label_cannot_substitute_for_redacted_native_identity",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -137,7 +137,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_context_quota.ContextQuotaTests.test_quota_metadata_and_reset_exact_grant",
+      "offline_test": "tests.test_operations.AdmissionTests.test_paid_grant_cannot_authorize_a_rotated_native_account",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -173,7 +173,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_concurrent_objectives_share_one_unknown_account_allowance",
+      "offline_test": "tests.test_operations.BoundaryTests.test_native_read_enumerates_every_stable_run_before_claiming_complete_fleet",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -454,7 +454,7 @@
         "offline_behavior",
         "external_gate"
       ],
-      "offline_test": "tests.test_routing.RoutingTests.test_changed_alias_and_paid_route_need_separate_grants",
+      "offline_test": "tests.test_operations.AdmissionTests.test_paid_grant_cannot_authorize_a_rotated_native_account",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -512,9 +512,10 @@
     {
       "id": "A62",
       "required_evidence": [
+        "offline_behavior",
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_operations.BoundaryTests.test_governor_mutations_require_native_owner_and_runtime_but_status_is_read_only",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -862,7 +863,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_ledger.V2StateTests.test_exact_released_projection_frees_a_bound_legacy_hold_only",
+      "offline_test": "tests.test_operations.BoundaryTests.test_native_read_enumerates_every_stable_run_before_claiming_complete_fleet",
       "candidate_status": "NOT_RUN"
     },
     {

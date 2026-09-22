@@ -8,7 +8,7 @@ from unittest.mock import patch
 from pod.errors import PodError
 from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, contract,
                       effective_launch, executable, hosts, identity, mutate_command, read_command,
-                      require_route_establishment, route_establishment, worker_rows,
+                      require_route_establishment, route_establishment, run_rows, worker_rows,
                       worktree_selector)
 from tests.common import envelope, receipt
 
@@ -68,6 +68,37 @@ class OrcaAdapterTests(unittest.TestCase):
             self.assertTrue(fleet["complete"])
             self.assertIn("--cursor", reader.call_args.args[0])
 
+    def test_paginated_run_inventory_requires_stable_runtime_and_unique_ids(self):
+        pages = [
+            {"runtime": "r", "result": {"runs": [{"id": "run-a"}], "nextCursor": "next"}},
+            {"runtime": "r", "result": {"runs": [{"id": "run-b"}], "nextCursor": None}},
+        ]
+        with patch("pod.orca.read_command", side_effect=pages) as reader:
+            inventory = run_rows()
+        self.assertEqual([row["id"] for row in inventory["runs"]], ["run-a", "run-b"])
+        self.assertTrue(inventory["complete"])
+        self.assertIn("--cursor", reader.call_args.args[0])
+        with patch("pod.orca.read_command", side_effect=[pages[0],
+                  {"runtime": "other", "result": {"runs": [], "nextCursor": None}}]):
+            with self.assertRaises(PodError) as changed:
+                run_rows()
+        self.assertEqual(changed.exception.code, "orca_runtime_changed")
+        with patch("pod.orca.read_command", return_value={
+                "runtime": "r", "result": {"runs": []}}), \
+             self.assertRaises(PodError) as missing:
+            run_rows()
+        self.assertEqual(missing.exception.code, "orca_pagination")
+        looping = [
+            {"runtime": "r", "result": {"runs": [{"id": "run-a"}],
+                                           "nextCursor": "next"}},
+            {"runtime": "r", "result": {"runs": [{"id": "run-b"}],
+                                           "nextCursor": "next"}},
+        ]
+        with patch("pod.orca.read_command", side_effect=looping), \
+             self.assertRaises(PodError) as repeated:
+            run_rows()
+        self.assertEqual(repeated.exception.code, "orca_pagination")
+
     def test_cached_metadata_redacts_accounts_and_keeps_timestamps(self):
         result = {"runtime": "r", "result": {"claude": [{"token": "secret"}], "rateLimits": {
             "claude": {"status": "ok", "updatedAt": 1000,
@@ -109,11 +140,16 @@ class RouteEstablishmentTests(unittest.TestCase):
 
     def established(self, *, agent="codex", model="gpt-5.6-sol", billing="included",
                     login=None, bucket=None, delegation=False):
-        route = {"agent": agent, "model": model, "account": "personal", "bucket": bucket,
-                 "effort": "high"}
+        accounts = self.accounts()
+        identity_digest = accounts["providers"][agent].get("identity_digest")
+        login = login or {"auth": "oauth", "subscription": True,
+                          "identity_digest": identity_digest or "a" * 64}
+        identity_digest = identity_digest or login.get("identity_digest")
+        route = {"agent": agent, "model": model, "account": identity_digest,
+                 "bucket": bucket, "effort": "high"}
         return route, route_establishment(
-            route, {"billing": billing}, snapshot=self.snapshot(), accounts=self.accounts(),
-            login=login or {"auth": "oauth", "subscription": True, "identity_digest": None},
+            route, {"billing": billing},
+            snapshot=self.snapshot(), accounts=accounts, login=login,
             fleet=self.fleet(), child_delegation=delegation)
 
     def test_contract_reports_the_runtime_and_advertised_contracts(self):
@@ -148,9 +184,12 @@ class RouteEstablishmentTests(unittest.TestCase):
     def test_an_included_route_survives_an_unavailable_quota_bucket(self):
         """The regression: absent optional metadata is a disclosure, not a blocker."""
         route, established = self.established(agent="claude", model="sonnet")
-        empty = {"providers": {"claude": {"managed_accounts": 0, "windows": {},
-                                          "account_association": "host_login"}}}
-        sparse = route_establishment(route, {"billing": "included"}, snapshot=self.snapshot(),
+        observed_identity = "a" * 64
+        empty = {"runtime": "uuid-0001", "providers": {"claude": {
+                     "managed_accounts": 0, "default_identity": observed_identity, "windows": {},
+                     "account_association": "host_login"}}}
+        sparse = route_establishment(route, {"billing": "included"},
+                                     snapshot=self.snapshot(),
                                      accounts=empty,
                                      login={"auth": "oauth", "subscription": True,
                                             "identity_digest": None},
@@ -160,9 +199,48 @@ class RouteEstablishmentTests(unittest.TestCase):
                       sparse["disclosures"])
         require_route_establishment(sparse, route)
 
+    def test_account_rotation_and_unavailable_identity_fail_before_route_use(self):
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a" * 64,
+                 "bucket": "default", "effort": "high"}
+        approved = "a" * 64
+        base_accounts = {"runtime": "uuid-0001", "providers": {"codex": {
+            "managed_accounts": 1, "active_account": approved, "default_identity": None,
+            "selected_auth": "oauth", "selected_has_auth": True,
+            "default_auth": "oauth", "default_has_auth": True, "windows": {}}}}
+        login = {"auth": "oauth", "subscription": True, "identity_digest": None}
+        for active in ("b" * 64, None):
+            accounts = json.loads(json.dumps(base_accounts))
+            accounts["providers"]["codex"]["active_account"] = active
+            established = route_establishment(
+                route, {"billing": "paid"},
+                snapshot=self.snapshot(), accounts=accounts, login=login, fleet=self.fleet())
+            with self.subTest(active=active), self.assertRaises(PodError) as caught:
+                require_route_establishment(established, route)
+            self.assertEqual(caught.exception.code, "account_binding_unverified")
+        matched = route_establishment(
+            route, {"billing": "included"},
+            snapshot=self.snapshot(), accounts=base_accounts, login=login, fleet=self.fleet())
+        require_route_establishment(matched, route)
+
+    def test_managed_account_cannot_borrow_unrelated_host_subscription_proof(self):
+        identity_digest = "a" * 64
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+                 "bucket": "default", "effort": "high"}
+        accounts = {"runtime": "uuid-0001", "providers": {"codex": {
+            "managed_accounts": 1, "active_account": identity_digest,
+            "selected_auth": None, "selected_has_auth": False, "windows": {}}}}
+        established = route_establishment(
+            route, {"billing": "included"}, snapshot=self.snapshot(), accounts=accounts,
+            login={"auth": "oauth", "subscription": True, "identity_digest": "b" * 64},
+            fleet=self.fleet())
+        self.assertIn("billing_mode_unverified", established["hard_stops"])
+        with self.assertRaises(PodError) as caught:
+            require_route_establishment(established, route)
+        self.assertEqual(caught.exception.code, "billing_mode_unverified")
+
     def test_billing_and_paid_fallback_fail_closed(self):
         route, unknown = self.established(login={"auth": "unknown", "subscription": None,
-                                                 "identity_digest": None},
+                                                 "identity_digest": "a" * 64},
                                           agent="claude", model="sonnet")
         self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
         with self.assertRaises(PodError) as blocked:
@@ -170,7 +248,7 @@ class RouteEstablishmentTests(unittest.TestCase):
         self.assertEqual(blocked.exception.code, "billing_mode_unverified")
         route, paid = self.established(agent="claude", model="sonnet", billing="unknown",
                                        login={"auth": "api_key", "subscription": False,
-                                              "identity_digest": None})
+                                              "identity_digest": "a" * 64})
         self.assertEqual(paid["hard_stops"], ["paid_route_forbidden"])
         with self.assertRaises(PodError) as refused:
             require_route_establishment(paid, route)
@@ -345,15 +423,17 @@ class ReviewFindingRegressions(unittest.TestCase):
         """A caller could name the bucket and have it reported back as an observation."""
         snapshot = {"status": "observed", "runtime": "r", "version": "1.4.206",
                     "executable": "/fixture/orca", "capabilities": {}}
-        accounts = {"providers": {"claude": {"managed_accounts": 0, "windows": {"weekly": {}},
+        accounts = {"runtime": "r", "providers": {"claude": {"managed_accounts": 0,
+                                             "windows": {"weekly": {}},
                                              "account_association": "host_login"}}}
-        asserted = {"agent": "claude", "model": "fable-5", "account": "a",
+        asserted = {"agent": "claude", "model": "fable-5", "account": "a" * 64,
                     "bucket": "default", "effort": "high"}
         established = route_establishment(asserted, {"billing": "included"}, snapshot=snapshot,
                                           accounts=accounts,
                                           login={"auth": "oauth", "subscription": True,
                                                  "identity_digest": None},
-                                          fleet={"hosts": ["local"], "local_only": True})
+                                          fleet={"runtime": "r", "hosts": ["local"],
+                                                 "local_only": True})
         self.assertEqual(established["route"]["bucket"], "fable")
         self.assertEqual(established["controls"]["quota_bucket"]["bucket"], "fable")
         with self.assertRaises(PodError) as caught:

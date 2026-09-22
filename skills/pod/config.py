@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 import os
+import re
 from typing import Any
 
 import yaml
@@ -17,7 +18,8 @@ SCHEMA = "pod/v1"
 DEFAULT_WORKER_CAPACITY = 2
 COMPLEXITIES = ("trivial", "simple", "standard", "complex", "very_complex")
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
-MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approval_route", "billing", "efforts", "capabilities", "locations"}
+MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approval_route",
+                "billing", "efforts", "capabilities", "locations"}
 POLICY_FIELDS = {"max_workers", "ordinary_max", "allowed_agents", "allowed_accounts", "allowed_locations", "quota_low", "quota_critical", "quota_fresh_seconds", "child_delegation", "review", "spending_grants", "reset_grants", "exceptional_grants"}
 ROUTE_FIELDS = {"model", "effort", "strict"}
 # The waste governor's operator surface. Verification and trigger mappings are project
@@ -203,14 +205,18 @@ def validate(value: Any) -> dict:
         m = exact(raw, MODEL_FIELDS, name="model")
         if "agent" in m and m["agent"] not in ("codex", "claude"):
             raise PodError("invalid_config", "Unsupported agent")
-        for field in ("model", "account", "approval_ref", "approval_route"):
+        for field in ("model", "approval_ref", "approval_route"):
             if field in m and (not isinstance(m[field], str) or not m[field] or len(m[field]) > 256):
                 raise PodError("invalid_config", f"Invalid {field}")
+        if "account" in m and (not isinstance(m["account"], str)
+                                or not re.fullmatch(r"[0-9a-f]{64}", m["account"])):
+            raise PodError("invalid_config", "account must be a redacted native identity digest")
         if "approved" in m and not isinstance(m["approved"], bool):
             raise PodError("invalid_config", "approved must be a boolean")
-        if m.get("approved") and (not m.get("approval_ref") or not all(m.get(key) for key in ("agent", "model", "account"))
+        if m.get("approved") and (not m.get("approval_ref") or not all(m.get(key) for key in
+                                                                       ("agent", "model", "account"))
                                    or m.get("approval_route") != route_identity(m)):
-            raise PodError("invalid_config", "Approval must bind the exact agent/model/account route")
+            raise PodError("invalid_config", "Approval must bind the exact model and redacted account identity")
         if "billing" in m and m["billing"] not in ("included", "paid", "unknown"):
             raise PodError("invalid_config", "Invalid billing class")
         for field in ("efforts", "capabilities", "locations"):
@@ -242,6 +248,9 @@ def validate(value: Any) -> dict:
     for field in ("allowed_agents", "allowed_accounts", "allowed_locations"):
         if field in policy:
             _strings(policy[field], field)
+    if "allowed_accounts" in policy and any(not re.fullmatch(r"[0-9a-f]{64}", value)
+                                             for value in policy["allowed_accounts"]):
+        raise PodError("invalid_config", "allowed_accounts must use redacted native identities")
     if "child_delegation" in policy and not isinstance(policy["child_delegation"], bool):
         raise PodError("invalid_config", "child_delegation must be boolean")
     if "review" in policy and policy["review"] not in ("independent", "project_stricter"):
@@ -258,6 +267,8 @@ def validate(value: Any) -> dict:
                 for required_string in ("id", "action", "account", "valid_until"):
                     if not isinstance(grant[required_string], str) or not grant[required_string]:
                         raise PodError("invalid_config", "Grant identity and validity must be strings")
+                if not re.fullmatch(r"[0-9a-f]{64}", grant["account"]):
+                    raise PodError("invalid_config", "Grant account must be a redacted native identity")
                 try:
                     expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
                 except ValueError as exc:
@@ -294,7 +305,9 @@ def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
     for alias, model in layer.get("models", {}).items():
         if scope != "personal":
             old = base["models"].get(alias)
-            if old is None or any(key in model and model[key] != old.get(key) for key in ("agent", "model", "account", "approved", "approval_ref", "approval_route", "billing")):
+            if old is None or any(key in model and model[key] != old.get(key) for key in
+                                  ("agent", "model", "account", "approved",
+                                   "approval_ref", "approval_route", "billing")):
                 raise PodError("authority_expansion", "Project/task model identity or approval cannot expand personal authority")
             for key in ("efforts", "capabilities", "locations"):
                 if key in model and key in old and not set(model[key]) <= set(old[key]):

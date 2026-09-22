@@ -19,22 +19,26 @@ from tests.common import fixture
 
 
 NOW = datetime(2026, 9, 20, tzinfo=timezone.utc)
+ACCOUNT_IDENTITY = "a" * 64
 
 
 def scenario_inputs():
     policy = deepcopy(DEFAULT)
     model = policy["models"]["sol"]
-    model.update({"account": "account", "approved": True, "approval_ref": "personal",
+    model.update({"account": ACCOUNT_IDENTITY,
+                  "approved": True, "approval_ref": "personal",
                   "billing": "included", "efforts": ["high"], "capabilities": []})
     model["approval_route"] = route_identity(model)
     effective = {"policy": policy, "revision": digest(policy)}
     assessment = {"method": "delegate", "responsibility": "bounded edit", "complexity": "complex",
                   "risk": "low", "size": "small", "uncertainty": "low", "verifiability": "unit",
                   "capabilities": [], "context": [], "reason": "isolated edit", "bounded": True}
-    capabilities = {"sol": {"agent": "codex", "model": "gpt-5.6-sol", "account": "account",
+    capabilities = {"sol": {"agent": "codex", "model": "gpt-5.6-sol",
+                            "account": ACCOUNT_IDENTITY,
                             "bucket": "shared", "efforts": ["high"], "capabilities": [],
                             "billing_preflight": True, "fanout_control": True}}
-    quota = {"account": {"schema": "pod-quota/v1", "provider": "codex", "account": "account",
+    quota = {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
+                         "account": ACCOUNT_IDENTITY,
                          "bucket": "shared", "windows": [{"name": "hour", "remaining_percent": 60}],
                          "remaining_percent": 60, "observed_at": NOW.isoformat(), "source": "supported",
                          "confidence": "observed", "unknowns": []}}
@@ -80,7 +84,7 @@ class ScenarioFixtureTests(unittest.TestCase):
             project.mkdir()
             policy, assessment, capabilities, quota = scenario_inputs()
             route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
-                     "account": "account", "bucket": "shared", "effort": "high"}
+                     "account": ACCOUNT_IDENTITY, "bucket": "shared", "effort": "high"}
             frozen = packet({"schema": "pod-packet/v1", "objective": "objective",
                              "criteria": ["works"], "responsibility": "worker",
                              "scope": ["notes.txt"], "actions": ["edit"],

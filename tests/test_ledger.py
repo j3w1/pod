@@ -110,6 +110,16 @@ class V2StateTests(unittest.TestCase):
             for retired in ("effects", "deliveries", "cleanup"):
                 self.assertNotIn(retired, state)
 
+    def test_run_subset_cannot_be_promoted_to_complete_fleet_capacity(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            with self.assertRaises(PodError) as caught:
+                fresh_projection(project, {"runtime": "runtime",
+                                            "scope": "bound+ledger_runs",
+                                            "complete": True, "workers": []})
+            self.assertEqual(caught.exception.code, "native_occupancy_unverified")
+
     def test_fresh_projection_releases_only_on_one_exact_native_row(self):
         with fixture() as root:
             project = root / "project"
@@ -157,7 +167,7 @@ class V2StateTests(unittest.TestCase):
                        worker_reader=lambda dispatch: shown(binding, released=False))
             self.assertEqual(next(iter(read(project, "objective")["admissions"].values()))["state"],
                              "legacy_hold")
-            native = {"runtime": "runtime", "scope": "bound+ledger_runs", "complete": True,
+            native = {"runtime": "runtime", "scope": "all_runs", "complete": True,
                       "workers": [{"dispatchId": "dispatch", "runId": "run",
                                    "taskId": "task", "terminalState": "released"}]}
             self.assertEqual(fresh_projection(project, native, objective="objective")["occupied"], [])

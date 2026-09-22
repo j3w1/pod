@@ -16,6 +16,35 @@ from .util import bounded_json, exact
 from .context import execution_brief
 
 
+def _governor_projection(project: Path, objective: str, owner: str, *, mutating: bool) -> dict:
+    """Join Governor work to the actual caller and one stable native runtime."""
+    from .ledger import fresh_projection, read
+    from .operations import OrcaPort
+
+    native = OrcaPort(project).read_native(owner)
+    projection = fresh_projection(project, native, objective=objective)
+    if not mutating:
+        return projection
+    if (native.get("authoritative") is not True or native.get("owner") != owner
+            or projection.get("authoritative") is not True
+            or projection.get("owner") != owner
+            or projection.get("runtime") != native.get("runtime")):
+        raise PodError("native_authority_unverified",
+                       "Governor mutation requires the current native objective owner")
+    state = read(project, objective)
+    if state is not None:
+        runtimes = {row.get("runtime") for row in state.get("admissions", {}).values()
+                    if isinstance(row, dict)}
+        checkpoint_value = state.get("checkpoint")
+        refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
+        runtimes.update(ref.get("runtime") for ref in refs
+                        if isinstance(ref, dict) and ref.get("runtime") is not None)
+        if any(runtime != native["runtime"] for runtime in runtimes):
+            raise PodError("native_authority_unverified",
+                           "Governor evidence belongs to another Orca runtime")
+    return projection
+
+
 def run(operation: str, request: dict) -> dict:
     if operation == "brief":
         exact(request, {"criteria", "coverage"}, {"criteria", "coverage"}, name="request")
@@ -96,19 +125,19 @@ def run(operation: str, request: dict) -> dict:
         exact(request, {"project", "objective", "owner", "action", "exception"},
               {"project", "objective", "owner", "action"}, name="request")
         from .governor import decide
-        from .operations import OrcaPort
-        from .ledger import fresh_projection
-        native = OrcaPort(Path(request["project"])).read_native(request["owner"])
-        projection = fresh_projection(Path(request["project"]), native,
-                                      objective=request["objective"])
-        return decide(Path(request["project"]), request["objective"], owner=request["owner"],
+        project = Path(request["project"])
+        projection = _governor_projection(project, request["objective"], request["owner"],
+                                          mutating=True)
+        return decide(project, request["objective"], owner=request["owner"],
                       action=request["action"], exception=request.get("exception"),
                       native_projection=projection)
     if operation == "governor-outcome":
         exact(request, {"project", "objective", "owner", "record_id", "outcome", "provider", "evidence", "detail"},
               {"project", "objective", "owner", "record_id", "outcome"}, name="request")
         from .governor import record_outcome
-        return record_outcome(Path(request["project"]), request["objective"], owner=request["owner"],
+        project = Path(request["project"])
+        _governor_projection(project, request["objective"], request["owner"], mutating=True)
+        return record_outcome(project, request["objective"], owner=request["owner"],
                               record_id=request["record_id"], outcome=request["outcome"],
                               provider=request.get("provider"), evidence=request.get("evidence"),
                               detail=request.get("detail"))
@@ -118,6 +147,7 @@ def run(operation: str, request: dict) -> dict:
               {"project", "objective", "owner", "unit"}, name="request")
         from .governor import observe_candidate, prepare_candidate
         project = Path(request["project"])
+        _governor_projection(project, request["objective"], request["owner"], mutating=True)
         # Commit and tree are read from Git here. A caller cannot hand in the candidate it
         # wants validated, because that identity is what every later reuse rests on.
         observation = observe_candidate(project, base_ref=request.get("base_ref", "origin/main"),
@@ -132,50 +162,54 @@ def run(operation: str, request: dict) -> dict:
         exact(request, {"project", "objective", "owner", "unit", "candidate", "check", "status", "report"},
               {"project", "objective", "owner", "unit", "candidate", "check", "status"}, name="request")
         from .governor import record_preflight
-        return record_preflight(Path(request["project"]), request["objective"], owner=request["owner"],
+        project = Path(request["project"])
+        _governor_projection(project, request["objective"], request["owner"], mutating=True)
+        return record_preflight(project, request["objective"], owner=request["owner"],
                                 unit=request["unit"], candidate=request["candidate"], check=request["check"],
                                 status=request["status"], report=request.get("report"))
     if operation == "governor-classify":
         exact(request, {"project", "objective", "owner", "record_id", "classification"},
               {"project", "objective", "owner", "record_id", "classification"}, name="request")
         from .governor import classify_failure
-        return classify_failure(Path(request["project"]), request["objective"], owner=request["owner"],
+        project = Path(request["project"])
+        _governor_projection(project, request["objective"], request["owner"], mutating=True)
+        return classify_failure(project, request["objective"], owner=request["owner"],
                                 record_id=request["record_id"], classification=request["classification"])
     if operation == "governor-correct":
         exact(request, {"project", "objective", "owner", "unit", "correction", "diagnosis"},
               {"project", "objective", "owner", "unit", "correction"}, name="request")
         from .governor import record_correction
-        return record_correction(Path(request["project"]), request["objective"], owner=request["owner"],
+        project = Path(request["project"])
+        _governor_projection(project, request["objective"], request["owner"], mutating=True)
+        return record_correction(project, request["objective"], owner=request["owner"],
                                  unit=request["unit"], correction=request["correction"],
                                  diagnosis=request.get("diagnosis"))
     if operation == "governor-execute":
         exact(request, {"project", "objective", "owner", "action", "exception", "pull_request"},
               {"project", "objective", "owner", "action"}, name="request")
         from .governor import execute
-        from .operations import OrcaPort
-        from .ledger import fresh_projection
-        native = OrcaPort(Path(request["project"])).read_native(request["owner"])
-        projection = fresh_projection(Path(request["project"]), native,
-                                      objective=request["objective"])
+        project = Path(request["project"])
+        projection = _governor_projection(project, request["objective"], request["owner"],
+                                          mutating=True)
         # The production port is the installed gh and git; request JSON cannot supply one.
-        return execute(Path(request["project"]), request["objective"], owner=request["owner"],
+        return execute(project, request["objective"], owner=request["owner"],
                        action=request["action"], exception=request.get("exception"),
                        pull_request=request.get("pull_request"), native_projection=projection)
     if operation == "governor-reconcile":
         exact(request, {"project", "objective", "owner", "record_id"},
               {"project", "objective", "owner", "record_id"}, name="request")
         from .governor import reconcile
-        return reconcile(Path(request["project"]), request["objective"], owner=request["owner"],
+        project = Path(request["project"])
+        _governor_projection(project, request["objective"], request["owner"], mutating=True)
+        return reconcile(project, request["objective"], owner=request["owner"],
                          record_id=request["record_id"])
     if operation == "governor-status":
         exact(request, {"project", "objective", "owner"}, {"project", "objective", "owner"}, name="request")
         from .governor import status
-        from .operations import OrcaPort
-        from .ledger import fresh_projection
-        native = OrcaPort(Path(request["project"])).read_native(request["owner"])
-        projection = fresh_projection(Path(request["project"]), native,
-                                      objective=request["objective"])
-        return status(Path(request["project"]), request["objective"], native_projection=projection)
+        project = Path(request["project"])
+        projection = _governor_projection(project, request["objective"], request["owner"],
+                                          mutating=False)
+        return status(project, request["objective"], native_projection=projection)
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task",
                         "assessment", "capabilities", "quotas", "occupancy", "plan_revision",

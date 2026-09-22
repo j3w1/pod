@@ -63,6 +63,16 @@ The retired v1 configuration key `policy.retain_idle_minutes` is not imported or
 explicit retention/disposition operations replace that old Pod timer; removing the key grants
 no release authority and performs no native action.
 
+Approved model routes also use a single redacted native account identity in `models.*.account`.
+Run `pod doctor --json` read-only and copy the selected provider's 64-character
+`account_identities.<provider>.identity_digest`. First mark the personal model route
+`approved: false`; then place that digest in its `account` field and in any applicable personal
+`allowed_accounts` or grant `account` field. Run `pod config --check --json`, copy that model's
+new `approval_routes` value into `approval_route`, record the fresh personal approval in
+`approval_ref`, set `approved: true`, and check again. Do not copy a display label, email,
+workspace name or raw provider identifier. A missing identity leaves the route unavailable; a
+changed identity needs a new personal approval and cannot inherit the old account's grants.
+
 ## Installation and release
 
 The package directory remains the single authoring source for Python, skill text and wheel

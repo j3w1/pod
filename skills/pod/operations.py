@@ -10,10 +10,10 @@ from uuid import UUID
 
 from .config import DEFAULT_WORKER_CAPACITY, effective
 from .errors import PodError
-from .ledger import (admission_identity, binding_valid, bound_runs, migrate_v1, read, reserve,
+from .ledger import (admission_identity, binding_valid, migrate_v1, read, reserve,
                      update_admission, _spending_grant_binding)
 from .orca import (account_metadata_raw, agent_login_mode, bucket_for, contract, hosts, identity,
-                   mutate_command, read_command, route_establishment, worker_rows, worker_show,
+                   mutate_command, read_command, route_establishment, run_rows, worker_rows, worker_show,
                    worktree_selector)
 from .routing import preview
 from .util import bounded_text
@@ -24,24 +24,12 @@ STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
 
 class NativePort(Protocol):
     def establish(self, route: dict, model_policy: dict, *, child_delegation: bool) -> dict: ...
-    def read_native(self, owner: str, *, run: str | None = None, route: dict | None = None,
-                    runs: tuple[str, ...] = ()) -> dict: ...
+    def read_native(self, owner: str, *, route: dict | None = None) -> dict: ...
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
                      worktree: str, retry_request: str | None = None) -> dict: ...
     def request_show(self, request_uuid: str) -> dict: ...
     def find_worker(self, *, run: str, task: str) -> list[dict]: ...
     def show_worker(self, dispatch: str) -> dict: ...
-
-
-def _identifier(value: object) -> str | None:
-    if isinstance(value, str):
-        return value or None
-    if isinstance(value, dict):
-        for key in ("id", "dispatchId", "dispatch_id"):
-            found = value.get(key)
-            if isinstance(found, str) and found:
-                return found
-    return None
 
 
 class OrcaPort:
@@ -56,42 +44,29 @@ class OrcaPort:
                                    login=agent_login_mode(route["agent"]), fleet=hosts(),
                                    child_delegation=child_delegation)
 
-    def read_native(self, owner: str, *, run: str | None = None, route: dict | None = None,
-                    runs: tuple[str, ...] = ()) -> dict:
+    def read_native(self, owner: str, *, route: dict | None = None) -> dict:
         handle = os.environ.get("ORCA_TERMINAL_HANDLE")
         authoritative = bool(handle) and handle == owner
-        explicit_runs = {value for value in (run, *runs) if isinstance(value, str) and value}
-        runtime = None
-        if run is None:
-            current = read_command(["orchestration", "run-current", "--json"])
-            runtime = current["runtime"]
-            current_value = current["result"].get("run")
-            current_id = (_identifier(current_value)
-                          if isinstance(current_value, dict) else current_value)
-            if isinstance(current_id, str) and current_id:
-                explicit_runs.add(current_id)
-            if self.project is not None:
-                explicit_runs.update(bound_runs(self.project, runtime))
-        pages = [worker_rows(value) for value in sorted(explicit_runs)]
-        if not pages:
-            pages = [worker_rows()]
-            runtime = pages[0]["runtime"]
-            scope = (pages[0]["scope"].get("source")
-                     if isinstance(pages[0]["scope"], dict) else pages[0]["scope"])
-            if scope != "all":
-                raise PodError("native_occupancy_unverified",
-                               "No exact Run set or all-fleet Orca projection is available")
-        elif runtime is None:
-            runtime = pages[0]["runtime"]
-            if self.project is not None:
-                known_runs = bound_runs(self.project, runtime)
-                for extra in sorted(set(known_runs) - explicit_runs):
-                    pages.append(worker_rows(extra))
+        before = run_rows()
+        runtime = before["runtime"]
+        run_ids = tuple(sorted(row["id"] for row in before["runs"]))
+        pages = [(run_id, worker_rows(run_id)) for run_id in run_ids]
+        after = run_rows()
+        after_ids = tuple(sorted(row["id"] for row in after["runs"]))
+        if (before.get("complete") is not True or after.get("complete") is not True
+                or after["runtime"] != runtime or after_ids != run_ids):
+            raise PodError("native_occupancy_unverified",
+                           "Native Run inventory changed during the fleet read")
         rows = []
         cross_host = False
-        for page in pages:
+        for run_id, page in pages:
             if page["runtime"] != runtime or page["complete"] is not True:
                 raise PodError("orca_runtime_changed", "Orca projection changed during admission read")
+            scope = page.get("scope")
+            if (not isinstance(scope, dict) or scope.get("source") != "flag"
+                    or scope.get("run") != run_id):
+                raise PodError("native_occupancy_unverified",
+                               "Run-scoped worker projection does not prove its exact Run")
             for worker in page["workers"]:
                 if not isinstance(worker, dict):
                     raise PodError("orca_contract", "Worker projection is malformed")
@@ -103,7 +78,7 @@ class OrcaPort:
                 rows.append(worker)
         return {"runtime": runtime, "owner": owner if authoritative else None,
                 "authoritative": authoritative,
-                "scope": "bound+ledger_runs" if explicit_runs else "all",
+                "scope": "all_runs",
                 "complete": True, "workers": rows,
                 "quota": _quota_snapshot(route) if route else None,
                 "cross_host": cross_host, "atomic_admission": False}
@@ -350,7 +325,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": row["state"], "admission": row, "action": "hold"}
     if worktree != admission["worktree"]:
         raise PodError("admission_conflict", "Recovery changed the original worktree")
-    authority = native_port.read_native(owner, run=admission["run_id"], route=admission["request"])
+    authority = native_port.read_native(owner, route=admission["request"])
     if (authority.get("authoritative") is not True or authority.get("owner") != owner
             or authority.get("runtime") != admission["runtime"]):
         raise PodError("native_authority_unverified", "Recovery caller/runtime authority is unproven")
@@ -430,7 +405,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                                                         "policy": policy["policy"]["policy"],
                                                         "task_policy": task_policy},
                         establishment=establishment,
-                        native_reader=lambda: native_port.read_native(owner, run=run, route=route),
+                        native_reader=lambda: native_port.read_native(owner, route=route),
                         capacity=capacity, run_id=run, task_id=task,
                         plan_revision=plan_revision, packet_id=validated["packet_id"],
                         worktree=worktree, frozen_packet=validated,
