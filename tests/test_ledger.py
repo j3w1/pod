@@ -47,7 +47,10 @@ def shown(binding, *, released=False, launch=None):
                      **({"status": "completed"} if released else {})},
         "projection": {"id": binding["workerId"], "dispatchId": binding["dispatchId"],
                        "runId": binding["runId"], "taskId": binding["taskId"],
-                       **({"outcome": "succeeded"} if released else {}),
+                       "outcome": "succeeded" if released else "in_progress",
+                       "stage": {"dispatch": "completed" if released else "dispatched",
+                                 "worker": "succeeded" if released else "running",
+                                 "detail": "settled" if released else "working"},
                        "resource": {"state": "released" if released else "owned"}},
         "worker": {"dispatchId": binding["dispatchId"],
                    "worktreeId": binding.get("worktreeId", "worktree"),
@@ -223,6 +226,51 @@ class MigrationTests(unittest.TestCase):
             closed = next(row for row in state["admissions"].values() if row["state"] == "closed")
             self.assertEqual(closed["recovery"]["spending_grant"], grant)
             self.assertNotIn("deliveries", state)
+
+    def test_migration_uses_the_same_coherent_assignment_settlement_rule(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            cases = {}
+            terminal = ("succeeded", "failed", "stopped", "canceled", "cancelled",
+                        "abandoned")
+            for outcome in terminal:
+                binding = old_binding(outcome)
+                cases[outcome] = (binding, outcome, "settled", "closed")
+            cases.update({
+                "terminal_active_stage": (old_binding("terminal-active"), "succeeded",
+                                          "working", "bound"),
+                "active_settled_stage": (old_binding("active-settled"), "in_progress",
+                                          "settled", "bound"),
+                "missing_outcome": (old_binding("missing"), None, "settled", "bound"),
+                "malformed_outcome": (old_binding("malformed-outcome"), ["succeeded"],
+                                      "settled", "bound"),
+                "malformed_stage": (old_binding("malformed"), "succeeded", None, "bound"),
+            })
+            self.write_old(project, legacy({
+                name: effect("confirmed", binding=binding)
+                for name, (binding, _, _, _) in cases.items()}))
+
+            def reader(dispatch):
+                case = next(case for case in cases.values()
+                            if case[0]["dispatchId"] == dispatch)
+                binding, outcome, detail, _ = case
+                value = shown(binding)
+                projection = value["result"]["projection"]
+                if outcome is None:
+                    projection.pop("outcome")
+                else:
+                    projection["outcome"] = outcome
+                if detail is None:
+                    projection["stage"] = "settled"
+                else:
+                    projection["stage"]["detail"] = detail
+                return value
+
+            migrate_v1(project, "objective", owner="owner", worker_reader=reader)
+            migrated = read(project, "objective")["admissions"].values()
+            by_effect = {row["recovery"]["legacy_effect"]: row["state"] for row in migrated}
+            self.assertEqual(by_effect, {name: case[3] for name, case in cases.items()})
 
     def test_fifo_legacy_context_is_rejected_without_blocking(self):
         with fixture() as root:

@@ -128,11 +128,20 @@ def _mutation_envelope(stdout: str) -> dict:
         if native_result is not None and not isinstance(native_result, dict):
             raise PodError("native_effect_uncertain", "Native refusal carries a malformed result")
         result = dict(native_result or {})
+        if "error" in result:
+            result["_result_error"] = result["error"]
         result.setdefault("state", "deferred")
         result["error"] = error
         for key in ("dispatchId", "dispatch_id", "workerId", "worker_id",
-                    "residualResources", "failedStage"):
-            if key in value and key not in result:
+                    "residualResources", "residual_resources", "effects",
+                    "terminal", "terminalHandle", "terminal_handle",
+                    "worktreeId", "worktree_id", "terminalResourceId",
+                    "terminal_resource_id", "resource", "failedStage", "failed_stage"):
+            if key not in value:
+                continue
+            if key in result and result[key] != value[key]:
+                result.setdefault("_envelope_conflicts", {})[key] = value[key]
+            else:
                 result[key] = value[key]
     else:
         raise PodError("native_effect_uncertain", "Native response does not prove an effect or refusal")
@@ -140,6 +149,13 @@ def _mutation_envelope(stdout: str) -> dict:
     if not isinstance(mutation, dict):
         mutation = value.get("mutation")
     request_uuid = mutation.get("requestId") if isinstance(mutation, dict) else None
+    error_data = error.get("data") if isinstance(error, dict) else None
+    error_request = (error_data.get("orchestrationRequestId")
+                     if isinstance(error_data, dict) else None)
+    if request_uuid is None:
+        request_uuid = error_request
+    elif error_request is not None and error_request != request_uuid:
+        result["_request_conflict"] = True
     return {"runtime": runtime, "result": result, "request_uuid": request_uuid,
             "error": error}
 

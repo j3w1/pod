@@ -61,6 +61,12 @@ Pod's automatic source and packet-reference boundary excludes conventional crede
 
 Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent or changed source durably rejects that packet assignment; an unavailable source holds admission until a fresh packet binds actual bytes. This is a bounded admission check, not an atomic multi-file snapshot against external writes. `pod-context/v2` persists only policy/evidence admissions: `reserved`, `bound`, `unresolved`, `closed`, `deferred` and `legacy_hold`. The same objective lock serializes one logical reservation per Pod assignment. Reserved, unresolved and unbound legacy rows remain outstanding; one exact already-bound runtime/Run/Task/Dispatch/worker read whose assignment has settled frees a logical slot regardless of retained terminal or resource disposition. Missing, ambiguous or contradictory evidence does not free it. Independent objectives and foreign historical workers are not reconstructed or counted for runtime capacity. There is no all-Run pagination, fleet completeness prerequisite, terminal-liveness inference or occupancy deduplication in admission. Unknown quota conservatively limits the objective's own overlapping logical admissions. Paid grant units remain spent after settlement, closure, deferral or migration.
 
+Those six states have narrow policy purposes: `reserved` fences the pre-effect
+decision, `bound` keeps an exact own-attempt reference, `unresolved` prevents a
+duplicate start under uncertainty, `closed` preserves proven migrated settlement,
+`deferred` records authoritative no-start, and `legacy_hold` preserves unresolvable
+v1 uncertainty. None reconstructs Orca resource occupancy.
+
 The personal model `account` value is the redacted native identity digest reported by
 `pod doctor --json`, not a display label. The same digest keys approval, quota and
 exceptional/spending/reset grants, so aliases cannot split one account's allowance or transfer a

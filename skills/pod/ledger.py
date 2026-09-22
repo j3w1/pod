@@ -353,6 +353,24 @@ def logical_projection(project: Path, native: dict, *, objective: str,
             "physical_capacity": native.get("physical_capacity", "unavailable")}
 
 
+_SETTLED_ASSIGNMENT_OUTCOMES = frozenset(
+    {"succeeded", "failed", "stopped", "canceled", "cancelled", "abandoned"})
+
+
+def _native_assignment_settled(shown: dict) -> bool:
+    """Read only Orca's assignment outcome and its settlement qualifier."""
+    result = shown.get("result") if isinstance(shown, dict) else None
+    projection = result.get("projection") if isinstance(result, dict) else None
+    if not isinstance(projection, dict):
+        return False
+    stage = projection.get("stage")
+    if not isinstance(stage, dict):
+        return False
+    outcome = projection.get("outcome")
+    return (isinstance(outcome, str) and outcome in _SETTLED_ASSIGNMENT_OUTCOMES
+            and stage.get("detail") == "settled")
+
+
 def _quota_hold(provider: str, account: str, bucket: str | None,
                 snapshot: dict | None, state: str, *, now: datetime,
                 freshness: int, project: Path | None = None) -> bool:
@@ -629,17 +647,7 @@ def _legacy_binding_matches(shown: dict, effect: dict, binding: dict, runtime: s
 
 
 def _legacy_assignment_settled(shown: dict) -> bool:
-    result = shown.get("result") if isinstance(shown, dict) else None
-    dispatch = result.get("dispatch") if isinstance(result, dict) else None
-    projection = result.get("projection") if isinstance(result, dict) else None
-    worker = result.get("worker") if isinstance(result, dict) else None
-    if not all(isinstance(row, dict) for row in (dispatch, projection, worker)):
-        return False
-    stage = projection.get("stage") if isinstance(projection.get("stage"), dict) else {}
-    terminal = {"succeeded", "failed", "stopped", "canceled", "cancelled", "abandoned"}
-    return bool({dispatch.get("status"), projection.get("outcome"), worker.get("state"),
-                 stage.get("dispatch"), stage.get("worker")}.intersection(terminal)
-                or stage.get("detail") == "settled")
+    return _native_assignment_settled(shown)
 
 
 def _read_legacy_bytes(path: Path, *, limit: int = 1_048_576) -> bytes:

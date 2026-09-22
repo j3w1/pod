@@ -34,10 +34,11 @@ routes and checks tied to your original criteria.
 
 Pod checks policy before a worker starts and verifies the effective route
 afterward. It stores the admission decision and evidence bindings; Orca supplies
-the current runtime facts and enforces actual worker capacity. Pod never infers
-physical capacity from a fleet census. The coordinator follows Orca's installed,
-version-matched [orchestration guide](https://www.onorca.dev/docs/cli/orchestration)
-for supervision and lifecycle.
+the authoritative native start result and owns actual workers and capacity; CE
+owns physical limits. Pod never infers physical capacity from a fleet census.
+The coordinator follows Orca's installed, version-matched
+[orchestration guide](https://www.onorca.dev/docs/cli/orchestration) for
+supervision and lifecycle.
 
 Before a Pod-mediated Git or CI action, the Governor checks whether the candidate
 is ready, an equivalent action is running, or suitable evidence already exists.

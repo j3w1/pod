@@ -11,7 +11,8 @@ from uuid import UUID
 from .config import DEFAULT_WORKER_CAPACITY, effective
 from .errors import PodError
 from .ledger import (admission_identity, binding_valid, migrate_v1, read, reserve,
-                     update_admission, _spending_grant_binding)
+                     update_admission, _native_assignment_settled,
+                     _spending_grant_binding)
 from .orca import (account_evidence_stops, account_metadata_raw, agent_login_mode, bucket_for,
                    contract, current_run, hosts, identity, mutate_command, read_command,
                    require_route_establishment, route_establishment,
@@ -21,9 +22,6 @@ from .util import bounded_text
 
 
 STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
-SETTLED_STATES = ("succeeded", "failed", "stopped", "canceled", "cancelled", "abandoned")
-
-
 def _assignment_evidence(shown: dict, admission: dict) -> dict:
     """Project settlement for one already-bound assignment, never terminal ownership."""
     binding = admission.get("native_binding")
@@ -45,14 +43,10 @@ def _assignment_evidence(shown: dict, admission: dict) -> dict:
             or worker.get("dispatchId") != binding["dispatchId"]
             or worker.get("worktreeId") != binding["worktreeId"]):
         raise PodError("native_assignment_unverified", "Exact assignment identity differs")
-    stage = projection.get("stage") if isinstance(projection.get("stage"), dict) else {}
-    states = {dispatch.get("status"), projection.get("outcome"), worker.get("state"),
-              stage.get("dispatch"), stage.get("worker")}
-    settled = bool(states.intersection(SETTLED_STATES) or stage.get("detail") == "settled")
     return {"admission_id": admission["admission_id"], "runtime": shown["runtime"],
             "run_id": binding["runId"], "task_id": binding["taskId"],
             "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
-            "settled": settled}
+            "settled": _native_assignment_settled(shown)}
 
 
 class NativePort(Protocol):
@@ -273,22 +267,28 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
     shown = port.show_worker(dispatch)
     binding = _binding_from_show(shown, admission, dispatch)
     def apply(row: dict) -> None:
+        recovery = dict(row.get("recovery", {}))
+        recovery.pop("capacity_refusal", None)
+        recovery["receipt"] = "recorded"
         row["state"] = "bound"
         row["native_binding"] = binding
         row["request_uuid"] = request_uuid
         row["error"] = None
-        row["recovery"] = {**row.get("recovery", {}), "receipt": "recorded"}
+        row["recovery"] = recovery
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
 def _hold(project: Path, objective: str, *, owner: str, admission_id: str,
           request_uuid: str | None, code: str, detail: object) -> dict:
     def apply(row: dict) -> None:
+        recovery = {**row.get("recovery", {}),
+                    "next": "request-show" if request_uuid else "exact Run/Task/Dispatch read"}
+        if code == "native_capacity_refusal_unverified":
+            recovery["capacity_refusal"] = "unverified"
         row["state"] = "unresolved"
         row["request_uuid"] = request_uuid
         row["error"] = {"code": code, "detail": detail}
-        row["recovery"] = {**row.get("recovery", {}),
-                           "next": "request-show" if request_uuid else "exact Run/Task/Dispatch read"}
+        row["recovery"] = recovery
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
@@ -303,28 +303,122 @@ def _record_request(project: Path, objective: str, *, owner: str, admission_id: 
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
-def _native_capacity_full(receipt: dict) -> bool:
+_EFFECT_IDENTITIES = (("dispatchId", "dispatch_id"), ("workerId", "worker_id"))
+_EFFECT_COLLECTIONS = (("residualResources", "residual_resources"), ("effects",))
+_EFFECT_REFERENCES = ("terminal", "terminalHandle", "terminal_handle", "worktreeId",
+                      "worktree_id", "terminalResourceId", "terminal_resource_id", "resource",
+                      "failedStage", "failed_stage")
+
+
+def _aliases_conflict(row: dict, names: tuple[str, ...]) -> bool:
+    values = [row[name] for name in names if name in row]
+    return len(values) > 1 and any(value != values[0] for value in values[1:])
+
+
+def _possible_effect_evidence(row: object) -> bool:
+    if not isinstance(row, dict):
+        return True
+    for names in _EFFECT_IDENTITIES:
+        if _aliases_conflict(row, names):
+            return True
+        if any(row.get(name) is not None for name in names if name in row):
+            return True
+    for names in _EFFECT_COLLECTIONS:
+        if _aliases_conflict(row, names):
+            return True
+        for name in names:
+            if name in row and (not isinstance(row[name], list) or row[name]):
+                return True
+    return any(name in row and row[name] is not None for name in _EFFECT_REFERENCES)
+
+
+def _capacity_request_reference(receipt: dict) -> tuple[str | None, bool]:
+    values = []
+    if receipt.get("request_uuid") is not None:
+        values.append(receipt["request_uuid"])
+    mutation = receipt.get("mutation")
+    if mutation is not None:
+        if not isinstance(mutation, dict):
+            return None, False
+        if mutation.get("requestId") is not None:
+            values.append(mutation["requestId"])
     error = receipt.get("error")
-    if (receipt.get("exit") == 0 or receipt.get("state") != "deferred"
-            or not isinstance(error, dict) or error.get("code") != "capacity_full"):
-        return False
-    if any(identity(receipt, field) is not None for field in ("dispatchId", "workerId")):
-        return False
-    residual = receipt.get("residualResources")
-    return residual in (None, [], {})
+    data = error.get("data") if isinstance(error, dict) else None
+    if isinstance(data, dict) and data.get("orchestrationRequestId") is not None:
+        values.append(data["orchestrationRequestId"])
+    if not values:
+        return None, True
+    try:
+        validated = [_valid_request_uuid(value) for value in values]
+    except PodError:
+        return None, False
+    if any(value != validated[0] for value in validated[1:]):
+        return None, False
+    return validated[0], True
+
+
+def _capacity_refusal_classification(receipt: dict, admission: dict,
+                                     *, request_uuid: str | None = None) -> str | None:
+    """Classify one admission-bound native no-start result without lifecycle inference."""
+    error = receipt.get("error") if isinstance(receipt, dict) else None
+    if not isinstance(error, dict) or error.get("code") != "capacity_full":
+        return None
+    if (receipt.get("runtime") != admission.get("runtime")
+            or receipt.get("state") != "deferred"):
+        return "unverified"
+    if ("_result_error" in receipt or receipt.get("_envelope_conflicts")
+            or receipt.get("_request_conflict")):
+        return "unverified"
+    if "exit" in receipt and (type(receipt["exit"]) is not int or receipt["exit"] == 0):
+        return "unverified"
+    observed_request, request_valid = _capacity_request_reference(receipt)
+    if not request_valid or (request_uuid is not None and observed_request is not None
+                             and observed_request != request_uuid):
+        return "unverified"
+    data = error.get("data", {})
+    if not isinstance(data, dict):
+        return "unverified"
+    if _possible_effect_evidence(receipt) or _possible_effect_evidence(data):
+        return "unverified"
+    runtime_names = ("runtime", "runtimeId", "runtime_id")
+    if _aliases_conflict(data, runtime_names):
+        return "unverified"
+    for name in runtime_names:
+        if name in data and data[name] != admission["runtime"]:
+            return "unverified"
+    if "state" in data and data["state"] != "deferred":
+        return "unverified"
+    return "authoritative"
+
+
+def _capacity_refusal_result(project: Path, objective: str, *, owner: str,
+                             admission_id: str, admission: dict, receipt: dict,
+                             request_uuid: str | None = None) -> dict | None:
+    classification = _capacity_refusal_classification(
+        receipt, admission, request_uuid=request_uuid)
+    if classification is None:
+        return None
+    available_request = request_uuid
+    if available_request is None:
+        observed_request, request_valid = _capacity_request_reference(receipt)
+        available_request = observed_request if request_valid else None
+    if classification == "authoritative":
+        return _defer_capacity(project, objective, owner=owner, admission_id=admission_id,
+                               receipt=receipt, request_uuid=available_request)
+    return _hold(project, objective, owner=owner, admission_id=admission_id,
+                 request_uuid=available_request, code="native_capacity_refusal_unverified",
+                 detail="capacity_full did not prove an admission-bound no-start result")
 
 
 def _defer_capacity(project: Path, objective: str, *, owner: str, admission_id: str,
-                    receipt: dict) -> dict:
-    request_uuid = receipt.get("request_uuid")
-    if request_uuid is not None:
-        request_uuid = _valid_request_uuid(request_uuid)
+                    receipt: dict, request_uuid: str | None) -> dict:
     def apply(row: dict) -> None:
         row["state"] = "deferred"
         row["request_uuid"] = request_uuid
         row["native_binding"] = None
         row["error"] = {"code": "capacity_full", "detail": receipt.get("error")}
         row["recovery"] = {**row.get("recovery", {}),
+                           "capacity_refusal": "authoritative",
                            "native_start_state": "deferred",
                            "next": "explicit new policy admission after native capacity changes"}
     return update_admission(project, objective, owner=owner,
@@ -437,11 +531,19 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
             row = _hold(project, objective, owner=owner, admission_id=admission_id,
                         request_uuid=request_uuid, code="native_receipt_missing", detail="completed request")
         else:
-            row = _bind(project, objective, owner=owner, admission_id=admission_id,
-                        receipt={"runtime": admission["runtime"], **receipt},
-                        port=native_port, request_uuid=request_uuid)
+            completed_receipt = {"runtime": admission["runtime"], **receipt}
+            row = _capacity_refusal_result(
+                project, objective, owner=owner, admission_id=admission_id,
+                admission=admission, receipt=completed_receipt,
+                request_uuid=request_uuid)
+            if row is None:
+                row = _bind(project, objective, owner=owner, admission_id=admission_id,
+                            receipt=completed_receipt, port=native_port,
+                            request_uuid=request_uuid)
         return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
     if status == "pending":
+        if admission.get("recovery", {}).get("capacity_refusal") == "unverified":
+            return {"status": admission["state"], "admission": admission, "action": "hold"}
         model, current_policy = _current_authority(
             project, objective, admission, task_policy=task_policy)
         fresh_establishment = native_port.establish(
@@ -458,13 +560,18 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         receipt = native_port.start_worker(run=admission["run_id"], task=admission["task_id"],
                                            owner=owner, route=admission["request"],
                                            worktree=worktree, retry_request=request_uuid)
+        row = _capacity_refusal_result(
+            project, objective, owner=owner, admission_id=admission_id,
+            admission=admission, receipt=receipt, request_uuid=request_uuid)
         returned = receipt.get("request_uuid")
-        if returned is not None and returned != request_uuid:
-            row = _hold(project, objective, owner=owner, admission_id=admission_id,
-                        request_uuid=request_uuid, code="native_request_mismatch", detail=returned)
-        else:
-            row = _bind(project, objective, owner=owner, admission_id=admission_id,
-                        receipt=receipt, port=native_port, request_uuid=request_uuid)
+        if row is None:
+            if returned is not None and returned != request_uuid:
+                row = _hold(project, objective, owner=owner, admission_id=admission_id,
+                            request_uuid=request_uuid, code="native_request_mismatch",
+                            detail=returned)
+            else:
+                row = _bind(project, objective, owner=owner, admission_id=admission_id,
+                            receipt=receipt, port=native_port, request_uuid=request_uuid)
         return {"status": row["state"], "admission": row, "action": "joined_pending_request"}
     row = _adopt_unique(project, objective, owner=owner, admission_id=admission_id,
                         port=native_port, request_uuid=request_uuid)
@@ -532,21 +639,11 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     try:
         receipt = native_port.start_worker(run=run, task=task, owner=owner, route=route,
                                            worktree=worktree)
-        if _native_capacity_full(receipt):
-            row = _defer_capacity(project, objective, owner=owner,
-                                  admission_id=admission_id, receipt=receipt)
-            return {"status": "deferred", "admission": row, "decision": decision,
-                    "establishment": establishment}
-        if isinstance(receipt.get("error"), dict) and receipt["error"].get("code") == "capacity_full":
-            request_uuid = receipt.get("request_uuid")
-            try:
-                request_uuid = _valid_request_uuid(request_uuid) if request_uuid is not None else None
-            except PodError:
-                request_uuid = None
-            row = _hold(project, objective, owner=owner, admission_id=admission_id,
-                        request_uuid=request_uuid, code="native_capacity_refusal_unverified",
-                        detail="capacity_full receipt also carried possible effect evidence")
-            return {"status": "unresolved", "admission": row, "decision": decision,
+        row = _capacity_refusal_result(
+            project, objective, owner=owner, admission_id=admission_id,
+            admission=admission, receipt=receipt)
+        if row is not None:
+            return {"status": row["state"], "admission": row, "decision": decision,
                     "establishment": establishment}
         request_uuid = _valid_request_uuid(receipt.get("request_uuid"))
         _record_request(project, objective, owner=owner, admission_id=admission_id,

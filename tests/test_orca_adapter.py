@@ -408,8 +408,9 @@ class MutationAllowlistTests(unittest.TestCase):
 
     def test_capacity_full_error_envelope_preserves_runtime_and_request(self):
         request_id = "11111111-1111-4111-8111-111111111111"
-        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full"},
-                   "mutation": {"requestId": request_id},
+        payload = {"ok": False,
+                   "error": {"code": "capacity_full", "message": "full",
+                             "data": {"orchestrationRequestId": request_id}},
                    "_meta": {"runtimeId": "runtime"}}
         completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
         argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
@@ -423,7 +424,9 @@ class MutationAllowlistTests(unittest.TestCase):
 
     def test_capacity_full_error_envelope_preserves_partial_effect_evidence(self):
         request_id = "11111111-1111-4111-8111-111111111111"
-        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full"},
+        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full",
+                                           "data": {"residualResources": [
+                                               {"kind": "terminal"}]}},
                    "result": {"dispatchId": "dispatch", "workerId": "worker"},
                    "mutation": {"requestId": request_id},
                    "_meta": {"runtimeId": "runtime"}}
@@ -435,6 +438,22 @@ class MutationAllowlistTests(unittest.TestCase):
             receipt_value = mutate_command(argv, accept_exit=(0, 1))
         self.assertEqual(receipt_value["result"]["dispatchId"], "dispatch")
         self.assertEqual(receipt_value["result"]["workerId"], "worker")
+        self.assertEqual(receipt_value["result"]["error"]["data"]["residualResources"],
+                         [{"kind": "terminal"}])
+
+    def test_capacity_full_error_envelope_preserves_conflicting_alias_evidence(self):
+        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full"},
+                   "result": {"dispatchId": "one"}, "dispatchId": "two",
+                   "dispatch_id": "three", "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
+                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["result"]["dispatchId"], "one")
+        self.assertEqual(receipt_value["result"]["dispatch_id"], "three")
+        self.assertEqual(receipt_value["result"]["_envelope_conflicts"]["dispatchId"], "two")
 
     def test_worktree_selectors_accept_existing_placements_only(self):
         for value in ("current", "path:/fixture/repo", "id:abc", "name:task", "branch:main"):

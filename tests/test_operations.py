@@ -9,7 +9,9 @@ from pod.config import effective, route_identity
 from pod.errors import PodError
 from pod.internal import run as helper_run
 from pod.ledger import checkpoint, read, state_root, update_admission
-from pod.operations import OrcaPort, guarded_start, recover_admission
+from pod.operations import (OrcaPort, _assignment_evidence,
+                            _capacity_refusal_classification, guarded_start,
+                            recover_admission)
 from pod.records import packet
 from tests.common import fixture
 
@@ -28,6 +30,7 @@ class FakePort:
         self.request_state = "completed"
         self.request_method = "orchestration.workerStart"
         self.request_id = REQUEST_UUID
+        self.request_receipt = None
         self.show_error = None
         self.find_rows = None
         self.quota = {"schema": "pod-quota/v1", "provider": "codex",
@@ -60,11 +63,7 @@ class FakePort:
             item = self.workers.get(binding["dispatchId"])
             if item is None:
                 continue
-            rows.append({"admission_id": admission["admission_id"], "runtime": self.runtime,
-                         "run_id": binding["runId"], "task_id": binding["taskId"],
-                         "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
-                         "settled": item.get("state") in
-                         ("succeeded", "failed", "stopped", "canceled", "abandoned")})
+            rows.append(_assignment_evidence(self.show_worker(binding["dispatchId"]), admission))
         authoritative = bool(authority_runs)
         return {"runtime": self.runtime, "authoritative": authoritative,
                 "owner": owner if authoritative else None,
@@ -80,13 +79,14 @@ class FakePort:
             return dict(self.start_receipt)
         dispatch = "dispatch" if not self.workers else f"dispatch-{len(self.workers) + 1}"
         self.workers[dispatch] = {"run": run, "task": task, "route": dict(route),
-                                  "worktree": worktree, "state": "ready"}
+                                  "worktree": worktree, "state": "ready",
+                                  "outcome": "in_progress", "stage_detail": "input_accepted"}
         return {"runtime": self.runtime, "request_uuid": retry_request or REQUEST_UUID,
                 "runId": run, "taskId": task, "dispatchId": dispatch, "state": "ready"}
 
     def request_show(self, request_uuid):
-        receipt = None
-        if self.workers:
+        receipt = self.request_receipt
+        if receipt is None and self.workers:
             dispatch, item = next(iter(self.workers.items()))
             receipt = {"runId": item["run"], "taskId": item["task"],
                        "dispatchId": dispatch,
@@ -116,9 +116,13 @@ class FakePort:
         if not self.headless:
             worker["agentTerminalHandle"] = "terminal-" + dispatch
         return {"runtime": self.runtime, "result": {
-            "dispatch": {"id": dispatch, "runId": item["run"], "taskId": item["task"]},
+            "dispatch": {"id": dispatch, "runId": item["run"], "taskId": item["task"],
+                         "status": "dispatched"},
             "projection": {"id": "worker-" + dispatch, "dispatchId": dispatch,
-                           "runId": item["run"], "taskId": item["task"]},
+                           "runId": item["run"], "taskId": item["task"],
+                           "outcome": item["outcome"],
+                           "stage": {"dispatch": "dispatched", "worker": item["state"],
+                                     "detail": item["stage_detail"]}},
             "worker": worker}}
 
 
@@ -220,10 +224,40 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(full.exception.code, "logical_capacity_full")
             dispatch = first["admission"]["native_binding"]["dispatchId"]
             port.workers[dispatch]["state"] = "succeeded"
+            port.workers[dispatch]["outcome"] = "succeeded"
+            port.workers[dispatch]["stage_detail"] = "settled"
             third = start(project, assessment, capabilities, quotas, frozen, port, task="three")
             self.assertEqual(third["status"], "bound")
             self.assertIn("terminal-" + dispatch,
                           port.show_worker(dispatch)["result"]["worker"]["agentTerminalHandle"])
+
+    def test_assignment_settlement_uses_one_coherent_projection_outcome(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            started = start(project, assessment, capabilities, quotas, frozen, port)
+            admission = started["admission"]
+            dispatch = admission["native_binding"]["dispatchId"]
+            item = port.workers[dispatch]
+            for outcome in ("succeeded", "failed", "stopped", "canceled", "cancelled",
+                            "abandoned"):
+                with self.subTest(outcome=outcome):
+                    item.update(outcome=outcome, stage_detail="settled")
+                    self.assertTrue(_assignment_evidence(
+                        port.show_worker(dispatch), admission)["settled"])
+            item.update(outcome="succeeded", stage_detail="working")
+            self.assertFalse(_assignment_evidence(port.show_worker(dispatch), admission)["settled"])
+            item.update(outcome="in_progress", stage_detail="settled")
+            self.assertFalse(_assignment_evidence(port.show_worker(dispatch), admission)["settled"])
+            shown = port.show_worker(dispatch)
+            shown["result"]["projection"].pop("outcome")
+            self.assertFalse(_assignment_evidence(shown, admission)["settled"])
+            shown = port.show_worker(dispatch)
+            shown["result"]["projection"]["stage"] = "settled"
+            self.assertFalse(_assignment_evidence(shown, admission)["settled"])
+            shown = port.show_worker(dispatch)
+            shown["result"]["projection"]["outcome"] = ["succeeded"]
+            self.assertFalse(_assignment_evidence(shown, admission)["settled"])
 
     def test_native_capacity_full_is_durable_deferred_not_a_binding_or_retry(self):
         with fixture() as root:
@@ -251,6 +285,65 @@ class AdmissionTests(unittest.TestCase):
             result = start(project, assessment, capabilities, quotas, frozen, port)
             self.assertEqual(result["status"], "unresolved")
             self.assertIsNone(result["admission"]["native_binding"])
+            self.assertEqual(result["admission"]["error"]["code"],
+                             "native_capacity_refusal_unverified")
+
+    def test_capacity_refusal_preserves_error_data_request_reference(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            port.start_receipt = {
+                "runtime": "runtime", "exit": 1, "state": "deferred",
+                "error": {"code": "capacity_full", "message": "full",
+                          "data": {"orchestrationRequestId": REQUEST_UUID}}}
+            result = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(result["status"], "deferred")
+            self.assertEqual(result["admission"]["request_uuid"], REQUEST_UUID)
+
+    def test_capacity_refusal_classifier_rejects_runtime_and_envelope_contradictions(self):
+        admission = {"runtime": "runtime"}
+        base = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST_UUID,
+                "state": "deferred", "error": {"code": "capacity_full", "message": "full"}}
+        self.assertEqual(_capacity_refusal_classification(base, admission), "authoritative")
+        data_request = {**base, "request_uuid": None,
+                        "error": {**base["error"],
+                                  "data": {"orchestrationRequestId": REQUEST_UUID}}}
+        self.assertEqual(_capacity_refusal_classification(data_request, admission),
+                         "authoritative")
+        variants = {
+            "wrong_runtime": {**base, "runtime": "other"},
+            "missing_runtime": {key: value for key, value in base.items() if key != "runtime"},
+            "malformed_runtime": {**base, "runtime": 7},
+            "nested_dispatch": {**base, "error": {**base["error"],
+                                "data": {"dispatchId": "partial"}}},
+            "nested_worker": {**base, "error": {**base["error"],
+                              "data": {"worker_id": "partial"}}},
+            "nested_residual": {**base, "error": {**base["error"],
+                                "data": {"residualResources": [{"kind": "terminal"}]}}},
+            "malformed_empty_residual": {**base, "error": {**base["error"],
+                                         "data": {"residualResources": {}}}},
+            "malformed_null_effects": {**base, "error": {**base["error"],
+                                       "data": {"effects": None}}},
+            "alias_conflict": {**base, "dispatchId": None, "dispatch_id": "partial"},
+            "result_error_conflict": {**base, "_result_error": {"code": "other"}},
+            "envelope_conflict": {**base, "_envelope_conflicts": {"workerId": "partial"}},
+            "malformed_data": {**base, "error": {**base["error"], "data": "unknown"}},
+        }
+        for name, receipt in variants.items():
+            with self.subTest(name=name):
+                self.assertEqual(_capacity_refusal_classification(receipt, admission),
+                                 "unverified")
+
+    def test_runtime_conflicting_capacity_refusal_is_held_with_request_reference(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            port.start_receipt = {"runtime": "other", "exit": 1,
+                                  "request_uuid": REQUEST_UUID, "state": "deferred",
+                                  "error": {"code": "capacity_full", "message": "full"}}
+            result = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(result["status"], "unresolved")
+            self.assertEqual(result["admission"]["request_uuid"], REQUEST_UUID)
             self.assertEqual(result["admission"]["error"]["code"],
                              "native_capacity_refusal_unverified")
 
@@ -327,6 +420,61 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(result["status"], "bound")
         self.assertEqual(port.retry_requests, [REQUEST_UUID])
         self.assertEqual(len(port.starts), 1)
+
+    def test_completed_capacity_refusal_defers_once_without_start(self):
+        project, port, admission_id = self.recovery_case()
+        port.request_receipt = {"state": "deferred",
+                                "error": {"code": "capacity_full", "message": "full"}}
+        first = recover_admission(project, "objective", owner="owner",
+                                  admission_id=admission_id, worktree="current", port=port)
+        second = recover_admission(project, "objective", owner="owner",
+                                   admission_id=admission_id, worktree="current", port=port)
+        self.assertEqual((first["status"], second["status"]), ("deferred", "deferred"))
+        self.assertEqual(first["admission"]["request_uuid"], REQUEST_UUID)
+        self.assertEqual(port.starts, [])
+
+    def test_pending_capacity_refusal_defers_once_without_another_replay(self):
+        project, port, admission_id = self.recovery_case()
+        port.request_state = "pending"
+        port.start_receipt = {"runtime": "runtime", "exit": 1,
+                              "request_uuid": REQUEST_UUID, "state": "deferred",
+                              "error": {"code": "capacity_full", "message": "full"}}
+        first = recover_admission(project, "objective", owner="owner",
+                                  admission_id=admission_id, worktree="current", port=port)
+        second = recover_admission(project, "objective", owner="owner",
+                                   admission_id=admission_id, worktree="current", port=port)
+        self.assertEqual((first["status"], second["status"]), ("deferred", "deferred"))
+        self.assertEqual(port.retry_requests, [REQUEST_UUID])
+        self.assertEqual(len(port.starts), 1)
+
+    def test_unverified_recovered_capacity_refusals_hold_without_replay_loop(self):
+        variants = (
+            {"runtime": "other", "state": "deferred",
+             "error": {"code": "capacity_full", "message": "full"}},
+            {"state": "deferred", "error": {"code": "capacity_full", "message": "full",
+                                              "data": {"dispatchId": "partial"}}},
+        )
+        for path in ("completed", "pending"):
+            for receipt in variants:
+                with self.subTest(path=path, receipt=receipt):
+                    project, port, admission_id = self.recovery_case()
+                    if path == "completed":
+                        port.request_receipt = receipt
+                    else:
+                        port.request_state = "pending"
+                        port.start_receipt = {"request_uuid": REQUEST_UUID, "exit": 1,
+                                              **receipt}
+                    first = recover_admission(project, "objective", owner="owner",
+                                              admission_id=admission_id,
+                                              worktree="current", port=port)
+                    second = recover_admission(project, "objective", owner="owner",
+                                               admission_id=admission_id,
+                                               worktree="current", port=port)
+                    self.assertEqual((first["status"], second["status"]),
+                                     ("unresolved", "unresolved"))
+                    self.assertEqual(first["admission"]["error"]["code"],
+                                     "native_capacity_refusal_unverified")
+                    self.assertLessEqual(len(port.starts), 1)
 
     def test_account_rotation_blocks_pending_replay_but_not_completed_observation(self):
         project, port, admission_id = self.recovery_case()
