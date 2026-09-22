@@ -770,7 +770,8 @@
         "live_native"
       ],
       "offline_test": "tests.test_governor.ExecutorTests.test_a_lost_submission_is_reconciled_before_another_one",
-      "candidate_status": "NOT_RUN"
+      "candidate_status": "PASS",
+      "evidence": "live gh against j3w1/pod on 2026-09-22; throwaway branch agent/governor-probe, since deleted; see docs/validation.md"
     },
     {
       "id": "A93",
@@ -803,7 +804,8 @@
         "live_native"
       ],
       "offline_test": "tests.test_governor.ExecutorTests.test_supersedence_cancels_only_safe_validation",
-      "candidate_status": "NOT_RUN"
+      "candidate_status": "PASS",
+      "evidence": "live gh against j3w1/pod on 2026-09-22; throwaway branch agent/governor-probe, since deleted; see docs/validation.md"
     },
     {
       "id": "A97",
