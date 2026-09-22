@@ -471,6 +471,8 @@ class DecisionTests(GovernorCase):
         probe = self.decide(diagnostic(candidate=binding["id"]))
         self.assertEqual(probe["decision"], "ALLOW", probe["explanation"])
         self.assertEqual(probe["purpose"], "diagnostic")
+        # The lean governor's "one early remote diagnostic is allowed, and annotated".
+        self.assertIn("early_diagnostic", [w["code"] for w in probe["warnings"]])
         record_outcome(self.project, "objective", owner="owner", record_id=probe["record_id"], outcome="PASS")
         answered = self.decide(diagnostic(candidate=binding["id"]))
         self.assertEqual((answered["decision"], answered["reuse"]["kind"]), ("REUSE", "evidence"))
@@ -505,6 +507,41 @@ class FailureTests(GovernorCase):
     def classify(self, record_id, cls, **extra):
         return classify_failure(self.project, "objective", owner="owner", record_id=record_id,
                                 classification={"class": cls, "reason": cls + " observed", **extra}, now=NOW)
+
+    def test_a_changed_input_still_earns_a_rerun(self):
+        """The lean governor's rerun rule, kept: anti-thrashing must not become anti-progress.
+
+        An unbound unit has no generation digest to invalidate, so the question falls back
+        to whether anything a rerun would consume has changed. It has — the correction is
+        recorded in the intervention state the digest covers — so the attempt is allowed
+        and annotated rather than deferred as a repeat.
+
+        The other half of the rule, refusing an unchanged repeat, is asserted against a
+        bound candidate in test_repeated_code_defects_go_through_the_intervention_rule,
+        where the generation digest makes "unchanged" mean something stronger.
+        """
+        self.prepared()
+        first = self.decide(dispatch(unit="default"))
+        record_outcome(self.project, "objective", owner="owner",
+                       record_id=first["record_id"], outcome="FAILED")
+        self.classify(first["record_id"], "code_defect", correction=correction("fix the manifest"))
+        changed = self.decide(dispatch(unit="default"))
+        self.assertEqual(changed["decision"], "ALLOW")
+        self.assertIn("necessary_rerun", [w["code"] for w in changed["warnings"]])
+
+    def test_an_unchanged_probe_of_a_remote_only_failure_is_not_repeated(self):
+        """The lean governor's repeat_diagnostic rule: asking the same question the same
+        way teaches nothing, so the check must change or the answer must be recorded."""
+        self.prepared()
+        probe = self.decide(diagnostic(unit="default"))
+        record_outcome(self.project, "objective", owner="owner",
+                       record_id=probe["record_id"], outcome="FAILED")
+        self.classify(probe["record_id"], "remote_only")
+        repeated = self.decide(diagnostic(unit="default"))
+        self.assertEqual(repeated["decision"], "DEFER")
+        self.assertIn("repeat_diagnostic", self.codes(repeated))
+        changed = self.decide(diagnostic(unit="default", check="runner python version"))
+        self.assertEqual(changed["decision"], "ALLOW")
 
     def test_an_unclassified_failure_is_not_retried(self):
         binding, run = self.validated()
