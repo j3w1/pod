@@ -76,6 +76,41 @@ a scope containing `release` returns `authorized`; an incomplete set stays `bloc
 authorization says. Missing live or delegation subchecks remain unavailable even if a top-level
 result says PASS. The gate performs no release.
 
+## Waste governor
+
+The governor's own evaluation runs offline: rule tests need no network, Orca, `gh` or model, and
+the only remote seam is a port whose exact `git` and `gh` argument shapes have their own tests.
+`tests/incidents/test_repeated_pr_cycle.py` is the sanitized regression for the incident that
+motivated it: a still-converging unit crossing the pull-request and CI boundary once per
+intermediate correction. It keeps the shape of the incident and none of its identifiers.
+
+The private operations are `governor-prepare` (freeze a delivery unit's candidate generation
+from Git), `governor-preflight` (bind a local check result to it), `governor` (decide),
+`governor-execute` (admit and perform push, pull-request reuse or creation, workflow dispatch,
+rerun or cancellation against the bound commit), `governor-outcome`, `governor-reconcile`
+(settle an UNKNOWN or pending row from provider readback only), `governor-classify`,
+`governor-correct` and `governor-status`. Merge, release and deployment are decided by the
+governor and performed by project governance. The journal is `governor.json` beside the
+objective's `context.json`; a `pod-governor/v1` journal is carried forward in place, and a
+malformed one asks for migration rather than being repaired.
+
+What the executor proves is bounded: a push lands the exact candidate commit or is reported
+rejected; a dispatch is read back by workflow and commit, so a run that was started but never
+answered is found rather than resubmitted; a cancellation is issued only for a pending,
+cancel-safe validation with a run identity, and a cancellation that fails never strands the
+action that followed it. A landed publication journals a derived validation row for each
+workflow it triggers, so the run a push starts is attached to rather than doubled by a later
+dispatch. Every row carries its own commit, so a superseded generation is read back by that
+commit and never by the unit's current candidate. The journal keeps at most 96 rows within a
+256 KB record; a `pod-governor/v1` journal above that bound is carried forward by keeping
+every open row and the newest settled ones, and the number dropped is recorded in its counters. What it does not prove: that a worker or shell
+holding the same credentials used the governed path. The enforcement level says `advisory`
+until the owner's personal policy declares a host control, and it is recorded at the
+owner-configuration tier because Pod cannot verify it. Live `gh` behaviour against a real
+repository, required-check reporting and merge-queue semantics remain `NOT_RUN` until
+exercised; the reference contract in [github-ci-contract](github-ci-contract.md) is documentation
+of a pattern, not evidence that a repository follows it.
+
 ## Evidence record
 
 ```json

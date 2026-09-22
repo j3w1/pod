@@ -99,6 +99,12 @@ environment is only the installer.
 5. **Let it verify.** Worker output is an observation, not an acceptance. Pod binds proof to
    the exact candidate, source, policy and environment, and keeps "implemented", "locally
    verified", "reviewed", "hosted", "accepted", "merged" and "released" apart.
+   Before anything crosses the remote boundary, the waste governor checks that the delivery
+   unit's candidate is frozen, locally checked and not already validated: related
+   corrections converge on one branch and one pull request instead of a CI run each, an
+   identical action already running is attached to rather than repeated, a lost response is
+   read back rather than resubmitted, and a repeated failure is classified before it is
+   retried.
 6. **Read the report.** It names what was achieved, what failed, what is uncertain, and what
    is still blocked.
 
@@ -114,7 +120,8 @@ python3 .agents/skills/pod/scripts/pod.py doctor --json       # Codex, project i
 
 - **`doctor`** reports the installed bundle, your prerequisites, which routes the runtime
   actually establishes, and where your skill copies live. It changes nothing.
-- **`status`** joins a Run's native worker states to your local decision record.
+- **`status`** joins a Run's native worker states to your local decision record, including
+  each delivery unit's candidate, preflight, last governor decision and blocker.
 - **`config`** shows the merged policy and where each value came from.
 
 Common answers: a **blocked route** names the control that is missing, not a generic refusal.
@@ -129,12 +136,15 @@ back, because a lost response is not proof that nothing started.
 - **The skill.** One `SKILL.md` of coordination policy, with focused references for
   [planning](skills/pod/references/planning.md),
   [routing](skills/pod/references/routing.md),
-  [native effects](skills/pod/references/native-effects.md) and
-  [verification](skills/pod/references/verification.md), loaded only when needed.
+  [native effects](skills/pod/references/native-effects.md),
+  [verification](skills/pod/references/verification.md) and the
+  [waste governor](skills/pod/references/governor.md), loaded only when needed.
 - **Four public helper families.** `setup`, `config`, `doctor` and `status`. Nothing else is
   a command.
 - **Your policy.** `~/.config/pod/config.yaml` holds your approved routes and limits.
-  A project may narrow them in `.pod/config.yaml`; it can never widen them.
+  A project may narrow them in `.pod/config.yaml`; it can never widen them. The project
+  also names its local preflight checks and what a push or pull-request update triggers,
+  which is what the governor judges.
 - **A private record per objective.** What was launched, what settled, what is still
   uncertain, and enough to resume after an interruption.
 
@@ -151,7 +161,12 @@ unavailable. Refusing a worker's own delegation is a policy decision, not a sand
 become permission, and a projection never withholds a readiness fact it can prove.
 
 **An effect you cannot see still happened.** A lost response, a delayed output or an absent
-terminal never justifies starting a second worker.
+terminal never justifies starting a second worker, and a lost CI submission is read back
+before it is ever submitted again.
+
+**Cross the expensive boundary once per ready candidate.** A correction that a local check
+would catch does not deserve a hosted run. The governor is advisory where the host cannot
+restrict the mutation routes, and it says so.
 
 ## Updating, rolling back and removing
 

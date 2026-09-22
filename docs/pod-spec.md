@@ -121,9 +121,10 @@ passed, and retiring one does not permit removing an applicable correctness chec
 | R60 | B,I | Install through the existing agent-skills ecosystem. Publish one discoverable `skills/pod` bundle whose `SKILL.md`, references, helpers and resources are the same authoring source the Python distribution packages, with a parity check rather than divergent copies. Document a release-pinned source form and a Node-free install from the reviewed release. Do not create an npm package, require a publication registry, or recommend an unrelated package. | O1 | A82,A83 |
 | R61 | B,H | The installed skill carries its own first-party helpers. Loading it never installs tools or dependencies, edits shell profiles, installs Orca, changes billing or overwrites project files. Declare the actual prerequisites and supply one explicit user-space bootstrap step when one is needed. Never depend on a source checkout, an editable install, `PYTHONPATH`, a broken link or a path outside the distributed skill. | O2 | A83,A84 |
 | R62 | B,H | Establish each route against the installed runtime instead of demanding a universal attestation. Distinguish an enforceable control, a supported runtime observation, owner route configuration and unavailable metadata, and claim no more than those controls prove. An unresolved authentication or billing route that could incur an unauthorized charge must not launch; unknown optional metadata is disclosed, not treated as installation failure. | O3 | A85,A86 |
-| R63 | B | Before a Pod-mediated push, pull-request update, workflow dispatch, merge, release or deployment, return an explainable ALLOW, WARN or DEFER from durable objective records. Defer a duplicate action, a superseded candidate and validation that is premature while integration is unsettled; permit a justified early remote diagnostic. Record a soft efficiency override that never lifts an authorization, spending or correctness restriction. These controls cover Pod-mediated operations, not arbitrary shell commands. | O7 | A87,A88 |
+| R63 | B | Before a Pod-mediated push, pull-request update, workflow dispatch, rerun, remote diagnostic, merge, release, deployment or cancellation, return an explainable ALLOW, REUSE or DEFER from durable objective records. Revised 2026-09-21: WARN is an annotation, never a fourth state, and a duplicate action attaches to the running one or reuses its evidence rather than deferring. Defer a superseded candidate and validation that is premature while the unit is unsettled; permit a justified bounded remote diagnostic. A scoped efficiency exception replaces the generic override and never lifts an authorization, spending or correctness restriction. These controls cover Pod-mediated operations, not arbitrary shell commands. | O7,O9 | A87,A88 |
 | R64 | H | Derive release authorization from an owner record naming the exact candidate, tree and scope. Report technical readiness accurately and separately; passing checks never grant permission, and a projection never withholds a readiness fact it has evidence for. | O8 | A89 |
 | R65 | B,H | Keep host integration optional. Pod works on a suitable Linux environment without the owner's host tooling, paths, accounts or evidence, detecting and respecting host policies when present. | O2 | A84 |
+| R66 | B,H | Govern expensive Pod-mediated remote actions with one deterministic, event-driven kernel inside the existing execution path, evaluated at boundaries with zero model calls and bounded state reads. Bind each request to a delivery unit's explicitly prepared candidate generation, which freezes commit, tree, base, workflow digests, verification commands, toolchain, environment and policy revision; judge what an action triggers, never its verb; require the configured local preflight before remote validation; reuse compatible evidence and attach to an equivalent running action; classify a remote failure before another attempt and route repeated code defects through the existing intervention rule; execute an admitted action against the bound commit with a journaled intention, restart-safe receipts and readback-only reconciliation of a lost response; cancel only a pending, cancel-safe validation of a superseded candidate. Report enforcement as advisory unless the host restricts mutation routes. Project policy may only narrow governor authority; scoped exceptions rejoin a personal grant; Orca keeps worker lifecycle and project governance keeps merge, release and deployment. | O9 | A90–A99 |
 
 ## Public interfaces
 
@@ -308,9 +309,19 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A84 | A copied bundle runs from an unrelated directory with no `PYTHONPATH` and no source tree; a missing prerequisite prints one actionable step, never an import traceback or an invented payment requirement. |
 | A85 | An approved subscription route whose optional quota bucket is unavailable still launches, with the gap disclosed; unknown billing or an unbacked paid route still fails closed before any native effect. |
 | A86 | A skills-CLI-managed copy is detected and never overwritten, removed or claimed; repeating setup is a cheap no-op when correct, and global setup writes nothing into the current repository. |
-| A87 | A duplicate action, a superseded candidate and premature validation each defer with an explainable reason; a necessary rerun after changed input proceeds. |
-| A88 | A recorded efficiency override softens only an efficiency deferral and never lifts an authorization, spending or correctness hold. |
+| A87 | A superseded candidate and premature validation each defer with an explainable reason and next action; an identical running action is attached to and a passing result for the same candidate and context is reused; a necessary rerun after changed input proceeds. |
+| A88 | A scoped efficiency exception bound to a personal grant softens only an efficiency deferral and never lifts an authorization, spending or correctness hold. |
 | A89 | A complete gate without owner authorization reports readiness and withholds permission; authorization naming the exact candidate, tree and scope authorizes it, and an incomplete gate stays blocked regardless. |
+| A90 | Several locally discoverable corrections in one delivery unit converge on the same branch and pull request; no intermediate correction crosses the remote boundary until its candidate passes the configured local preflight. |
+| A91 | Two callers requesting identical validation concurrently produce one admitted execution; the other attaches to it. |
+| A92 | A submission whose response is lost stays UNKNOWN, blocks a resubmission, and is settled only by provider readback; after a coordinator restart the unit's candidate bindings, evidence, decisions and pending effects remain recoverable. |
+| A93 | A changed source, base, workflow, environment or policy opens a new candidate generation, and evidence bound to the previous one is not reused as current proof even on the same commit. |
+| A94 | A remote-only question admits a bounded diagnostic naming its question, local limitation, check and stopping condition while the candidate is still converging, without pretending the candidate is release-ready; an unchanged repeat is answered from the record. |
+| A95 | An unclassified remote failure is not retried; a code defect is recorded as a correction, and the third equivalent correction requires a diagnosis with distinct bounded evidence before validation resumes. |
+| A96 | Supersedence cancels a pending, cancel-safe validation of the old candidate only when policy allows it, its result can never approve the newer candidate, and a pending deployment is never canceled by supersedence. |
+| A97 | An independent or urgent delivery unit is admitted while another unit's workers, deliveries or corrections are unsettled. |
+| A98 | A project file that relaxes the governor mode, widens the retry budget, enables cancellation, declares host control or adds an exception grant is refused as authority expansion. |
+| A99 | The enforcement level is reported as advisory unless the owner's personal policy declares a host control, and it is never reported as a proven control. |
 
 ## Implementation sequence and verification
 
@@ -351,10 +362,12 @@ effective launch, delivery, settlement and release. Missing live PASS for any re
 combination blocks release despite offline PASS. Optional unsupported capabilities fail
 conservatively and are not advertised operational.
 
-Efficiency is governed by the bounded decision check of R63, not by a comparative
-benchmark. It reuses the records an objective already keeps and returns ALLOW, WARN or
-DEFER with an explainable reason. Unknown stays unknown; wall time is not provider
-compute; Pod claims no universal savings percentage.
+Efficiency is governed by the bounded decision check of R63 and the waste governor kernel
+of R66, not by a comparative benchmark. It reuses the records an objective already keeps
+and returns ALLOW, REUSE or DEFER with an explainable reason and next action. Unknown stays
+unknown; observed elapsed time is not provider compute or billed cost; counters report
+reuse, deferrals, interruptions and cancellations without an estimate of minutes saved; Pod
+claims no universal savings percentage.
 
 Live exercises are disposable and bounded/authorized. Existing ordinary-project trials are
 read-only. No purchase, reset-credit redemption, production mutation, deployment or
