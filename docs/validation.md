@@ -59,19 +59,22 @@ The [scenario coverage file](pod-coverage.json) lists every acceptance scenario.
 
 Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.
 
-Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent or changed source durably rejects that packet assignment; an unavailable source holds admission until a fresh packet binds actual bytes. This is a bounded admission check, not an atomic multi-file snapshot against external writes. `pod-context/v2` persists only policy/evidence admissions: `reserved`, `bound`, `unresolved`, `closed` and `legacy_hold`. Fresh Orca projection determines occupancy. A unique exact runtime/Run/Task/Dispatch binding with released resource projection frees capacity; missing, ambiguous, retained or contradictory projection remains occupied. Foreign workers and authorized descendants are included conservatively and exact native identities are deduplicated. Paid grant units remain spent even after closure or migration. Account-wide admission is serialized only on the local host, so discovered cross-host workers make delegation fail closed until native atomic admission exists.
+Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent or changed source durably rejects that packet assignment; an unavailable source holds admission until a fresh packet binds actual bytes. This is a bounded admission check, not an atomic multi-file snapshot against external writes. `pod-context/v2` persists only policy/evidence admissions: `reserved`, `bound`, `unresolved`, `closed` and `legacy_hold`. Fresh Orca projection determines occupancy. A unique exact runtime/Run/Task/Dispatch binding with released resource projection frees capacity, including an exactly bound `legacy_hold`; an unbound legacy row and missing, ambiguous, retained or contradictory projection remain occupied. Foreign workers and authorized descendants are included conservatively and exact native identities are deduplicated. Paid grant units remain spent even after closure or migration. Account-wide admission is serialized only on the local host, so discovered cross-host workers make delegation fail closed until native atomic admission exists.
 
 Request recovery starts from the Orca-issued UUID recorded before worker readback. `request-show`
 completed binds its receipt; pending replays the exact original worker-start command with the same
-UUID; absent permits only a unique matching exact Run/Task/Dispatch readback. Invalid UUID,
-changed policy/route/worktree, missing receipt, runtime mismatch or ambiguous/contradictory
-identity holds the admission. Pod never invents a UUID, starts a replacement, retries in a loop,
-or mutates release, terminal or lifecycle state.
+UUID; absent, whose native record has no method, permits only a unique matching exact
+Run/Task/Dispatch readback. Current policy is rechecked immediately before pending replay or a new
+start, while completed/absent diagnosis remains read-only after revocation. Invalid UUID, changed
+worktree, missing receipt, runtime mismatch or ambiguous/contradictory identity holds the
+admission. Pod never invents a UUID, starts a replacement, retries in a loop, or mutates release,
+terminal or lifecycle state.
 
 `internal state-migrate` is the only v1-to-v2 state transition. It locks and validates a
-bounded no-follow v1 context, writes and verifies an immutable digest-named archive, uses only
-Orca reads to resolve exact bindings, validates the constructed v2 context, then atomically
-replaces the active file. Reserved, uncertain, pending/unknown-release and otherwise unproven
+bounded nonblocking regular-file, no-follow v1 context, uses only Orca reads to resolve exact
+bindings, validates the constructed v2 context, writes and boundedly verifies an immutable
+digest-named archive, then atomically replaces the active file. Reserved, uncertain,
+pending/unknown-release and otherwise unproven
 effects become `legacy_hold`; exact active bindings become `bound`; only exact released proof
 becomes `closed`. Historical Delivery/cleanup collections remain only in the archive. Any
 failure leaves v1 active. `doctor` and `status` report `migration_required` without migrating.

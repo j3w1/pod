@@ -23,13 +23,28 @@ inside the immutable archive.
 Run the private `state-migrate` operation separately for each selected v1 objective. The
 operation:
 
-1. takes the serialized admission/objective locks and reads the v1 file through a bounded,
-   no-follow descriptor;
+1. takes the serialized admission/objective locks and reads the v1 regular file through a
+   bounded, nonblocking, no-follow descriptor;
 2. validates the complete v1 shape before native reads;
-3. writes an immutable digest-named archive and verifies its SHA-256;
-4. uses worker-show only to validate exact runtime, Run, Task, Dispatch, worker, worktree,
+3. uses worker-show only to validate exact runtime, Run, Task, Dispatch, worker, worktree,
    terminal/resource and effective-launch evidence;
-5. constructs and validates v2, then atomically replaces the active context.
+4. constructs and validates v2, writes and boundedly verifies an immutable digest-named
+   archive, then atomically replaces the active context.
+
+Use the installed bundle helper with a private JSON request; this is a Pod helper call, not an
+Orca lifecycle command:
+
+```json
+{"project":"/absolute/path/to/project","objective":"the exact objective","owner":"the current Orca terminal handle"}
+```
+
+```sh
+python3.13 /absolute/path/to/skills/pod/scripts/pod.py internal state-migrate --input /absolute/path/to/request.json
+```
+
+Choose the objective reported by `pod status`/`pod doctor` and the current coordinator handle.
+The helper discovers and reads the installed Orca runtime; the request must not contain a Run,
+Task, Dispatch, release instruction or user-selected request UUID.
 
 Confirmed exact active effects become `bound`. Only exact native released proof becomes
 `closed`. Reserved, uncertain, malformed, absent, ambiguous and pending/unknown-release rows
@@ -42,6 +57,11 @@ There is no automatic downgrade. A v1 archive may be restored only before any v2
 has been made for that objective; otherwise restoration would discard newer policy evidence.
 Native remediation, release and retry remain explicit Orca operations under the installed
 orchestration guide.
+
+The retired v1 configuration key `policy.retain_idle_minutes` is not imported or accepted by
+0.3. Remove it from personal, project and task policy before validating configuration. Orca's
+explicit retention/disposition operations replace that old Pod timer; removing the key grants
+no release authority and performs no native action.
 
 ## Installation and release
 

@@ -159,7 +159,10 @@ class SetupCliTests(unittest.TestCase):
             workers = {"runtime": "runtime", "scope": {"source": "flag"}, "complete": True,
                        "workers": [{"terminalState": "active", "projection": {"attention": {"requiresAction": True}}},
                                    {"terminalState": "released", "projection": {}}]}
-            with patch("pod.cli.worker_rows", return_value=workers):
+            native = {"runtime": "runtime", "scope": "bound+ledger_runs", "complete": True,
+                      "workers": workers["workers"]}
+            with patch("pod.cli.worker_rows", return_value=workers), \
+                 patch("pod.operations.OrcaPort.read_native", return_value=native):
                 result = execute(parser().parse_args(["status", "--run", "run"]), project)
             self.assertEqual(result["verification_gaps"], ["works"])
             self.assertEqual(result["next_safe_action"], "run checks")

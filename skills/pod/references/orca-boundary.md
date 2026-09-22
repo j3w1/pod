@@ -18,6 +18,8 @@ UUIDs are recovery references, never Pod-generated operation IDs. Use the same
 admission to consult the native request record; missing or ambiguous evidence
 keeps the reservation unresolved. Creating a new admission does not resolve the
 old one. Orca's guide governs actual retry decisions.
+Completed or absent request recovery is read-only even after policy revocation;
+replaying a pending mutation requires current authority.
 
 A missing required capability blocks the affected operation. Diagnose or update
 Orca; do not substitute another runtime, execution host, account or direct
@@ -34,6 +36,7 @@ Use `internal state-migrate` explicitly for v1 records. It archives old state
 and inspects Orca before producing v2; it does not perform lifecycle actions.
 Old Delivery and cleanup records remain historical evidence. An unresolved
 legacy record becomes a hold, not permission to repeat an action.
+Exact native release evidence can clear a bound hold; unbound ambiguity stays held.
 Read-only diagnostics never migrate automatically.
 
 On continuation, recover the objective's decisions, relevant evidence gaps and

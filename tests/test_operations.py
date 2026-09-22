@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import unittest
@@ -28,6 +29,12 @@ class FakePort:
         self.request_id = REQUEST_UUID
         self.show_error = None
         self.find_rows = None
+        self.quota = {"schema": "pod-quota/v1", "provider": "codex",
+                      "account": "account", "bucket": "shared",
+                      "observed_at": NOW.isoformat(), "source": "fixture",
+                      "confidence": "observed", "unknowns": [],
+                      "windows": [{"name": "hour", "remaining_percent": 80}]}
+        self.headless = False
 
     def establish(self, route, model_policy, *, child_delegation=False):
         return {"schema": "pod-route-establishment/v1", "runtime": self.runtime,
@@ -47,11 +54,7 @@ class FakePort:
         return {"runtime": self.runtime, "authoritative": True, "owner": owner,
                 "scope": "all" if run is None else "bound+ledger_runs", "complete": True,
                 "workers": rows, "cross_host": False, "atomic_admission": False,
-                "quota": {"schema": "pod-quota/v1", "provider": "codex",
-                          "account": "account", "bucket": "shared",
-                          "observed_at": NOW.isoformat(), "source": "fixture",
-                          "confidence": "observed", "unknowns": [],
-                          "windows": [{"name": "hour", "remaining_percent": 80}]}}
+                "quota": self.quota}
 
     def start_worker(self, *, run, task, owner, route, worktree="current", retry_request=None):
         if retry_request is not None:
@@ -70,9 +73,11 @@ class FakePort:
             receipt = {"runId": item["run"], "taskId": item["task"],
                        "dispatchId": dispatch,
                        "mutation": {"requestId": request_uuid, "replayed": False}}
-        return {"runtime": self.runtime, "result": {"requestId": self.request_id,
-                "state": self.request_state, "method": self.request_method,
-                "receipt": receipt}}
+        result = {"requestId": self.request_id, "state": self.request_state,
+                  "receipt": receipt}
+        if self.request_state != "absent":
+            result["method"] = self.request_method
+        return {"runtime": self.runtime, "result": result}
 
     def find_worker(self, *, run, task):
         if self.find_rows is not None:
@@ -86,14 +91,17 @@ class FakePort:
             raise self.show_error
         item = self.workers[dispatch]
         requested = {key: item["route"][key] for key in ("agent", "model", "effort")}
+        worker = {"dispatchId": dispatch, "worktreeId": item["worktree"],
+                  "state": "ready",
+                  "startOptions": {"launch": {"requested": requested,
+                                                  "effective": requested}}}
+        if not self.headless:
+            worker["agentTerminalHandle"] = "terminal-" + dispatch
         return {"runtime": self.runtime, "result": {
             "dispatch": {"id": dispatch, "runId": item["run"], "taskId": item["task"]},
             "projection": {"id": "worker-" + dispatch, "dispatchId": dispatch,
                            "runId": item["run"], "taskId": item["task"]},
-            "worker": {"dispatchId": dispatch, "worktreeId": item["worktree"],
-                       "agentTerminalHandle": "terminal-" + dispatch, "state": "ready",
-                       "startOptions": {"launch": {"requested": requested,
-                                                     "effective": requested}}}}}
+            "worker": worker}}
 
 
 def setup_case(root, *, paid=False):
@@ -283,7 +291,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(mismatch.exception.code, "native_request_mismatch")
         self.assertEqual(port.starts, [])
 
-    def test_recovery_rejects_changed_worktree_and_revoked_route(self):
+    def test_recovery_rejects_changed_worktree_but_completed_read_survives_revocation(self):
         project, port, admission_id = self.recovery_case()
         with self.assertRaises(PodError) as worktree:
             recover_admission(project, "objective", owner="owner",
@@ -291,10 +299,170 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(worktree.exception.code, "admission_conflict")
         config = Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml"
         config.write_text(config.read_text().replace("approved: true", "approved: false"))
+        recovered = recover_admission(project, "objective", owner="owner",
+                                      admission_id=admission_id, worktree="current", port=port)
+        self.assertEqual(recovered["status"], "bound")
+        self.assertEqual(port.starts, [])
+
+    def test_revocation_blocks_pending_replay_but_not_public_completed_recovery(self):
+        project, port, admission_id = self.recovery_case()
+        config = Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml"
+        config.write_text(config.read_text().replace("approved: true", "approved: false"))
+        port.request_state = "pending"
         with self.assertRaises(PodError) as revision:
             recover_admission(project, "objective", owner="owner",
                               admission_id=admission_id, worktree="current", port=port)
         self.assertEqual(revision.exception.code, "policy_revision_mismatch")
+        self.assertEqual(port.starts, [])
+
+    def test_pending_replay_rechecks_new_task_and_checkpoint_restrictions(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            started = start(project, assessment, capabilities, quotas, frozen, port)
+            admission_id = started["admission"]["admission_id"]
+            make_unresolved(project, admission_id)
+            port.starts.clear()
+            port.request_state = "pending"
+            with self.assertRaises(PodError) as task_limit:
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              assessment=assessment, capabilities=capabilities, quotas=quotas,
+                              occupancy={}, plan_revision="plan", frozen_packet=frozen,
+                              task_policy={"schema": "pod/v1", "policy": {"max_workers": 0}},
+                              port=port, now=NOW)
+            self.assertEqual(task_limit.exception.code, "policy_revision_mismatch")
+            self.assertEqual(port.starts, [])
+            checkpoint_value = read(project, "objective")["checkpoint"]
+            checkpoint_value["candidate"] = "changed-candidate"
+            checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                       native={"runtime": "runtime"})
+            with self.assertRaises(PodError) as checkpoint_change:
+                recover_admission(project, "objective", owner="owner",
+                                  admission_id=admission_id, worktree="current", port=port)
+            self.assertEqual(checkpoint_change.exception.code, "checkpoint_binding_changed")
+            self.assertEqual(port.starts, [])
+
+    def test_public_admission_reentry_recovers_completed_after_revocation(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            started = start(project, assessment, capabilities, quotas, frozen, port)
+            make_unresolved(project, started["admission"]["admission_id"])
+            port.starts.clear()
+            config = Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml"
+            config.write_text(config.read_text().replace("approved: true", "approved: false"))
+            recovered = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(recovered["status"], "bound")
+            self.assertEqual(port.starts, [])
+
+    def test_real_absent_shape_without_method_inspects_without_start(self):
+        project, port, admission_id = self.recovery_case()
+        port.request_state = "absent"
+        result = recover_admission(project, "objective", owner="owner",
+                                   admission_id=admission_id, worktree="current", port=port)
+        self.assertEqual(result["action"], "inspect_after_absent")
+        self.assertEqual(result["status"], "bound")
+        self.assertEqual(port.starts, [])
+
+    def test_headless_worker_binds_without_a_terminal_identity(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            port.headless = True
+            result = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(result["status"], "bound")
+            self.assertIsNone(result["admission"]["native_binding"]["terminalHandle"])
+
+    def test_exceptional_grant_cannot_bypass_task_max_workers(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            grant = {"id": "wide", "action": "exceptional_capacity", "account": "account",
+                     "objective": "objective", "run": "run", "plan_revision": "plan",
+                     "limit": 4, "reason": "four independent checks",
+                     "valid_until": "2026-09-23T00:00:00Z"}
+            config = Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml"
+            config.write_text(config.read_text() + "\npolicy:\n  exceptional_grants:\n"
+                              "    - id: wide\n      action: exceptional_capacity\n"
+                              "      account: account\n      objective: objective\n      run: run\n"
+                              "      plan_revision: plan\n      limit: 4\n"
+                              "      reason: four independent checks\n"
+                              "      valid_until: '2026-09-23T00:00:00Z'\n")
+            task_policy = {"schema": "pod/v1", "policy": {"max_workers": 2}}
+            revision = effective(project, task=task_policy)["revision"]
+            frozen = packet({**frozen["body"], "policy_revision": revision})
+            port = FakePort()
+            with self.assertRaises(PodError) as caught:
+                guarded_start(project, "objective", owner="owner", run="run", task="task",
+                              assessment=assessment, capabilities=capabilities, quotas=quotas,
+                              occupancy={}, plan_revision="plan", frozen_packet=frozen,
+                              capacity=4, exceptional_grant=grant, task_policy=task_policy,
+                              port=port, now=NOW)
+            self.assertEqual(caught.exception.code, "capacity_ceiling")
+            self.assertEqual(port.starts, [])
+            personal_revision = effective(project)["revision"]
+            personal_packet = packet({**frozen["body"], "policy_revision": personal_revision})
+            allowed = guarded_start(project, "objective", owner="owner", run="run",
+                                    task="task-positive", assessment=assessment,
+                                    capabilities=capabilities, quotas=quotas, occupancy={},
+                                    plan_revision="plan", frozen_packet=personal_packet,
+                                    capacity=4, exceptional_grant=grant, port=port, now=NOW)
+            self.assertEqual(allowed["status"], "bound")
+
+    def test_source_and_instruction_context_state_matrix_blocks_before_start(self):
+        for kind in ("source", "instruction"):
+            for change, code in (("changed", "source_changed"), ("absent", "source_absent")):
+                with self.subTest(kind=kind, change=change), fixture() as root:
+                    project, assessment, capabilities, quotas, frozen = setup_case(root)
+                    source = project / "bound.txt"
+                    source.write_text("one")
+                    from pod.records import source_identity
+                    bound = source_identity(project, "bound.txt")
+                    frozen = packet({**frozen["body"], "context": [
+                        {"kind": kind, "path": "bound.txt", "sha256": bound["sha256"]}]})
+                    source.write_text("two") if change == "changed" else source.unlink()
+                    port = FakePort()
+                    with self.assertRaises(PodError) as caught:
+                        start(project, assessment, capabilities, quotas, frozen, port)
+                    self.assertEqual(caught.exception.code, code)
+                    self.assertEqual(port.starts, [])
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            frozen = packet({**frozen["body"], "sources": [
+                {"path": "unavailable.txt", "state": "unavailable"}]})
+            port = FakePort()
+            with self.assertRaises(PodError) as caught:
+                start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(caught.exception.code, "source_unbound")
+            self.assertEqual(port.starts, [])
+
+    def test_concurrent_objectives_share_one_unknown_account_allowance(self):
+        with fixture() as root:
+            project, assessment, capabilities, _, frozen = setup_case(root)
+            revision = effective(project)["revision"]
+            checkpoint(project, "second", owner="owner", value={
+                "schema": "pod-checkpoint/v1", "criteria": ["works"],
+                "plan_revision": "plan", "candidate": "candidate",
+                "policy_revision": revision, "native_refs": [], "assignments": [],
+                "questions": [], "verification_gaps": ["works"],
+                "next_safe_action": "inspect"}, native={"runtime": "runtime"})
+            second_packet = packet({**frozen["body"], "objective": "second"})
+            port = FakePort()
+            port.quota = None
+            def attempt(item):
+                objective, task_name, selected_packet = item
+                try:
+                    guarded_start(project, objective, owner="owner", run="run", task=task_name,
+                                  assessment=assessment, capabilities=capabilities, quotas={},
+                                  occupancy={}, plan_revision="plan", frozen_packet=selected_packet,
+                                  port=port, now=NOW)
+                    return "admitted"
+                except PodError as exc:
+                    return exc.code
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(attempt, row) for row in (
+                    ("objective", "task-one", frozen), ("second", "task-two", second_packet))]
+                outcomes = [future.result(timeout=5) for future in futures]
+            self.assertEqual(sorted(outcomes), ["admitted", "unknown_quota_capacity"])
 
     def test_worker_identity_or_launch_contradiction_cannot_bind(self):
         with fixture() as root:
@@ -330,6 +498,34 @@ class BoundaryTests(unittest.TestCase):
                                              retry_request=REQUEST_UUID)
         self.assertEqual(result["request_uuid"], REQUEST_UUID)
         self.assertIn("--retry-request", command.call_args.args[0])
+
+    def test_governor_native_read_resolves_bound_and_checkpoint_runs_explicitly(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            start(project, assessment, capabilities, quotas, frozen, port)
+            checkpoint_value = read(project, "objective")["checkpoint"]
+            checkpoint_value["native_refs"] = [{"runId": "checkpoint-run"}]
+            checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                       native={"runtime": "runtime"})
+            pages = {
+                "checkpoint-run": {"runtime": "runtime", "scope": {"source": "flag"},
+                                   "complete": True, "workers": []},
+                "current-run": {"runtime": "runtime", "scope": {"source": "flag"},
+                                "complete": True, "workers": []},
+                "run": {"runtime": "runtime", "scope": {"source": "bound"},
+                        "complete": True, "workers": []},
+            }
+            with (patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"}),
+                  patch("pod.operations.read_command", return_value={
+                      "runtime": "runtime", "result": {"run": {"id": "current-run"}}}),
+                  patch("pod.operations.worker_rows", side_effect=lambda selected: pages[selected])
+                  as rows,
+                  patch("pod.operations._quota_snapshot", return_value=None)):
+                native = OrcaPort(project).read_native("owner")
+            self.assertEqual(native["scope"], "bound+ledger_runs")
+            self.assertEqual({call.args[0] for call in rows.call_args_list},
+                             {"checkpoint-run", "current-run", "run"})
 
     def test_report_joins_a_fresh_exact_worker_read(self):
         with fixture() as root:

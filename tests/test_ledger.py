@@ -1,13 +1,16 @@
 import hashlib
 import json
 import os
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import (ADMISSION_STATES, _path, checkpoint, fresh_projection,
-                        migrate_v1, migration_inventory, read)
+                        migrate_v1, migration_inventory, read, _quota_hold)
 from pod.records import source_identity
 from tests.common import fixture
 
@@ -66,6 +69,35 @@ def effect(state, *, binding=None, grant=None):
 
 
 class V2StateTests(unittest.TestCase):
+    def test_quota_exhaustion_is_monotonic_across_restart_and_window_renewal(self):
+        with fixture() as root:
+            now = datetime(2026, 9, 22, 12, tzinfo=timezone.utc)
+            def snapshot(seconds, hour, week, *, hour_reset="h1", week_reset="w1"):
+                return {"schema": "pod-quota/v1", "provider": "codex", "account": "a",
+                        "bucket": "shared",
+                        "observed_at": (now + timedelta(seconds=seconds)).isoformat(),
+                        "source": "supported", "confidence": "observed", "unknowns": [],
+                        "windows": [{"name": "hour", "remaining_percent": hour,
+                                     "reset_at": hour_reset},
+                                    {"name": "week", "remaining_percent": week,
+                                     "reset_at": week_reset}]}
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(-5, 0, 40),
+                                        "exhausted", now=now, freshness=60, project=root))
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(-15, 0, 40),
+                                        "exhausted", now=now, freshness=60, project=root))
+            self.assertTrue(_quota_hold("codex", "a", "shared", snapshot(-10, 50, 40),
+                                        "normal", now=now, freshness=60, project=root))
+            script = ("from datetime import datetime,timezone; from pathlib import Path; "
+                      "from pod.ledger import _quota_hold; "
+                      "print(_quota_hold('codex','a','shared',None,'unknown',"
+                      "now=datetime(2026,9,22,12,tzinfo=timezone.utc),freshness=60,"
+                      "project=Path(r'" + str(root) + "')))" )
+            resumed = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                                     text=True, check=True, env=os.environ.copy())
+            self.assertEqual(resumed.stdout.strip(), "True")
+            self.assertFalse(_quota_hold("codex", "a", "shared",
+                                         snapshot(0, 50, 40, hour_reset="h2"),
+                                         "normal", now=now, freshness=60, project=root))
     def test_checkpoint_creates_only_v2_policy_state(self):
         with fixture() as root:
             project = root / "project"
@@ -110,6 +142,25 @@ class V2StateTests(unittest.TestCase):
             wrong = {**released, "taskId": "other"}
             self.assertEqual(len(fresh_projection(project, {**base, "workers": [wrong]},
                                                   objective="objective")["occupied"]), 1)
+
+    def test_exact_released_projection_frees_a_bound_legacy_hold_only(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            binding = old_binding()
+            path = _path(project, "objective")
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(legacy(
+                {"op": effect("confirmed", binding=binding)},
+                cleanup={"dispatch": {"state": "release_unknown"}})))
+            migrate_v1(project, "objective", owner="owner",
+                       worker_reader=lambda dispatch: shown(binding, released=False))
+            self.assertEqual(next(iter(read(project, "objective")["admissions"].values()))["state"],
+                             "legacy_hold")
+            native = {"runtime": "runtime", "scope": "bound+ledger_runs", "complete": True,
+                      "workers": [{"dispatchId": "dispatch", "runId": "run",
+                                   "taskId": "task", "terminalState": "released"}]}
+            self.assertEqual(fresh_projection(project, native, objective="objective")["occupied"], [])
 
     def test_foreign_and_descendant_rows_are_not_lost(self):
         with fixture() as root:
@@ -183,29 +234,73 @@ class MigrationTests(unittest.TestCase):
             project.mkdir()
             active = old_binding("active")
             released = old_binding("released")
+            predecessor = {key: value for key, value in old_binding("predecessor").items()
+                           if key in ("dispatchId", "workerId", "taskId", "runId")}
             grant = {"id": "paid", "identity": "g", "units": 1, "scope": "s"}
             old = legacy({"reserved": effect("reserved"), "uncertain": effect("uncertain"),
                           "active": effect("confirmed", binding=active, grant=grant),
-                          "released": effect("confirmed", binding=released)},
+                          "released": effect("confirmed", binding=released, grant=grant),
+                          "predecessor": effect("confirmed", binding=predecessor)},
                          cleanup={"released": {"state": "release_unknown"}})
             path, original = self.write_old(project, old)
             calls = []
             def reader(dispatch):
                 calls.append(dispatch)
-                return shown(active if dispatch == "active" else released,
-                             released=dispatch == "released")
+                selected = active if dispatch == "active" else predecessor if dispatch == "predecessor" else released
+                return shown(selected, released=dispatch == "released")
             result = migrate_v1(project, "objective", owner="owner", worker_reader=reader)
-            self.assertEqual(sorted(calls), ["active", "released"])
+            self.assertEqual(sorted(calls), ["active", "predecessor", "released"])
             state = read(project, "objective")
             states = sorted(row["state"] for row in state["admissions"].values())
-            self.assertEqual(states, ["bound", "closed", "legacy_hold", "legacy_hold"])
+            self.assertEqual(states, ["bound", "bound", "closed", "legacy_hold", "legacy_hold"])
             self.assertEqual(result["admissions"]["legacy_hold"], 2)
             archive = path.parent / state["legacy_archives"][0]["path"]
             self.assertEqual(archive.read_bytes(), original)
             self.assertEqual(state["legacy_archives"][0]["sha256"], hashlib.sha256(original).hexdigest())
             bound = next(row for row in state["admissions"].values() if row["state"] == "bound")
             self.assertEqual(bound["recovery"]["spending_grant"], grant)
+            closed = next(row for row in state["admissions"].values() if row["state"] == "closed")
+            self.assertEqual(closed["recovery"]["spending_grant"], grant)
             self.assertNotIn("deliveries", state)
+
+    def test_fifo_legacy_context_is_rejected_without_blocking(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            path = _path(project, "objective")
+            path.parent.mkdir(parents=True)
+            os.mkfifo(path)
+            with self.assertRaises(PodError) as caught:
+                migrate_v1(project, "objective", owner="owner", worker_reader=lambda dispatch: {})
+            self.assertEqual(caught.exception.code, "state_migration_failed")
+
+    def test_oversized_archive_readback_is_bounded_and_keeps_v1(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            path, original = self.write_old(project, legacy({"reserved": effect("reserved")}))
+            digest_value = hashlib.sha256(original).hexdigest()
+            archive = path.parent / "archives" / f"context-v1-{digest_value}.json"
+            archive.parent.mkdir()
+            archive.write_bytes(b"x" * (1_048_576 + 1))
+            with self.assertRaises(PodError) as caught:
+                migrate_v1(project, "objective", owner="owner", worker_reader=lambda dispatch: {})
+            self.assertEqual(caught.exception.code, "state_migration_failed")
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_redirected_archive_ancestry_is_rejected_before_write(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            path, original = self.write_old(project, legacy({"reserved": effect("reserved")}))
+            outside = root / "outside"
+            outside.mkdir()
+            (path.parent / "archives").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(PodError) as caught:
+                migrate_v1(project, "objective", owner="owner", worker_reader=lambda dispatch: {})
+            self.assertEqual(caught.exception.code, "state_migration_failed")
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(outside.iterdir()), [])
 
     def test_uncertain_release_holds_without_exact_release_proof(self):
         with fixture() as root:
@@ -219,17 +314,25 @@ class MigrationTests(unittest.TestCase):
             row = next(iter(read(project, "objective")["admissions"].values()))
             self.assertEqual(row["state"], "legacy_hold")
 
-    def test_contradictory_identity_or_launch_never_promotes(self):
-        with fixture() as root:
-            project = root / "project"
-            project.mkdir()
-            binding = old_binding()
-            self.write_old(project, legacy({"op": effect("confirmed", binding=binding)}))
-            wrong = {"agent": "codex", "model": "other", "effort": "high"}
-            migrate_v1(project, "objective", owner="owner",
-                       worker_reader=lambda dispatch: shown(binding, launch=wrong))
-            self.assertEqual(next(iter(read(project, "objective")["admissions"].values()))["state"],
-                             "legacy_hold")
+    def test_worktree_terminal_resource_or_launch_contradiction_never_promotes(self):
+        for contradiction in ("worktree", "terminal_resource", "launch"):
+            with self.subTest(contradiction=contradiction), fixture() as root:
+                project = root / "project"
+                project.mkdir()
+                binding = old_binding()
+                self.write_old(project, legacy({"op": effect("confirmed", binding=binding)}))
+                observed = shown(binding)
+                if contradiction == "worktree":
+                    observed["result"]["worker"]["worktreeId"] = "other"
+                elif contradiction == "terminal_resource":
+                    observed["result"]["terminalResource"]["id"] = "other"
+                else:
+                    wrong = {"agent": "codex", "model": "other", "effort": "high"}
+                    observed = shown(binding, launch=wrong)
+                migrate_v1(project, "objective", owner="owner",
+                           worker_reader=lambda dispatch, value=observed: value)
+                row = next(iter(read(project, "objective")["admissions"].values()))
+                self.assertEqual(row["state"], "legacy_hold")
 
     def test_validation_failure_leaves_v1_untouched_and_calls_no_native_mutation(self):
         with fixture() as root:

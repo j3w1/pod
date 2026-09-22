@@ -167,6 +167,14 @@ policy:
             local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 30}\n")
             self.assertEqual(effective(root, personal=personal)["policy"]["policy"]["quota_fresh_seconds"], 30)
 
+    def test_retired_idle_timer_is_rejected_instead_of_copying_lifecycle_policy(self):
+        with fixture() as root:
+            personal = root / "personal.yaml"
+            personal.write_text("schema: pod/v1\npolicy: {retain_idle_minutes: 30}\n")
+            with self.assertRaises(PodError) as caught:
+                effective(root, personal=personal)
+            self.assertEqual(caught.exception.code, "invalid_config")
+
     def test_local_routing_can_tighten_but_not_weaken_or_replace_strict_pin(self):
         with fixture() as root:
             personal = root / "personal.yaml"

@@ -18,7 +18,7 @@ DEFAULT_WORKER_CAPACITY = 2
 COMPLEXITIES = ("trivial", "simple", "standard", "complex", "very_complex")
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approval_route", "billing", "efforts", "capabilities", "locations"}
-POLICY_FIELDS = {"max_workers", "ordinary_max", "allowed_agents", "allowed_accounts", "allowed_locations", "quota_low", "quota_critical", "quota_fresh_seconds", "retain_idle_minutes", "child_delegation", "review", "spending_grants", "reset_grants", "exceptional_grants"}
+POLICY_FIELDS = {"max_workers", "ordinary_max", "allowed_agents", "allowed_accounts", "allowed_locations", "quota_low", "quota_critical", "quota_fresh_seconds", "child_delegation", "review", "spending_grants", "reset_grants", "exceptional_grants"}
 ROUTE_FIELDS = {"model", "effort", "strict"}
 # The waste governor's operator surface. Verification and trigger mappings are project
 # knowledge; the mode, cancellation authority, retry budget, host declaration and exception
@@ -53,8 +53,7 @@ DEFAULT = {
         # The normal starting capacity is DEFAULT_WORKER_CAPACITY. These are
         # hard ordinary ceilings; a scoped personal grant is needed above 3.
         "max_workers": 3, "ordinary_max": 3, "quota_low": 20,
-        "quota_critical": 5, "quota_fresh_seconds": 60,
-        "retain_idle_minutes": 30, "child_delegation": False,
+        "quota_critical": 5, "quota_fresh_seconds": 60, "child_delegation": False,
         "review": "independent",
         "spending_grants": [], "reset_grants": [], "exceptional_grants": [],
     },
@@ -233,7 +232,7 @@ def validate(value: Any) -> dict:
     policy = obj.get("policy", {})
     if not isinstance(policy, dict) or set(policy) - POLICY_FIELDS:
         raise PodError("invalid_config", "Invalid policy fields")
-    for field in ("max_workers", "ordinary_max", "quota_low", "quota_critical", "quota_fresh_seconds", "retain_idle_minutes"):
+    for field in ("max_workers", "ordinary_max", "quota_low", "quota_critical", "quota_fresh_seconds"):
         if field in policy and (type(policy[field]) is not int or policy[field] < 0 or policy[field] > 3600):
             raise PodError("invalid_config", f"Invalid {field}")
     if "max_workers" in policy and not 0 <= policy["max_workers"] <= 8:

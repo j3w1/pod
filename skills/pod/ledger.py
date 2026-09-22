@@ -9,10 +9,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 from typing import Callable, Iterator
 
 from .errors import PodError
 from .orca import require_route_establishment
+from .quota import validate_snapshot
 from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
@@ -331,9 +333,22 @@ def _all_admissions(project: Path) -> list[tuple[Path, dict]]:
 
 
 def bound_runs(project: Path, runtime: str) -> tuple[str, ...]:
-    """Every Run referenced by local v2 admissions on the same Orca runtime."""
-    return tuple(sorted({row["run_id"] for _, row in _all_admissions(project)
-                         if row.get("runtime") == runtime and isinstance(row.get("run_id"), str)}))
+    """Every Run referenced by local v2 policy evidence for this Orca runtime."""
+    runs = {row["run_id"] for _, row in _all_admissions(project)
+            if row.get("runtime") == runtime and isinstance(row.get("run_id"), str)}
+    root = state_root(project)
+    if root.exists():
+        for path in root.glob("*/context.json"):
+            state = _read(path)
+            checkpoint_value = state.get("checkpoint")
+            refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
+            for ref in refs:
+                if not isinstance(ref, dict) or ref.get("runtime") not in (None, runtime):
+                    continue
+                run_id = ref.get("runId", ref.get("run_id"))
+                if isinstance(run_id, str) and run_id:
+                    runs.add(run_id)
+    return tuple(sorted(runs))
 
 
 def _occupied_admissions(project: Path, native: dict) -> list[dict]:
@@ -358,7 +373,7 @@ def _occupied_admissions(project: Path, native: dict) -> list[dict]:
             continue
         binding = admission.get("native_binding")
         key = ("admission", str(path), admission["admission_id"])
-        if state == "bound" and binding_valid(binding):
+        if state in ("bound", "legacy_hold") and binding_valid(binding):
             key = ("dispatch", admission["runtime"], binding["dispatchId"])
             matches = by_dispatch.get(binding["dispatchId"], [])
             exact_matches = [row for row in matches
@@ -439,29 +454,62 @@ def _quota_hold(provider: str, account: str, bucket: str | None,
         exact(raw, {"schema", "holds"}, {"schema", "holds"}, name="quota_holds")
         if raw["schema"] != "pod-quota-holds/v3" or not isinstance(raw["holds"], dict):
             raise PodError("state_migration_required", "Quota hold schema is unsupported")
-        hold = raw["holds"].get(key)
-        if state == "exhausted" and snapshot is not None:
-            exhausted = {row["name"]: row.get("reset_at") for row in snapshot["windows"]
-                         if float(row["remaining_percent"]) <= 0}
-            raw["holds"][key] = {"windows": exhausted, "observed_at": snapshot["observed_at"]}
+        hold = raw["holds"].get(key, {"windows": {}})
+        if not isinstance(hold, dict) or not isinstance(hold.get("windows"), dict):
+            raise PodError("state_migration_required", "Quota hold identity is malformed")
+        windows = dict(hold["windows"])
+        supported = None
+        if state != "unknown" and snapshot is not None:
+            try:
+                candidate = validate_snapshot(snapshot)
+                observed = datetime.fromisoformat(candidate["observed_at"].replace("Z", "+00:00"))
+                if (candidate["provider"] == provider and candidate["account"] == account
+                        and candidate["bucket"] == bucket
+                        and candidate["source"] in ("supported", "supported_metadata")
+                        and candidate["confidence"] == "observed"
+                        and observed.tzinfo is not None and now.tzinfo is not None
+                        and 0 <= (now - observed).total_seconds()):
+                    supported = candidate, observed, (now - observed).total_seconds() <= freshness
+            except (PodError, TypeError, ValueError, OverflowError):
+                pass
+        changed = False
+        if supported is not None:
+            candidate, observed, fresh = supported
+            values = {row["name"]: (row.get("remaining_percent"), row.get("reset_at"))
+                      for row in candidate["windows"]}
+            if "remaining_percent" in candidate:
+                values["aggregate"] = (candidate["remaining_percent"], None)
+            for name, (remaining, reset_at) in values.items():
+                previous = windows.get(name)
+                previous_at = None
+                if previous is not None:
+                    if not isinstance(previous, dict) or not isinstance(previous.get("observed_at"), str):
+                        raise PodError("state_migration_required", "Quota hold window is malformed")
+                    try:
+                        previous_at = datetime.fromisoformat(
+                            previous["observed_at"].replace("Z", "+00:00"))
+                    except ValueError as exc:
+                        raise PodError("state_migration_required",
+                                       "Quota hold timestamp is malformed") from exc
+                    if previous_at.tzinfo is None:
+                        raise PodError("state_migration_required",
+                                       "Quota hold timestamp has no timezone")
+                if remaining == 0 and (previous_at is None or observed > previous_at):
+                    windows[name] = {"observed_at": observed.isoformat(), "reset_at": reset_at}
+                    changed = True
+                elif (fresh and remaining is not None and remaining > 0
+                      and previous_at is not None and observed > previous_at):
+                    del windows[name]
+                    changed = True
+        if changed:
+            if windows:
+                raw["holds"][key] = {"windows": windows}
+            else:
+                raw["holds"].pop(key, None)
             atomic_json(path, raw)
+        if state == "exhausted":
             return True
-        if not isinstance(hold, dict):
-            return False
-        if snapshot is None or state == "unknown":
-            return True
-        observed = datetime.fromisoformat(snapshot["observed_at"].replace("Z", "+00:00"))
-        if (now - observed).total_seconds() > freshness:
-            return True
-        windows = {row["name"]: row for row in snapshot["windows"]}
-        renewed = all(name in windows and float(windows[name]["remaining_percent"]) > 0
-                      and (reset is None or windows[name].get("reset_at") != reset)
-                      for name, reset in hold.get("windows", {}).items())
-        if renewed:
-            del raw["holds"][key]
-            atomic_json(path, raw)
-            return False
-        return True
+        return bool(windows)
 
 
 def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -470,7 +518,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             task_id: str, plan_revision: str, packet_id: str, worktree: str,
             frozen_packet: dict,
             exceptional_grant: dict | None = None, capacity_reason: str | None = None,
-            spending_grant: dict | None = None, now: datetime | None = None) -> dict:
+            spending_grant: dict | None = None, task_policy: dict | None = None,
+            now: datetime | None = None) -> dict:
     """Serialize policy and fresh-capacity validation before the one native start seam."""
     moment = now or datetime.now(timezone.utc)
     if not isinstance(admission_id, str) or not admission_id:
@@ -485,7 +534,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
     path = _path(project, objective)
     with _lock(state_root(project) / "admission" / "state"), _lock(path):
         from .config import effective
-        current_policy = effective(project)
+        current_policy = effective(project, task=task_policy)
         if current_policy["revision"] != route_decision.get("policy_revision"):
             raise PodError("policy_revision_mismatch", "Admission policy changed after route selection")
         policy = current_policy["policy"]["policy"]
@@ -529,7 +578,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                          if ref["kind"] in ("source", "instruction"))]
         _check_bound_sources_locked(project, path, state, packet_id, bound_sources)
         if capacity <= 3 and capacity > min(policy["max_workers"], policy["ordinary_max"]):
-            raise PodError("capacity_ceiling", "Capacity exceeds effective policy")
+            raise PodError("capacity_ceiling", "Capacity exceeds the ordinary worker ceiling")
         if capacity == 3 and not (isinstance(capacity_reason, str) and capacity_reason.strip()):
             raise PodError("capacity_reason_required", "Three workers needs a reason")
         if capacity >= 4 and not _grant_matches(exceptional_grant, policy.get("exceptional_grants", []),
@@ -538,6 +587,10 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                                                  account=requested["account"], capacity=capacity,
                                                  now=moment):
             raise PodError("exceptional_capacity_grant_required", "Four to eight workers needs an exact grant")
+        if (capacity >= 4
+                and current_policy["provenance"].get("policy.max_workers") in ("project", "task")
+                and capacity > policy["max_workers"]):
+            raise PodError("capacity_ceiling", "Local hard capacity restriction remains effective")
         qstate, _ = quota_state(native.get("quota"), provider=requested["agent"],
                              account=requested["account"], bucket=requested.get("bucket"),
                              policy=policy, now=moment)
@@ -590,7 +643,11 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                "request_uuid": None, "run_id": run_id, "task_id": task_id,
                "plan_revision": plan_revision, "packet_id": packet_id, "worktree": worktree,
                "bucket": requested.get("bucket"), "native_binding": None,
-               "recovery": {"spending_grant": grant_binding} if grant_binding else {},
+               "recovery": {
+                   "checkpoint_binding": {key: checkpoint_value.get(key) for key in
+                                          ("candidate", "criteria", "plan_revision",
+                                           "policy_revision")},
+                   **({"spending_grant": grant_binding} if grant_binding else {})},
                "error": None, "created_at": stamp, "updated_at": stamp}
         state["owner"] = owner
         state["admissions"][admission_id] = row
@@ -671,13 +728,17 @@ def _legacy_binding_matches(shown: dict, effect: dict, binding: dict, runtime: s
 
 
 def _read_legacy_bytes(path: Path, *, limit: int = 1_048_576) -> bytes:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+             | getattr(os, "O_CLOEXEC", 0))
     try:
         fd = os.open(path, flags)
     except OSError as exc:
         raise PodError("state_migration_failed", "Legacy state cannot be opened safely") from exc
     try:
-        size = os.fstat(fd).st_size
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise PodError("state_migration_failed", "Legacy state must be a regular file")
+        size = info.st_size
         if size > limit:
             raise PodError("state_migration_failed", "Legacy state exceeds the migration bound")
         chunks = []

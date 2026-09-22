@@ -1,16 +1,17 @@
 # Pod 0.3.0 progress
 
 Specification baseline: `1b0aa6fc68ee2157f6f67ba4a60076d967791cc4`.
-Read-only observations found Orca 1.4.206, Codex CLI 0.155.1 and Claude Code
+The current read-only observation found Orca 1.4.207; the reconciliation record in the
+specification preserves the earlier 1.4.205 observation. Codex CLI 0.155.1 and Claude Code
 2.1.278; version discovery alone does not prove execution. This page reports candidate
 implementation, not release.
 
 | Area | State | Evidence / limit |
 | --- | --- | --- |
 | Runtime boundary | IMPLEMENTED locally | Orca owns Runs, Tasks, Dispatches, requests, messaging, terminals/resources and lifecycle. Pod's mutation adapter exposes only worker start and exact same-request replay. Removed Pod Delivery, cleanup, release and retry state machines have no private helper surface. |
-| Admission | IMPLEMENTED locally | Serialized v2 policy reservations re-read effective approval, route, source, packet, quota, spending and capacity under lock before one native start. Fresh Orca projections count exact admissions, foreign workers and descendants conservatively and deduplicate bindings. |
-| Recovery | IMPLEMENTED locally | The Orca-issued request UUID is persisted before worker readback. Completed, pending and absent request paths record, join or inspect the same immutable admission; missing, invalid, ambiguous and contradictory evidence holds without a fresh start. |
-| State migration | IMPLEMENTED locally | Explicit `state-migrate` validates and archives v1, reads Orca only, preserves spent grants, maps uncertainty to `legacy_hold`, and atomically installs v2. Failure leaves v1 active. Doctor/status only report `migration_required`. |
+| Admission | IMPLEMENTED locally | Serialized v2 policy reservations re-read effective personal/project/task approval, route, source, packet, quota, spending and capacity under lock before one native start. Fresh exact-Run projections count admissions, foreign workers and descendants conservatively and deduplicate bindings. |
+| Recovery | IMPLEMENTED locally | The Orca-issued request UUID is persisted before worker readback. Completed, pending and method-less absent request paths record, join or inspect the same immutable admission; revocation blocks mutation but not completed/absent read-only reconciliation. |
+| State migration | IMPLEMENTED locally | Explicit `state-migrate` validates bounded regular-file input, resolves exact effects through Orca reads only, preserves v1 in a boundedly verified archive, and atomically installs v2. Exact later release proof frees a bound legacy hold; unbound ambiguity remains occupied. |
 | Packets and reports | IMPLEMENTED locally | Existing bounded packet/source/report contracts remain. Report admission joins a fresh worker-show to exact runtime and Dispatch identity. |
 | Waste governor | IMPLEMENTED locally | ALLOW/REUSE/DEFER, candidate/preflight/authorization/failure/correction and remote-action semantics remain. Production decisions now consume fresh read-only Orca occupancy rather than persistent Delivery/cleanup state. |
 | Skill and package | IMPLEMENTED locally | Package and skill are 0.3.0 candidates; CLI/helper envelopes are v2. The lean skill loads the installed Orca guide and on-demand Pod references. The last published installation pin remains `v0.1.2`; no v0.3.0 tag or publication is claimed. |

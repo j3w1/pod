@@ -179,7 +179,8 @@ def run(operation: str, request: dict) -> dict:
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task",
                         "assessment", "capabilities", "quotas", "occupancy", "plan_revision",
-                        "capacity", "capacity_reason", "exceptional_grant", "packet", "worktree"},
+                        "capacity", "capacity_reason", "exceptional_grant", "packet", "worktree",
+                        "task_policy"},
               {"project", "objective", "owner", "run", "task",
                "assessment", "capabilities", "quotas", "occupancy", "plan_revision", "packet"}, name="request")
         from .operations import guarded_start
@@ -193,7 +194,8 @@ def run(operation: str, request: dict) -> dict:
                              capacity_reason=request.get("capacity_reason"),
                              exceptional_grant=request.get("exceptional_grant"),
                              frozen_packet=request["packet"],
-                             worktree=request.get("worktree", "current"))
+                             worktree=request.get("worktree", "current"),
+                             task_policy=request.get("task_policy"))
     if operation == "state-migrate":
         exact(request, {"project", "objective", "owner"},
               {"project", "objective", "owner"}, name="request")

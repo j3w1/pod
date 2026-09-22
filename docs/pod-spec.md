@@ -35,7 +35,7 @@ blanket permission to remove applicable correctness checks.
 | Fixed launch/finish waves | Dependency-ready admission when capacity safely frees. |
 | All workers need terminals and old receipt shapes are universal | Installed-version backend-specific native identity, optional terminal. |
 | Automatic managed installer/PATH repair in setup | Explicit isolated installation; setup only owned enrollment/integration writes. |
-| Unconditional session-age stop/restart | Evidence-based checkpoints and retained-settled-only idle expiry. |
+| Unconditional session-age stop/restart and Pod retention timer | Evidence-based checkpoints; Orca owns worker retention and disposition. |
 | Release core integrations as merely unverified | Missing live core evidence blocks release. |
 | Keep old aliases/machinery/tests for compatibility | No compatibility period; preserve applicable invariants with replacement coverage. |
 | Passive setup means no writes | Setup may write authorized owned integration; diagnostics/default reads remain read-only. |
@@ -84,7 +84,7 @@ request UUIDs; Pod only records and reuses them for the same immutable admission
 | R13 | H | Merge soft preferences by specificity and hard restrictions restrictively. Resolve keyed entries consistently; local lists cannot broaden restrictive lists. Project/task files cannot expand model/provider approval, spending authority, destructive permissions or hard ceilings. | F4; PB | A09,A12,A48 |
 | R14 | B | Supply five starter preferences as pending capability-validated recommendations. Offer Opus/Fable as additional approvable alternatives. Exact identifiers/efforts depend on the approved installed route; names are not permanent rankings. | F4; PB,P | A10,A47,A50 |
 | R15 | B,H | Start with the matching preference, filter infeasible routes and depart only for a concrete recorded reason. Strict pins prohibit substitution. Exceptions do not edit saved preferences. Never reroute to circumvent a provider safety refusal. | F4–5; PB–C | A05,A06,A07,A38 |
-| R16 | H | Bind each assignment to immutable configuration/catalog revisions, assessment and route. Preferences affect future assignments; hard revocations apply at the next enforceable boundary. Invalid configuration blocks new dispatch without blocking diagnosis or authorized reconciliation/cleanup; never silently use an older revision. | F4; PB,J | A11,A12,A51 |
+| R16 | H | Bind each assignment to immutable configuration/catalog revisions, assessment and route. Preferences affect future assignments; hard revocations apply at the next enforceable mutation boundary. Invalid configuration blocks a pending replay or new dispatch without blocking read-only diagnosis or binding a completed native effect; never silently use an older revision. | F4; PB,J | A11,A12,A51 |
 | R17 | B | Provide dispatch-free routing preview and deterministic replay from supplied assessment, policy, capability and quota snapshots. Helpers validate/explain decisions; they do not claim to understand arbitrary tasks through numerical lookup. | F2,10; PJ | A36,A52 |
 | R18 | B,H | Read supported metadata for the actual authentication/account route. Preserve buckets/windows, observed consumption, resets, timestamps, source, freshness and uncertainty. Prefer notifications/bounded cached reads. Do not scrape credential stores/undocumented endpoints or use provider inference APIs for workers. | F2,5; PC | A13,A14,A15,A16,A39,A53 |
 | R19 | B,H | Apply configurable quota heuristics: initially 20% low, 5% critical, 60-second freshness. Assess bounded work individually. Unknown quota allows at most one newly active managed worker per unobserved account route; existing workers count against that allowance. Exhaustion requires positive renewed-availability evidence. Avoid oscillation and account rotation. | F5; PC | A13,A14,A15,A16,A54 |
@@ -171,7 +171,7 @@ account credentials or personal machine paths belong in committed examples.
 - `models`: stable alias, agent, exact model identity, approval, billing restriction;
   optional account/effort/capability/data-location/approval-provenance restrictions.
 - `routing`: five complexity rows, model alias and effort; derive agent.
-- `policy`: concurrency, quota, billing, delegation, review and lifecycle/retention.
+- `policy`: admission concurrency, quota, billing, delegation and review controls.
 - Optional project context references for enrollment/verification, without execution
   or personal authorization grants.
 
@@ -195,8 +195,9 @@ ordinary effort values. Default worker ceiling 2; ordinary maximum 3; explicitly
 exceptional maximum 8. Quota low 20%, critical 5%, freshness 60 seconds. Unknown quota
 conservative, extra usage/reset credits require explicit authorization. Child delegation
 requires coordinator authorization; independent review for substantial/high-risk work
-unless project rules are stricter. Retained-settled idle expiry defaults to 30 minutes.
-No-progress diagnostic threshold is two equivalent failed corrections without new evidence.
+unless project rules are stricter. Worker retention and idle disposition have no Pod timer;
+they follow explicit Orca operations. No-progress diagnostic threshold is two equivalent
+failed corrections without new evidence.
 
 ## Structured contracts
 
@@ -393,10 +394,11 @@ public dual interface. Supported execution environment: Linux.
 
 ## Evidence boundary at reconciliation
 
-Baseline is clean main at the commit above. Read-only observations found reachable Orca
-1.4.206 advertising orchestration.contract.v1 and worker-launch-preferences, Codex CLI
+Baseline is clean main at the commit above. The historical reconciliation observation at that
+baseline found Orca 1.4.205 advertising orchestration.contract.v1 and
+worker-launch-preferences, Codex CLI
 0.155.1 and Claude Code 2.1.278. Native help describes optional worker terminals.
 These facts are not Pod lifecycle, quota, billing, permission/fan-out or recovery proof.
-Host workspace doctor passed, but canonical pod registration is an owner-admin cutover
-dependency. Implementation/tests, live core matrix, hosted CI, independent audit,
-acceptance, merge and release were NOT_RUN for Pod at reconciliation.
+Implementation/tests, live core matrix, hosted CI, independent audit, acceptance, merge and
+release were NOT_RUN for Pod at reconciliation. Current observations and candidate state are
+reported in [pod-progress.md](pod-progress.md), not retroactively written into this record.

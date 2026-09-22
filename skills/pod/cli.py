@@ -92,9 +92,9 @@ def _status(root: Path, run: str | None) -> dict:
         context = _read_context(context_root)
         if context_root is not None:
             from .governor import status_at
+            from .operations import OrcaPort
             from .ledger import fresh_projection
-            native = {"runtime": workers["runtime"], "scope": "bound+ledger_runs",
-                      "complete": workers["complete"], "workers": workers["workers"]}
+            native = OrcaPort(root).read_native(context.get("owner"), run=run)
             objective_names = {row.get("objective") for row in context.get("admissions", {}).values()
                                if isinstance(row, dict) and row.get("objective")}
             selected_objective = next(iter(objective_names)) if len(objective_names) == 1 else None

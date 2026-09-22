@@ -60,14 +60,33 @@ class OrcaPort:
                     runs: tuple[str, ...] = ()) -> dict:
         handle = os.environ.get("ORCA_TERMINAL_HANDLE")
         authoritative = bool(handle) and handle == owner
-        pages = [worker_rows()] if run is None else [worker_rows(run)]
-        runtime = pages[0]["runtime"]
-        scope = pages[0]["scope"].get("source") if isinstance(pages[0]["scope"], dict) else pages[0]["scope"]
-        if run is None and scope != "all":
-            raise PodError("native_occupancy_unverified", "Unscoped Orca read did not cover the fleet")
-        known_runs = bound_runs(self.project, runtime) if self.project is not None else ()
-        for extra in sorted({value for value in (*runs, *known_runs) if value and value != run}):
-            pages.append(worker_rows(extra))
+        explicit_runs = {value for value in (run, *runs) if isinstance(value, str) and value}
+        runtime = None
+        if run is None:
+            current = read_command(["orchestration", "run-current", "--json"])
+            runtime = current["runtime"]
+            current_value = current["result"].get("run")
+            current_id = (_identifier(current_value)
+                          if isinstance(current_value, dict) else current_value)
+            if isinstance(current_id, str) and current_id:
+                explicit_runs.add(current_id)
+            if self.project is not None:
+                explicit_runs.update(bound_runs(self.project, runtime))
+        pages = [worker_rows(value) for value in sorted(explicit_runs)]
+        if not pages:
+            pages = [worker_rows()]
+            runtime = pages[0]["runtime"]
+            scope = (pages[0]["scope"].get("source")
+                     if isinstance(pages[0]["scope"], dict) else pages[0]["scope"])
+            if scope != "all":
+                raise PodError("native_occupancy_unverified",
+                               "No exact Run set or all-fleet Orca projection is available")
+        elif runtime is None:
+            runtime = pages[0]["runtime"]
+            if self.project is not None:
+                known_runs = bound_runs(self.project, runtime)
+                for extra in sorted(set(known_runs) - explicit_runs):
+                    pages.append(worker_rows(extra))
         rows = []
         cross_host = False
         for page in pages:
@@ -84,7 +103,7 @@ class OrcaPort:
                 rows.append(worker)
         return {"runtime": runtime, "owner": owner if authoritative else None,
                 "authoritative": authoritative,
-                "scope": "all" if run is None else "bound+ledger_runs",
+                "scope": "bound+ledger_runs" if explicit_runs else "all",
                 "complete": True, "workers": rows,
                 "quota": _quota_snapshot(route) if route else None,
                 "cross_host": cross_host, "atomic_admission": False}
@@ -166,11 +185,11 @@ def _receipt_from_request_show(shown: dict, request_uuid: str) -> tuple[str, dic
         raise PodError("native_request_unverified", "Orca request readback is malformed")
     if result.get("requestId") != request_uuid:
         raise PodError("native_request_mismatch", "Orca request readback names another request")
-    if result.get("method") != "orchestration.workerStart":
-        raise PodError("native_request_mismatch", "Orca request readback names another mutation")
     status = result.get("status", result.get("state"))
     if status not in ("completed", "pending", "absent"):
         raise PodError("native_request_unverified", "Orca request state is unsupported")
+    if status in ("completed", "pending") and result.get("method") != "orchestration.workerStart":
+        raise PodError("native_request_mismatch", "Orca request readback names another mutation")
     receipt = result.get("receipt", result.get("result", result.get("response")))
     return status, receipt if isinstance(receipt, dict) else None
 
@@ -250,11 +269,21 @@ def _record_request(project: Path, objective: str, *, owner: str, admission_id: 
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
-def _current_authority(project: Path, admission: dict) -> None:
+def _current_authority(project: Path, objective: str, admission: dict,
+                       *, task_policy: dict | None) -> None:
     """A pending replay is still a mutation, so current revocation/spending policy applies."""
-    policy = effective(project)
+    policy = effective(project, task=task_policy)
     if policy["revision"] != admission["route_decision"].get("policy_revision"):
         raise PodError("policy_revision_mismatch", "Policy changed before native request replay")
+    state = read(project, objective)
+    checkpoint_value = state.get("checkpoint") if isinstance(state, dict) else None
+    expected_checkpoint = admission.get("recovery", {}).get("checkpoint_binding")
+    current_checkpoint = ({key: checkpoint_value.get(key) for key in
+                           ("candidate", "criteria", "plan_revision", "policy_revision")}
+                          if isinstance(checkpoint_value, dict) else None)
+    if not isinstance(expected_checkpoint, dict) or current_checkpoint != expected_checkpoint:
+        raise PodError("checkpoint_binding_changed",
+                       "Checkpoint semantics changed before native request replay")
     route = admission["request"]
     model = policy["policy"]["models"].get(route.get("alias"))
     if (not isinstance(model, dict) or not model.get("approved")
@@ -297,7 +326,8 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
 
 
 def recover_admission(project: Path, objective: str, *, owner: str, admission_id: str,
-                      worktree: str, port: NativePort | None = None) -> dict:
+                      worktree: str, port: NativePort | None = None,
+                      task_policy: dict | None = None) -> dict:
     """Recover the same admission; never issue a fresh semantic start."""
     native_port = port or OrcaPort(project)
     state = read(project, objective)
@@ -320,7 +350,6 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": row["state"], "admission": row, "action": "hold"}
     if worktree != admission["worktree"]:
         raise PodError("admission_conflict", "Recovery changed the original worktree")
-    _current_authority(project, admission)
     authority = native_port.read_native(owner, run=admission["run_id"], route=admission["request"])
     if (authority.get("authoritative") is not True or authority.get("owner") != owner
             or authority.get("runtime") != admission["runtime"]):
@@ -341,6 +370,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                         port=native_port, request_uuid=request_uuid)
         return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
     if status == "pending":
+        _current_authority(project, objective, admission, task_policy=task_policy)
         receipt = native_port.start_worker(run=admission["run_id"], task=admission["task_id"],
                                            owner=owner, route=admission["request"],
                                            worktree=worktree, retry_request=request_uuid)
@@ -362,7 +392,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   plan_revision: str, frozen_packet: dict, capacity: int = DEFAULT_WORKER_CAPACITY,
                   capacity_reason: str | None = None, exceptional_grant: dict | None = None,
                   worktree: str = "current", port: NativePort | None = None,
-                  now: datetime | None = None) -> dict:
+                  task_policy: dict | None = None, now: datetime | None = None) -> dict:
     """Policy check, durable reservation, then one native start or exact recovery."""
     from .records import packet
     from .ledger import check_bound_sources
@@ -373,7 +403,17 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         raise PodError("invalid_packet", "Frozen packet identity changed")
     if validated["body"]["objective"] != objective:
         raise PodError("packet_mismatch", "Packet objective differs from admission")
-    policy = effective(project)
+    admission_id = admission_identity(objective=objective, run_id=run, task_id=task,
+                                      packet_id=validated["packet_id"], plan_revision=plan_revision)
+    existing_state = read(project, objective)
+    if isinstance(existing_state, dict) and admission_id in existing_state["admissions"]:
+        recovered = recover_admission(project, objective, owner=owner,
+                                      admission_id=admission_id, worktree=worktree,
+                                      port=native_port, task_policy=task_policy)
+        return {**recovered,
+                "decision": recovered["admission"]["route_decision"],
+                "establishment": recovered["admission"]["effective_evidence"]}
+    policy = effective(project, task=task_policy)
     decision = preview(assessment, policy, capabilities=capabilities, quotas=quotas,
                        occupancy=occupancy, objective=objective, now=now)
     if decision.get("status") != "usable":
@@ -383,22 +423,24 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         raise PodError("packet_mismatch", "Packet route differs from effective route")
     establishment = native_port.establish(route, policy["policy"]["models"][route["alias"]],
                                            child_delegation=bool(policy["policy"]["policy"].get("child_delegation")))
-    admission_id = admission_identity(objective=objective, run_id=run, task_id=task,
-                                      packet_id=validated["packet_id"], plan_revision=plan_revision)
     check_bound_sources(project, objective, owner=owner, assignment=validated["packet_id"],
                         sources=validated["body"]["sources"])
     admission = reserve(project, objective, owner=owner, admission_id=admission_id,
-                        requested=route, route_decision={**decision, "policy": policy["policy"]["policy"]},
+                        requested=route, route_decision={**decision,
+                                                        "policy": policy["policy"]["policy"],
+                                                        "task_policy": task_policy},
                         establishment=establishment,
                         native_reader=lambda: native_port.read_native(owner, run=run, route=route),
                         capacity=capacity, run_id=run, task_id=task,
                         plan_revision=plan_revision, packet_id=validated["packet_id"],
                         worktree=worktree, frozen_packet=validated,
                         exceptional_grant=exceptional_grant, capacity_reason=capacity_reason,
-                        spending_grant=decision.get("spending_grant"), now=now)
+                        spending_grant=decision.get("spending_grant"), task_policy=task_policy,
+                        now=now)
     if admission["existing"]:
         recovered = recover_admission(project, objective, owner=owner,
-                                      admission_id=admission_id, worktree=worktree, port=native_port)
+                                      admission_id=admission_id, worktree=worktree,
+                                      port=native_port, task_policy=task_policy)
         return {**recovered, "decision": decision, "establishment": establishment}
     try:
         receipt = native_port.start_worker(run=run, task=task, owner=owner, route=route,

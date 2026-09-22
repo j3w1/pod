@@ -9,10 +9,13 @@
   waste governor use fresh Orca projection; missing, ambiguous, retained or unresolved work
   remains conservative, and exact released projection can free capacity.
 - Native recovery records Orca's request UUID before readback and handles completed, pending
-  and absent request states without a second semantic start. Pod never selects a retry UUID.
+  and method-less absent request states without a second semantic start. Read-only completed
+  or absent reconciliation remains possible after revocation; only pending replay rechecks
+  current mutation authority. Pod never selects a retry UUID.
 - Explicit `state-migrate` archives and hashes v1, performs read-only native reconciliation,
-  preserves spent grants and uncertain holds, then atomically installs v2. Doctor and status
-  report migration requirements without changing state.
+  preserves spent grants and uncertain holds, then atomically installs v2 from bounded regular
+  files. Exact later release proof frees a bound legacy hold; doctor and status report migration
+  requirements without changing state.
 - Package/skill metadata is 0.3.0 and CLI/helper envelopes are v2. The last published install
   pin remains `v0.1.2`; this candidate does not claim a tag or publication.
 
