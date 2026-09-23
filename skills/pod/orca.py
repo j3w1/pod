@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 from .errors import PodError
 from .util import digest
@@ -16,7 +17,6 @@ from .util import digest
 MAX_OUTPUT = 2_000_000
 CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1",
-                   "fleet_snapshot_v1": "orchestration.federation-fleet-snapshot.v1",
                    "reset_credit_v1": "accounts.codex-reset-credit.v1"}
 AGENTS = ("codex", "claude")
 TIERS = ("enforceable_control", "runtime_observation", "owner_route_config", "unavailable")
@@ -33,8 +33,10 @@ def executable() -> Path:
         found = shutil.which(selected)
     elif os.environ.get("ORCA_DEV_REPO_ROOT"):
         found = shutil.which("orca-dev")
+    elif sys.platform.startswith("linux") and not os.environ.get("ORCA_TERMINAL_HANDLE"):
+        found = shutil.which("orca-ide")
     else:
-        found = shutil.which("orca") or shutil.which("orca-ide")
+        found = shutil.which("orca")
     if not found:
         raise PodError("orca_unavailable", "Configured Orca executable is unavailable")
     path = Path(found).resolve()
@@ -49,7 +51,7 @@ def _argument(value: object, *, limit: int = 4096) -> bool:
 
 def _read_allowed(argv: list[str]) -> bool:
     if argv in (["--version"], ["status", "--json"], ["host", "list", "--json"],
-                ["account", "list", "--json"], ["orchestration", "run-list", "--json"],
+                ["account", "list", "--json"],
                 ["orchestration", "run-current", "--json"]):
         return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
@@ -97,16 +99,84 @@ def _envelope(stdout: str) -> dict:
     runtime = value.get("_meta", {}).get("runtimeId")
     if not isinstance(runtime, str) or not runtime:
         raise PodError("orca_contract", "Orca runtime identity is unavailable")
-    return {"runtime": runtime, "result": value["result"]}
+    mutation = value["result"].get("mutation")
+    if not isinstance(mutation, dict):
+        mutation = value.get("mutation")
+    request_uuid = mutation.get("requestId") if isinstance(mutation, dict) else None
+    return {"runtime": runtime, "result": value["result"], "request_uuid": request_uuid}
+
+
+def _mutation_envelope(stdout: str) -> dict:
+    """Decode a mutation receipt, including Orca's authoritative no-start refusal."""
+    try:
+        value = json.loads(stdout)
+    except ValueError as exc:
+        raise PodError("native_effect_uncertain", "Native response is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise PodError("native_effect_uncertain", "Native response is malformed")
+    runtime = value.get("_meta", {}).get("runtimeId")
+    if not isinstance(runtime, str) or not runtime:
+        raise PodError("native_effect_uncertain", "Native response has no runtime identity")
+    if value.get("ok") is True and isinstance(value.get("result"), dict):
+        result = value["result"]
+        error = None
+    elif value.get("ok") is False and isinstance(value.get("error"), dict):
+        error = value["error"]
+        if error.get("code") != "capacity_full":
+            raise PodError("native_effect_uncertain", "Native refusal is not a supported no-start result")
+        native_result = value.get("result")
+        if native_result is not None and not isinstance(native_result, dict):
+            raise PodError("native_effect_uncertain", "Native refusal carries a malformed result")
+        result = dict(native_result or {})
+        if "error" in result:
+            result["_result_error"] = result["error"]
+        result.setdefault("state", "deferred")
+        result["error"] = error
+        for key in ("dispatchId", "dispatch_id", "workerId", "worker_id",
+                    "residualResources", "residual_resources", "effects",
+                    "terminal", "terminalHandle", "terminal_handle",
+                    "worktreeId", "worktree_id", "terminalResourceId",
+                    "terminal_resource_id", "resource", "failedStage", "failed_stage"):
+            if key not in value:
+                continue
+            if key in result and result[key] != value[key]:
+                result.setdefault("_envelope_conflicts", {})[key] = value[key]
+            else:
+                result[key] = value[key]
+    else:
+        raise PodError("native_effect_uncertain", "Native response does not prove an effect or refusal")
+    request_references = []
+    request_malformed = False
+    for carrier in (result, value):
+        if "mutation" not in carrier:
+            continue
+        mutation = carrier["mutation"]
+        if not isinstance(mutation, dict) or mutation.get("requestId") is None:
+            request_malformed = True
+            continue
+        request_references.append(mutation["requestId"])
+    error_data = error.get("data") if isinstance(error, dict) else None
+    error_request = (error_data.get("orchestrationRequestId")
+                     if isinstance(error_data, dict) else None)
+    if isinstance(error_data, dict) and "orchestrationRequestId" in error_data:
+        if error_request is None:
+            request_malformed = True
+        else:
+            request_references.append(error_request)
+    request_uuid = request_references[0] if request_references else None
+    if (request_malformed
+            or any(reference != request_uuid for reference in request_references[1:])):
+        result["_request_conflict"] = True
+    return {"runtime": runtime, "result": result, "request_uuid": request_uuid,
+            "error": error}
 
 
 def _worker_list_tail(tail: list[str]) -> bool:
     if tail[:2] == ["--limit", "100"]:
         tail = tail[2:]
-    if len(tail) >= 2 and tail[0] == "--run":
-        if not _argument(tail[1]):
-            return False
-        tail = tail[2:]
+    if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
+        return False
+    tail = tail[2:]
     if len(tail) >= 2 and tail[0] == "--cursor":
         if not _argument(tail[1]):
             return False
@@ -117,21 +187,14 @@ def _worker_list_tail(tail: list[str]) -> bool:
 def _mutate_allowed(argv: list[str]) -> bool:
     if argv[:2] == ["orchestration", "worker-start"]:
         return _worker_start_shape(argv[2:])
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-release", "--dispatch"]
-            and _argument(argv[3]) and argv[4] == "--json"):
-        return True
-    if argv[:2] == ["orchestration", "check"]:
-        return _check_shape(argv[2:])
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "run-create", "--objective"]
-            and isinstance(argv[3], str) and argv[3].strip() and len(argv[3]) <= 4096
-            and argv[4] == "--json"):
-        return True
-    if argv[:2] == ["orchestration", "task-create"]:
-        return _task_create_shape(argv[2:])
     return False
 
 
 def _worker_start_shape(tail: list[str]) -> bool:
+    retry = None
+    if len(tail) >= 3 and tail[-3] == "--retry-request" and tail[-1] == "--json":
+        retry = tail[-2]
+        tail = tail[:-3] + ["--json"]
     expected = ["--task", None, "--run", None, "--worktree", None,
                 "--agent", None, "--model", None, "--effort", None, "--json"]
     if len(tail) != len(expected):
@@ -142,43 +205,7 @@ def _worker_start_shape(tail: list[str]) -> bool:
                 return False
         elif tail[index] != flag:
             return False
-    return worktree_selector(tail[5]) is not None
-
-
-def _check_shape(tail: list[str]) -> bool:
-    if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
-        return False
-    rest = tail[2:]
-    if rest[:1] == ["--ack"]:
-        if len(rest) < 2 or not _argument(rest[1]):
-            return False
-        rest = rest[2:]
-    if rest[:1] == ["--wait"]:
-        rest = rest[1:]
-        if rest[:1] == ["--types"]:
-            if len(rest) < 2 or not _argument(rest[1]):
-                return False
-            rest = rest[2:]
-        if rest[:1] != ["--timeout-ms"]:
-            return False
-        if len(rest) < 2 or not rest[1].isdigit() or not 1000 <= int(rest[1]) <= 900_000:
-            return False
-        rest = rest[2:]
-    return rest == ["--json"]
-
-
-def _task_create_shape(tail: list[str]) -> bool:
-    if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
-        return False
-    rest = tail[2:]
-    if rest[:1] != ["--spec"] or len(rest) < 2 or not isinstance(rest[1], str) or not rest[1].strip():
-        return False
-    rest = rest[2:]
-    if rest[:1] == ["--task-title"]:
-        if len(rest) < 2 or not isinstance(rest[1], str) or not rest[1].strip():
-            return False
-        rest = rest[2:]
-    return rest == ["--json"]
+    return worktree_selector(tail[5]) is not None and (retry is None or _argument(retry))
 
 
 def worktree_selector(value: object) -> str | None:
@@ -208,8 +235,10 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
         raise PodError("native_effect_uncertain", "Native command returned an unsupported exit status")
     if len(completed.stdout) > MAX_OUTPUT:
         raise PodError("orca_contract", "Native response exceeds bounded output")
-    envelope = _envelope(completed.stdout)
-    return {"runtime": envelope["runtime"], "exit": completed.returncode, "result": envelope["result"]}
+    envelope = _mutation_envelope(completed.stdout)
+    return {"runtime": envelope["runtime"], "exit": completed.returncode,
+            "result": envelope["result"], "request_uuid": envelope.get("request_uuid"),
+            "error": envelope.get("error")}
 
 
 def identity(mapping: object, camel: str) -> object:
@@ -247,10 +276,12 @@ def contract() -> dict:
     return snapshot
 
 
-def worker_rows(run: str | None = None) -> dict:
+def worker_rows(run: str) -> dict:
+    """Read workers for one exact Run; unscoped fleet enumeration is forbidden."""
+    if not _argument(run):
+        raise PodError("orca_contract", "Exact Run identity is required for worker reads")
     prefix = ["orchestration", "worker-list", "--include-remote", "--json", "--limit", "100"]
-    if run:
-        prefix += ["--run", run]
+    prefix += ["--run", run]
     all_rows: list[dict] = []
     cursor = None
     seen = set()
@@ -262,11 +293,11 @@ def worker_rows(run: str | None = None) -> dict:
         page = result.get("page", {})
         rows = result.get("workers")
         if not isinstance(rows, list) or not isinstance(page, dict):
-            raise PodError("orca_contract", "Worker fleet page is malformed")
+            raise PodError("orca_contract", "Run worker page is malformed")
         if runtime is not None and response["runtime"] != runtime:
-            raise PodError("orca_runtime_changed", "Runtime changed during fleet read")
+            raise PodError("orca_runtime_changed", "Runtime changed during Run worker read")
         if runtime is not None and result.get("scope") != scope:
-            raise PodError("orca_scope_changed", "Fleet scope changed during read")
+            raise PodError("orca_scope_changed", "Run worker scope changed during read")
         runtime, scope = response["runtime"], result.get("scope")
         all_rows.extend(rows)
         if not page.get("hasMore"):
@@ -274,9 +305,32 @@ def worker_rows(run: str | None = None) -> dict:
                     "complete": True, "page_count": len(seen) + 1}
         cursor = page.get("nextCursor")
         if not isinstance(cursor, str) or cursor in seen:
-            raise PodError("orca_pagination", "Worker fleet cursor is missing or repeated")
+            raise PodError("orca_pagination", "Run worker cursor is missing or repeated")
         seen.add(cursor)
-    raise PodError("orca_pagination", "Worker fleet exceeds bounded pages")
+    raise PodError("orca_pagination", "Run worker read exceeds bounded pages")
+
+
+def current_run() -> dict:
+    """Read this terminal's native coordinator binding without adopting or creating one."""
+    response = read_command(["orchestration", "run-current", "--json"])
+    result = response["result"]
+    if "run" not in result:
+        raise PodError("orca_contract", "Current Run response lacks an explicit binding")
+    row = result["run"]
+    if row is None:
+        return {"runtime": response["runtime"], "run": None}
+    if not isinstance(row, dict):
+        raise PodError("orca_contract", "Current Run binding is malformed")
+    run_id = row.get("id")
+    coordinator = row.get("coordinator_handle")
+    generation = row.get("consumer_generation")
+    if (not isinstance(run_id, str) or not run_id
+            or not isinstance(coordinator, str) or not coordinator
+            or type(generation) is not int or generation < 0):
+        raise PodError("orca_contract", "Current Run ownership proof is incomplete")
+    return {"runtime": response["runtime"], "run": {
+            "id": run_id, "coordinator_handle": coordinator,
+            "consumer_generation": generation}}
 
 
 def hosts() -> dict:
@@ -289,16 +343,97 @@ def hosts() -> dict:
             "local_only": names in ([], ["local"])}
 
 
-def account_metadata() -> dict:
+def account_metadata(raw: dict | None = None) -> dict:
     """Redacted provider rate-limit projection. Account identifiers never leave this call."""
-    raw = account_metadata_raw()
+    raw = raw or account_metadata_raw()
     out = {}
     for provider in AGENTS:
         block = raw["providers"].get(provider, {})
         out[provider] = {key: block[key] for key in
-                         ("status", "updated_at_ms", "freshness", "windows", "account_association", "source")
+                         ("status", "updated_at_ms", "freshness", "windows", "account_association",
+                          "identity_digest", "source")
                          if key in block}
     return {"runtime": raw["runtime"], "providers": out}
+
+
+def selected_account_identity(account_block: dict, login_block: dict) -> dict:
+    """Choose the one redacted identity that approval, accounting and grants share."""
+    if account_block.get("managed_accounts"):
+        value = account_block.get("active_account")
+        source = "orca_active_managed_account"
+    else:
+        default_present = account_block.get("default_present")
+        if default_present is None:
+            default_present = any(account_block.get(key) is not None
+                                  for key in ("default_identity", "default_auth")) \
+                or account_block.get("default_has_auth") is True
+        if default_present:
+            value = account_block.get("default_identity")
+            source = "orca_system_default"
+        else:
+            value = login_block.get("identity_digest")
+            source = "agent_login_status"
+    return {"identity_digest": value if isinstance(value, str) and value else None,
+            "source": source if value else "unavailable"}
+
+
+def selected_account_evidence(account_block: dict, login_block: dict) -> dict:
+    """Join identity and billing proof from one selected account context."""
+    identity = selected_account_identity(account_block, login_block)
+    stamp, source = identity["identity_digest"], identity["source"]
+    auth = "unknown"
+    subscription = None
+    proof_source = "unavailable"
+    context_matched = False
+    if source == "orca_active_managed_account":
+        if account_block.get("selected_has_auth"):
+            auth = account_block.get("selected_auth", "unknown")
+            proof_source = source
+            context_matched = auth in ("oauth", "api_key")
+    elif source == "orca_system_default":
+        if account_block.get("default_has_auth"):
+            auth = account_block.get("default_auth", "unknown")
+            proof_source = source
+            context_matched = auth in ("oauth", "api_key")
+    elif source == "agent_login_status" and login_block.get("identity_digest") == stamp:
+        auth = login_block.get("auth", "unknown")
+        subscription = login_block.get("subscription")
+        proof_source = source
+        context_matched = auth in ("oauth", "api_key")
+    if auth == "oauth":
+        if proof_source.startswith("orca_"):
+            subscription = True
+        elif subscription is not True:
+            context_matched = False
+            subscription = None
+    elif auth == "api_key":
+        subscription = False
+    else:
+        auth = "unknown"
+        subscription = None
+        context_matched = False
+    billing = ("subscription" if context_matched and auth == "oauth" and subscription is True
+               else "api" if context_matched and auth == "api_key" else "unknown")
+    return {**identity, "auth": auth, "subscription": subscription,
+            "billing": billing, "proof_source": proof_source,
+            "context_matched": context_matched}
+
+
+def account_evidence_stops(evidence: dict, *, expected_identity: object,
+                           approved_billing: object) -> list[str]:
+    """Apply one fail-closed identity/billing policy to every pre-effect account read."""
+    observed = evidence.get("identity_digest")
+    if (not isinstance(expected_identity, str) or not isinstance(observed, str)
+            or observed != expected_identity):
+        return ["account_binding_unverified"]
+    if evidence.get("context_matched") is not True or evidence.get("billing") == "unknown":
+        return ["billing_mode_unverified"]
+    stops = []
+    if approved_billing == "included" and evidence["billing"] != "subscription":
+        stops.append("billing_mode_unverified")
+    if evidence["billing"] == "api" and approved_billing != "paid":
+        stops.append("paid_route_forbidden")
+    return stops
 
 
 def account_metadata_raw() -> dict:
@@ -314,16 +449,25 @@ def account_metadata_raw() -> dict:
         provider_block = result.get(provider) if isinstance(result.get(provider), dict) else {}
         managed = provider_block.get("accounts")
         managed = managed if isinstance(managed, list) else []
-        default = provider_block.get("systemDefault")
-        default = default if isinstance(default, dict) else {}
+        default_value = provider_block.get("systemDefault")
+        default_present = isinstance(default_value, dict)
+        default = default_value if default_present else {}
         active = provider_block.get("activeAccountId")
+        selected = [row for row in managed
+                    if isinstance(row, dict) and row.get("id") == active]
+        selected = selected[0] if len(selected) == 1 else {}
         record = {"managed_accounts": len(managed),
                   "active_account": digest(active) if isinstance(active, str) and active else None,
+                  "selected_auth": selected.get("authKind")
+                  if isinstance(selected.get("authKind"), str) else None,
+                  "selected_has_auth": bool(selected.get("hasAuth")),
+                  "default_present": default_present,
                   "default_identity": digest(default.get("providerAccountId"))
                   if isinstance(default.get("providerAccountId"), str) else None,
                   "default_auth": default.get("authKind") if isinstance(default.get("authKind"), str) else None,
                   "default_has_auth": bool(default.get("hasAuth")),
                   "reset_credits": None}
+        record["identity_digest"] = selected_account_identity(record, {})["identity_digest"]
         credits = raw.get("rateLimitResetCredits") if isinstance(raw, dict) else None
         if isinstance(credits, dict) and isinstance(credits.get("availableCount"), int):
             record["reset_credits"] = credits["availableCount"]
@@ -425,7 +569,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                 "hard_stops": ["native_authority_unverified"],
                 "disclosures": ["installed Orca runtime identity is unavailable"]}
     agent = route.get("agent")
-    account_block = (accounts or account_metadata_raw())["providers"].get(agent, {})
+    account_snapshot = accounts or account_metadata_raw()
+    account_block = account_snapshot.get("providers", {}).get(agent, {})
     login_block = login if login is not None else agent_login_mode(agent)
     host_block = fleet if fleet is not None else hosts()
     capabilities = observed.get("capabilities", {})
@@ -434,15 +579,12 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     bucket = bucket_for(agent, route.get("model", ""))
     managed = account_block.get("managed_accounts", 0)
     mode = "managed_account" if managed else "host_login"
-    stamp = account_block.get("active_account") or account_block.get("default_identity") \
-        or login_block.get("identity_digest")
-    auth = login_block.get("auth", "unknown")
-    if auth == "unknown" and account_block.get("default_auth") == "oauth" and account_block.get("default_has_auth"):
-        auth, subscription = "oauth", True
-    else:
-        subscription = login_block.get("subscription")
-    observed_billing = "subscription" if auth == "oauth" and subscription else (
-        "api" if auth == "api_key" else "unknown")
+    account_evidence = selected_account_evidence(account_block, login_block)
+    stamp = account_evidence["identity_digest"]
+    expected_stamp = route.get("account")
+    auth = account_evidence["auth"]
+    subscription = account_evidence["subscription"]
+    observed_billing = account_evidence["billing"]
     approved_billing = model_policy.get("billing") if isinstance(model_policy, dict) else None
     windows = account_block.get("windows", {})
     controls = {
@@ -457,8 +599,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                                   "Orca refuses a nested worker past its own depth limit; Pod "
                                   "observes the depth and does not set the limit",
                                   limit="unknown_to_pod"),
-        "descendant_count": _tier("descendant_count", "runtime_observation",
-                                  "worker-list projection.parent and worker-show creatorDispatchId"),
+        "descendant_count": _tier("descendant_count", "owner_route_config",
+                                  "objective-local Pod admissions for delegated assignments"),
         "child_delegation": _tier("child_delegation", "owner_route_config",
                                   "policy child_delegation with packet action refusal",
                                   enabled=bool(child_delegation),
@@ -469,7 +611,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                               observed=observed_billing),
         "account_identity": _tier("account_identity",
                                   "runtime_observation" if stamp else "unavailable",
-                                  "digest of the provider account or organisation identifier"),
+                                  "digest of the active provider account or organisation identifier",
+                                  matched=bool(stamp and expected_stamp and stamp == expected_stamp)),
         "route_approval": _tier("route_approval", "owner_route_config",
                                 "personal policy approval provenance",
                                 billing=approved_billing),
@@ -478,13 +621,16 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
                               "provider rate-limit windows reported by Orca", bucket=bucket),
         "cross_host": _tier("cross_host", "runtime_observation", "host inventory",
                             local_only=bool(host_block.get("local_only", True))),
+        "physical_capacity": _tier("physical_capacity", "unavailable",
+                                   "Orca owns placement and runtime capacity; Pod reads no capacity census"),
     }
     hard_stops = []
     disclosures = []
-    if approved_billing == "included" and observed_billing != "subscription":
-        hard_stops.append("billing_mode_unverified")
-    if observed_billing == "api" and approved_billing != "paid":
-        hard_stops.append("paid_route_forbidden")
+    if account_snapshot.get("runtime") != observed["runtime"]:
+        hard_stops.append("native_authority_unverified")
+    hard_stops.extend(account_evidence_stops(
+        account_evidence, expected_identity=expected_stamp,
+        approved_billing=approved_billing))
     if not windows:
         disclosures.append("provider quota windows are unavailable to the installed runtime")
     if controls["quota_bucket"]["tier"] == "runtime_observation" and "bucket" not in account_block:
@@ -493,18 +639,21 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         disclosures.append("installed runtime advertises no nested-worker depth control")
     else:
         disclosures.append("the runtime enforces a nested-worker depth limit whose value Pod "
-                           "cannot read; Pod counts descendants rather than assuming one")
+                           "cannot read; Pod requires a logical admission for each delegated assignment")
     if not child_delegation:
         disclosures.append("worker-initiated delegation is refused by Pod admission, not by a provider sandbox")
     if not host_block.get("local_only", True):
-        disclosures.append("the fleet reaches beyond this host; cross-host admission is not atomic")
+        disclosures.append("the runtime reports more than one host; Pod does not infer capacity from it")
+    disclosures.append("physical worker capacity is unavailable to Pod and enforced by Orca/CE")
     return {"schema": "pod-route-establishment/v1", "runtime": observed["runtime"],
             "version": observed.get("version"), "executable": observed.get("executable"),
-            "route": {"agent": agent, "model": route.get("model"), "account": route.get("account"),
-                      "bucket": bucket, "effort": route.get("effort")},
+            "route": {"agent": agent, "model": route.get("model"), "account": stamp,
+                      "bucket": bucket,
+                      "effort": route.get("effort")},
             "controls": controls,
             "login": {"mode": mode, "auth": auth, "subscription": subscription,
-                      "managed_accounts": managed, "identity_digest": stamp},
+                      "managed_accounts": managed, "identity_digest": stamp,
+                      "proof_source": account_evidence["proof_source"]},
             "billing": {"observed": observed_billing, "approved": approved_billing},
             "hard_stops": hard_stops, "disclosures": disclosures}
 
@@ -521,9 +670,19 @@ def require_route_establishment(establishment: dict, route: dict) -> None:
             raise PodError("account_binding_unverified", "Established route differs from the requested route")
     if route.get("bucket") is not None and established.get("bucket") != route["bucket"]:
         raise PodError("account_binding_unverified", "Established quota bucket differs from the requested one")
+    identity_control = establishment.get("controls", {}).get("account_identity")
+    expected_identity = route.get("account")
+    observed_identity = establishment.get("login", {}).get("identity_digest")
+    if (not isinstance(expected_identity, str) or not isinstance(observed_identity, str)
+            or expected_identity != observed_identity or not isinstance(identity_control, dict)
+            or identity_control.get("tier") != "runtime_observation"
+            or identity_control.get("matched") is not True):
+        raise PodError("account_binding_unverified",
+                       "Native account identity does not match personal route approval")
     for stop in establishment.get("hard_stops", []):
         raise PodError(stop if stop in ("billing_mode_unverified", "paid_route_forbidden",
-                                        "native_authority_unverified") else "route_establishment_failed",
+                                        "native_authority_unverified", "account_binding_unverified")
+                       else "route_establishment_failed",
                        "Route establishment refuses this launch: " + str(stop))
 
 

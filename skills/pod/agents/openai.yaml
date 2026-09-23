@@ -1,3 +1,3 @@
 interface:
   display_name: Pod
-  short_description: Coordinate an authorized software task in the current Claude Code or Codex conversation using Orca-n
+  short_description: "Coordinate a pod of Orca-native workers"

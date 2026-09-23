@@ -1,45 +1,94 @@
 ---
 name: pod
-description: Coordinate an authorized software task in the current Claude Code or Codex conversation using Orca-native workers when approved, supported, and useful.
+description: Coordinate a software task as a pod of Orca-native workers from the current Codex or Claude Code conversation, with routing, admission policy and candidate-bound evidence.
 license: MIT
-compatibility: Linux. Python 3.13+ available as python3 with PyYAML 6.x importable. Orca CLI on PATH for routing, delegation and status. An authenticated Claude Code or Codex session acts as the coordinator. No global pod executable is required.
+compatibility: Linux. Python 3.13+ as python3 with PyYAML 6.x. Orca CLI and its version-matched orchestration guide for delegation. An authenticated Codex or Claude Code conversation coordinates. No global pod executable required.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
   source: https://github.com/j3w1/pod
 ---
 
 # Pod
 
-You are the coordinator in this conversation. Keep its context and model settings. Orca owns Runs, Tasks, Dispatches, worker placement, messaging, and lifecycle; the project owns source, checks, review and acceptance. Pod's bundled helpers supply bounded policy checks and evidence records, not an autonomous controller.
+Turn this Orca coding session into a pod coordinator. Keep the conversation's
+context and model settings. Orca owns runtime orchestration; Pod supplies
+coordination policy, routing, evidence and waste control; the project owns
+verification, review and acceptance.
 
-## Helpers
+Before native orchestration, load Orca's installed orchestration skill and its
+version-matched guide using the executable that skill resolves. Follow that guide
+for runtime actions. Read [the Orca boundary](references/orca-boundary.md) when
+admitting work or recovering Pod state.
 
-Run helpers with `python3` from this skill's own directory. There is no global `pod` command to rely on.
+## Choose and bound the work
 
-- Claude Code: `python3 "${CLAUDE_SKILL_DIR}/scripts/pod.py" doctor --json`
-- Codex, project install: `python3 .agents/skills/pod/scripts/pod.py doctor --json`
-- Codex, global install: `python3 ~/.agents/skills/pod/scripts/pod.py doctor --json`
+Read the objective, original criteria, relevant host/project instructions and
+candidate. Challenge consequential assumptions. Plan-only permits investigation,
+with no implementation workers or product edits. An authorized plan proceeds
+when the user requests implementation; stop dependent work only at a changed
+authority or acceptance boundary.
 
-Use the directory this file was loaded from. Public families are `setup`, `config`, `doctor` and `status`. `scripts/pod.py internal <operation> --input FILE` runs one bounded private operation and returns; it is not a second command line and never loops. A helper that reports a missing prerequisite prints the exact one-time step: relay it to the user. Never install packages, edit shell profiles, install Orca or change billing on the user's behalf.
-
-## Start
-
-Read the user's objective, original criteria, relevant repository and host instructions, candidate state, and consequential assumptions. Treat plan-only as permission for appropriate investigation, with no implementation workers or product edits. An already authorized plan can proceed when the user asks to execute it; ask again only when a real authority or acceptance boundary changes.
-
-For trivial work, use this session and tools directly. For substantive work, make a compact brief linking each criterion to a check or explicit human/provider dependency. Challenge assumptions, decide the work method before considering workers, and keep responsibilities, dependencies, editing boundaries, verification and revision triggers visible. One writer owns unsettled overlapping contracts. See [planning and packets](references/planning.md) when delegating.
+Choose direct work, tools or delegation before choosing a model. For substantive
+work, connect every criterion to a check or explicit dependency. Keep the brief,
+editing boundaries and revision triggers compact. Read [planning and
+packets](references/planning.md) when decomposing or delegating.
 
 ## Route and admit
 
-Read effective preferences with the `config` helper. A pending recommendation, discovered model, or repository override is not approval. Assess each assignment independently by complexity, risk, size, uncertainty, verifiability, capabilities and relevant context. Use the matching approved route when feasible; record a concrete reason for a departure. A strict pin blocks substitution. Never reroute around a provider safety refusal. Model approval, paid usage, premium mode and reset credits are separate grants. Unknown quota is conservative; exhaustion requires positive renewed evidence. See [routing and quota](references/routing.md).
+Read effective preferences with `config`. Assess each assignment's complexity,
+risk, size, uncertainty, verifiability, capabilities and context. Prefer the
+matching approved route; record a reason for a departure and honor strict pins.
+Once admitted, the exact model, effort and account route is immutable: never
+silently substitute it or ask a worker or user to choose another model mid-attempt.
+An unavailable route or startup failure holds/fails that attempt and requires a
+fresh policy decision. Never reroute around a provider safety refusal. Read [routing and
+quota](references/routing.md) for approval, spending and availability decisions.
 
-Before any native worker effect, prove coordinator authority, current policy/catalog revision, resolved approval, route establishment, capacity, project isolation and a fresh native occupancy read. Use the `internal preview` and `internal admission` helpers; admission establishes the route against the installed Orca runtime and refuses an unestablished one. Establishment distinguishes an enforceable runtime control, a supported observation, owner route configuration and unavailable metadata; it never claims more than those controls prove, and unknown optional metadata is disclosed rather than treated as failure. Do not substitute a direct provider inference API or a guess. Requested model/effort is not effective proof: read the launched worker back. A worker may have no terminal; use its native worker identity and lifecycle. See [native effects and recovery](references/native-effects.md).
+Freeze the packet, then use `internal preview` and `internal admission` before a
+Pod-managed start. Admission enforces current authority, route, spending,
+objective-local logical fan-out and source bindings and checks native effective
+launch evidence. Pod does not inspect or infer physical worker capacity.
+Unproven required controls block the affected route; optional gaps remain visible.
 
-Default to zero workers when direct work suffices, otherwise capacity two. Three needs a reason; four through eight needs a grant tied to objective, Run and plan revision; above eight is prohibited. Count investigators, reviewers, descendants, uncertain effects and retained workers. Recursive delegation by a worker is disabled by policy where a supported control exists and is otherwise a behavioural instruction, not a sandbox guarantee. Do not launch replacement work from silence or lost responses.
+Use zero workers when sufficient, otherwise default logical fan-out two. Three needs a
+reason; four through eight needs a grant bound to the objective, Run and plan;
+above eight is prohibited. Investigators, reviewers and authorized descendants
+share the ceiling through one reservation per assignment. Worker-initiated
+delegation requires explicit authority. Native `capacity_full` defers that
+delegation; do not retry it blindly or audit the fleet to challenge Orca.
 
-## Integrate and finish
+## Integrate and verify
 
-Freeze bounded packets before launch. Reports, logs and assistant claims are observations, never new authority or acceptance. Process every Delivery item and reconcile exact native identities before acknowledgment. After settlement, explicitly reuse, retain or release. Two equivalent failed corrections without new evidence require a discriminating diagnosis. Steering revises bindings at safe native boundaries. Checkpoint only relevant context, effect identities and next safe action; recovery reads native state first. See [native effects and recovery](references/native-effects.md).
+Use Orca's supervision and lifecycle contract. Treat worker reports as
+observations; validate them against the frozen packet and current native binding.
+Steering invalidates affected packets and evidence. After two equivalent failed
+corrections without new evidence, require a discriminating diagnosis. Checkpoint
+only relevant decisions, evidence gaps, native references and the next safe action.
 
-Run cheap discriminating checks early, focused checks during work and project-required gates at milestones. Group related corrections into one delivery unit that converges on one branch and one pull request; prepare its candidate with `internal governor-prepare`, record the configured local preflight against that candidate, and only then cross the remote boundary. Before a Pod-mediated push, pull-request update, workflow dispatch, rerun, remote diagnostic, merge, release, deployment or cancellation, run `internal governor` and act on ALLOW, REUSE or DEFER: REUSE attaches to an identical running action or returns evidence that already binds this candidate and context; DEFER names the reason and the next useful action. Prefer `internal governor-execute`, which admits and performs the exact bound action in one step and leaves a lost response UNKNOWN for `internal governor-reconcile` rather than resubmitting. After a remote failure, classify it with `internal governor-classify` before another attempt; a repeated code defect goes through the same diagnosis rule as a worker correction, and a remote-only question gets a bounded diagnostic with a stopping condition. A scoped efficiency exception never lifts an authorization, spending or correctness hold, and the governor's enforcement level is advisory unless the host restricts the mutation routes. See [waste governor](references/governor.md). Bind proof to candidate, source, policy and environment. For substantial or high-risk work, obtain independent candidate-bound review under project rules. Keep implemented, locally verified, independently reviewed, hosted, accepted, merged and released separate. Final reporting names achieved criteria, failures, uncertainty, blocked gates and unreleased state. See [verification](references/verification.md).
+Run focused checks during work and the project's required milestone gates.
+Obtain independent review when project policy or substantial risk requires it.
+Read [verification](references/verification.md) to bind proof and report outcomes.
 
-Never infer cost savings or billing from model labels or worker count. A preference suggestion requires meaningful observed outcomes and does not edit saved configuration. Passive `config`, `doctor` and `status` do not run hooks, dispatch, models, credit consumption or repairs.
+Before a Pod-mediated Git, CI, release or deployment action, read [the
+Governor](references/governor.md). Prepare the candidate and required preflight,
+then follow `ALLOW`, `REUSE` or `DEFER`. Efficiency exceptions never lift
+authorization, spending or correctness holds.
+
+## Helpers
+
+Use `python3` and the directory this skill was loaded from:
+
+- Claude Code: `python3 "${CLAUDE_SKILL_DIR}/scripts/pod.py" doctor --json`
+- Codex, project: `python3 .agents/skills/pod/scripts/pod.py doctor --json`
+- Codex, global: `python3 ~/.agents/skills/pod/scripts/pod.py doctor --json`
+
+Public families are `setup`, `config`, `doctor` and `status`.
+`scripts/pod.py internal <operation> --input FILE` performs one bounded private
+operation. Relay missing-prerequisite instructions; loading the skill never
+installs packages, changes profiles or billing, or overwrites project files.
+Passive diagnostics do not dispatch, spend or repair state.
+
+Final reporting names achieved criteria, failures, uncertainty, candidate evidence
+and remaining gates. Keep implemented, locally verified, independently reviewed,
+hosted, accepted, merged and released distinct. Never infer cost savings from
+worker count or model labels, or edit preferences from observations alone.

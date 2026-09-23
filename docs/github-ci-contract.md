@@ -57,3 +57,7 @@ proposal is never policy until it is written here. The target is no unnecessary 
 validation of one candidate and context, not exactly one workflow run regardless of what the
 repository requires: local preflight receipts are preparation evidence and never replace an
 independently required remote proof.
+
+Pod 0.3.0 also supplies Governor decisions with exact read-only Orca evidence for
+the selected objective's assignments when readiness depends on their settlement.
+Pod does not reconstruct worker lifecycle or fleet capacity from its journal.

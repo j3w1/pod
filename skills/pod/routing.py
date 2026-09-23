@@ -93,13 +93,12 @@ def _grant(grants: list, *, action: str, route: dict, objective: str | None,
 
 
 def preview(assessment: dict, effective: dict, *, capabilities: dict | None = None,
-            quotas: dict | None = None, occupancy: dict | None = None,
-            strict_pin: str | None = None, safety_refusal: bool = False,
+            quotas: dict | None = None, strict_pin: str | None = None, safety_refusal: bool = False,
             objective: str | None = None, now: datetime | None = None) -> dict:
     a = assess(assessment)
     policy = effective["policy"]
     models, rows, rules = policy["models"], policy["routing"], policy["policy"]
-    caps, quota_map, occupied = capabilities or {}, quotas or {}, occupancy or {}
+    caps, quota_map = capabilities or {}, quotas or {}
     now = now or datetime.now(timezone.utc)
     preferred = rows[a["complexity"]]["model"]
     preferred_effort = rows[a["complexity"]]["effort"]
@@ -164,8 +163,6 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
                                      account=model.get("account"), bucket=route_bucket, policy=rules, now=now)
         if qstate == "exhausted":
             reject.append(qreason)
-        elif qstate == "unknown" and occupied.get(model.get("account"), 0) >= 1:
-            reject.append("unknown quota permits at most one active worker on this account")
         elif qstate == "critical" and (not a.get("bounded") or a["uncertainty"] not in ("low", "bounded")):
             reject.append("critical quota cannot support this uncertain assignment")
         elif qstate == "low" and not a.get("bounded"):
@@ -192,7 +189,7 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
 
 
 def replay(captured: dict) -> dict:
-    exact(captured, {"assessment", "effective", "capabilities", "quotas", "occupancy", "strict_pin", "safety_refusal", "objective", "at"},
+    exact(captured, {"assessment", "effective", "capabilities", "quotas", "strict_pin", "safety_refusal", "objective", "at"},
           {"assessment", "effective", "capabilities", "quotas", "at"}, name="replay")
     try:
         when = datetime.fromisoformat(captured["at"].replace("Z", "+00:00"))
@@ -205,6 +202,6 @@ def replay(captured: dict) -> dict:
     if policy.get("revision") != digest(policy["policy"]):
         raise PodError("policy_revision_mismatch", "Captured policy revision does not match its content")
     return preview(captured["assessment"], captured["effective"], capabilities=captured["capabilities"],
-                   quotas=captured["quotas"], occupancy=captured.get("occupancy"),
+                   quotas=captured["quotas"],
                    strict_pin=captured.get("strict_pin"), safety_refusal=captured.get("safety_refusal", False),
                    objective=captured.get("objective"), now=when)

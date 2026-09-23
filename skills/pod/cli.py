@@ -17,9 +17,9 @@ import yaml
 from .bundle import bundle_root, version
 from .config import DEFAULT, effective, personal_path, route_identity
 from .errors import PodError
-from .ledger import context_root_for_run
+from .ledger import context_root_for_run, migration_inventory
 from .orca import (account_metadata, account_metadata_raw, agent_login_mode, contract, executable,
-                   hosts, read_command, route_establishment, worker_rows)
+                   current_run, hosts, route_establishment, selected_account_identity, worker_rows)
 from .setup import inspect, setup, skills_cli_entry
 
 
@@ -63,16 +63,13 @@ def _edit(path: Path, *, project_scope: bool) -> None:
 def _status(root: Path, run: str | None) -> dict:
     if run is None:
         try:
-            listing = read_command(["orchestration", "run-list", "--json"])
+            binding = current_run()
         except PodError as exc:
             return {"status": "unavailable", "reason": exc.code, "selection_required": True}
-        result = listing["result"]
-        runs = result.get("runs", result.get("items", []))
-        if not isinstance(runs, list) or len(runs) != 1 or result.get("nextCursor"):
-            return {"status": "selection_required", "run_count": len(runs) if isinstance(runs, list) else "unknown"}
-        run = runs[0].get("id") if isinstance(runs[0], dict) else None
-        if not run:
-            return {"status": "selection_required", "reason": "native Run identity unavailable"}
+        current = binding.get("run")
+        run = current.get("id") if isinstance(current, dict) else None
+        if not isinstance(run, str) or not run:
+            return {"status": "selection_required", "reason": "no current native Run; pass --run"}
     try:
         workers = worker_rows(run)
     except PodError as exc:
@@ -92,7 +89,22 @@ def _status(root: Path, run: str | None) -> dict:
         context = _read_context(context_root)
         if context_root is not None:
             from .governor import status_at
-            governor = _governor_projection(status_at(context_root, project=root))
+            from .operations import OrcaPort
+            from .ledger import binding_valid, logical_projection
+            assignments = tuple(row for row in context.get("admissions", {}).values()
+                                if isinstance(row, dict) and row.get("state") == "bound"
+                                and binding_valid(row.get("native_binding")))
+            native = OrcaPort(root).read_native(context.get("owner"), assignments=assignments)
+            objective_names = {row.get("objective") for row in context.get("admissions", {}).values()
+                               if isinstance(row, dict) and row.get("objective")}
+            selected_objective = next(iter(objective_names)) if len(objective_names) == 1 else None
+            projection = (logical_projection(root, native, objective=selected_objective)
+                          if selected_objective is not None else {
+                              "schema": "pod-logical-projection/v1", "runtime": native["runtime"],
+                              "authoritative": False, "owner": None, "outstanding": [],
+                              "outstanding_ids": [], "physical_capacity": "unavailable"})
+            governor = _governor_projection(status_at(
+                context_root, project=root, native_projection=projection))
     except PodError as exc:
         context = {"error": exc.code}
     checkpoint_value = context.get("checkpoint") if isinstance(context, dict) else None
@@ -101,7 +113,8 @@ def _status(root: Path, run: str | None) -> dict:
                        "workers_by_state": counts, "attention_count": attention,
                        "complete": workers["complete"]},
             "verification_gaps": checkpoint_value.get("verification_gaps", []) if checkpoint_value else "unknown",
-            "pending_effects": sum(e.get("state") in ("reserved", "uncertain") for e in context.get("effects", {}).values()) if checkpoint_value else "unknown",
+            "pending_admissions": sum(a.get("state") in ("reserved", "unresolved", "legacy_hold")
+                                      for a in context.get("admissions", {}).values()) if checkpoint_value else "unknown",
             "route_decisions": checkpoint_value.get("route_decisions", "unknown") if checkpoint_value else "unknown",
             "quota_visibility": checkpoint_value.get("quota_visibility", "unknown") if checkpoint_value else "unknown",
             "next_safe_action": checkpoint_value.get("next_safe_action") if checkpoint_value else "inspect native Run",
@@ -198,7 +211,7 @@ def _route_report(root: Path, snapshot: dict) -> dict:
 
 def execute(args: argparse.Namespace, root: Path) -> dict:
     if args.command == "setup":
-        return {"schema": "pod-cli/v1", "status": "ok", **setup(root, global_scope=args.global_scope)}
+        return {"schema": "pod-cli/v2", "status": "ok", **setup(root, global_scope=args.global_scope)}
     if args.command == "config":
         if args.edit:
             target = personal_path(root) if args.scope == "personal" else root / ".pod" / "config.yaml"
@@ -206,7 +219,7 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
         value = effective(root)
         approval_routes = {alias: route_identity(model) for alias, model in value["policy"]["models"].items()
                            if all(model.get(key) for key in ("agent", "model", "account"))}
-        return {"schema": "pod-cli/v1", "status": "valid", "effective": value,
+        return {"schema": "pod-cli/v2", "status": "valid", "effective": value,
                 "approval_routes": approval_routes, "edited": args.edit,
                 "scope": args.scope if args.edit else None}
     if args.command == "doctor":
@@ -216,9 +229,15 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
         except PodError as exc:
             config = {"status": "invalid", "reason": exc.code}
         try:
-            quota = account_metadata()["providers"]
+            raw_accounts = account_metadata_raw()
+            quota = account_metadata(raw_accounts)["providers"]
+            account_identities = {}
+            for agent in ("codex", "claude"):
+                account_identities[agent] = selected_account_identity(
+                    raw_accounts["providers"].get(agent, {}), agent_login_mode(agent))
         except PodError as exc:
             quota = {"status": "unavailable", "reason": exc.code}
+            account_identities = {"status": "unavailable", "reason": exc.code}
         local_skills = inspect(root)
         global_skills = inspect(root, global_scope=True)
         overlap = {}
@@ -240,15 +259,28 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
             elif local_status == "current" and global_status not in ("missing", "current"):
                 overlap[host] = "modified_global_copy"
         snapshot = contract()
-        return {"schema": "pod-cli/v1", "status": "observed", "config": config,
+        try:
+            migrations = migration_inventory(root)
+        except PodError as exc:
+            migrations = {"v1": 0, "v2": 0, "invalid": 1,
+                          "migration_required": True, "reason": exc.code}
+        return {"schema": "pod-cli/v2", "status": "observed", "config": config,
                 "orca": snapshot, "project_skills": local_skills,
                 "global_skills": global_skills, "integration_overlap": overlap,
-                "quota": quota, "bundle": _bundle_report(),
+                "quota": quota, "account_identities": account_identities,
+                "bundle": _bundle_report(),
                 "prerequisites": _prerequisites(snapshot),
                 "routes": _route_report(root, snapshot),
-                "skills_cli": skills_cli_entry(), "native_probe": "not_run"}
+                "skills_cli": skills_cli_entry(), "native_probe": "not_run",
+                "state": migrations}
     if args.command == "status":
-        return {"schema": "pod-cli/v1", **_status(root, args.run)}
+        result = _status(root, args.run)
+        try:
+            result["state"] = migration_inventory(root)
+        except PodError as exc:
+            result["state"] = {"v1": 0, "v2": 0, "invalid": 1,
+                               "migration_required": True, "reason": exc.code}
+        return {"schema": "pod-cli/v2", **result}
     raise PodError("unknown_command", "Unknown command")
 
 
@@ -257,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = execute(args, Path.cwd())
     except PodError as exc:
-        result = {"schema": "pod-cli/v1", "status": "blocked", "error": {"code": exc.code, "message": str(exc)}}
+        result = {"schema": "pod-cli/v2", "status": "blocked", "error": {"code": exc.code, "message": str(exc)}}
     if getattr(args, "json", False):
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
     else:

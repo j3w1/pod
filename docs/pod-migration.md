@@ -1,53 +1,86 @@
-# Pod cutover inventory
+# Pod 0.3.0 state migration
 
-Baseline `17a2316` and Git history preserve all legacy code, tests, recovery descriptions and acceptance evidence. This branch changes repository source and installed package surface only. It does not mutate existing host-local native state or release resources.
+Baseline `1b0aa6fc68ee2157f6f67ba4a60076d967791cc4` and Git history preserve the
+pre-0.3 implementation and evidence. The migration changes Pod's private policy/evidence
+context only. It performs no Orca mutation and does not release, retry, stop or delete native
+work.
 
-| Legacy area | Disposition | Replacement / retained invariant |
-| --- | --- | --- |
-| `src/orchestrate/controller.py`, coordination, state and bootstrap CLI | Remove | Current conversation coordinates. `pod.ledger` stores bounded private effects/checkpoints; native Orca remains authoritative. No autonomous scheduler. |
-| Managed machine installer, PATH repair and the retired transport launcher | Remove | Explicit reviewed-checkout `install.py`, a fresh selected venv and no PATH write. The supported execution environment is Linux. |
-| Role roster and project JSON routing | Remove | Personal/project `pod/v1` YAML, strict merge, pending starter table, immutable route decisions. |
-| Source/packet/admission safety | Adapt | `pod.records` bounded packet/report/source/evidence checks, `pod.ledger` intent/reconciliation and capacity. Route establishment blocks a launch whose billing mode is unknown or whose paid route has no grant. |
-| Legacy public command tests and incident fixtures | Remove | `tests/test_*.py` and `tests/incidents/test_safety_boundaries.py` cover new behaviour; `docs/pod-coverage.json` maps every scenario, including unrun gates. |
-| Retired-platform bootstrap fault gates | Remove | Explicit isolated installer and a fresh wheel smoke on the one hosted Linux job. Legacy managed PATH effects are no longer a Pod behaviour. |
-| Native lifecycle, uncertain effects, Delivery replay | Adapt | Ledger tests preserve no blind retry, occupancy and all-item reconciliation; live lifecycle remains unverified. |
-| Review/acceptance state | Adapt | Candidate-bound evidence/acceptance records keep local, review, hosted and acceptance distinct. |
+## Boundary change
 
-## Retired test and gate disposition
+Pod 0.3 removes its parallel native lifecycle machinery. Orca is authoritative for Runs,
+Tasks, Dispatches, requests, messaging, worker state, terminals/resources and disposition.
+Pod retains routing approval, quota/logical-fan-out/spending admission, frozen packets, source
+bindings, reports, checkpoints, interventions, acceptance evidence and the waste governor.
 
-| Legacy test or gate | Keep / adapt / remove | Pod replacement |
-| --- | --- | --- |
-| `test_admission.py`, `test_profile_sources.py`, selected/ignored/large-source incident files | Adapt | `test_records.py`, `test_ledger.py`, `test_config.py`, and `test_safety_boundaries.py` retain bounded identity, source changes, rejected restoration and authority restrictions; legacy CE discovery paths remain historical, not a Pod authority. |
-| `test_orca.py`, `test_coordination.py`, `test_controller.py`, capacity/creation-history incidents | Adapt | `test_orca_adapter.py`, `test_operations.py`, `test_ledger.py` cover exact read verbs, terminal-optional receipt, one-shot admission, shared account occupancy, uncertain effects and Delivery replay. Live native execution is still required. |
-| `test_packets.py`, `test_state.py`, `test_intervention.py`, `test_efficiency.py` | Adapt | `test_records.py`, `test_ledger.py`, `test_context_quota.py`, `test_release.py` cover bounded packets, private checkpoints, diagnosis, evidence and explicit unknown usage. |
-| `test_doctor.py`, `test_bootstrap.py`, `test_machine_bootstrap.py`, `test_path_faults.py`, machine-bootstrap path incident, `installed_machine_smoke.py` | Remove obsolete managed installer contract | `test_setup_cli.py`, `test_install.py`, `test_bundle_install.py`, package wheel smokes, hosted Linux CI and explicit no-PATH/no-hook passive checks. |
-| The retired transport tests and smoke | Remove with the platform they served | The supported execution environment is Linux; the retired scenarios are recorded as `RETIRED` rather than as unrun. |
-| The old dual-platform simulated suite | Remove obsolete provider gate | The full unit and incident suite runs on one hosted Linux job, beside a supported-environment audit of the tracked product. |
-| Old controller/managed-bootstrap installed wheel smoke | Remove | A frozen Pod wheel in a fresh isolated environment, the CLI help/config/doctor/setup smoke, a copied-bundle smoke and a skills-CLI install. |
-| Old hosted, review, live, acceptance and publication rows | Keep as historical only | New exact-candidate rows in [validation](validation.md) and read-only `release-gate`; every external gate starts `NOT_RUN`. |
+`pod-context/v2` contains exactly owner, admissions, checkpoint, interventions,
+source-rejections and legacy-archive references. An admission is `reserved`, `bound`,
+`unresolved`, `closed`, `deferred` or `legacy_hold`. Native identifiers and Orca-issued request UUIDs are
+references, never copied lifecycle authority. v1 Delivery and cleanup collections survive only
+inside the immutable archive.
 
-An older orchestrate-associated native resource remains in `release_unknown` despite settled execution and unverifiable liveness. Its exact recovery evidence is held outside this branch by the coordinator. Installed-state deletion or migration must wait for exact owner/native reconciliation. No code deletion here is evidence that the resource was released.
+## Explicit migration
 
-Canonical repository rename/registration, installed-state cutover, hosted/live gates, independent audit and external acceptance are owner-controlled release steps. The Pod spec is the sole active Pod product authority; [legacy contracts](contracts-and-recovery.md) and [historical first increment](live-first-increment.md) are retained as history in Git.
+Run the private `state-migrate` operation separately for each selected v1 objective. The
+operation:
 
-## Cutover to the `pod` identity
+1. takes the serialized admission/objective locks and reads the v1 regular file through a
+   bounded, nonblocking, no-follow descriptor;
+2. validates the complete v1 shape before native reads;
+3. uses worker-show only to validate exact runtime, Run, Task, Dispatch, worker, worktree,
+   assignment settlement and effective-launch evidence; terminal/resource disposition is ignored;
+4. constructs and validates v2, writes and boundedly verifies an immutable digest-named
+   archive, then atomically replaces the active context.
 
-The repository, canonical checkout, host registration and Orca project identity move from
-`orchestrate` to `pod` together. GitHub is renamed in place so the repository id, history,
-issues and pull requests are preserved; the automatic legacy redirect is acceptable and is
-not a request for compatibility aliases. Local remotes and active references are updated
-rather than left to that redirect.
+Use the installed bundle helper with a private JSON request; this is a Pod helper call, not an
+Orca lifecycle command:
 
-Local material moves to `~/dev/pod`, `~/worktrees/pod/<task>`, the host's per-project task
-records, evidence and archive namespaces. Git-aware worktree movement and repair is used,
-never a bare directory move, and every retained worktree's repository identity, HEAD,
-dirty inventory and remote are verified afterwards. Virtual environments and installed
-entry points are recreated at their final locations. No legacy `orchestrate` command,
-package shim, skill alias or compatibility symlink is left active.
+```json
+{"project":"/absolute/path/to/project","objective":"the exact objective","owner":"the current Orca terminal handle"}
+```
 
-Sealed historical evidence moves without being rewritten: hashes, commit identities, quoted
-historical paths and native record identifiers are preserved, and a separate relocation
-index records the new locations. A historical quoted path is not an active dependency, and
-no home-wide text replacement is performed. The unresolved legacy `release_unknown` native
-resource is retained, not deleted; it blocks only an operation that genuinely depends on
-resolving it.
+```sh
+python3.13 /absolute/path/to/skills/pod/scripts/pod.py internal state-migrate --input /absolute/path/to/request.json
+```
+
+Choose the objective reported by `pod status`/`pod doctor` and the current coordinator handle.
+The helper discovers and reads the installed Orca runtime; the request must not contain a Run,
+Task, Dispatch, release instruction or user-selected request UUID.
+
+Confirmed exact unsettled assignments become `bound`. Exact native assignment settlement becomes
+`closed` regardless of retained terminal state. Reserved, uncertain, malformed, absent and
+ambiguous rows become `legacy_hold`. Spent-grant evidence is preserved whether the admission is active or
+closed. A failure before the atomic replacement leaves v1 active and unchanged. Doctor and
+status are read-only and report `migration_required`; new admissions for an affected objective
+remain blocked.
+
+There is no automatic downgrade. A v1 archive may be restored only before any v2 admission
+has been made for that objective; otherwise restoration would discard newer policy evidence.
+Native remediation, release and retry remain explicit Orca operations under the installed
+orchestration guide.
+
+The retired v1 configuration key `policy.retain_idle_minutes` is not imported or accepted by
+0.3. Remove it from personal, project and task policy before validating configuration. Orca's
+explicit retention/disposition operations replace that old Pod timer; removing the key grants
+no release authority and performs no native action.
+
+Approved model routes also use a single redacted native account identity in `models.*.account`.
+Run `pod doctor --json` read-only and copy the selected provider's 64-character
+`account_identities.<provider>.identity_digest`. First mark the personal model route
+`approved: false`; then place that digest in its `account` field and in any applicable personal
+`allowed_accounts` or grant `account` field. Run `pod config --check --json`, copy that model's
+new `approval_routes` value into `approval_route`, record the fresh personal approval in
+`approval_ref`, set `approved: true`, and check again. Do not copy a display label, email,
+workspace name or raw provider identifier. A missing identity leaves the route unavailable; a
+changed identity needs a new personal approval and cannot inherit the old account's grants.
+
+## Installation and release
+
+The package directory remains the single authoring source for Python, skill text and wheel
+payload. Setup upgrades only copies it owns and prunes retired owned files such as
+`references/native-effects.md`; skills-CLI-managed or modified copies are reported, not
+overwritten. Installation examples remain pinned to the actually published `v0.1.2` until a
+later release exists.
+
+Hosted CI, live provider/Orca evidence, independent audit, project acceptance, merge, tag,
+release and publication are separate gates. No such gate is implied by successful state
+migration.

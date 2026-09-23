@@ -102,7 +102,7 @@ class SetupCliTests(unittest.TestCase):
             setup(project)
             setup(project, global_scope=True)
             with patch("pod.cli.contract", return_value={"status": "unavailable"}), \
-                 patch("pod.cli.account_metadata", side_effect=PodError("unavailable", "offline")):
+                 patch("pod.cli.account_metadata_raw", side_effect=PodError("unavailable", "offline")):
                 report = execute(parser().parse_args(["doctor"]), project)
             self.assertEqual(report["integration_overlap"]["codex"], "duplicate_current_copies")
             self.assertTrue((project / ".agents" / "skills" / "pod" / "SKILL.md").is_file())
@@ -147,6 +147,52 @@ class SetupCliTests(unittest.TestCase):
             self.assertFalse((root / "codex").exists())
             self.assertFalse((root / "config").exists())
 
+    def test_doctor_exposes_only_redacted_account_identities_for_personal_approval(self):
+        with fixture() as root, \
+             patch("pod.cli.contract", return_value={"status": "observed", "runtime": "runtime",
+                                                       "capabilities": {}}), \
+             patch("pod.cli.account_metadata_raw", return_value={"runtime": "runtime", "providers": {
+                 "codex": {"managed_accounts": 0, "default_identity": "a" * 64},
+                 "claude": {"managed_accounts": 0, "default_identity": None}}}), \
+             patch("pod.cli.agent_login_mode", return_value={"identity_digest": "b" * 64}):
+            report = execute(parser().parse_args(["doctor", "--json"]), root)
+        self.assertEqual(report["account_identities"], {
+            "codex": {"identity_digest": "a" * 64, "source": "orca_system_default"},
+            "claude": {"identity_digest": "b" * 64, "source": "agent_login_status"},
+        })
+        self.assertNotIn("email", str(report["account_identities"]))
+
+    def test_doctor_never_substitutes_host_login_for_an_unidentified_managed_account(self):
+        with fixture() as root, \
+             patch("pod.cli.contract", return_value={"status": "observed", "runtime": "runtime",
+                                                       "capabilities": {}}), \
+             patch("pod.cli.account_metadata_raw", return_value={"runtime": "runtime", "providers": {
+                 "codex": {"managed_accounts": 1, "active_account": None},
+                 "claude": {"managed_accounts": 0, "default_identity": None}}}), \
+             patch("pod.cli.agent_login_mode", return_value={"identity_digest": "b" * 64}):
+            report = execute(parser().parse_args(["doctor", "--json"]), root)
+        self.assertEqual(report["account_identities"]["codex"], {
+            "identity_digest": None, "source": "unavailable"})
+        self.assertEqual(report["account_identities"]["claude"]["identity_digest"], "b" * 64)
+
+    def test_doctor_does_not_fall_through_a_partial_native_default_to_host_login(self):
+        with fixture() as root, \
+             patch("pod.cli.contract", return_value={"status": "observed", "runtime": "runtime",
+                                                       "capabilities": {}}), \
+             patch("pod.cli.account_metadata_raw", return_value={"runtime": "runtime", "providers": {
+                 "codex": {"managed_accounts": 0, "default_present": True,
+                           "default_identity": None, "default_auth": "api_key",
+                           "default_has_auth": True},
+                 "claude": {"managed_accounts": 0, "default_present": False,
+                            "default_identity": None}}}), \
+             patch("pod.cli.agent_login_mode", return_value={"auth": "oauth",
+                                                               "subscription": True,
+                                                               "identity_digest": "b" * 64}):
+            report = execute(parser().parse_args(["doctor", "--json"]), root)
+        self.assertEqual(report["account_identities"]["codex"], {
+            "identity_digest": None, "source": "unavailable"})
+        self.assertEqual(report["account_identities"]["claude"]["identity_digest"], "b" * 64)
+
     def test_status_joins_selected_run_to_checkpoint_compactly(self):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state")}):
             project = root / "project"
@@ -159,7 +205,10 @@ class SetupCliTests(unittest.TestCase):
             workers = {"runtime": "runtime", "scope": {"source": "flag"}, "complete": True,
                        "workers": [{"terminalState": "active", "projection": {"attention": {"requiresAction": True}}},
                                    {"terminalState": "released", "projection": {}}]}
-            with patch("pod.cli.worker_rows", return_value=workers):
+            native = {"runtime": "runtime", "scope": "objective_assignments", "complete": True,
+                      "assignments": [], "physical_capacity": "unavailable"}
+            with patch("pod.cli.worker_rows", return_value=workers), \
+                 patch("pod.operations.OrcaPort.read_native", return_value=native):
                 result = execute(parser().parse_args(["status", "--run", "run"]), project)
             self.assertEqual(result["verification_gaps"], ["works"])
             self.assertEqual(result["next_safe_action"], "run checks")
@@ -333,7 +382,7 @@ class SkillOwnershipTests(unittest.TestCase):
             project = self.install_global(root)
             with patch("pod.cli.contract", return_value={"status": "unavailable",
                                                          "reason": "orca_unavailable"}), \
-                 patch("pod.cli.account_metadata", side_effect=PodError("unavailable", "offline")), \
+                 patch("pod.cli.account_metadata_raw", side_effect=PodError("unavailable", "offline")), \
                  patch("pod.cli.executable", side_effect=PodError("orca_unavailable", "absent")):
                 report = execute(parser().parse_args(["doctor"]), project)
             self.assertEqual(report["bundle"]["version"], version())
@@ -378,7 +427,7 @@ class OwnershipClaimRegressions(unittest.TestCase):
             project.mkdir()
             with patch("pod.cli.contract", return_value={"status": "unavailable",
                                                          "reason": "orca_unavailable"}), \
-                 patch("pod.cli.account_metadata", side_effect=PodError("unavailable", "offline")), \
+                 patch("pod.cli.account_metadata_raw", side_effect=PodError("unavailable", "offline")), \
                  patch("pod.cli.executable", side_effect=PodError("orca_unavailable", "absent")):
                 report = execute(parser().parse_args(["doctor"]), project)
             self.assertEqual(report["status"], "observed")

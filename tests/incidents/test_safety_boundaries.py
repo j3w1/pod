@@ -33,7 +33,7 @@ class SafetyBoundaryIncidents(unittest.TestCase):
         field can put such a record into admission in the first place.
         """
         from pod.orca import require_route_establishment
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a"}
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a" * 64}
         unestablished = {"schema": "pod-route-establishment/v1", "runtime": None,
                          "route": route, "controls": {}, "hard_stops": [], "disclosures": [],
                          "login": {}, "billing": {}}
@@ -41,7 +41,11 @@ class SafetyBoundaryIncidents(unittest.TestCase):
             require_route_establishment(unestablished, route)
         self.assertEqual(unproven.exception.code, "native_authority_unverified")
         established = {**unestablished, "runtime": "r",
-                       "route": {**route, "bucket": "default", "effort": "high"}}
+                       "route": {**route, "account_identity": "a" * 64,
+                                 "bucket": "default", "effort": "high"},
+                       "controls": {"account_identity": {"tier": "runtime_observation",
+                                                          "matched": True}},
+                       "login": {"identity_digest": "a" * 64}}
         require_route_establishment(established, route)
         for stop in ("billing_mode_unverified", "paid_route_forbidden"):
             with self.subTest(stop=stop):
@@ -59,7 +63,7 @@ class SafetyBoundaryIncidents(unittest.TestCase):
                     with self.assertRaises(PodError) as caught:
                         run("admission", {"project": ".", "objective": "o", "owner": "t", "run": "r",
                                           "task": "t", "operation_id": "op", "assessment": {},
-                                          "capabilities": {}, "quotas": {}, "occupancy": {},
+                                          "capabilities": {}, "quotas": {},
                                           "plan_revision": "p",
                                           forbidden: {"billing_preflight": True, "fanout_control": True}})
                     self.assertEqual(caught.exception.code, "invalid_request")

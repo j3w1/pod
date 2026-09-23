@@ -12,28 +12,33 @@ from pod.config import DEFAULT, route_identity
 from pod.context import execution_brief
 from pod.errors import PodError
 from pod.operations import guarded_start
+from pod.records import packet
 from pod.routing import preview
 from pod.util import digest
 from tests.common import fixture
 
 
 NOW = datetime(2026, 9, 20, tzinfo=timezone.utc)
+ACCOUNT_IDENTITY = "a" * 64
 
 
 def scenario_inputs():
     policy = deepcopy(DEFAULT)
     model = policy["models"]["sol"]
-    model.update({"account": "account", "approved": True, "approval_ref": "personal",
+    model.update({"account": ACCOUNT_IDENTITY,
+                  "approved": True, "approval_ref": "personal",
                   "billing": "included", "efforts": ["high"], "capabilities": []})
     model["approval_route"] = route_identity(model)
     effective = {"policy": policy, "revision": digest(policy)}
     assessment = {"method": "delegate", "responsibility": "bounded edit", "complexity": "complex",
                   "risk": "low", "size": "small", "uncertainty": "low", "verifiability": "unit",
                   "capabilities": [], "context": [], "reason": "isolated edit", "bounded": True}
-    capabilities = {"sol": {"agent": "codex", "model": "gpt-5.6-sol", "account": "account",
+    capabilities = {"sol": {"agent": "codex", "model": "gpt-5.6-sol",
+                            "account": ACCOUNT_IDENTITY,
                             "bucket": "shared", "efforts": ["high"], "capabilities": [],
                             "billing_preflight": True, "fanout_control": True}}
-    quota = {"account": {"schema": "pod-quota/v1", "provider": "codex", "account": "account",
+    quota = {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
+                         "account": ACCOUNT_IDENTITY,
                          "bucket": "shared", "windows": [{"name": "hour", "remaining_percent": 60}],
                          "remaining_percent": 60, "observed_at": NOW.isoformat(), "source": "supported",
                          "confidence": "observed", "unknowns": []}}
@@ -77,11 +82,21 @@ class ScenarioFixtureTests(unittest.TestCase):
         with fixture() as root, patch.dict(os.environ, {"XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
-            _, assessment, capabilities, quota = scenario_inputs()
+            policy, assessment, capabilities, quota = scenario_inputs()
+            route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
+                     "account": ACCOUNT_IDENTITY, "bucket": "shared", "effort": "high"}
+            frozen = packet({"schema": "pod-packet/v1", "objective": "objective",
+                             "criteria": ["works"], "responsibility": "worker",
+                             "scope": ["notes.txt"], "actions": ["edit"],
+                             "candidate": "candidate", "context": [], "dependencies": [],
+                             "route": route, "policy_revision": policy["revision"],
+                             "plan_revision": "plan", "report_contract": "checks",
+                             "sources": []})
             with self.assertRaises(PodError) as caught:
                 guarded_start(project, "objective", owner="owner", run="run", task="task",
-                              operation_id="op", assessment=assessment, capabilities=capabilities,
-                              quotas=quota, occupancy={}, plan_revision="plan", port=Spy(), now=NOW)
+                              assessment=assessment, capabilities=capabilities,
+                              quotas=quota, plan_revision="plan",
+                              frozen_packet=frozen, port=Spy(), now=NOW)
             self.assertEqual(caught.exception.code, "route_unusable")
 
     def test_coverage_inventory_is_complete_without_claiming_behavior(self):

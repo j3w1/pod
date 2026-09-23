@@ -81,7 +81,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_config.ConfigTests.test_changed_model_identity_invalidates_prior_approval_binding",
+      "offline_test": "tests.test_config.ConfigTests.test_account_label_cannot_substitute_for_redacted_native_identity",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -105,7 +105,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_routing.RoutingTests.test_unknown_quota_one_account_and_exhausted",
+      "offline_test": "tests.test_routing.RoutingTests.test_unknown_quota_is_left_to_objective_admission_and_exhausted_blocks",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -113,7 +113,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_routing.RoutingTests.test_unknown_quota_one_account_and_exhausted",
+      "offline_test": "tests.test_operations.AdmissionTests.test_independent_objectives_ignore_foreign_history_under_unknown_quota",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -121,7 +121,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_ledger.LedgerTests.test_exhausted_bucket_hold_needs_later_supported_positive_read",
+      "offline_test": "tests.test_ledger.V2StateTests.test_quota_exhaustion_is_monotonic_across_restart_and_window_renewal",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -129,7 +129,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_ledger.LedgerTests.test_concurrent_objectives_share_unknown_account_allowance",
+      "offline_test": "tests.test_operations.AdmissionTests.test_objective_fanout_admits_two_blocks_third_and_settlement_frees_slot",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -137,7 +137,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_context_quota.ContextQuotaTests.test_quota_metadata_and_reset_exact_grant",
+      "offline_test": "tests.test_operations.AdmissionTests.test_account_rotation_blocks_pending_replay_but_not_completed_observation",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -146,7 +146,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_complete_guarded_path_without_terminal_and_no_repeat",
+      "offline_test": "tests.test_operations.AdmissionTests.test_objective_fanout_admits_two_blocks_third_and_settlement_frees_slot",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -155,7 +155,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_exceptional_grant_exact_scope_and_request_identity",
+      "offline_test": "tests.test_operations.AdmissionTests.test_exceptional_grant_cannot_bypass_task_max_workers",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -164,7 +164,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_prelaunch_denial_and_unknown_effect_do_not_retry",
+      "offline_test": "tests.test_operations.AdmissionTests.test_unapproved_policy_stops_before_native_effect",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -173,7 +173,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_ledger.LedgerTests.test_concurrent_objectives_share_unknown_account_allowance",
+      "offline_test": "tests.test_operations.BoundaryTests.test_policy_evidence_never_enumerates_the_fleet",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -182,7 +182,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_uncertain_release_is_not_repeated",
+      "offline_test": "tests.test_operations.AdmissionTests.test_absent_or_ambiguous_attempt_holds_without_start",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -191,7 +191,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_ledger.LedgerTests.test_delivery_survives_process_exit_between_items",
+      "offline_test": "tests.test_operations.BoundaryTests.test_removed_lifecycle_operations_are_not_exposed",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -208,7 +208,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_ledger.LedgerTests.test_two_equivalent_corrections_require_productive_diagnosis",
+      "offline_test": "tests.test_governor.FailureTests.test_repeated_code_defects_go_through_the_intervention_rule",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -436,7 +436,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_orca_adapter.OrcaAdapterTests.test_cached_metadata_redacts_accounts_and_keeps_timestamps",
+      "offline_test": "tests.test_ledger.V2StateTests.test_quota_exhaustion_is_monotonic_across_restart_and_window_renewal",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -445,7 +445,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_orca_adapter.OrcaAdapterTests.test_cached_metadata_redacts_accounts_and_keeps_timestamps",
+      "offline_test": "tests.test_ledger.V2StateTests.test_quota_exhaustion_is_monotonic_across_restart_and_window_renewal",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -454,7 +454,7 @@
         "offline_behavior",
         "external_gate"
       ],
-      "offline_test": "tests.test_routing.RoutingTests.test_changed_alias_and_paid_route_need_separate_grants",
+      "offline_test": "tests.test_operations.BoundaryTests.test_fresh_account_read_never_relabels_a_rotated_identity",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -480,7 +480,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_complete_guarded_path_without_terminal_and_no_repeat",
+      "offline_test": "tests.test_operations.AdmissionTests.test_headless_worker_binds_without_a_terminal_identity",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -489,7 +489,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_prelaunch_denial_and_unknown_effect_do_not_retry",
+      "offline_test": "tests.test_operations.AdmissionTests.test_unapproved_policy_stops_before_native_effect",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -498,7 +498,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_prelaunch_denial_and_unknown_effect_do_not_retry",
+      "offline_test": "tests.test_operations.AdmissionTests.test_uuid_is_persisted_before_worker_readback_failure",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -506,15 +506,16 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_uncertain_release_is_not_repeated",
+      "offline_test": "tests.test_operations.AdmissionTests.test_absent_or_ambiguous_attempt_holds_without_start",
       "candidate_status": "NOT_RUN"
     },
     {
       "id": "A62",
       "required_evidence": [
+        "offline_behavior",
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_operations.BoundaryTests.test_production_authority_joins_current_run_owner_and_objective_reference",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -538,7 +539,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_frozen_sources_are_checked_at_guarded_admission",
+      "offline_test": "tests.test_operations.AdmissionTests.test_source_and_instruction_context_state_matrix_blocks_before_start",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -546,7 +547,7 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_frozen_sources_are_checked_at_guarded_admission",
+      "offline_test": "tests.test_operations.AdmissionTests.test_source_and_instruction_context_state_matrix_blocks_before_start",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -554,17 +555,17 @@
       "required_evidence": [
         "offline_behavior"
       ],
-      "offline_test": "tests.test_ledger.LedgerTests.test_two_equivalent_corrections_require_productive_diagnosis",
+      "offline_test": "tests.test_governor.FailureTests.test_repeated_code_defects_go_through_the_intervention_rule",
       "candidate_status": "NOT_RUN"
     },
     {
       "id": "A68",
       "required_evidence": [
-        "offline_behavior",
-        "live_native"
+        "offline_behavior"
       ],
-      "offline_test": "tests.test_operations.GuardedOperationTests.test_retained_cleanup_occupies_until_exact_release_readback",
-      "candidate_status": "NOT_RUN"
+      "offline_test": null,
+      "candidate_status": "RETIRED",
+      "retired": "2026-09-22: terminal retention and release are Orca lifecycle concerns and no longer determine Pod logical fan-out"
     },
     {
       "id": "A69",
@@ -711,7 +712,7 @@
         "offline_behavior",
         "live_native"
       ],
-      "offline_test": "tests.test_orca_adapter.RouteEstablishmentTests.test_an_included_route_survives_an_unavailable_quota_bucket",
+      "offline_test": "tests.test_orca_adapter.RouteEstablishmentTests.test_system_default_billing_cannot_be_overridden_by_another_login_context",
       "candidate_status": "NOT_RUN"
     },
     {
@@ -770,8 +771,7 @@
         "live_native"
       ],
       "offline_test": "tests.test_governor.ExecutorTests.test_a_lost_submission_is_reconciled_before_another_one",
-      "candidate_status": "PASS",
-      "evidence": "live gh against j3w1/pod on 2026-09-22; throwaway branch agent/governor-probe, since deleted; see docs/validation.md"
+      "candidate_status": "NOT_RUN"
     },
     {
       "id": "A93",
@@ -804,8 +804,7 @@
         "live_native"
       ],
       "offline_test": "tests.test_governor.ExecutorTests.test_supersedence_cancels_only_safe_validation",
-      "candidate_status": "PASS",
-      "evidence": "live gh against j3w1/pod on 2026-09-22; throwaway branch agent/governor-probe, since deleted; see docs/validation.md"
+      "candidate_status": "NOT_RUN"
     },
     {
       "id": "A97",
@@ -838,6 +837,50 @@
         "offline_behavior"
       ],
       "offline_test": "tests.test_governor.RecoveryTests.test_a_v1_pass_is_not_promoted_to_v2_proof",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A101",
+      "required_evidence": [
+        "offline_behavior",
+        "live_native"
+      ],
+      "offline_test": "tests.test_operations.BoundaryTests.test_removed_lifecycle_operations_are_not_exposed",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A102",
+      "required_evidence": [
+        "offline_behavior",
+        "live_native"
+      ],
+      "offline_test": "tests.test_operations.AdmissionTests.test_real_absent_shape_without_method_inspects_without_start",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A103",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": null,
+      "candidate_status": "RETIRED",
+      "retired": "2026-09-22: fleet occupancy, resource-release reconstruction and deduplication were removed because Orca and CE own runtime capacity"
+    },
+    {
+      "id": "A104",
+      "required_evidence": [
+        "offline_behavior"
+      ],
+      "offline_test": "tests.test_ledger.MigrationTests.test_all_legacy_states_archive_and_exact_confirmed_bind",
+      "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A105",
+      "required_evidence": [
+        "offline_behavior",
+        "live_native"
+      ],
+      "offline_test": "tests.test_operations.AdmissionTests.test_native_capacity_full_is_durable_deferred_not_a_binding_or_retry",
       "candidate_status": "NOT_RUN"
     }
   ]

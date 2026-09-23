@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 — candidate
+
+- Orca owns worker creation, capacity and lifecycle. Pod keeps objective-level
+  admission, routing, spending and evidence without a fleet occupancy census,
+  terminal release counter or private cleanup state machine.
+- `pod-context/v2` stores one logical reservation per assignment. Exact native
+  assignment settlement frees its objective slot even when the terminal remains;
+  an authoritative `capacity_full` refusal becomes a durable deferral.
+- Each admitted model, effort and account route stays immutable. Pod rejects
+  contradictory request identities and retains their unresolved provenance
+  across later incomplete responses, preventing an accidental second start or
+  an unjustified binding. Orca-issued UUIDs recover the same admission.
+- Personal approval, quota and grants use Orca's redacted selected-account
+  identity. Route and billing evidence must come from the same selected context
+  and are rechecked before start or pending replay.
+- Explicit `state-migrate` archives and hashes v1, reconciles exact native
+  bindings by read only operations, and holds uncertainty. A migrated binding
+  closes on exact native assignment settlement, not terminal release.
+- Governor decisions use the current Run's stable authority and relevant exact
+  objective assignments. They do not reconstruct foreign workers or capacity.
+- The skill and Python package share one source; CLI/helper envelopes are v2.
+  Strict, noninteractive provider startup remains an Orca dependency. The last
+  published installation tag is `v0.1.2`; this candidate is not a release.
+
 ## 0.2.0 — 2026-09-22
 
 - The governor is now a waste-governor kernel: a small deterministic control layer inside the

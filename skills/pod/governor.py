@@ -43,7 +43,6 @@ CLASSES = ("authorization", "correctness", "efficiency")
 FAILURE_CLASSES = ("code_defect", "remote_only", "transient", "external")
 PREFLIGHT_STATUSES = ("PASS", "FAILED", "UNAVAILABLE")
 DIAGNOSTIC_FIELDS = {"question", "local_limitation", "check", "stopping_condition"}
-SETTLED_CLEANUP = ("released", "already_released", "retained")
 DEFAULT_UNIT = "default"
 # Mirrors the ledger's own threshold: a third correction needs a discriminating diagnosis.
 CORRECTION_THRESHOLD = 2
@@ -68,7 +67,7 @@ NEXT_ACTIONS = {
     "candidate_unpublished": "push the candidate commit to the unit's branch first",
     "effects_unknown": "declare the action's downstream effects, or map waste_governor.triggers in project policy",
     "effect_unresolved": "reconcile the unresolved submission with the governor-reconcile helper before submitting again",
-    "integration_unsettled": "settle the unit's active effects, deliveries and corrections first",
+    "integration_unsettled": "settle the unit's native work and corrections first",
     "diagnosis_required": "record a discriminating diagnosis for the unit's repeated failure",
     "local_preflight_missing": "run the configured local preflight and record each result for this candidate",
     "blocking_findings": "fix the failing local check, then prepare a new candidate",
@@ -399,40 +398,22 @@ def _unit_tasks(unit: dict | None) -> list[str] | None:
     return None if unit is None else list(unit.get("tasks", []))
 
 
-def _active(state: dict, tasks: list[str] | None = None) -> list[str]:
+def _active(native_projection: dict | None, tasks: list[str] | None = None) -> list[str]:
+    """Objective-local logical assignments supplied at the governor boundary."""
+    if not isinstance(native_projection, dict):
+        return []
+    rows = native_projection.get("outstanding")
+    if not isinstance(rows, list):
+        raise PodError("native_assignment_unverified", "Governor logical projection is malformed")
     active = []
-    for key, effect in state.get("effects", {}).items():
-        if not isinstance(effect, dict) or effect.get("state") not in ("reserved", "uncertain", "confirmed"):
-            continue
-        binding = effect.get("native_binding")
-        dispatch = binding.get("dispatchId") if isinstance(binding, dict) else None
-        row = state.get("cleanup", {}).get(dispatch) if dispatch else None
-        cleanup = row if isinstance(row, dict) else {}
-        if cleanup.get("state") in SETTLED_CLEANUP:
-            continue
-        # An effect without a Task binding cannot be attributed to another unit, so it
-        # counts against every unit; that is the conservative reading.
-        task = binding.get("taskId") if isinstance(binding, dict) else None
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise PodError("native_assignment_unverified", "Governor logical projection is malformed")
+        task = row.get("task")
         if tasks is not None and task is not None and task not in tasks:
             continue
-        active.append(key)
-    return sorted(active)
-
-
-def _unresolved_deliveries(state: dict, tasks: list[str] | None = None) -> list[str]:
-    unresolved = []
-    for key, delivery in state.get("deliveries", {}).items():
-        if not isinstance(delivery, dict):
-            continue
-        for row in delivery.get("items", {}).values():
-            if row.get("effect") is not None:
-                continue
-            task = row.get("item", {}).get("taskId") if isinstance(row.get("item"), dict) else None
-            if tasks is not None and task is not None and task not in tasks:
-                continue
-            unresolved.append(key)
-            break
-    return sorted(unresolved)
+        active.append(str(index) + ":" + str(task or "unbound"))
+    return active
 
 
 def _pending_interventions(state: dict, unit: str | None = None,
@@ -466,12 +447,17 @@ def _inputs(state: dict) -> str:
                    "sources": state.get("source_rejections", {})})
 
 
-def _phase(state: dict, actions: list[dict], unit: dict | None, candidate: str | None) -> str:
+def _phase(state: dict, actions: list[dict], unit: dict | None, candidate: str | None,
+           native_projection: dict | None = None) -> str:
+    checkpoint = _checkpoint(state)
+    if native_projection is None and (state.get("admissions") or checkpoint.get("native_refs")):
+        raise PodError("native_assignment_unverified",
+                       "Governor needs exact objective assignment evidence for native-bound work")
     tasks = _unit_tasks(unit)
-    if not candidate or _active(state, tasks):
+    if not candidate or _active(native_projection, tasks):
         return "working"
     name = unit["name"] if unit else None
-    if _unresolved_deliveries(state, tasks) or _pending_interventions(state, name, tasks):
+    if _pending_interventions(state, name, tasks):
         return "converging"
     passed = {(row["action"]["kind"], row["action"]["candidate"], row.get("candidate_id"))
               for row in actions if row.get("outcome") == "PASS" and row.get("decision") == "ALLOW"}
@@ -504,7 +490,7 @@ def _warn(warnings: list[dict], code: str, detail: str) -> None:
 
 
 def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
-              managed: bool = False) -> dict:
+              managed: bool = False, native_projection: dict | None = None) -> dict:
     """Apply the decision order and return reasons, warnings, reuse and bindings."""
     reasons: list[dict] = []
     warnings: list[dict] = []
@@ -594,7 +580,7 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
 
     if superseded and kind != "remote_diagnostic":
         # Nothing after the binding step is about this request; it names the wrong candidate.
-        return verdict(_phase(state, journal["actions"], unit, current), [])
+        return verdict(_phase(state, journal["actions"], unit, current, native_projection), [])
 
     # 3. An equivalent action already running, or valid evidence already recorded.
     if latest is None and kind in VALIDATION_KINDS and candidate_id is not None:
@@ -653,7 +639,7 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
     if stale_pending:
         _warn(warnings, "superseded_validation_pending",
               f"{len(stale_pending)} validation run(s) for a superseded candidate are still pending")
-    phase = _phase(state, journal["actions"], unit, current)
+    phase = _phase(state, journal["actions"], unit, current, native_projection)
     if (validates or purpose == "release") and kind != "remote_diagnostic" and phase in ("working", "converging"):
         pending = _pending_interventions(state, action["unit"], _unit_tasks(unit))
         if phase == "converging" and "unit:" + action["unit"] in pending:
@@ -661,8 +647,8 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
                     "two remote validation failures were corrected without new evidence")
         else:
             _reason(reasons, "efficiency", "integration_unsettled",
-                    "active or uncertain native effects remain" if phase == "working"
-                    else "deliveries or corrections are still unsettled")
+                    "objective assignments are still outstanding" if phase == "working"
+                    else "corrections are still unsettled")
 
     # 5. Readiness, or the diagnostic exception.
     if purpose == "validation" or purpose == "release":
@@ -773,7 +759,7 @@ def _count(counter: dict, key: str) -> None:
 
 
 def _admit(project: Path, objective: str, *, owner: str, action: dict, exception: dict | None,
-           now: datetime, managed: bool = False) -> dict:
+           now: datetime, managed: bool = False, native_projection: dict | None = None) -> dict:
     """Evaluate one request and journal the decision, with the objective lock held."""
     bounded_text(owner, name="owner")
     proposal = validate_action(action)
@@ -788,7 +774,8 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         journal = _read_journal(record_path)
-        verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed)
+        verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
+                            native_projection=native_projection)
         exception_record = _exception_grant(governor_policy, supplied, action=proposal, objective=objective,
                                             candidate_ids=verdict["candidate_ids"], now=now)
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
@@ -854,10 +841,10 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
 
 
 def decide(project: Path, objective: str, *, owner: str, action: dict, exception: object = None,
-           now: datetime | None = None) -> dict:
+           now: datetime | None = None, native_projection: dict | None = None) -> dict:
     """Return ALLOW, REUSE or DEFER for one proposed expensive effect, and record it."""
     result = _admit(project, objective, owner=owner, action=action, exception=exception,
-                    now=now or datetime.now(timezone.utc))
+                    now=now or datetime.now(timezone.utc), native_projection=native_projection)
     return {key: value for key, value in result.items() if not key.startswith("_")}
 
 
@@ -1494,7 +1481,7 @@ def _record_execution(project: Path, objective: str, *, owner: str, record_id: s
 
 def execute(project: Path, objective: str, *, owner: str, action: dict, exception: object = None,
             port: GitHubPort | None = None, pull_request: dict | None = None,
-            now: datetime | None = None) -> dict:
+            now: datetime | None = None, native_projection: dict | None = None) -> dict:
     """Admit and perform one action as a single managed step.
 
     The decision and the execution are one path: the journal records the admitted
@@ -1506,7 +1493,7 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
     if validate_action(action)["kind"] not in EXECUTABLE_KINDS:
         raise PodError("invalid_action", "Merge, release and deployment are decided here and performed by project governance")
     admitted = _admit(project, objective, owner=owner, action=action, exception=exception, now=moment,
-                      managed=True)
+                      managed=True, native_projection=native_projection)
     result = {key: value for key, value in admitted.items() if not key.startswith("_")}
     result["cancellations"] = []
     if admitted["decision"] != "ALLOW":
@@ -1532,6 +1519,7 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
             try:
                 canceled = execute(
                     project, objective, owner=owner, port=remote, now=moment,
+                    native_projection=native_projection,
                     action={"kind": "cancel_validation", "unit": unit["name"], "candidate": binding["id"],
                             "target": stale, "reason": "superseded by a newer candidate generation"})
                 result["cancellations"].append({**canceled, "target": stale})
@@ -1734,16 +1722,19 @@ def _unit_projection(unit: dict, actions: list[dict]) -> dict:
             "active_validation": active, "unresolved": unresolved}
 
 
-def status_at(root: Path, *, project: Path | None = None) -> dict:
+def status_at(root: Path, *, project: Path | None = None,
+              native_projection: dict | None = None) -> dict:
     """Read-only projection of one objective's governor state from its private directory."""
     context_path = root / "context.json"
     state = _read(context_path) if context_path.exists() else {
-        "effects": {}, "cleanup": {}, "deliveries": {}, "interventions": {}, "checkpoint": None}
+        "admissions": {}, "interventions": {}, "checkpoint": None}
     journal = _read_journal(root / "governor.json")
     policy = effective(project) if project is not None else None
     units = {name: _unit_projection(unit, journal["actions"]) for name, unit in journal["units"].items()}
-    result = {"schema": SCHEMA, "phase": _phase(state, journal["actions"], None, _checkpoint(state).get("candidate")),
-              "active_effects": _active(state), "unresolved_deliveries": _unresolved_deliveries(state),
+    result = {"schema": SCHEMA,
+              "phase": _phase(state, journal["actions"], None, _checkpoint(state).get("candidate"),
+                              native_projection),
+              "active_admissions": _active(native_projection),
               "pending_diagnosis": _pending_interventions(state), "units": units,
               "counters": journal["counters"],
               "actions": [{key: row[key] for key in ("record_id", "decision", "outcome", "at", "attempt")}
@@ -1762,9 +1753,10 @@ def status_at(root: Path, *, project: Path | None = None) -> dict:
     return result
 
 
-def status(project: Path, objective: str) -> dict:
+def status(project: Path, objective: str, *, native_projection: dict | None = None) -> dict:
     """Read-only projection for status and reporting."""
-    return status_at(objective_root(project, objective), project=project)
+    return status_at(objective_root(project, objective), project=project,
+                     native_projection=native_projection)
 
 
 # --------------------------------------------------------------------------- GitHub port

@@ -24,6 +24,9 @@ FORBIDDEN_FORMS = (
 )
 REQUIRED_FORMS = ("scripts/pod.py", "${CLAUDE_SKILL_DIR}")
 MAX_SKILL_LINES = 500
+MAX_SKILL_WORDS = 750
+MAX_REFERENCE_WORDS = 700
+MAX_REFERENCE_WORDS_COMBINED = 2200
 SOURCE_PREFIX = "https://github.com/j3w1/pod"
 
 
@@ -33,6 +36,8 @@ def _skill_text(root: Path) -> str:
         raise PodError("invalid_skill", "SKILL.md is oversized")
     if len(text.splitlines()) > MAX_SKILL_LINES:
         raise PodError("invalid_skill", "SKILL.md exceeds its line budget")
+    if len(text.split()) > MAX_SKILL_WORDS:
+        raise PodError("invalid_skill", "SKILL.md exceeds its word budget")
     return text
 
 
@@ -80,13 +85,20 @@ def _check_body(root: Path, body: str) -> None:
     for name in links:
         if name not in BUNDLE_FILES:
             raise PodError("invalid_skill", f"SKILL.md links {name}, which is not in the bundle")
+    combined_words = 0
     for name in REFERENCES:
         data = (root / name).read_text(encoding="utf-8")
         if not data.startswith("# ") or len(data.encode()) > MAX_SKILL:
             raise PodError("invalid_skill", f"{name} is missing a bounded title")
+        words = len(data.split())
+        combined_words += words
+        if words > MAX_REFERENCE_WORDS:
+            raise PodError("invalid_skill", f"{name} exceeds its word budget")
         for pattern, described in FORBIDDEN_FORMS:
             if pattern.search(data):
                 raise PodError("invalid_skill", f"{name} must not instruct {described}")
+    if combined_words > MAX_REFERENCE_WORDS_COMBINED:
+        raise PodError("invalid_skill", "Skill references exceed their combined word budget")
 
 
 def _check_launcher(root: Path) -> None:

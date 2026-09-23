@@ -7,13 +7,28 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, contract,
-                      effective_launch, hosts, identity, mutate_command, read_command,
+                      current_run, effective_launch, executable, hosts, identity,
+                      mutate_command, read_command,
                       require_route_establishment, route_establishment, worker_rows,
                       worktree_selector)
 from tests.common import envelope, receipt
 
 
 class OrcaAdapterTests(unittest.TestCase):
+    def test_desktop_linux_uses_orca_ide_discovery_without_bare_orca_fallback(self):
+        with patch.dict(os.environ, {}, clear=False):
+            for key in ("ORCA_CLI_COMMAND", "ORCA_DEV_REPO_ROOT", "ORCA_TERMINAL_HANDLE"):
+                os.environ.pop(key, None)
+            with patch("pod.orca.shutil.which", return_value="/fixture/orca-ide") as which, \
+                 patch("pod.orca.Path.is_file", return_value=True):
+                self.assertEqual(executable(), Path("/fixture/orca-ide"))
+            which.assert_called_once_with("orca-ide")
+            with patch("pod.orca.shutil.which", return_value=None) as missing:
+                with self.assertRaises(PodError) as caught:
+                    executable()
+            self.assertEqual(caught.exception.code, "orca_unavailable")
+            missing.assert_called_once_with("orca-ide")
+
     def test_pod_location_overrides_do_not_replace_native_subprocess_profile(self):
         native = {
                   "CODEX_HOME": "native-codex", "CLAUDE_CONFIG_DIR": "native-claude"}
@@ -41,18 +56,50 @@ class OrcaAdapterTests(unittest.TestCase):
                     read_command(argv)
             runner.assert_not_called()
 
-    def test_paginated_worker_list_requires_stable_runtime_and_complete_pages(self):
+    def test_paginated_exact_run_worker_list_requires_stable_runtime_and_complete_pages(self):
         pages = [
-            {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [{"dispatchId": "a"}],
+            {"runtime": "r", "result": {"scope": {"source": "run"}, "workers": [{"dispatchId": "a"}],
                                          "page": {"hasMore": True, "nextCursor": "next"}}},
-            {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [{"dispatchId": "b"}],
+            {"runtime": "r", "result": {"scope": {"source": "run"}, "workers": [{"dispatchId": "b"}],
                                          "page": {"hasMore": False}}},
         ]
         with patch("pod.orca.read_command", side_effect=pages) as reader:
-            fleet = worker_rows()
-            self.assertEqual([x["dispatchId"] for x in fleet["workers"]], ["a", "b"])
-            self.assertTrue(fleet["complete"])
+            run_workers = worker_rows("run")
+            self.assertEqual([x["dispatchId"] for x in run_workers["workers"]], ["a", "b"])
+            self.assertTrue(run_workers["complete"])
             self.assertIn("--cursor", reader.call_args.args[0])
+
+    def test_unscoped_worker_and_all_run_enumeration_are_not_adapter_reads(self):
+        with patch("pod.orca.subprocess.run") as runner:
+            for argv in (["orchestration", "run-list", "--limit", "100", "--json"],
+                         ["orchestration", "worker-list", "--include-remote", "--json",
+                          "--limit", "100"]):
+                with self.subTest(argv=argv), self.assertRaises(PodError) as caught:
+                    read_command(argv)
+                self.assertEqual(caught.exception.code, "unsupported_orca_read")
+            runner.assert_not_called()
+        with self.assertRaises(PodError) as caught:
+            worker_rows("")
+        self.assertEqual(caught.exception.code, "orca_contract")
+
+    def test_current_run_requires_the_native_coordinator_binding_shape(self):
+        bound = {"runtime": "r", "result": {"run": {
+            "id": "run", "coordinator_handle": "owner", "consumer_generation": 7,
+            "objective": "objective"}}}
+        with patch("pod.orca.read_command", return_value=bound):
+            self.assertEqual(current_run(), {"runtime": "r", "run": {
+                "id": "run", "coordinator_handle": "owner", "consumer_generation": 7}})
+        with patch("pod.orca.read_command", return_value={
+                "runtime": "r", "result": {"run": None}}):
+            self.assertEqual(current_run(), {"runtime": "r", "run": None})
+        for malformed in ({}, {"run": "run"}, {"run": {"id": "run",
+                          "coordinator_handle": "owner"}}):
+            with self.subTest(malformed=malformed), \
+                 patch("pod.orca.read_command", return_value={"runtime": "r",
+                                                               "result": malformed}), \
+                 self.assertRaises(PodError) as caught:
+                current_run()
+            self.assertEqual(caught.exception.code, "orca_contract")
 
     def test_cached_metadata_redacts_accounts_and_keeps_timestamps(self):
         result = {"runtime": "r", "result": {"claude": [{"token": "secret"}], "rateLimits": {
@@ -95,11 +142,16 @@ class RouteEstablishmentTests(unittest.TestCase):
 
     def established(self, *, agent="codex", model="gpt-5.6-sol", billing="included",
                     login=None, bucket=None, delegation=False):
-        route = {"agent": agent, "model": model, "account": "personal", "bucket": bucket,
-                 "effort": "high"}
+        accounts = self.accounts()
+        identity_digest = accounts["providers"][agent].get("identity_digest")
+        login = login or {"auth": "oauth", "subscription": True,
+                          "identity_digest": identity_digest or "a" * 64}
+        identity_digest = identity_digest or login.get("identity_digest")
+        route = {"agent": agent, "model": model, "account": identity_digest,
+                 "bucket": bucket, "effort": "high"}
         return route, route_establishment(
-            route, {"billing": billing}, snapshot=self.snapshot(), accounts=self.accounts(),
-            login=login or {"auth": "oauth", "subscription": True, "identity_digest": None},
+            route, {"billing": billing},
+            snapshot=self.snapshot(), accounts=accounts, login=login,
             fleet=self.fleet(), child_delegation=delegation)
 
     def test_contract_reports_the_runtime_and_advertised_contracts(self):
@@ -117,10 +169,11 @@ class RouteEstablishmentTests(unittest.TestCase):
         tiers = {name: control["tier"] for name, control in established["controls"].items()}
         self.assertEqual(tiers["effective_launch"], "enforceable_control")
         self.assertEqual(tiers["descendant_depth"], "enforceable_control")
-        self.assertEqual(tiers["descendant_count"], "runtime_observation")
+        self.assertEqual(tiers["descendant_count"], "owner_route_config")
         self.assertEqual(tiers["child_delegation"], "owner_route_config")
         self.assertEqual(tiers["billing_mode"], "runtime_observation")
         self.assertEqual(tiers["quota_bucket"], "runtime_observation")
+        self.assertEqual(tiers["physical_capacity"], "unavailable")
         self.assertEqual(established["login"]["mode"], "host_login")
         self.assertEqual(established["billing"], {"observed": "subscription", "approved": "included"})
         self.assertEqual(established["hard_stops"], [])
@@ -134,9 +187,13 @@ class RouteEstablishmentTests(unittest.TestCase):
     def test_an_included_route_survives_an_unavailable_quota_bucket(self):
         """The regression: absent optional metadata is a disclosure, not a blocker."""
         route, established = self.established(agent="claude", model="sonnet")
-        empty = {"providers": {"claude": {"managed_accounts": 0, "windows": {},
-                                          "account_association": "host_login"}}}
-        sparse = route_establishment(route, {"billing": "included"}, snapshot=self.snapshot(),
+        observed_identity = "a" * 64
+        empty = {"runtime": "uuid-0001", "providers": {"claude": {
+                     "managed_accounts": 0, "default_identity": observed_identity,
+                     "default_auth": "oauth", "default_has_auth": True, "windows": {},
+                     "account_association": "host_login"}}}
+        sparse = route_establishment(route, {"billing": "included"},
+                                     snapshot=self.snapshot(),
                                      accounts=empty,
                                      login={"auth": "oauth", "subscription": True,
                                             "identity_digest": None},
@@ -146,9 +203,101 @@ class RouteEstablishmentTests(unittest.TestCase):
                       sparse["disclosures"])
         require_route_establishment(sparse, route)
 
+    def test_account_rotation_and_unavailable_identity_fail_before_route_use(self):
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a" * 64,
+                 "bucket": "default", "effort": "high"}
+        approved = "a" * 64
+        base_accounts = {"runtime": "uuid-0001", "providers": {"codex": {
+            "managed_accounts": 1, "active_account": approved, "default_identity": None,
+            "selected_auth": "oauth", "selected_has_auth": True,
+            "default_auth": "oauth", "default_has_auth": True, "windows": {}}}}
+        login = {"auth": "oauth", "subscription": True, "identity_digest": None}
+        for active in ("b" * 64, None):
+            accounts = json.loads(json.dumps(base_accounts))
+            accounts["providers"]["codex"]["active_account"] = active
+            established = route_establishment(
+                route, {"billing": "paid"},
+                snapshot=self.snapshot(), accounts=accounts, login=login, fleet=self.fleet())
+            with self.subTest(active=active), self.assertRaises(PodError) as caught:
+                require_route_establishment(established, route)
+            self.assertEqual(caught.exception.code, "account_binding_unverified")
+        matched = route_establishment(
+            route, {"billing": "included"},
+            snapshot=self.snapshot(), accounts=base_accounts, login=login, fleet=self.fleet())
+        require_route_establishment(matched, route)
+
+    def test_managed_account_cannot_borrow_unrelated_host_subscription_proof(self):
+        identity_digest = "a" * 64
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+                 "bucket": "default", "effort": "high"}
+        accounts = {"runtime": "uuid-0001", "providers": {"codex": {
+            "managed_accounts": 1, "active_account": identity_digest,
+            "selected_auth": None, "selected_has_auth": False, "windows": {}}}}
+        established = route_establishment(
+            route, {"billing": "included"}, snapshot=self.snapshot(), accounts=accounts,
+            login={"auth": "oauth", "subscription": True, "identity_digest": "b" * 64},
+            fleet=self.fleet())
+        self.assertIn("billing_mode_unverified", established["hard_stops"])
+        with self.assertRaises(PodError) as caught:
+            require_route_establishment(established, route)
+        self.assertEqual(caught.exception.code, "billing_mode_unverified")
+
+    def test_system_default_billing_cannot_be_overridden_by_another_login_context(self):
+        identity_digest = "a" * 64
+        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+                 "bucket": "default", "effort": "high"}
+        base = {"runtime": "uuid-0001", "providers": {"codex": {
+            "managed_accounts": 0, "default_identity": identity_digest,
+            "default_auth": "api_key", "default_has_auth": True, "windows": {}}}}
+        unrelated_oauth = {"auth": "oauth", "subscription": True,
+                           "identity_digest": "b" * 64}
+        api = route_establishment(route, {"billing": "included"}, snapshot=self.snapshot(),
+                                  accounts=base, login=unrelated_oauth, fleet=self.fleet())
+        self.assertEqual(api["billing"]["observed"], "api")
+        self.assertIn("billing_mode_unverified", api["hard_stops"])
+        with self.assertRaises(PodError):
+            require_route_establishment(api, route)
+
+        unavailable = json.loads(json.dumps(base))
+        unavailable["providers"]["codex"].update(default_auth=None,
+                                                   default_has_auth=False)
+        unknown = route_establishment(route, {"billing": "included"},
+                                      snapshot=self.snapshot(), accounts=unavailable,
+                                      login=unrelated_oauth, fleet=self.fleet())
+        self.assertEqual(unknown["billing"]["observed"], "unknown")
+        self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
+
+        unavailable["providers"]["codex"].update(default_auth="api_key")
+        same_identity_login = {"auth": "oauth", "subscription": True,
+                               "identity_digest": identity_digest}
+        same_identity = route_establishment(route, {"billing": "included"},
+                                            snapshot=self.snapshot(), accounts=unavailable,
+                                            login=same_identity_login, fleet=self.fleet())
+        self.assertEqual(same_identity["billing"]["observed"], "unknown")
+        self.assertEqual(same_identity["hard_stops"], ["billing_mode_unverified"])
+
+        partial = json.loads(json.dumps(base))
+        partial["providers"]["codex"].update(default_present=True,
+                                               default_identity=None)
+        incomplete = route_establishment(route, {"billing": "included"},
+                                         snapshot=self.snapshot(), accounts=partial,
+                                         login=unrelated_oauth, fleet=self.fleet())
+        self.assertIsNone(incomplete["route"]["account"])
+        self.assertEqual(incomplete["billing"]["observed"], "unknown")
+        self.assertEqual(incomplete["hard_stops"], ["account_binding_unverified"])
+
+        subscribed = json.loads(json.dumps(base))
+        subscribed["providers"]["codex"].update(default_auth="oauth",
+                                                  default_has_auth=True)
+        exact = route_establishment(route, {"billing": "included"},
+                                    snapshot=self.snapshot(), accounts=subscribed,
+                                    login=unrelated_oauth, fleet=self.fleet())
+        self.assertEqual(exact["login"]["proof_source"], "orca_system_default")
+        require_route_establishment(exact, route)
+
     def test_billing_and_paid_fallback_fail_closed(self):
         route, unknown = self.established(login={"auth": "unknown", "subscription": None,
-                                                 "identity_digest": None},
+                                                 "identity_digest": "a" * 64},
                                           agent="claude", model="sonnet")
         self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
         with self.assertRaises(PodError) as blocked:
@@ -156,7 +305,7 @@ class RouteEstablishmentTests(unittest.TestCase):
         self.assertEqual(blocked.exception.code, "billing_mode_unverified")
         route, paid = self.established(agent="claude", model="sonnet", billing="unknown",
                                        login={"auth": "api_key", "subscription": False,
-                                              "identity_digest": None})
+                                              "identity_digest": "a" * 64})
         self.assertEqual(paid["hard_stops"], ["paid_route_forbidden"])
         with self.assertRaises(PodError) as refused:
             require_route_establishment(paid, route)
@@ -226,6 +375,7 @@ class MutationAllowlistTests(unittest.TestCase):
     def test_only_known_mutations_reach_a_process(self):
         with patch("pod.orca.subprocess.run") as runner:
             for argv in (["orchestration", "reset", "--json"],
+                         ["orchestration", "worker-release", "--dispatch", "d", "--json"],
                          ["orchestration", "worker-start", "--task", "t", "--json"],
                          ["orchestration", "worker-start", "--task", "t", "--run", "r",
                           "--worktree", "new-child", "--agent", "codex", "--model", "m",
@@ -256,6 +406,107 @@ class MutationAllowlistTests(unittest.TestCase):
                 mutate_command(argv)
             self.assertEqual(unexpected.exception.code, "native_effect_uncertain")
 
+    def test_capacity_full_error_envelope_preserves_runtime_and_request(self):
+        request_id = "11111111-1111-4111-8111-111111111111"
+        payload = {"ok": False,
+                   "error": {"code": "capacity_full", "message": "full",
+                             "data": {"orchestrationRequestId": request_id}},
+                   "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
+                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["runtime"], "runtime")
+        self.assertEqual(receipt_value["request_uuid"], request_id)
+        self.assertEqual(receipt_value["result"]["error"]["code"], "capacity_full")
+
+    def test_capacity_full_joins_every_request_reference_before_flattening(self):
+        first = "11111111-1111-4111-8111-111111111111"
+        second = "22222222-2222-4222-8222-222222222222"
+        variants = {
+            "result_conflicts_with_envelope": ({"requestId": first},
+                                                {"requestId": second}, first, first),
+            "envelope_conflicts_with_result": ({"requestId": second},
+                                                {"requestId": first}, first, second),
+            "malformed_result": ({"requestId": None}, {"requestId": first}, first, first),
+            "malformed_envelope": ({"requestId": first}, "malformed", first, first),
+        }
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r",
+                "--worktree", "current", "--agent", "codex", "--model", "m",
+                "--effort", "high", "--json"]
+        for name, (result_mutation, envelope_mutation, error_request, preserved) in variants.items():
+            with self.subTest(name=name):
+                payload = {"ok": False,
+                           "error": {"code": "capacity_full", "message": "full",
+                                     "data": {"orchestrationRequestId": error_request}},
+                           "result": {"mutation": result_mutation},
+                           "mutation": envelope_mutation,
+                           "_meta": {"runtimeId": "runtime"}}
+                completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+                with patch("pod.orca.executable", return_value=Path("orca")), \
+                     patch("pod.orca.subprocess.run", return_value=completed):
+                    receipt_value = mutate_command(argv, accept_exit=(0, 1))
+                self.assertEqual(receipt_value["request_uuid"], preserved)
+                self.assertTrue(receipt_value["result"]["_request_conflict"])
+
+        agreeing = {"ok": False,
+                    "error": {"code": "capacity_full", "message": "full",
+                              "data": {"orchestrationRequestId": first}},
+                    "result": {"mutation": {"requestId": first}},
+                    "mutation": {"requestId": first},
+                    "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(agreeing), "")
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["request_uuid"], first)
+        self.assertNotIn("_request_conflict", receipt_value["result"])
+
+        no_reference = {"ok": False,
+                        "error": {"code": "capacity_full", "message": "full"},
+                        "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(no_reference), "")
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertIsNone(receipt_value["request_uuid"])
+        self.assertNotIn("_request_conflict", receipt_value["result"])
+
+    def test_capacity_full_error_envelope_preserves_partial_effect_evidence(self):
+        request_id = "11111111-1111-4111-8111-111111111111"
+        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full",
+                                           "data": {"residualResources": [
+                                               {"kind": "terminal"}]}},
+                   "result": {"dispatchId": "dispatch", "workerId": "worker"},
+                   "mutation": {"requestId": request_id},
+                   "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
+                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["result"]["dispatchId"], "dispatch")
+        self.assertEqual(receipt_value["result"]["workerId"], "worker")
+        self.assertEqual(receipt_value["result"]["error"]["data"]["residualResources"],
+                         [{"kind": "terminal"}])
+
+    def test_capacity_full_error_envelope_preserves_conflicting_alias_evidence(self):
+        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full"},
+                   "result": {"dispatchId": "one"}, "dispatchId": "two",
+                   "dispatch_id": "three", "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
+                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["result"]["dispatchId"], "one")
+        self.assertEqual(receipt_value["result"]["dispatch_id"], "three")
+        self.assertEqual(receipt_value["result"]["_envelope_conflicts"]["dispatchId"], "two")
+
     def test_worktree_selectors_accept_existing_placements_only(self):
         for value in ("current", "path:/fixture/repo", "id:abc", "name:task", "branch:main"):
             self.assertEqual(worktree_selector(value), value)
@@ -285,6 +536,8 @@ class MutationAllowlistTests(unittest.TestCase):
             runner.assert_not_called()
         for argv in (["status", "--json"], ["host", "list", "--json"],
                      ["orchestration", "run-current", "--json"],
+                     ["orchestration", "request-show", "--request",
+                      "11111111-1111-4111-8111-111111111111", "--json"],
                      ["orchestration", "task-list", "--run", "r", "--json"],
                      ["orchestration", "worker-read", "--dispatch", "d", "--limit", "50", "--json"]):
             with self.subTest(argv=argv):
@@ -328,29 +581,31 @@ class ReviewFindingRegressions(unittest.TestCase):
         """A caller could name the bucket and have it reported back as an observation."""
         snapshot = {"status": "observed", "runtime": "r", "version": "1.4.206",
                     "executable": "/fixture/orca", "capabilities": {}}
-        accounts = {"providers": {"claude": {"managed_accounts": 0, "windows": {"weekly": {}},
+        accounts = {"runtime": "r", "providers": {"claude": {"managed_accounts": 0,
+                                             "windows": {"weekly": {}},
                                              "account_association": "host_login"}}}
-        asserted = {"agent": "claude", "model": "fable-5", "account": "a",
+        asserted = {"agent": "claude", "model": "fable-5", "account": "a" * 64,
                     "bucket": "default", "effort": "high"}
         established = route_establishment(asserted, {"billing": "included"}, snapshot=snapshot,
                                           accounts=accounts,
                                           login={"auth": "oauth", "subscription": True,
                                                  "identity_digest": None},
-                                          fleet={"hosts": ["local"], "local_only": True})
+                                          fleet={"runtime": "r", "hosts": ["local"],
+                                                 "local_only": True})
         self.assertEqual(established["route"]["bucket"], "fable")
         self.assertEqual(established["controls"]["quota_bucket"]["bucket"], "fable")
         with self.assertRaises(PodError) as caught:
             require_route_establishment(established, asserted)
         self.assertEqual(caught.exception.code, "account_binding_unverified")
 
-    def test_a_fleet_page_cannot_introduce_a_scope_the_first_page_lacked(self):
+    def test_a_run_worker_page_cannot_introduce_a_scope_the_first_page_lacked(self):
         pages = [{"runtime": "r", "result": {"scope": None, "workers": [],
                                              "page": {"hasMore": True, "nextCursor": "next"}}},
                  {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [],
                                              "page": {"hasMore": False}}}]
         with patch("pod.orca.read_command", side_effect=pages):
             with self.assertRaises(PodError) as caught:
-                worker_rows()
+                worker_rows("run")
         self.assertEqual(caught.exception.code, "orca_scope_changed")
 
     def test_a_dispatch_identity_is_read_across_both_spellings(self):

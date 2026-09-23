@@ -1,9 +1,42 @@
 # Routing, quota and spending
 
-The five starter rows are pending recommendations, not permanent model rankings. Personal `pod/v1` YAML defines resolved aliases and explicit approval provenance. Project/task YAML may refine soft rows and restrict hard policy; it cannot grant approval or spending. The `config` helper shows the merged table and provenance without writing it.
+Personal `pod/v1` YAML supplies approved routes and limits. Project/task policy
+may refine preferences and tighten restrictions; it cannot grant model/provider
+approval or spending. The `config` helper displays the effective policy and
+provenance. Starter model rows remain pending recommendations.
 
-Preview/replay uses supplied assessment, policy, capability and quota snapshots. It explains deterministic feasibility, not an arbitrary task's true difficulty. Bind assignments to those revisions. Approval binds agent, exact model and account route. Validate requested effort and native effective readback separately.
+Approval binds the exact agent, model and redacted native account identity shown
+by the doctor's JSON output; the model alias is the human label. Quota and
+grants use that same identity, so discovery, relabeling or account rotation cannot
+inherit approval. Identity and billing proof must come from the same selected managed,
+native-default or, only when no native default exists, login context. Pod repeats that
+join just before start or pending replay, even without quota windows; it never relabels
+the observed account. Keep responsibility, application, model and effort
+distinct. Preview/replay evaluates supplied assessment, capability and quota
+snapshots; it does not infer an arbitrary task's difficulty. Bind the packet to
+the resulting route and policy revision.
 
-Quota snapshots identify account route, bucket, window, observed consumption, reset, timestamp, source and unknowns. Default low is 20%, critical 5%, freshness 60 seconds. A bounded task may proceed at low/critical only when the actual snapshot and headroom permit it; stale/unknown admits at most one new active worker for an overlapping account/bucket route, including pending intents and existing workers. An unknown bucket can overlap other accounts on the same provider; known distinct buckets remain independent. Each exhausted window requires a later fresh supported positive observation for that exact provider, account and bucket. Changing model labels does not replenish an account bucket.
+Admission establishes the route against the installed runtime. Distinguish
+enforced controls, supported observations, owner configuration and unavailable
+metadata. Requested settings are not proof of effective settings. Unknown billing
+or missing required route controls blocks launch; optional gaps stay disclosed.
+Invalid policy blocks new admission without preventing read-only diagnosis.
 
-Paid or uncertain billing requires an exact scoped bounded grant. Reset credits need a distinct exact grant, supported idempotency, durable operation identity and subsequent quota readback. An uncertain response forbids another redemption.
+Quota follows provider/account/bucket windows, with source, time and uncertainty.
+Defaults are 20% low, 5% critical and 60-second freshness. Low quota calls for a
+bounded task and reserved integration/reporting headroom. Stale or unknown quota
+allows one outstanding logical assignment on the objective's overlapping route,
+including reservations and uncertain admissions. It does not require a foreign-worker
+census or let historical work in an independent objective occupy the slot.
+Unknown buckets may overlap; known distinct buckets
+remain independent. An exhausted window needs fresh positive evidence for that
+same route before new work. Switching model labels replenishes nothing.
+
+Model approval, paid usage, premium modes and reset credits are separate grants.
+Paid usage requires a current scoped, bounded grant. Reset consumption additionally
+requires supported idempotency and quota readback; an uncertain result cannot
+authorize another redemption. Pod has no installed redemption transport.
+
+Keep the coordinator's own headroom visible. Worker routing neither replenishes
+nor changes the coordinating conversation. Observed outcomes may justify a
+preference suggestion, never a silent policy edit or an inferred savings claim.

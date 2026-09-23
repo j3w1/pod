@@ -8,6 +8,7 @@ from pod.util import digest
 
 
 NOW = datetime(2026, 9, 20, tzinfo=timezone.utc)
+ACCOUNT_IDENTITY = "a" * 64
 
 
 def assessment(**changes):
@@ -21,21 +22,24 @@ def assessment(**changes):
 def setup():
     p = deepcopy(DEFAULT)
     for alias in ("sol", "terra"):
-        p["models"][alias].update({"account": "acct", "approved": True, "approval_ref": "personal-1",
+        p["models"][alias].update({"account": ACCOUNT_IDENTITY,
+                                    "approved": True, "approval_ref": "personal-1",
                                     "billing": "included", "efforts": ["high"], "capabilities": []})
         p["models"][alias]["approval_route"] = route_identity(p["models"][alias])
     return {"policy": p, "revision": digest(p)}
 
 
 def caps():
-    return {alias: {"agent": "codex", "model": model, "account": "acct", "efforts": ["high"],
+    return {alias: {"agent": "codex", "model": model, "account": ACCOUNT_IDENTITY,
+                    "efforts": ["high"],
                     "capabilities": [], "suitable_for": ["complex"],
                     "billing_preflight": True, "fanout_control": True, "bucket": "shared"}
             for alias, model in (("sol", "gpt-5.6-sol"), ("terra", "gpt-5.6-terra"))}
 
 
 def quota(percent=50):
-    return {"acct": {"schema": "pod-quota/v1", "provider": "codex", "account": "acct",
+    return {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
+                     "account": ACCOUNT_IDENTITY,
                      "bucket": "shared", "observed_at": NOW.isoformat(), "source": "supported_metadata",
                      "confidence": "observed", "unknowns": [],
                      "windows": [{"name": "hour", "remaining_percent": percent}],
@@ -55,15 +59,18 @@ class RoutingTests(unittest.TestCase):
         e = setup()
         cap = caps()
         del cap["sol"]
-        self.assertEqual(preview(assessment(), e, capabilities=cap, quotas=quota(),
-                                 strict_pin="sol", now=NOW)["status"], "blocked")
+        pinned = preview(assessment(), e, capabilities=cap, quotas=quota(),
+                         strict_pin="sol", now=NOW)
+        self.assertEqual(pinned["status"], "blocked")
+        self.assertIsNone(pinned["selected"])
+        self.assertIn("strict pin excludes substitution", pinned["rejections"]["terra"])
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(),
                                  safety_refusal=True, now=NOW)["status"], "blocked")
 
-    def test_unknown_quota_one_account_and_exhausted(self):
+    def test_unknown_quota_is_left_to_objective_admission_and_exhausted_blocks(self):
         e = setup()
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas={},
-                                 occupancy={"acct": 1}, now=NOW)["status"], "blocked")
+                                 now=NOW)["status"], "usable")
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(0),
                                  now=NOW)["status"], "blocked")
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(4),
@@ -74,18 +81,18 @@ class RoutingTests(unittest.TestCase):
     def test_provider_bucket_and_every_window_bind_route(self):
         e = setup()
         snapshot = quota(70)
-        snapshot["acct"]["windows"].append({"name": "week", "remaining_percent": 0})
+        snapshot[ACCOUNT_IDENTITY]["windows"].append({"name": "week", "remaining_percent": 0})
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot, now=NOW)["status"], "blocked")
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
                                  now=NOW + timedelta(minutes=10))["status"], "blocked")
-        snapshot["acct"]["windows"][1]["remaining_percent"] = 70
-        snapshot["acct"]["provider"] = "claude"
+        snapshot[ACCOUNT_IDENTITY]["windows"][1]["remaining_percent"] = 70
+        snapshot[ACCOUNT_IDENTITY]["provider"] = "claude"
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
-                                 occupancy={"acct": 1}, now=NOW)["status"], "blocked")
-        snapshot["acct"]["provider"] = "codex"
-        snapshot["acct"]["bucket"] = "other"
+                                 now=NOW)["status"], "usable")
+        snapshot[ACCOUNT_IDENTITY]["provider"] = "codex"
+        snapshot[ACCOUNT_IDENTITY]["bucket"] = "other"
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=snapshot,
-                                 occupancy={"acct": 1}, now=NOW)["status"], "blocked")
+                                 now=NOW)["status"], "usable")
 
     def test_changed_alias_and_paid_route_need_separate_grants(self):
         e = setup()
@@ -94,7 +101,8 @@ class RoutingTests(unittest.TestCase):
         e = setup()
         e["policy"]["models"]["sol"]["billing"] = "paid"
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(), now=NOW)["selected"]["alias"], "terra")
-        e["policy"]["policy"]["spending_grants"] = [{"id": "g", "action": "paid_usage", "account": "acct",
+        e["policy"]["policy"]["spending_grants"] = [{"id": "g", "action": "paid_usage",
+                                                          "account": ACCOUNT_IDENTITY,
             "model": "gpt-5.6-sol", "objective": "o",
             "valid_until": (NOW + timedelta(days=1)).isoformat(), "max_units": 1}]
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(), now=NOW, objective="o")["selected"]["alias"], "sol")

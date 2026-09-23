@@ -11,6 +11,8 @@ from pod.ledger import checkpoint, read, state_root
 from pod.util import native_home
 from tests.common import fixture
 
+ACCOUNT_IDENTITY = "a" * 64
+
 
 class ConfigTests(unittest.TestCase):
     def test_fixture_ignores_and_restores_inherited_pod_homes(self):
@@ -110,13 +112,14 @@ class ConfigTests(unittest.TestCase):
     def test_personal_approval_and_project_restriction(self):
         with fixture() as root:
             personal = root / "personal.yaml"
-            binding = route_identity({"agent": "codex", "model": "gpt-5.6-sol", "account": "acct"})
+            binding = route_identity({"agent": "codex", "model": "gpt-5.6-sol",
+                                      "account": ACCOUNT_IDENTITY})
             personal.write_text(f"""schema: pod/v1
 models:
   sol:
     agent: codex
     model: gpt-5.6-sol
-    account: acct
+    account: {ACCOUNT_IDENTITY}
     approved: true
     approval_ref: reviewed-grant
     approval_route: {binding}
@@ -167,6 +170,14 @@ policy:
             local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 30}\n")
             self.assertEqual(effective(root, personal=personal)["policy"]["policy"]["quota_fresh_seconds"], 30)
 
+    def test_retired_idle_timer_is_rejected_instead_of_copying_lifecycle_policy(self):
+        with fixture() as root:
+            personal = root / "personal.yaml"
+            personal.write_text("schema: pod/v1\npolicy: {retain_idle_minutes: 30}\n")
+            with self.assertRaises(PodError) as caught:
+                effective(root, personal=personal)
+            self.assertEqual(caught.exception.code, "invalid_config")
+
     def test_local_routing_can_tighten_but_not_weaken_or_replace_strict_pin(self):
         with fixture() as root:
             personal = root / "personal.yaml"
@@ -191,6 +202,27 @@ policy:
             row = effective(root, personal=personal)["policy"]["routing"]["complex"]
             self.assertEqual(row["model"], "terra")
             self.assertTrue(row["strict"])
+
+    def test_account_label_cannot_substitute_for_redacted_native_identity(self):
+        with fixture() as root:
+            personal = root / "personal.yaml"
+            personal.write_text("""schema: pod/v1
+models:
+  sol:
+    agent: codex
+    model: gpt-5.6-sol
+    account: friendly-label
+    approved: true
+    approval_ref: review
+    approval_route: does-not-matter
+""")
+            with self.assertRaises(PodError) as absent:
+                effective(root, personal=personal)
+            self.assertEqual(absent.exception.code, "invalid_config")
+            personal.write_text(personal.read_text().replace("friendly-label", "not-a-digest"))
+            with self.assertRaises(PodError) as invalid:
+                effective(root, personal=personal)
+            self.assertEqual(invalid.exception.code, "invalid_config")
 
     def test_native_home_variables_reject_relative_or_malformed_values(self):
         with fixture() as root:
@@ -280,13 +312,14 @@ policy:
     def test_changed_model_identity_invalidates_prior_approval_binding(self):
         with fixture() as root:
             personal = root / "personal.yaml"
-            binding = route_identity({"agent": "codex", "model": "original", "account": "account"})
+            binding = route_identity({"agent": "codex", "model": "original",
+                                      "account": ACCOUNT_IDENTITY})
             personal.write_text(f"""schema: pod/v1
 models:
   sol:
     agent: codex
     model: changed
-    account: account
+    account: {ACCOUNT_IDENTITY}
     approved: true
     approval_ref: original-review
     approval_route: {binding}

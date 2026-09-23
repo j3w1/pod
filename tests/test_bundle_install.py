@@ -82,7 +82,7 @@ class BundleInstallTests(unittest.TestCase):
             helper = launch(skill, ["internal", "brief", "--input", str(request)],
                             home=home, cwd=work)
             self.assertEqual(helper.returncode, 0, helper.stderr)
-            self.assertEqual(json.loads(helper.stdout)["schema"], "pod-helper/v1")
+            self.assertEqual(json.loads(helper.stdout)["schema"], "pod-helper/v2")
             unknown = launch(skill, ["internal-preview"], home=home, cwd=work)
             self.assertNotEqual(unknown.returncode, 0)
 
