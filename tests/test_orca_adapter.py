@@ -422,6 +422,58 @@ class MutationAllowlistTests(unittest.TestCase):
         self.assertEqual(receipt_value["request_uuid"], request_id)
         self.assertEqual(receipt_value["result"]["error"]["code"], "capacity_full")
 
+    def test_capacity_full_joins_every_request_reference_before_flattening(self):
+        first = "11111111-1111-4111-8111-111111111111"
+        second = "22222222-2222-4222-8222-222222222222"
+        variants = {
+            "result_conflicts_with_envelope": ({"requestId": first},
+                                                {"requestId": second}, first, first),
+            "envelope_conflicts_with_result": ({"requestId": second},
+                                                {"requestId": first}, first, second),
+            "malformed_result": ({"requestId": None}, {"requestId": first}, first, first),
+            "malformed_envelope": ({"requestId": first}, "malformed", first, first),
+        }
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r",
+                "--worktree", "current", "--agent", "codex", "--model", "m",
+                "--effort", "high", "--json"]
+        for name, (result_mutation, envelope_mutation, error_request, preserved) in variants.items():
+            with self.subTest(name=name):
+                payload = {"ok": False,
+                           "error": {"code": "capacity_full", "message": "full",
+                                     "data": {"orchestrationRequestId": error_request}},
+                           "result": {"mutation": result_mutation},
+                           "mutation": envelope_mutation,
+                           "_meta": {"runtimeId": "runtime"}}
+                completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+                with patch("pod.orca.executable", return_value=Path("orca")), \
+                     patch("pod.orca.subprocess.run", return_value=completed):
+                    receipt_value = mutate_command(argv, accept_exit=(0, 1))
+                self.assertEqual(receipt_value["request_uuid"], preserved)
+                self.assertTrue(receipt_value["result"]["_request_conflict"])
+
+        agreeing = {"ok": False,
+                    "error": {"code": "capacity_full", "message": "full",
+                              "data": {"orchestrationRequestId": first}},
+                    "result": {"mutation": {"requestId": first}},
+                    "mutation": {"requestId": first},
+                    "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(agreeing), "")
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertEqual(receipt_value["request_uuid"], first)
+        self.assertNotIn("_request_conflict", receipt_value["result"])
+
+        no_reference = {"ok": False,
+                        "error": {"code": "capacity_full", "message": "full"},
+                        "_meta": {"runtimeId": "runtime"}}
+        completed = subprocess.CompletedProcess([], 1, json.dumps(no_reference), "")
+        with patch("pod.orca.executable", return_value=Path("orca")), \
+             patch("pod.orca.subprocess.run", return_value=completed):
+            receipt_value = mutate_command(argv, accept_exit=(0, 1))
+        self.assertIsNone(receipt_value["request_uuid"])
+        self.assertNotIn("_request_conflict", receipt_value["result"])
+
     def test_capacity_full_error_envelope_preserves_partial_effect_evidence(self):
         request_id = "11111111-1111-4111-8111-111111111111"
         payload = {"ok": False, "error": {"code": "capacity_full", "message": "full",

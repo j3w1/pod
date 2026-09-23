@@ -35,6 +35,14 @@ A missing required capability blocks the affected operation. Diagnose or update
 Orca; do not substitute another runtime, execution host, account or direct
 provider worker API. Host-local serialization is not distributed fencing.
 
+The requested/effective readback detects a route mismatch only after worker start;
+it is not a strict provider-startup guarantee before task delivery. The installed
+`worker-start` exposes model and effort selection but no per-launch strict-route or
+noninteractive flag, so that pre-delivery guarantee is unavailable. Do not automate
+provider UI, write shared/personal provider settings or add a Pod provider wrapper.
+Any future strict automation control must be opt-in per launch and leave ordinary
+non-Pod sessions unchanged.
+
 ## Private state and migration
 
 `pod-context/v2` stores policy admissions, checkpoints, source rejections,

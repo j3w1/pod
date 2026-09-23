@@ -272,6 +272,35 @@ class MigrationTests(unittest.TestCase):
             by_effect = {row["recovery"]["legacy_effect"]: row["state"] for row in migrated}
             self.assertEqual(by_effect, {name: case[3] for name, case in cases.items()})
 
+    def test_migration_requires_exact_projection_assignment_identities(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            names = ("correct", "wrong_dispatch", "missing_dispatch", "wrong_run",
+                     "missing_run", "wrong_task", "missing_task")
+            bindings = {name: old_binding(name) for name in names}
+            self.write_old(project, legacy({
+                name: effect("confirmed", binding=binding)
+                for name, binding in bindings.items()}))
+
+            def reader(dispatch):
+                name = next(name for name, binding in bindings.items()
+                            if binding["dispatchId"] == dispatch)
+                value = shown(bindings[name], released=True)
+                projection = value["result"]["projection"]
+                if name.startswith("wrong_"):
+                    projection[name.removeprefix("wrong_") + "Id"] = "other"
+                elif name.startswith("missing_"):
+                    projection.pop(name.removeprefix("missing_") + "Id")
+                return value
+
+            migrate_v1(project, "objective", owner="owner", worker_reader=reader)
+            migrated = read(project, "objective")["admissions"].values()
+            by_effect = {row["recovery"]["legacy_effect"]: row["state"] for row in migrated}
+            self.assertEqual(by_effect["correct"], "closed")
+            self.assertEqual({name: by_effect[name] for name in names if name != "correct"},
+                             {name: "legacy_hold" for name in names if name != "correct"})
+
     def test_fifo_legacy_context_is_rejected_without_blocking(self):
         with fixture() as root:
             project = root / "project"

@@ -632,6 +632,9 @@ def _legacy_binding_matches(shown: dict, effect: dict, binding: dict, runtime: s
             and dispatch.get("runId") == binding.get("runId")
             and dispatch.get("taskId") == binding.get("taskId")
             and projection.get("id") == binding.get("workerId")
+            and projection.get("dispatchId") == binding.get("dispatchId")
+            and projection.get("runId") == binding.get("runId")
+            and projection.get("taskId") == binding.get("taskId")
             and worker.get("dispatchId") == binding.get("dispatchId")):
         return False
     if "worktreeId" in binding and worker.get("worktreeId") != binding.get("worktreeId"):

@@ -145,16 +145,27 @@ def _mutation_envelope(stdout: str) -> dict:
                 result[key] = value[key]
     else:
         raise PodError("native_effect_uncertain", "Native response does not prove an effect or refusal")
-    mutation = result.get("mutation")
-    if not isinstance(mutation, dict):
-        mutation = value.get("mutation")
-    request_uuid = mutation.get("requestId") if isinstance(mutation, dict) else None
+    request_references = []
+    request_malformed = False
+    for carrier in (result, value):
+        if "mutation" not in carrier:
+            continue
+        mutation = carrier["mutation"]
+        if not isinstance(mutation, dict) or mutation.get("requestId") is None:
+            request_malformed = True
+            continue
+        request_references.append(mutation["requestId"])
     error_data = error.get("data") if isinstance(error, dict) else None
     error_request = (error_data.get("orchestrationRequestId")
                      if isinstance(error_data, dict) else None)
-    if request_uuid is None:
-        request_uuid = error_request
-    elif error_request is not None and error_request != request_uuid:
+    if isinstance(error_data, dict) and "orchestrationRequestId" in error_data:
+        if error_request is None:
+            request_malformed = True
+        else:
+            request_references.append(error_request)
+    request_uuid = request_references[0] if request_references else None
+    if (request_malformed
+            or any(reference != request_uuid for reference in request_references[1:])):
         result["_request_conflict"] = True
     return {"runtime": runtime, "result": result, "request_uuid": request_uuid,
             "error": error}

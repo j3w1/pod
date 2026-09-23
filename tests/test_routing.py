@@ -59,8 +59,11 @@ class RoutingTests(unittest.TestCase):
         e = setup()
         cap = caps()
         del cap["sol"]
-        self.assertEqual(preview(assessment(), e, capabilities=cap, quotas=quota(),
-                                 strict_pin="sol", now=NOW)["status"], "blocked")
+        pinned = preview(assessment(), e, capabilities=cap, quotas=quota(),
+                         strict_pin="sol", now=NOW)
+        self.assertEqual(pinned["status"], "blocked")
+        self.assertIsNone(pinned["selected"])
+        self.assertIn("strict pin excludes substitution", pinned["rejections"]["terra"])
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(),
                                  safety_refusal=True, now=NOW)["status"], "blocked")
 

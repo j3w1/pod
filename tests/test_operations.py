@@ -264,15 +264,35 @@ class AdmissionTests(unittest.TestCase):
             project, assessment, capabilities, quotas, frozen = setup_case(root)
             port = FakePort()
             port.start_receipt = {"runtime": "runtime", "exit": 1,
-                                  "request_uuid": REQUEST_UUID, "state": "deferred",
+                                  "state": "deferred",
                                   "error": {"code": "capacity_full", "message": "full"}}
             first = start(project, assessment, capabilities, quotas, frozen, port)
             self.assertEqual(first["status"], "deferred")
             self.assertIsNone(first["admission"]["native_binding"])
-            self.assertEqual(first["admission"]["request_uuid"], REQUEST_UUID)
+            self.assertIsNone(first["admission"]["request_uuid"])
             second = start(project, assessment, capabilities, quotas, frozen, port)
             self.assertEqual(second["status"], "deferred")
             self.assertEqual(len(port.starts), 1)
+
+    def test_conflicting_or_malformed_capacity_request_identity_holds_without_retry(self):
+        variants = (
+            {"request_uuid": REQUEST_UUID, "_request_conflict": True},
+            {"request_uuid": "not-a-uuid"},
+        )
+        for evidence in variants:
+            with self.subTest(evidence=evidence), fixture() as root:
+                project, assessment, capabilities, quotas, frozen = setup_case(root)
+                port = FakePort()
+                port.start_receipt = {
+                    "runtime": "runtime", "exit": 1, "state": "deferred",
+                    "error": {"code": "capacity_full", "message": "full"}, **evidence}
+                first = start(project, assessment, capabilities, quotas, frozen, port)
+                second = start(project, assessment, capabilities, quotas, frozen, port)
+                self.assertEqual((first["status"], second["status"]),
+                                 ("unresolved", "unresolved"))
+                self.assertEqual(first["admission"]["error"]["code"],
+                                 "native_capacity_refusal_unverified")
+                self.assertEqual(len(port.starts), 1)
 
     def test_capacity_full_with_partial_effect_evidence_remains_unresolved(self):
         with fixture() as root:
@@ -327,6 +347,7 @@ class AdmissionTests(unittest.TestCase):
             "alias_conflict": {**base, "dispatchId": None, "dispatch_id": "partial"},
             "result_error_conflict": {**base, "_result_error": {"code": "other"}},
             "envelope_conflict": {**base, "_envelope_conflicts": {"workerId": "partial"}},
+            "request_conflict": {**base, "_request_conflict": True},
             "malformed_data": {**base, "error": {**base["error"], "data": "unknown"}},
         }
         for name, receipt in variants.items():
@@ -715,6 +736,43 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(PodError) as caught:
                 start(project, assessment, capabilities, quotas, frozen, port)
             self.assertEqual(caught.exception.code, "native_identity_unverified")
+
+    def test_effective_route_mismatch_holds_same_attempt_without_replacement(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            original = port.show_worker
+            def wrong(dispatch):
+                value = original(dispatch)
+                value["result"]["worker"]["startOptions"]["launch"]["effective"]["model"] = "other"
+                return value
+            port.show_worker = wrong
+            with self.assertRaises(PodError) as first:
+                start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(first.exception.code, "effective_launch_unverified")
+            port.starts.clear()
+            with self.assertRaises(PodError) as repeated:
+                start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(repeated.exception.code, "effective_launch_unverified")
+            self.assertEqual(port.starts, [])
+
+    def test_failed_startup_holds_same_attempt_without_replacement(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            port.workers["failed"] = {"run": "run", "task": "task",
+                                      "route": frozen["body"]["route"],
+                                      "worktree": "current", "state": "failed",
+                                      "outcome": "failed", "stage_detail": "settled"}
+            port.start_receipt = {"runtime": "runtime", "exit": 1,
+                                  "request_uuid": REQUEST_UUID, "state": "failed",
+                                  "runId": "run", "taskId": "task", "dispatchId": "failed",
+                                  "failedStage": "dispatch_input"}
+            first = start(project, assessment, capabilities, quotas, frozen, port)
+            repeated = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual((first["status"], repeated["status"]), ("bound", "bound"))
+            self.assertEqual(first["admission"]["native_binding"]["dispatchId"], "failed")
+            self.assertEqual(len(port.starts), 1)
 
 
 class BoundaryTests(unittest.TestCase):

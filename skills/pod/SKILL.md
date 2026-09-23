@@ -38,7 +38,10 @@ packets](references/planning.md) when decomposing or delegating.
 Read effective preferences with `config`. Assess each assignment's complexity,
 risk, size, uncertainty, verifiability, capabilities and context. Prefer the
 matching approved route; record a reason for a departure and honor strict pins.
-Never reroute around a provider safety refusal. Read [routing and
+Once admitted, the exact model, effort and account route is immutable: never
+silently substitute it or ask a worker or user to choose another model mid-attempt.
+An unavailable route or startup failure holds/fails that attempt and requires a
+fresh policy decision. Never reroute around a provider safety refusal. Read [routing and
 quota](references/routing.md) for approval, spending and availability decisions.
 
 Freeze the packet, then use `internal preview` and `internal admission` before a
