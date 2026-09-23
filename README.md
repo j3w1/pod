@@ -49,7 +49,7 @@ not keep another worker database or use raw terminal closure as a lifecycle API.
 
 ## Installation
 
-Install the 0.3.0 candidate from `main` for both supported agents:
+Install from `main` for both supported agents:
 
 ```bash
 npx skills add j3w1/pod --skill pod -a codex -a claude-code -g
@@ -63,19 +63,19 @@ Requirements are Linux, Python 3.13+ as `python3`, PyYAML 6.x, and Orca with its
 version-matched orchestration guide. Loading Pod installs nothing or changes no
 provider setting.
 
-The latest published release remains `v0.1.2`; it does not contain the candidate
-behavior documented here:
+To pin a release, use a tag from the [releases](https://github.com/j3w1/pod/releases)
+page:
 
 ```bash
-npx skills add j3w1/pod#v0.1.2 --skill pod -a codex -a claude-code -g
+npx skills add j3w1/pod#v0.4.0 --skill pod -a codex -a claude-code -g
 ```
 
 Without Node, clone a reviewed published tag and use its explicit installer:
 
 ```bash
-git clone --branch v0.1.2 --depth 1 https://github.com/j3w1/pod pod-release
+git clone --branch v0.4.0 --depth 1 https://github.com/j3w1/pod pod-release
 python3 pod-release/install.py --venv ~/.local/share/pod/venv \
-  --expected-commit "$(git -C pod-release rev-parse v0.1.2^{commit})"
+  --expected-commit "$(git -C pod-release rev-parse v0.4.0^{commit})"
 ~/.local/share/pod/venv/bin/pod setup --global
 ```
 
@@ -156,10 +156,11 @@ model, agent and installed runtime can prove, bounded by the provider ceiling
 (up to 1.05M for these Codex models and 1M for these Claude models). A ceiling
 is not live capability proof.
 
-Current Orca 1.4.209 exposes per-worker model and effort, but no safe per-worker
-context control or strict noninteractive startup flag. Pod therefore reports all
-new context-dependent worker routes unavailable before any effect. It does not
-invent a flag, launch an unsupervised terminal, wrap a provider, or change shared
+Pod is developed against Orca 1.4.209 and discovers capabilities from the
+installed runtime. That Orca exposes per-worker model and effort, but no safe
+per-worker context control or strict noninteractive startup flag, so Pod reports
+context-dependent worker routes unavailable before any effect. It does not invent
+a flag, launch an unsupervised terminal, wrap a provider, or change shared
 settings. Bootstrap workers do not count as production-adapter proof.
 
 Guided approval is inside the existing `config` family:
@@ -186,17 +187,18 @@ python3 .agents/skills/pod/scripts/pod.py status --json  # Codex, project
 `doctor` gives concise direct-work and worker-route readiness. `config` shows
 effective policy. `status` shows the objective/source, selected worktree,
 relevant native work, blocker, next action and remaining gates. Add `--json` for
-detailed diagnostics. These reads do not dispatch, repair or migrate anything.
+detailed diagnostics. These reads do not dispatch, repair or convert anything.
 
 An inaccessible issue is an access blocker, a wrong target is a repository
 mismatch, and a changed body needs reconciliation. A closed issue needs intent
 and recorded-outcome review before repeated implementation.
 
 Lost worker-start responses retain their logical reservation and recover the
-same Orca request. A definite `capacity_full` refusal is deferred without blind
-retry. Silence is not completion. If state reports `migration_required`, follow
-the [migration guide](docs/pod-migration.md); unrelated old state does not block
-a new objective.
+same Orca request. Orca's effect-free refusals (`task_not_found`,
+`task_not_startable`, `inject_rejected`) are deferred without blind retry; a
+`runtime_error` or unknown response stays unresolved until native readback
+settles it. Silence is not completion. State in an unsupported schema is reported
+by `doctor` and blocks only that objective; it is never converted.
 
 ## What's inside
 
@@ -231,10 +233,6 @@ npx skills remove pod -g -a codex -a claude-code
 For the Python installer, update from a reviewed checkout and run `pod setup`
 again. Setup preserves modified copies and recognizes skills-CLI ownership.
 
-Version 0.3.0 changes private state and JSON envelopes. Read the
-[migration notes](docs/pod-migration.md) before upgrading or rolling back. No
-0.3.0 release has been published, and no historical tag is removed automatically.
-
 ## Contributing
 
 Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md), and the
@@ -243,12 +241,19 @@ Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md), and the
 ```bash
 PYTHONPATH=skills python -m unittest discover -s tests -v
 PYTHONPATH=skills python -m pod.skill_validation skills/pod
-python tools/platform_audit.py
 python tools/artifact_audit.py --source .
 ```
 
-[Progress](docs/pod-progress.md) distinguishes local evidence from hosted, live,
-review and acceptance gates. Historical product records remain evidence only.
+To release, bump `pod.__version__` and the `metadata.version` in `SKILL.md`,
+replace `release/NOTES.md` with this version's notes, and commit the
+`release/evidence.json` that records the [validation gates](docs/validation.md)
+and owner authorization for the exact releasable content: the candidate's whole
+tree, notes included, with only the evidence record left out. The evidence can
+land in a later commit; any other change after approval blocks publication. A pull request that changes
+product files without a bump fails its checks. On merge to `main`, the release
+workflow publishes the tag and GitHub release with the wheel, sdist and skill
+bundle only when that evidence passes Pod's release gate; otherwise `main` stays
+merged and unpublished, and the job summary says which gate is missing.
 
 ## License
 

@@ -1,6 +1,6 @@
 # Pod validation
 
-Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Commit and tree values are full lowercase Git object IDs (40 hexadecimal characters for SHA-1 repositories or 64 for SHA-256 repositories). One selected binding or validation record uses one repository-wide object format, so its commit and tree IDs must have the same width. The timestamp is canonical RFC 3339 UTC with a trailing `Z`, including seconds and at most six fractional-second digits. The report value is a repository-neutral relative artifact identifier followed by ` sha256:` and the artifact's full 64-character lowercase SHA-256 digest; the identifier begins with an ASCII letter or digit, and its path components may otherwise use ASCII letters, digits, `.`, `_`, and `-`, but must not be empty, `.` or `..`. Offline fixtures do not prove live Orca, provider behaviour, hosted CI, independent review or acceptance. All new-candidate rows start `NOT_RUN` until a matching result is recorded.
+Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Commit and tree values are full lowercase Git object IDs (40 hexadecimal characters for SHA-1 repositories or 64 for SHA-256 repositories). One selected binding or validation record uses one repository-wide object format, so its commit and tree IDs must have the same width. The timestamp is canonical RFC 3339 UTC with a trailing `Z`, including seconds and at most six fractional-second digits. The report value is a repository-neutral relative artifact identifier followed by ` sha256:` and the artifact's full 64-character lowercase SHA-256 digest; the identifier begins with an ASCII letter or digit, and its path components may otherwise use ASCII letters, digits, `.`, `_`, and `-`, but must not be empty, `.` or `..`. Offline fixtures do not prove live Orca, provider behaviour, hosted CI, independent review or acceptance. Every row for a new candidate starts `NOT_RUN` until a matching result is recorded.
 
 ## Required candidate checks
 
@@ -8,10 +8,11 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | --- | --- | --- |
 | Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
 | Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
-| Compile and diff | `python -m compileall -q skills tests tools install.py`; `git diff --check 1b0aa6fc68ee2157f6f67ba4a60076d967791cc4 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
-| Supported environment audit | `python tools/platform_audit.py` | No unsupported-platform implementation in the tracked product |
-| Artifact audit | `python tools/artifact_audit.py dist/*` | No personal path, account, runtime identifier, credential or retired-platform reference in a published artifact, outside the files that are history |
-| Tracked-source hygiene | `python tools/artifact_audit.py --source .` | Generic private-path/account/runtime/credential residue check with explicit history/sanitized-fixture boundaries |
+| Compile and whitespace | `python -m compileall -q skills tests tools install.py`; `git diff --check "$(git hash-object -t tree /dev/null)" HEAD` | Local syntax and whole-tree whitespace |
+| Release notes | `python tools/release.py notes "$(python -c 'import pod; print(pod.__version__)')"` | `release/NOTES.md` opens with `# Pod <declared version>` and describes it |
+| Release readiness | `python tools/release.py check BASE` on each pull request | A change under `skills/pod/`, `pyproject.toml`, `install.py` or `MANIFEST.in` carries a version bump; notes and any committed evidence name the declared version |
+| Artifact audit | `python tools/artifact_audit.py dist/*` | No personal path, account, runtime identifier, credential or trail vocabulary in a published artifact |
+| Tracked-source hygiene | `python tools/artifact_audit.py --source .` | The same check over every tracked file; sanitized fixtures are not exempt |
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, frontmatter allowlist, helper invocation forms and references |
 | Bundle parity | `python -m pod.skill_validation --wheel dist/*.whl`; `--installed PATH` for a placed copy | The wheel and every placed copy carry the tracked bundle's exact bytes |
 | Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel and sdist there | Exact committed candidate |
@@ -19,6 +20,7 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | Copied-bundle form | Run `scripts/pod.py doctor --json` from a copy, in an unrelated directory, with no `PYTHONPATH` and no checkout | The installed skill needs nothing outside itself |
 | Skills-CLI install | `npx skills@1.7.0 add SOURCE --skill pod -a codex -a claude-code -g -y` in a disposable home, with `DISABLE_TELEMETRY=1` | The documented installation actually works, and `pod setup` then reports it as externally managed |
 | Hosted Linux | The same suite, incident discovery, audit, frozen build, installs and smokes in one candidate-bound job | Candidate-bound CI |
+| Release publication | The `release` job on a push to `main` or a `v*` tag | Idempotent: publishes only a declared version with no tag and no release, and only when `release/evidence.json` passes the release gate for that candidate and releasable tree; otherwise `main` stays merged and unpublished |
 | Independent audit | Fresh reviewer of the exact commit and tree with reproducible evidence | Findings only |
 | Live core matrix | Codex and Claude Code, each on Linux: discovery, in-session coordination, authorized native worker and effective route, request recovery, verification and adoption | Separate live authorization and a disposable project |
 | Orca delegation | Each advertised worker adapter: request construction, account and authentication selection, launch identity, effective launch and request recovery; native messaging and disposition are observed from Orca | Production adapter against the installed runtime |
@@ -60,7 +62,7 @@ user site. Before success, the target interpreter runs in isolated mode and veri
 installed `j3w1-pod` distribution and `pod` import; no system pip upgrade or profile change
 is attempted.
 
-The [scenario coverage file](pod-coverage.json) lists every acceptance scenario. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised, and a retired scenario is recorded as `RETIRED` with its reason rather than as a pass.
+The [scenario coverage file](pod-coverage.json) lists every acceptance scenario. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised.
 
 Issue fixtures use disposable Git repositories and injected GitHub read ports. They establish
 complete-body parsing, identity, digest/reconciliation and linked-worktree policy/state behavior;
@@ -74,13 +76,14 @@ Execution Spec reference is conditional; it is not loaded for an unrelated direc
 
 Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.
 
-Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent or changed source durably rejects that packet assignment; an unavailable source holds admission until a fresh packet binds actual bytes. This is a bounded admission check, not an atomic multi-file snapshot against external writes. `pod-context/v2` persists only policy/evidence admissions: `reserved`, `bound`, `unresolved`, `closed`, `deferred` and `legacy_hold`. The same objective lock serializes one logical reservation per Pod assignment. Reserved, unresolved and unbound legacy rows remain outstanding; one exact already-bound runtime/Run/Task/Dispatch/worker read whose assignment has settled frees a logical slot regardless of retained terminal or resource disposition. Missing, ambiguous or contradictory evidence does not free it. Independent objectives and foreign historical workers are not reconstructed or counted for runtime capacity. There is no all-Run pagination, fleet completeness prerequisite, terminal-liveness inference or occupancy deduplication in admission. Unknown quota conservatively limits the objective's own overlapping logical admissions. Paid grant units remain spent after settlement, closure, deferral or migration.
+Guarded reservation checks each frozen packet source and source/instruction context path under the objective admission lock. A current absent or changed source durably rejects that packet assignment; an unavailable source holds admission until a fresh packet binds actual bytes. This is a bounded admission check, not an atomic multi-file snapshot against external writes. `pod-context/v3` persists only policy/evidence admissions: `reserved`, `bound`, `unresolved`, `closed` and `deferred`. The same objective lock serializes one logical reservation per Pod assignment. Reserved and unresolved rows remain outstanding; one exact already-bound runtime/Run/Task/Dispatch/worker read whose assignment has settled frees a logical slot regardless of retained terminal or resource disposition. Missing, ambiguous or contradictory evidence does not free it. Independent objectives and foreign workers are not reconstructed or counted for runtime capacity. There is no all-Run pagination, fleet completeness prerequisite, terminal-liveness inference or occupancy deduplication in admission. Unknown quota conservatively limits the objective's own overlapping logical admissions. Paid grant units remain spent after settlement, closure or deferral.
 
-Those six states have narrow policy purposes: `reserved` fences the pre-effect
+Those five states have narrow policy purposes: `reserved` fences the pre-effect
 decision, `bound` keeps an exact own-attempt reference, `unresolved` prevents a
-duplicate start under uncertainty, `closed` preserves proven migrated settlement,
-`deferred` records authoritative no-start, and `legacy_hold` preserves unresolvable
-v1 uncertainty. None reconstructs Orca resource occupancy.
+duplicate start under uncertainty, `closed` preserves proven settlement, and
+`deferred` records an authoritative no-start. None reconstructs Orca resource occupancy.
+A state record in any other schema is reported by `doctor` and `status`, blocks new
+admissions for that objective only, and is never converted.
 
 The personal model `account` value is the redacted native identity digest reported by
 `pod doctor --json`, not a display label. The same digest keys approval, quota and
@@ -103,21 +106,13 @@ Run/Task/Dispatch readback. Current policy is rechecked immediately before pendi
 start, while completed/absent diagnosis remains read-only after revocation. Invalid UUID, changed
 worktree, missing receipt, runtime mismatch or ambiguous/contradictory identity holds the
 admission. A request identity conflict remains recorded across later incomplete receipts or
-capacity-classified errors. Pending replay and absent unique-worker adoption stay blocked until
-a coherent completed receipt resolves that same admission. An authoritative definite no-start
-`capacity_full` response may have no UUID; absent identity alone is not a contradiction.
+refusal-classified errors. Pending replay and absent unique-worker adoption stay blocked until
+a coherent completed receipt resolves that same admission. Orca's documented effect-free
+refusals `task_not_found`, `task_not_startable` and `inject_rejected` may carry no UUID; absent
+identity alone is not a contradiction. `runtime_error` is decoded but never classified as a
+no-start: the admission holds `unresolved` until request-show and worker-show settle it.
 Pod never invents a UUID, starts a replacement, retries in a loop, or mutates release,
 terminal or lifecycle state.
-
-`internal state-migrate` is the only v1-to-v2 state transition. It locks and validates a
-bounded nonblocking regular-file, no-follow v1 context, uses only Orca reads to resolve exact
-bindings, validates the constructed v2 context, writes and boundedly verifies an immutable
-digest-named archive, then atomically replaces the active file. Reserved, uncertain and otherwise unproven
-effects become `legacy_hold`; exact unsettled bindings become `bound`; exact native assignment
-settlement becomes `closed` without consulting terminal release or cleanup state. Historical
-Delivery/cleanup collections remain only in the archive. Any
-failure leaves v1 active. `doctor` and `status` report `migration_required` without migrating.
-There is no automatic downgrade; restore the archive only before any v2 admissions are made.
 
 `python -m pod.internal release-gate --input RECORD.json` projects these exact rows. Every row
 records host `Linux`, the one supported execution environment. A complete set without an owner
@@ -126,6 +121,19 @@ withheld. Supplying a `pod-release-authorization/v1` record naming the exact can
 a scope containing `release` returns `authorized`; an incomplete set stays `blocked` whatever the
 authorization says. Missing live or delegation subchecks remain unavailable even if a top-level
 result says PASS. The gate performs no release.
+
+The release workflow consumes the same gate through `release/evidence.json`, a
+`pod-release-evidence/v1` record holding the declared `version`, the `candidate` commit, the
+`tree`, the validation `records` and the owner `authorization`. The tree is the releasable
+tree printed by `python tools/release.py tree CANDIDATE`: the candidate's whole tree,
+including `release/NOTES.md`, with only `release/evidence.json` left out, so the evidence can
+be committed after the candidate without binding itself. Authorization therefore binds the
+exact releasable content and candidate, not the later commit that adds the evidence and is
+tagged. On a push to `main`, `python tools/release.py gate` publishes only when the evidence
+names the declared version, its candidate is in the pushed history, the releasable tree of
+`HEAD` equals the bound tree, and the gate returns `authorized`; any other outcome leaves
+`main` merged and unpublished and is reported in the job summary. The file describes one
+version and is replaced for the next, like `release/NOTES.md`.
 
 ## Waste governor
 
@@ -152,8 +160,8 @@ rerun or cancellation against the bound commit), `governor-outcome`, `governor-r
 (settle an UNKNOWN or pending row from provider readback only), `governor-classify`,
 `governor-correct` and `governor-status`. Merge, release and deployment are decided by the
 governor and performed by project governance. The journal is `governor.json` beside the
-objective's `context.json`; a `pod-governor/v1` journal is carried forward in place, and a
-malformed one asks for migration rather than being repaired.
+objective's `context.json`; a malformed journal or one in another schema is refused, never
+repaired or upgraded.
 
 What the executor proves is bounded: a push lands the exact candidate commit or is reported
 rejected; a dispatch is read back by workflow and commit, so a run that was started but never
@@ -163,40 +171,12 @@ action that followed it. A landed publication journals a derived validation row 
 workflow it triggers, so the run a push starts is attached to rather than doubled by a later
 dispatch. Every row carries its own commit, so a superseded generation is read back by that
 commit and never by the unit's current candidate. The journal keeps at most 96 rows within a
-256 KB record; a `pod-governor/v1` journal above that bound is carried forward by keeping
-every open row and the newest settled ones, and the number dropped is recorded in its
-counters. A carried-forward v1 row is history, not proof: the upgrade has no commit, tree,
-workflow or environment to bind it to, so such a row is marked and never reused as evidence
-even when its logical key matches, and one left running defers as unresolved rather than
-being attached to a run nothing can read back.
+256 KB record.
 
 What it does not prove: that a worker or shell
 holding the same credentials used the governed path. The enforcement level says `advisory`
 until the owner's personal policy declares a host control, and it is recorded at the
 owner-configuration tier because Pod cannot verify it.
-
-Live `gh` behaviour against a real repository was exercised on 2026-09-22 against
-`j3w1/pod`, on a throwaway branch since deleted along with its pull request.
-
-A push targeted the bound candidate commit and the receipt's `remote_head` came back equal
-to it. A pull request was opened through the port; asking again for the same candidate
-returned `REUSE` / `already_done` and opened no second one. The admission transaction was
-observed by misusing it: a bare decide followed by an execute returned `REUSE` / `attach`
-rather than pushing twice, and the remote confirmed nothing had been pushed.
-
-**A92.** A publication journalled a derived validation row for the workflow it would
-trigger, pending and with no provider, because the run had not appeared in the seconds
-before the readback. Reconciliation later found run `35713804508` by workflow and commit,
-bound its id, url and conclusion, and settled the row `PASS`: the run that was started but
-never answered was found rather than resubmitted. Reconciling an admission that was never
-performed returned `pending` with a null provider instead of inventing a settlement.
-
-**A96.** A fourth candidate superseded a third whose validation run `35714053830` was
-`in_progress`. Preparing the new generation reported the superseded row, the superseding
-push issued the cancellation, the action settled `PASS`, and GitHub reports that run
-`completed / cancelled`; the superseded row is `CANCELED` and the counter reads one. An
-earlier attempt cancelled a run that had already finished: it settled `UNKNOWN` rather than
-claiming success, and the push that followed was not stranded.
 
 Required-check reporting and merge-queue semantics remain `NOT_RUN` until exercised; the
 reference contract in [github-ci-contract](github-ci-contract.md) is documentation of a
@@ -220,18 +200,17 @@ pattern, not evidence that a repository follows it.
 
 Do not store raw environments, credentials, source packets, personal paths or runtime IDs in tracked evidence. A passing offline suite cannot promote live, review, hosted, acceptance, merge or release labels.
 
-## Runtime limits
+## Runtime boundary
 
-Orca caches provider rate-limit metadata and does not refresh it when read: on the machine
-this was measured, the reading was hours old. A quota snapshot therefore records
-`confidence: observed`, meaning the runtime reported these numbers, and its age decides how
-far they are trusted. A reading older than `quota_fresh_seconds` resolves to unknown quota,
+Orca reports cached provider rate-limit metadata and does not refresh it when read. A quota
+snapshot therefore records `confidence: observed`, meaning the runtime reported these
+numbers, and its age decides how far they are trusted. A reading older than `quota_fresh_seconds` resolves to unknown quota,
 which permits one outstanding logical assignment on the objective's overlapping account route
 rather than the usual two. That is
 conservative by design, and it means the documented default of two workers holds only while
 a fresh reading is available.
 
-The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: effective launch and native descendant-depth limit are enforceable controls; billing mode, exact redacted account identity and quota windows are supported observations; route approval, child delegation and logical descendant reservations are owner policy; physical capacity is unavailable. Pod claims no more. Refusing worker-initiated delegation is a Pod admission decision and behavioural instruction, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints and exposes only a digest of the runtime-selected account for personal approval. Reset credits have only an offline intent guard; no redemption transport is installed. An authoritative native `capacity_full` refusal is recorded as durable deferred evidence with no binding and no blind retry; a malformed or partial-effect response remains unresolved. This branch is synthetically covered unless a genuine runtime refusal is observed. Exact live start/request recovery and the live core and delegation matrices require separate evidence; worker lifecycle, disposition and actual capacity remain Orca/host-owned.
+The installed Orca 1.4.209 worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: effective launch and native descendant-depth limit are enforceable controls; billing mode, exact redacted account identity and quota windows are supported observations; route approval, child delegation and logical descendant reservations are owner policy; physical capacity is unavailable. Pod claims no more. Refusing worker-initiated delegation is a Pod admission decision and behavioural instruction, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints and exposes only a digest of the runtime-selected account for personal approval. Reset credits have only an offline intent guard; no redemption transport is installed. Orca's documented effect-free refusals are recorded as durable deferred evidence with no binding and no blind retry; `runtime_error`, unknown codes and malformed or partial-effect responses remain unresolved. This branch is synthetically covered unless a genuine runtime refusal is observed. Exact live start/request recovery and the live core and delegation matrices require separate evidence; worker lifecycle, disposition and actual capacity remain Orca/host-owned.
 
 The installed Orca `worker-start` accepts model and effort but does not expose a scoped
 context selector or strict-route, noninteractive startup contract. Pod's `256k` profile is a

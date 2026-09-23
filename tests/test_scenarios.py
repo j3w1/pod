@@ -37,7 +37,6 @@ def scenario_inputs():
     capabilities = {"sol": {"agent": "codex", "model": "gpt-6-sol",
                             "account": ACCOUNT_IDENTITY,
                             "bucket": "shared", "efforts": ["high"], "capabilities": [],
-                            "billing_preflight": True, "fanout_control": True,
                             "suitable_for": ["complex"],
                             "context_control": "native_per_launch",
                             "contexts": {"256k": 256000, "max": 900000}}}
@@ -109,5 +108,5 @@ class ScenarioFixtureTests(unittest.TestCase):
         inventory = json.loads((root / "docs" / "pod-coverage.json").read_text())
         ids = [row["id"] for row in inventory["scenarios"]]
         self.assertEqual(ids, [f"A{number:02d}" for number in range(1, len(ids) + 1)])
-        self.assertTrue(all(row["candidate_status"] in ("NOT_RUN", "PARTIAL", "PASS", "RETIRED")
+        self.assertTrue(all(row["candidate_status"] in ("NOT_RUN", "PASS")
                             for row in inventory["scenarios"]))

@@ -34,26 +34,26 @@
         "provider": "antigravity",
         "session": null,
         "status": "unavailable",
-        "updatedAt": 1789992898626,
+        "updatedAt": 1790185794850,
         "weekly": null
       },
       "claude": {
         "error": null,
         "fableWeekly": {
-          "resetDescription": "Wed 3:00 PM",
-          "resetsAt": 1790193600040,
-          "usedPercent": 19,
+          "resetDescription": "3:00 PM",
+          "resetsAt": 1790193600096,
+          "usedPercent": 87,
           "windowMinutes": 10080
         },
         "provider": "claude",
         "session": {
-          "resetDescription": "7:50 AM",
-          "resetsAt": 1789995000039,
-          "usedPercent": 14,
+          "resetDescription": "5:40 PM",
+          "resetsAt": 1790203200096,
+          "usedPercent": 10,
           "windowMinutes": 300
         },
         "status": "ok",
-        "updatedAt": 1789992899156,
+        "updatedAt": 1790185795211,
         "usageMetadata": {
           "attemptedSources": [
             "oauth"
@@ -64,9 +64,9 @@
           "source": "oauth"
         },
         "weekly": {
-          "resetDescription": "Wed 3:00 PM",
-          "resetsAt": 1790193600039,
-          "usedPercent": 29,
+          "resetDescription": "3:00 PM",
+          "resetsAt": 1790193600096,
+          "usedPercent": 83,
           "windowMinutes": 10080
         }
       },
@@ -78,11 +78,16 @@
         "error": null,
         "provider": "codex",
         "rateLimitResetCredits": {
-          "availableCount": 1,
+          "availableCount": 2,
           "credits": [
             {
               "expiresAt": 1791173961692,
               "grantedAt": 1788581961692,
+              "status": "available"
+            },
+            {
+              "expiresAt": 1792701531686,
+              "grantedAt": 1790109531686,
               "status": "available"
             }
           ],
@@ -91,12 +96,12 @@
         },
         "session": null,
         "status": "ok",
-        "updatedAt": 1789992899523,
+        "updatedAt": 1790185796035,
         "usageMetadata": {},
         "weekly": {
           "resetDescription": "Tue 7:46 AM",
-          "resetsAt": 1790081180000,
-          "usedPercent": 91,
+          "resetsAt": 1790685980000,
+          "usedPercent": 90,
           "windowMinutes": 10080
         }
       },
@@ -109,7 +114,7 @@
         "provider": "gemini",
         "session": null,
         "status": "unavailable",
-        "updatedAt": 1789992898626,
+        "updatedAt": 1790185794850,
         "weekly": null
       },
       "grok": {
@@ -117,7 +122,7 @@
         "provider": "grok",
         "session": null,
         "status": "unavailable",
-        "updatedAt": 1789992898625,
+        "updatedAt": 1790185794850,
         "weekly": null
       },
       "grokAuthConfigured": false,
@@ -128,7 +133,7 @@
         "provider": "kimi",
         "session": null,
         "status": "unavailable",
-        "updatedAt": 1789992898638,
+        "updatedAt": 1790185794857,
         "weekly": null
       },
       "minimax": {
@@ -136,7 +141,7 @@
         "provider": "minimax",
         "session": null,
         "status": "unavailable",
-        "updatedAt": 1789992898626,
+        "updatedAt": 1790185794850,
         "usageMetadata": {
           "failureKind": "missing-credentials",
           "source": "web"
@@ -151,7 +156,7 @@
         "provider": "opencode-go",
         "session": null,
         "status": "unavailable",
-        "updatedAt": 1789992898626,
+        "updatedAt": 1790185794850,
         "weekly": null
       }
     }

@@ -19,7 +19,7 @@ from .bundle import bundle_root, version
 from .config import (DEFAULT, MODEL_CATALOG, effective, guided_personal_update,
                      personal_path, personal_revision, route_identity)
 from .errors import PodError
-from .ledger import context_root_for_run, migration_inventory
+from .ledger import context_root_for_run, state_inventory
 from .orca import (account_metadata, account_metadata_raw, agent_login_mode, contract, executable,
                    current_run, hosts, route_establishment, selected_account_evidence,
                    selected_account_identity, worker_rows)
@@ -125,7 +125,7 @@ def _status(root: Path, run: str | None) -> dict:
                        "workers_by_state": counts, "attention_count": attention,
                        "complete": workers["complete"]},
             "verification_gaps": checkpoint_value.get("verification_gaps", []) if checkpoint_value else "unknown",
-            "pending_admissions": sum(a.get("state") in ("reserved", "unresolved", "legacy_hold")
+            "pending_admissions": sum(a.get("state") in ("reserved", "unresolved")
                                       for a in context.get("admissions", {}).values()) if checkpoint_value else "unknown",
             "route_decisions": checkpoint_value.get("route_decisions", "unknown") if checkpoint_value else "unknown",
             "quota_visibility": checkpoint_value.get("quota_visibility", "unknown") if checkpoint_value else "unknown",
@@ -286,7 +286,7 @@ def _guided_config(root: Path, *, action: str, alias: str | None,
     proposal = _config_proposal(root, action, alias)
     if confirmation is None:
         public = {key: value for key, value in proposal.items() if key != "account"}
-        return {"schema": "pod-cli/v2", "status": "confirmation_required",
+        return {"schema": "pod-cli/v3", "status": "confirmation_required",
                 "proposal": public, "written": False}
     if confirmation != proposal["proposal"]:
         raise PodError("approval_evidence_changed",
@@ -300,7 +300,7 @@ def _guided_config(root: Path, *, action: str, alias: str | None,
                            alias=alias, approval=approval)
     # Read the resulting effective policy back through the normal validator.
     policy = effective(root)
-    return {"schema": "pod-cli/v2", "status": "approved" if approval else "revoked",
+    return {"schema": "pod-cli/v3", "status": "approved" if approval else "revoked",
             "alias": alias, "model": proposal["model"], "account": proposal["account_display"],
             "billing": proposal["billing"], "revision": policy["revision"], "written": True}
 
@@ -321,13 +321,13 @@ def _readiness(*, config: dict, snapshot: dict, routes: dict, state: dict,
             "orca": "connected" if connected else "unavailable",
             "approved_worker_routes": approved, "usable_worker_routes": usable,
             "limitations": sorted(set(limitations)),
-            "migration": {**state, "scope": "affected_objectives_only",
-                          "blocks_unrelated_objectives": False}}
+            "state": {**state, "scope": "affected_objectives_only",
+                      "blocks_unrelated_objectives": False}}
 
 
 def execute(args: argparse.Namespace, root: Path) -> dict:
     if args.command == "setup":
-        return {"schema": "pod-cli/v2", "status": "ok", **setup(root, global_scope=args.global_scope)}
+        return {"schema": "pod-cli/v3", "status": "ok", **setup(root, global_scope=args.global_scope)}
     if args.command == "config":
         if args.config_action:
             if args.edit or args.check or args.scope != "personal":
@@ -343,7 +343,7 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
         value = effective(root)
         approval_routes = {alias: route_identity(model) for alias, model in value["policy"]["models"].items()
                            if all(model.get(key) for key in ("agent", "model", "account"))}
-        return {"schema": "pod-cli/v2", "status": "valid", "effective": value,
+        return {"schema": "pod-cli/v3", "status": "valid", "effective": value,
                 "approval_routes": approval_routes, "edited": args.edit,
                 "scope": args.scope if args.edit else None}
     if args.command == "doctor":
@@ -384,12 +384,12 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
                 overlap[host] = "modified_global_copy"
         snapshot = contract()
         try:
-            migrations = migration_inventory(root)
+            state_report = state_inventory(root)
         except PodError as exc:
-            migrations = {"v1": 0, "v2": 0, "invalid": 1,
-                          "migration_required": True, "reason": exc.code}
+            state_report = {"current": 0, "unsupported": 0, "unreadable": 1,
+                            "blocked": True, "reason": exc.code}
         routes = _route_report(root, snapshot)
-        return {"schema": "pod-cli/v2", "status": "observed", "config": config,
+        return {"schema": "pod-cli/v3", "status": "observed", "config": config,
                 "orca": snapshot, "project_skills": local_skills,
                 "global_skills": global_skills, "integration_overlap": overlap,
                 "quota": quota, "account_identities": account_identities,
@@ -397,18 +397,18 @@ def execute(args: argparse.Namespace, root: Path) -> dict:
                 "prerequisites": _prerequisites(snapshot),
                 "routes": routes,
                 "skills_cli": skills_cli_entry(), "native_probe": "not_run",
-                "state": migrations,
+                "state": state_report,
                 "readiness": _readiness(config=config, snapshot=snapshot, routes=routes,
-                                        state=migrations,
+                                        state=state_report,
                                         policy=policy if config["status"] == "valid" else None)}
     if args.command == "status":
         result = _status(root, args.run)
         try:
-            result["state"] = migration_inventory(root)
+            result["state"] = state_inventory(root)
         except PodError as exc:
-            result["state"] = {"v1": 0, "v2": 0, "invalid": 1,
-                               "migration_required": True, "reason": exc.code}
-        return {"schema": "pod-cli/v2", **result}
+            result["state"] = {"current": 0, "unsupported": 0, "unreadable": 1,
+                               "blocked": True, "reason": exc.code}
+        return {"schema": "pod-cli/v3", **result}
     raise PodError("unknown_command", "Unknown command")
 
 
@@ -417,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = execute(args, Path.cwd())
     except PodError as exc:
-        result = {"schema": "pod-cli/v2", "status": "blocked", "error": {"code": exc.code, "message": str(exc)}}
+        result = {"schema": "pod-cli/v3", "status": "blocked", "error": {"code": exc.code, "message": str(exc)}}
     if (not getattr(args, "json", False) and args.command == "config"
             and result.get("status") == "confirmation_required"):
         proposal = result["proposal"]
@@ -441,10 +441,10 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     result = execute(args, Path.cwd())
                 except PodError as exc:
-                    result = {"schema": "pod-cli/v2", "status": "blocked",
+                    result = {"schema": "pod-cli/v3", "status": "blocked",
                               "error": {"code": exc.code, "message": str(exc)}}
             else:
-                result = {"schema": "pod-cli/v2", "status": "cancelled", "written": False}
+                result = {"schema": "pod-cli/v3", "status": "cancelled", "written": False}
         else:
             print("  No change written: confirmation is required in an interactive terminal or host conversation.")
     if getattr(args, "json", False):
@@ -476,9 +476,10 @@ def main(argv: list[str] | None = None) -> int:
                         "Orca is unavailable; start Orca, then rerun doctor",
                 }.get(limitation, limitation)
                 print(f"  ! {message}")
-            migration = ready["migration"]
-            if migration["v1"] or migration["invalid"]:
-                print(f"  ! old/invalid state affects {migration['v1'] + migration['invalid']} objective(s) only")
+            state_report = ready["state"]
+            if state_report["unsupported"] or state_report["unreadable"]:
+                affected = state_report["unsupported"] + state_report["unreadable"]
+                print(f"  ! unsupported or unreadable state affects {affected} objective(s) only")
         elif args.command == "config" and result.get("status") == "valid":
             for level, row in result["effective"]["policy"]["routing"].items():
                 model = result["effective"]["policy"]["models"][row["model"]]

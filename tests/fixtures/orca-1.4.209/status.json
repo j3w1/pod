@@ -14,8 +14,9 @@
       "state": "ready"
     },
     "runtime": {
-      "appVersion": "1.4.206",
+      "appVersion": "1.4.209",
       "capabilities": [
+        "git.antigravity-configured-model.v1",
         "files.pathsExist",
         "runtime.status.compat.v1",
         "runtime.environments.v1",

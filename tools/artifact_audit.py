@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Audit built distributions before they are published.
+"""Audit built distributions and tracked source for private residue.
 
-This reads the artifacts themselves, not the source tree, because a distribution can carry
-files the working tree does not. It distinguishes a deliberate historical reference from a
-leak: naming the retired product in migration notes is the point; carrying a personal path,
-account, runtime identifier or credential never is.
+Artifacts are read as archives, not from the working tree, because a distribution can carry
+files the tree does not. Findings name the file, the category and the line, never the
+matched text.
 """
 
 from __future__ import annotations
@@ -25,15 +24,17 @@ FORBIDDEN = (
     ("credential-shaped", re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}")),
     ("machine-local task state", re.compile(rb"\.local/state/[^/\s]+/tasks/")),
 )
-# The retired platform, using the source audit's own definitions so there is exactly one.
-# The source audit owns the platform definitions; see tools/platform_audit.py for how an
-# operating-system reference is told apart from a quota time window.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from platform_audit import ALLOWED, EXEMPT_PREFIXES, PATTERNS  # noqa: E402
-
-HISTORICAL = ("docs/history/", "CHANGELOG", "pod-migration", "release-notes",
-              "PKG-INFO", "METADATA", "README")
-
+# Vocabulary of things Pod no longer has. Main describes the present product only; a
+# reference to a removed mechanism, document or version state is a defect, not history.
+TRAIL = (
+    ("trail vocabulary", re.compile(
+        rb"orchestrate|legacy_hold|state[-_]migrate|\bcapacity_full\b|pod-context/v[12]|pod-governor/v1"
+        rb"|docs/history|release-notes/|backwards?[ -]compat|migration_required|pod-migration|pod-progress"
+        rb"|platform_audit|\b\d+\.\d+\.\d+ candidate\b|release candidate|latest published|CHANGELOG|[Cc]hangelog")),
+    ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|migration|baseline commit)\b", re.I)),
+)
+# The guard names its own patterns, and sanitized captures are Orca's words, not Pod's.
+TRAIL_EXEMPT = ("tests/fixtures/", "tools/artifact_audit.py", "tests/test_artifact_audit.py")
 
 def members(path: pathlib.Path):
     if path.suffix == ".whl":
@@ -58,32 +59,35 @@ def audit(paths: list[pathlib.Path]) -> list[str]:
     findings = []
     for artifact in paths:
         for name, data in members(artifact):
-            for label, pattern in FORBIDDEN:
-                match = pattern.search(data)
-                if match:
-                    findings.append(f"{artifact.name} :: {name} :: {label} at line "
-                                    f"{_line_number(data, match.start())}")
-            relative = name.split("/", 1)[1] if "/" in name and name.startswith(("pod/", "j3w1_pod-")) else name
-            if any(marker in name for marker in HISTORICAL):
-                continue
-            if relative.startswith(EXEMPT_PREFIXES):
-                continue
-            for line_number, raw in enumerate(data.splitlines(), 1):
-                try:
-                    line = raw.decode("utf-8")
-                except UnicodeError:
-                    continue
-                if any(allowed.search(line) for allowed in ALLOWED):
-                    continue
-                if any(pattern.search(line) for pattern in PATTERNS):
-                    findings.append(f"{artifact.name} :: {name} :: retired platform at line "
-                                    f"{line_number}")
-                    break
+            findings.extend(f"{artifact.name} :: {name} :: {finding}"
+                            for finding in _scan(_artifact_relative(name), data))
+    return findings
+
+
+def _artifact_relative(name: str) -> str:
+    """The path a distribution member would have in the source tree, for exemptions."""
+    if "/" in name and name.startswith("j3w1_pod-"):
+        return name.split("/", 1)[1]
+    if name.startswith("pod/"):
+        return "skills/" + name
+    return name
+
+
+def _scan(name: str, data: bytes) -> list[str]:
+    tables = [FORBIDDEN]
+    if not name.startswith(TRAIL_EXEMPT):
+        tables.append(TRAIL)
+    findings = []
+    for table in tables:
+        for label, pattern in table:
+            match = pattern.search(data)
+            if match:
+                findings.append(f"{label} at line {_line_number(data, match.start())}")
     return findings
 
 
 def audit_source(root: pathlib.Path) -> list[str]:
-    """Scan bounded tracked source; history and sanitized captures keep their evidence."""
+    """Scan every tracked file; sanitized fixtures are held to the same rule."""
     completed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
                                capture_output=True, check=False)
     if completed.returncode:
@@ -97,8 +101,6 @@ def audit_source(root: pathlib.Path) -> list[str]:
         except UnicodeError:
             findings.append("tracked source path is not UTF-8")
             continue
-        if name.startswith(("docs/history/", "tests/fixtures/")):
-            continue
         path = root / name
         try:
             mode = path.lstat().st_mode
@@ -108,11 +110,7 @@ def audit_source(root: pathlib.Path) -> list[str]:
         except OSError:
             findings.append(f"{name} :: tracked source is unreadable")
             continue
-        for label, pattern in FORBIDDEN:
-            match = pattern.search(data)
-            if match:
-                findings.append(f"{name} :: {label} at line "
-                                f"{_line_number(data, match.start())}")
+        findings.extend(f"{name} :: {finding}" for finding in _scan(name, data))
     return findings
 
 
@@ -134,7 +132,7 @@ def main(argv: list[str]) -> int:
             print("  " + finding)
         return 1
     print(f"{len(paths)} artifact(s) and {'tracked source' if source else 'no source tree'} audited; "
-          "no personal path, account, runtime identifier, credential or retired-platform reference outside history.")
+          "no personal path, account, runtime identifier, credential or trail vocabulary.")
     return 0
 
 

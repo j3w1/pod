@@ -5,7 +5,8 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "orca-1.4.206"
+ORCA_VERSION = "1.4.209"
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / f"orca-{ORCA_VERSION}"
 
 
 def receipt(name: str) -> dict:
@@ -43,7 +44,7 @@ def fixture():
 def establishment(route, *, runtime="runtime", billing="included", observed="subscription",
                   hard_stops=(), bucket=...):
     """A minimal route establishment record, as the production port would build one."""
-    return {"schema": "pod-route-establishment/v1", "runtime": runtime, "version": "1.4.206",
+    return {"schema": "pod-route-establishment/v1", "runtime": runtime, "version": ORCA_VERSION,
             "executable": "/fixture/orca", "hard_stops": list(hard_stops), "disclosures": [],
             "route": {"agent": route.get("agent"), "model": route.get("model"),
                       "account": route.get("account"),

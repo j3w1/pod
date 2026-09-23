@@ -53,8 +53,12 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(result["gates"]["skill_validation"], "NOT_RUN")
 
     def test_gate_list_is_linux_only_and_covers_delegation_and_packaging(self):
-        self.assertNotIn("matched_evaluation", REQUIRED_GATES)
-        self.assertFalse([gate for gate in REQUIRED_GATES if gate.endswith("_windows")])
+        self.assertEqual(set(REQUIRED_GATES), {
+            "unit_linux", "incident_linux", "compile_linux", "frozen_wheel_linux",
+            "isolated_install_linux", "bundle_copy_form", "hosted_ci_linux",
+            "skill_validation", "skill_bundle_parity", "skills_cli_install",
+            "independent_review", "live_codex_linux", "live_claude_linux",
+            "orca_delegation_codex", "orca_delegation_claude", "project_acceptance"})
         for gate in ("hosted_ci_linux", "skill_bundle_parity", "skills_cli_install",
                      "bundle_copy_form", "orca_delegation_codex", "orca_delegation_claude"):
             with self.subTest(gate=gate):
@@ -65,7 +69,7 @@ class ReleaseGateTests(unittest.TestCase):
                 self.assertEqual(result["gates"][gate], "NOT_RUN")
 
     def test_non_linux_host_is_rejected(self):
-        for host in ("Windows", "Darwin", "linux"):  # platform-audit: refusal
+        for host in ("macOS", "linux", "LINUX"):
             with self.subTest(host=host):
                 records = [{**row("unit_linux"), "host": host}]
                 with self.assertRaises(PodError) as caught:

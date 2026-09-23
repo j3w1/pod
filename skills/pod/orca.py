@@ -20,10 +20,8 @@ CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "reset_credit_v1": "accounts.codex-reset-credit.v1"}
 AGENTS = ("codex", "claude")
 TIERS = ("enforceable_control", "runtime_observation", "owner_route_config", "unavailable")
-IDENTITY_TWINS = {"dispatchId": "dispatch_id", "taskId": "task_id", "runId": "run_id",
-                  "lastFailure": "last_failure",
-                  "worktreeId": "worktree_id", "agentTerminalHandle": "agent_terminal_handle",
-                  "lastError": "last_error"}
+PREFLIGHT_REFUSALS = ("task_not_found", "task_not_startable", "inject_rejected")
+DECODED_REFUSALS = PREFLIGHT_REFUSALS + ("runtime_error",)
 WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:", "issue:")
 
 
@@ -57,18 +55,11 @@ def _read_allowed(argv: list[str]) -> bool:
     if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "task-list", "--run"]
-            and _argument(argv[3]) and argv[4] == "--json"):
-        return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "request-show", "--request"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
     if (len(argv) == 5 and argv[:3] == ["worktree", "show", "--worktree"]
             and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
-        return True
-    if (len(argv) == 7 and argv[:3] == ["orchestration", "worker-read", "--dispatch"]
-            and _argument(argv[3]) and argv[4] == "--limit"
-            and argv[5].isdigit() and 1 <= int(argv[5]) <= 200 and argv[6] == "--json"):
         return True
     if argv[:4] == ["orchestration", "worker-list", "--include-remote", "--json"]:
         return _worker_list_tail(argv[4:])
@@ -110,7 +101,7 @@ def _envelope(stdout: str) -> dict:
 
 
 def _mutation_envelope(stdout: str) -> dict:
-    """Decode a mutation receipt, including Orca's authoritative no-start refusal."""
+    """Decode a mutation receipt, including Orca's documented refused-start codes."""
     try:
         value = json.loads(stdout)
     except ValueError as exc:
@@ -125,21 +116,18 @@ def _mutation_envelope(stdout: str) -> dict:
         error = None
     elif value.get("ok") is False and isinstance(value.get("error"), dict):
         error = value["error"]
-        if error.get("code") != "capacity_full":
-            raise PodError("native_effect_uncertain", "Native refusal is not a supported no-start result")
+        if error.get("code") not in DECODED_REFUSALS:
+            raise PodError("native_effect_uncertain", "Native refusal is not a documented refused-start code")
         native_result = value.get("result")
         if native_result is not None and not isinstance(native_result, dict):
             raise PodError("native_effect_uncertain", "Native refusal carries a malformed result")
         result = dict(native_result or {})
         if "error" in result:
             result["_result_error"] = result["error"]
-        result.setdefault("state", "deferred")
         result["error"] = error
-        for key in ("dispatchId", "dispatch_id", "workerId", "worker_id",
-                    "residualResources", "residual_resources", "effects",
-                    "terminal", "terminalHandle", "terminal_handle",
-                    "worktreeId", "worktree_id", "terminalResourceId",
-                    "terminal_resource_id", "resource", "failedStage", "failed_stage"):
+        for key in ("dispatchId", "workerId", "residualResources", "effects", "terminal",
+                    "terminalHandle", "worktreeId", "terminalResourceId", "resource",
+                    "failedStage"):
             if key not in value:
                 continue
             if key in result and result[key] != value[key]:
@@ -269,18 +257,6 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
     return {"runtime": envelope["runtime"], "exit": completed.returncode,
             "result": envelope["result"], "request_uuid": envelope.get("request_uuid"),
             "error": envelope.get("error")}
-
-
-def identity(mapping: object, camel: str) -> object:
-    """Read one identity field across the known camel/snake spellings, refusing conflicts."""
-    if not isinstance(mapping, dict):
-        return None
-    snake = IDENTITY_TWINS.get(camel)
-    if snake is None:
-        return mapping.get(camel)
-    if camel in mapping and snake in mapping and mapping[camel] != mapping[snake]:
-        raise PodError("orca_contract", f"Conflicting {camel} spellings in one native record")
-    return mapping.get(camel, mapping.get(snake))
 
 
 def contract() -> dict:

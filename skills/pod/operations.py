@@ -10,11 +10,12 @@ from uuid import UUID
 
 from .config import DEFAULT_WORKER_CAPACITY, effective
 from .errors import PodError
-from .ledger import (admission_identity, binding_valid, migrate_v1, read, reserve,
+from .ledger import (admission_identity, binding_valid, read, reserve,
                      update_admission, _native_assignment_settled,
                      _spending_grant_binding)
-from .orca import (account_evidence_stops, account_metadata_raw, agent_login_mode, bucket_for,
-                   contract, current_run, hosts, identity, mutate_command, read_command,
+from .orca import (PREFLIGHT_REFUSALS, account_evidence_stops, account_metadata_raw,
+                   agent_login_mode, bucket_for, contract, current_run, hosts,
+                   mutate_command, read_command,
                    require_route_establishment, route_establishment,
                    selected_account_evidence, worker_rows, worker_show, worktree_identity,
                    worktree_selector)
@@ -219,9 +220,9 @@ class OrcaPort:
     def find_worker(self, *, run: str, task: str) -> list[dict]:
         fleet = worker_rows(run)
         return [worker for worker in fleet["workers"]
-                if (identity(worker, "taskId") == task
+                if (worker.get("taskId") == task
                     or isinstance(worker.get("projection"), dict)
-                    and identity(worker["projection"], "taskId") == task)]
+                    and worker["projection"].get("taskId") == task)]
 
     def show_worker(self, dispatch: str) -> dict:
         return worker_show(dispatch)
@@ -331,16 +332,16 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
     admission = read(project, objective)["admissions"][admission_id]
     if receipt.get("runtime") not in (None, admission["runtime"]):
         raise PodError("native_identity_unverified", "Start receipt changed runtime")
-    run = identity(receipt, "runId")
-    task = identity(receipt, "taskId")
-    dispatch = identity(receipt, "dispatchId")
+    run = receipt.get("runId")
+    task = receipt.get("taskId")
+    dispatch = receipt.get("dispatchId")
     if run != admission["run_id"] or task != admission["task_id"] or not isinstance(dispatch, str):
         raise PodError("native_identity_unverified", "Start receipt identity is incomplete")
     shown = port.show_worker(dispatch)
     binding = _binding_from_show(shown, admission, dispatch)
     def apply(row: dict) -> None:
         recovery = dict(row.get("recovery", {}))
-        recovery.pop("capacity_refusal", None)
+        recovery.pop("preflight_refusal", None)
         recovery.pop("request_conflict", None)
         recovery["receipt"] = "recorded"
         row["state"] = "bound"
@@ -358,12 +359,12 @@ def _hold(project: Path, objective: str, *, owner: str, admission_id: str,
         recovery = {**row.get("recovery", {}),
                     "next": "request-show" if request_uuid else "exact Run/Task/Dispatch read"}
         previous_error = (row.get("error") or {}).get("code")
-        previous_capacity_refusal = recovery.get("capacity_refusal")
-        if code == "native_capacity_refusal_unverified":
-            recovery["capacity_refusal"] = "unverified"
+        previous_refusal = recovery.get("preflight_refusal")
+        if code == "native_refusal_unverified":
+            recovery["preflight_refusal"] = "unverified"
         if (request_conflict or code == "native_request_conflict"
                 or previous_error == "native_request_conflict"
-                or previous_capacity_refusal == "unverified"):
+                or previous_refusal == "unverified"):
             recovery["request_conflict"] = "unresolved"
         row["state"] = "unresolved"
         row["request_uuid"] = request_uuid
@@ -376,18 +377,17 @@ def _request_conflict_result(project: Path, objective: str, *, owner: str,
                              admission_id: str, receipt: dict,
                              request_uuid: str | None) -> dict | None:
     """Hold a carried request contradiction without choosing a fresh UUID."""
-    observed_request, request_valid = _capacity_request_reference(receipt)
+    observed_request, request_valid = _refusal_request_reference(receipt)
     if (not receipt.get("_request_conflict") and request_valid
             and (request_uuid is None or observed_request is None
                  or observed_request == request_uuid)):
         return None
     error = receipt.get("error")
-    capacity_refusal = isinstance(error, dict) and error.get("code") == "capacity_full"
+    refused = isinstance(error, dict) and error.get("code") in PREFLIGHT_REFUSALS
     return _hold(
         project, objective, owner=owner, admission_id=admission_id,
         request_uuid=request_uuid,
-        code=("native_capacity_refusal_unverified" if capacity_refusal
-              else "native_request_conflict"),
+        code=("native_refusal_unverified" if refused else "native_request_conflict"),
         detail="native receipt carries contradictory or malformed request identity",
         request_conflict=True)
 
@@ -396,7 +396,7 @@ def _known_request_conflict(admission: dict) -> bool:
     recovery = admission.get("recovery", {})
     return (recovery.get("request_conflict") == "unresolved"
             or (admission.get("error") or {}).get("code") == "native_request_conflict"
-            or recovery.get("capacity_refusal") == "unverified")
+            or recovery.get("preflight_refusal") == "unverified")
 
 
 def _record_request(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -410,36 +410,28 @@ def _record_request(project: Path, objective: str, *, owner: str, admission_id: 
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
-_EFFECT_IDENTITIES = (("dispatchId", "dispatch_id"), ("workerId", "worker_id"))
-_EFFECT_COLLECTIONS = (("residualResources", "residual_resources"), ("effects",))
-_EFFECT_REFERENCES = ("terminal", "terminalHandle", "terminal_handle", "worktreeId",
-                      "worktree_id", "terminalResourceId", "terminal_resource_id", "resource",
-                      "failedStage", "failed_stage")
-
-
-def _aliases_conflict(row: dict, names: tuple[str, ...]) -> bool:
-    values = [row[name] for name in names if name in row]
-    return len(values) > 1 and any(value != values[0] for value in values[1:])
+_EFFECT_IDENTITIES = ("dispatchId", "workerId")
+_EFFECT_COLLECTIONS = ("residualResources", "effects")
+_EFFECT_REFERENCES = ("terminal", "terminalHandle", "worktreeId", "terminalResourceId",
+                      "resource", "failedStage")
+# Fields Orca's refused-start guide documents as diagnostic detail, never as an effect.
+_REFUSAL_DETAIL_FIELDS = frozenset({"taskId", "runId", "status", "unmetDependencies", "retryOf",
+                                    "terminal", "reason", "nextSteps"})
 
 
 def _possible_effect_evidence(row: object) -> bool:
     if not isinstance(row, dict):
         return True
-    for names in _EFFECT_IDENTITIES:
-        if _aliases_conflict(row, names):
+    for name in _EFFECT_IDENTITIES:
+        if row.get(name) is not None:
             return True
-        if any(row.get(name) is not None for name in names if name in row):
+    for name in _EFFECT_COLLECTIONS:
+        if name in row and (not isinstance(row[name], list) or row[name]):
             return True
-    for names in _EFFECT_COLLECTIONS:
-        if _aliases_conflict(row, names):
-            return True
-        for name in names:
-            if name in row and (not isinstance(row[name], list) or row[name]):
-                return True
     return any(name in row and row[name] is not None for name in _EFFECT_REFERENCES)
 
 
-def _capacity_request_reference(receipt: dict) -> tuple[str | None, bool]:
+def _refusal_request_reference(receipt: dict) -> tuple[str | None, bool]:
     values = []
     if receipt.get("request_uuid") is not None:
         values.append(receipt["request_uuid"])
@@ -463,72 +455,90 @@ def _capacity_request_reference(receipt: dict) -> tuple[str | None, bool]:
     return validated[0], True
 
 
-def _capacity_refusal_classification(receipt: dict, admission: dict,
-                                     *, request_uuid: str | None = None) -> str | None:
-    """Classify one admission-bound native no-start result without lifecycle inference."""
+def _preflight_refusal_classification(receipt: dict, admission: dict,
+                                      *, request_uuid: str | None = None) -> str | None:
+    """Classify one documented effect-free refusal without lifecycle inference.
+
+    Orca's guide names `task_not_found`, `task_not_startable` and `inject_rejected` as
+    preflight refusals that start nothing. Everything about the receipt must agree with
+    that before Pod records a durable no-start decision.
+    """
     error = receipt.get("error") if isinstance(receipt, dict) else None
-    if not isinstance(error, dict) or error.get("code") != "capacity_full":
+    if not isinstance(error, dict) or error.get("code") not in PREFLIGHT_REFUSALS:
         return None
-    if (receipt.get("runtime") != admission.get("runtime")
-            or receipt.get("state") != "deferred"):
+    if receipt.get("runtime") != admission.get("runtime"):
         return "unverified"
     if ("_result_error" in receipt or receipt.get("_envelope_conflicts")
             or receipt.get("_request_conflict")):
         return "unverified"
     if "exit" in receipt and (type(receipt["exit"]) is not int or receipt["exit"] == 0):
         return "unverified"
-    observed_request, request_valid = _capacity_request_reference(receipt)
+    observed_request, request_valid = _refusal_request_reference(receipt)
     if not request_valid or (request_uuid is not None and observed_request is not None
                              and observed_request != request_uuid):
         return "unverified"
     data = error.get("data", {})
+    if data is None:
+        data = {}
     if not isinstance(data, dict):
         return "unverified"
-    if _possible_effect_evidence(receipt) or _possible_effect_evidence(data):
+    detail_free = {key: value for key, value in data.items() if key not in _REFUSAL_DETAIL_FIELDS}
+    if _possible_effect_evidence(receipt) or _possible_effect_evidence(detail_free):
         return "unverified"
-    runtime_names = ("runtime", "runtimeId", "runtime_id")
-    if _aliases_conflict(data, runtime_names):
-        return "unverified"
-    for name in runtime_names:
+    for name in ("runtime", "runtimeId"):
         if name in data and data[name] != admission["runtime"]:
             return "unverified"
-    if "state" in data and data["state"] != "deferred":
-        return "unverified"
     return "authoritative"
 
 
-def _capacity_refusal_result(project: Path, objective: str, *, owner: str,
-                             admission_id: str, admission: dict, receipt: dict,
-                             request_uuid: str | None = None) -> dict | None:
-    classification = _capacity_refusal_classification(
-        receipt, admission, request_uuid=request_uuid)
-    if classification is None:
+def _refusal_result(project: Path, objective: str, *, owner: str,
+                    admission_id: str, admission: dict, receipt: dict,
+                    request_uuid: str | None = None) -> dict | None:
+    """Settle a decoded native refusal: defer, hold for readback, or hold as unverified."""
+    error = receipt.get("error") if isinstance(receipt, dict) else None
+    if not isinstance(error, dict):
         return None
     available_request = request_uuid
     if available_request is None:
-        observed_request, request_valid = _capacity_request_reference(receipt)
+        observed_request, request_valid = _refusal_request_reference(receipt)
         available_request = observed_request if request_valid else None
+    if error.get("code") == "runtime_error":
+        # Orca's catch-all is not proof that nothing started. Native readback of the
+        # request, Dispatch and worker is the only path out of this hold.
+        return _hold(project, objective, owner=owner, admission_id=admission_id,
+                     request_uuid=available_request, code="native_runtime_error",
+                     detail=error)
+    classification = _preflight_refusal_classification(
+        receipt, admission, request_uuid=request_uuid)
+    if classification is None:
+        return None
     if classification == "authoritative":
-        return _defer_capacity(project, objective, owner=owner, admission_id=admission_id,
-                               receipt=receipt, request_uuid=available_request)
+        return _defer_refusal(project, objective, owner=owner, admission_id=admission_id,
+                              receipt=receipt, request_uuid=available_request)
     return _hold(project, objective, owner=owner, admission_id=admission_id,
-                 request_uuid=available_request, code="native_capacity_refusal_unverified",
-                 detail="capacity_full did not prove an admission-bound no-start result")
+                 request_uuid=available_request, code="native_refusal_unverified",
+                 detail=f"{error.get('code')} did not prove an admission-bound no-start result")
 
 
-def _defer_capacity(project: Path, objective: str, *, owner: str, admission_id: str,
-                    receipt: dict, request_uuid: str | None) -> dict:
+def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: str,
+                   receipt: dict, request_uuid: str | None) -> dict:
+    error = receipt["error"]
+    data = error.get("data") if isinstance(error.get("data"), dict) else {}
+    next_step = data.get("nextSteps")
+    if not isinstance(next_step, str) or not next_step.strip() or len(next_step) > 2048:
+        next_step = "explicit new policy admission after correcting the refused preflight condition"
+
     def apply(row: dict) -> None:
         recovery = dict(row.get("recovery", {}))
         recovery.pop("request_conflict", None)
         row["state"] = "deferred"
         row["request_uuid"] = request_uuid
         row["native_binding"] = None
-        row["error"] = {"code": "capacity_full", "detail": receipt.get("error")}
+        row["error"] = {"code": error.get("code"), "detail": error}
         row["recovery"] = {**recovery,
-                           "capacity_refusal": "authoritative",
-                           "native_start_state": "deferred",
-                           "next": "explicit new policy admission after native capacity changes"}
+                           "preflight_refusal": "authoritative",
+                           "native_start_state": "refused",
+                           "next": next_step}
     return update_admission(project, objective, owner=owner,
                             admission_id=admission_id, update=apply)
 
@@ -588,7 +598,7 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
     candidates = []
     errors = []
     for row in rows:
-        dispatch = identity(row, "dispatchId")
+        dispatch = row.get("dispatchId")
         if not isinstance(dispatch, str):
             continue
         try:
@@ -655,7 +665,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                 project, objective, owner=owner, admission_id=admission_id,
                 receipt=completed_receipt, request_uuid=request_uuid)
             if row is None:
-                row = _capacity_refusal_result(
+                row = _refusal_result(
                 project, objective, owner=owner, admission_id=admission_id,
                 admission=admission, receipt=completed_receipt,
                 request_uuid=request_uuid)
@@ -691,7 +701,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
             project, objective, owner=owner, admission_id=admission_id,
             receipt=receipt, request_uuid=request_uuid)
         if row is None:
-            row = _capacity_refusal_result(
+            row = _refusal_result(
             project, objective, owner=owner, admission_id=admission_id,
             admission=admission, receipt=receipt, request_uuid=request_uuid)
         returned = receipt.get("request_uuid")
@@ -787,7 +797,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
             project, objective, owner=owner, admission_id=admission_id,
             receipt=receipt, request_uuid=None)
         if row is None:
-            row = _capacity_refusal_result(
+            row = _refusal_result(
             project, objective, owner=owner, admission_id=admission_id,
             admission=admission, receipt=receipt)
         if row is not None:
@@ -809,9 +819,3 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         _hold(project, objective, owner=owner, admission_id=admission_id,
               request_uuid=request_uuid, code=code, detail=str(exc))
         raise
-
-
-def migrate_state(project: Path, objective: str, *, owner: str,
-                  port: NativePort | None = None) -> dict:
-    native_port = port or OrcaPort(project)
-    return migrate_v1(project, objective, owner=owner, worker_reader=native_port.show_worker)

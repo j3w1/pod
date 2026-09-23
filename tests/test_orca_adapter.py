@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, contract,
-                      current_run, effective_launch, executable, hosts, identity,
+                      current_run, effective_launch, executable, hosts,
                       mutate_command, read_command,
                       require_route_establishment, route_establishment, worker_rows,
                       worktree_identity, worktree_selector)
-from tests.common import envelope, receipt
+from tests.common import ORCA_VERSION, envelope, receipt
 
 
 class OrcaAdapterTests(unittest.TestCase):
@@ -128,7 +128,7 @@ class RouteEstablishmentTests(unittest.TestCase):
     """Establishment against sanitized captures of the installed runtime."""
 
     def snapshot(self):
-        with patch("pod.orca.read_command", side_effect=[{"version": "1.4.206", "executable": "/fixture/orca"},
+        with patch("pod.orca.read_command", side_effect=[{"version": ORCA_VERSION, "executable": "/fixture/orca"},
                                                           envelope("status")]):
             return contract()
 
@@ -159,12 +159,12 @@ class RouteEstablishmentTests(unittest.TestCase):
     def test_contract_reports_the_runtime_and_advertised_contracts(self):
         snapshot = self.snapshot()
         self.assertEqual(snapshot["status"], "observed")
-        self.assertEqual(snapshot["version"], "1.4.206")
+        self.assertEqual(snapshot["version"], ORCA_VERSION)
         self.assertTrue(snapshot["runtime"])
         self.assertTrue(snapshot["capabilities"]["contract_v1"])
         self.assertTrue(snapshot["capabilities"]["launch_preferences_v1"])
-        for retired in ("billing_preflight", "fanout_control", "provider_quota"):
-            self.assertNotIn(retired, snapshot)
+        self.assertEqual(set(snapshot), {"status", "version", "executable", "runtime",
+                                         "capabilities", "runtime_state"})
 
     def test_controls_are_tiered_and_carry_no_account_identifier(self):
         route, established = self.established()
@@ -417,23 +417,42 @@ class MutationAllowlistTests(unittest.TestCase):
                 mutate_command(argv)
             self.assertEqual(unexpected.exception.code, "native_effect_uncertain")
 
-    def test_capacity_full_error_envelope_preserves_runtime_and_request(self):
+    def test_documented_refusal_envelope_preserves_runtime_and_request(self):
         request_id = "11111111-1111-4111-8111-111111111111"
-        payload = {"ok": False,
-                   "error": {"code": "capacity_full", "message": "full",
-                             "data": {"orchestrationRequestId": request_id}},
-                   "_meta": {"runtimeId": "runtime"}}
-        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
         argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
                 "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
-        with patch("pod.orca.executable", return_value=Path("orca")), \
-             patch("pod.orca.subprocess.run", return_value=completed):
-            receipt_value = mutate_command(argv, accept_exit=(0, 1))
-        self.assertEqual(receipt_value["runtime"], "runtime")
-        self.assertEqual(receipt_value["request_uuid"], request_id)
-        self.assertEqual(receipt_value["result"]["error"]["code"], "capacity_full")
+        for code in ("task_not_found", "task_not_startable", "inject_rejected", "runtime_error"):
+            with self.subTest(code=code):
+                payload = {"ok": False,
+                           "error": {"code": code, "message": "refused",
+                                     "data": {"orchestrationRequestId": request_id,
+                                              "nextSteps": "check task-list"}},
+                           "_meta": {"runtimeId": "runtime"}}
+                completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+                with patch("pod.orca.executable", return_value=Path("orca")), \
+                     patch("pod.orca.subprocess.run", return_value=completed):
+                    receipt_value = mutate_command(argv, accept_exit=(0, 1))
+                self.assertEqual(receipt_value["runtime"], "runtime")
+                self.assertEqual(receipt_value["request_uuid"], request_id)
+                self.assertEqual(receipt_value["result"]["error"]["code"], code)
+                self.assertNotIn("state", receipt_value["result"])
 
-    def test_capacity_full_joins_every_request_reference_before_flattening(self):
+    def test_unknown_refusal_code_is_native_effect_uncertain(self):
+        """A code the installed guide does not document proves nothing about effects."""
+        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
+                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
+        for code in ("quota_exhausted", "unknown", None):
+            with self.subTest(code=code):
+                payload = {"ok": False, "error": {"code": code, "message": "refused"},
+                           "_meta": {"runtimeId": "runtime"}}
+                completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+                with patch("pod.orca.executable", return_value=Path("orca")), \
+                     patch("pod.orca.subprocess.run", return_value=completed):
+                    with self.assertRaises(PodError) as caught:
+                        mutate_command(argv, accept_exit=(0, 1))
+                self.assertEqual(caught.exception.code, "native_effect_uncertain")
+
+    def test_refusal_joins_every_request_reference_before_flattening(self):
         first = "11111111-1111-4111-8111-111111111111"
         second = "22222222-2222-4222-8222-222222222222"
         variants = {
@@ -450,7 +469,7 @@ class MutationAllowlistTests(unittest.TestCase):
         for name, (result_mutation, envelope_mutation, error_request, preserved) in variants.items():
             with self.subTest(name=name):
                 payload = {"ok": False,
-                           "error": {"code": "capacity_full", "message": "full",
+                           "error": {"code": "task_not_startable", "message": "refused",
                                      "data": {"orchestrationRequestId": error_request}},
                            "result": {"mutation": result_mutation},
                            "mutation": envelope_mutation,
@@ -463,7 +482,7 @@ class MutationAllowlistTests(unittest.TestCase):
                 self.assertTrue(receipt_value["result"]["_request_conflict"])
 
         agreeing = {"ok": False,
-                    "error": {"code": "capacity_full", "message": "full",
+                    "error": {"code": "task_not_startable", "message": "refused",
                               "data": {"orchestrationRequestId": first}},
                     "result": {"mutation": {"requestId": first}},
                     "mutation": {"requestId": first},
@@ -476,7 +495,7 @@ class MutationAllowlistTests(unittest.TestCase):
         self.assertNotIn("_request_conflict", receipt_value["result"])
 
         no_reference = {"ok": False,
-                        "error": {"code": "capacity_full", "message": "full"},
+                        "error": {"code": "task_not_found", "message": "refused"},
                         "_meta": {"runtimeId": "runtime"}}
         completed = subprocess.CompletedProcess([], 1, json.dumps(no_reference), "")
         with patch("pod.orca.executable", return_value=Path("orca")), \
@@ -485,9 +504,9 @@ class MutationAllowlistTests(unittest.TestCase):
         self.assertIsNone(receipt_value["request_uuid"])
         self.assertNotIn("_request_conflict", receipt_value["result"])
 
-    def test_capacity_full_error_envelope_preserves_partial_effect_evidence(self):
+    def test_refusal_envelope_preserves_partial_effect_evidence(self):
         request_id = "11111111-1111-4111-8111-111111111111"
-        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full",
+        payload = {"ok": False, "error": {"code": "runtime_error", "message": "failed",
                                            "data": {"residualResources": [
                                                {"kind": "terminal"}]}},
                    "result": {"dispatchId": "dispatch", "workerId": "worker"},
@@ -504,10 +523,10 @@ class MutationAllowlistTests(unittest.TestCase):
         self.assertEqual(receipt_value["result"]["error"]["data"]["residualResources"],
                          [{"kind": "terminal"}])
 
-    def test_capacity_full_error_envelope_preserves_conflicting_alias_evidence(self):
-        payload = {"ok": False, "error": {"code": "capacity_full", "message": "full"},
+    def test_refusal_envelope_preserves_conflicting_envelope_evidence(self):
+        payload = {"ok": False, "error": {"code": "inject_rejected", "message": "refused"},
                    "result": {"dispatchId": "one"}, "dispatchId": "two",
-                   "dispatch_id": "three", "_meta": {"runtimeId": "runtime"}}
+                   "workerId": "three", "_meta": {"runtimeId": "runtime"}}
         completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
         argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
                 "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
@@ -515,7 +534,7 @@ class MutationAllowlistTests(unittest.TestCase):
              patch("pod.orca.subprocess.run", return_value=completed):
             receipt_value = mutate_command(argv, accept_exit=(0, 1))
         self.assertEqual(receipt_value["result"]["dispatchId"], "one")
-        self.assertEqual(receipt_value["result"]["dispatch_id"], "three")
+        self.assertEqual(receipt_value["result"]["workerId"], "three")
         self.assertEqual(receipt_value["result"]["_envelope_conflicts"]["dispatchId"], "two")
 
     def test_worktree_selectors_accept_existing_placements_only(self):
@@ -544,22 +563,15 @@ class MutationAllowlistTests(unittest.TestCase):
             worktree_identity("current")
         self.assertEqual(unavailable.exception.code, "worktree_resolution_unavailable")
 
-    def test_identity_twins_are_read_but_conflicts_refuse(self):
-        self.assertEqual(identity({"taskId": "t"}, "taskId"), "t")
-        self.assertEqual(identity({"task_id": "t"}, "taskId"), "t")
-        self.assertEqual(identity({"taskId": "t", "task_id": "t"}, "taskId"), "t")
-        with self.assertRaises(PodError) as caught:
-            identity({"taskId": "t", "task_id": "other"}, "taskId")
-        self.assertEqual(caught.exception.code, "orca_contract")
-        self.assertIsNone(identity({"stage": "x"}, "dispatchId"))
-
     def test_the_read_allowlist_covers_the_verbs_establishment_needs(self):
         with patch("pod.orca.subprocess.run") as runner:
             for argv in (["orchestration", "check", "--run", "r", "--json"],
                          ["orchestration", "worker-start", "--task", "t", "--run", "r",
                           "--worktree", "current", "--agent", "codex", "--model", "m",
                           "--effort", "high", "--json"],
-                         ["orchestration", "run-create", "--objective", "o", "--json"]):
+                         ["orchestration", "run-create", "--objective", "o", "--json"],
+                         ["orchestration", "task-list", "--run", "r", "--json"],
+                         ["orchestration", "worker-read", "--dispatch", "d", "--limit", "50", "--json"]):
                 with self.subTest(argv=argv):
                     with self.assertRaises(PodError) as caught:
                         read_command(argv)
@@ -569,9 +581,7 @@ class MutationAllowlistTests(unittest.TestCase):
                      ["worktree", "show", "--worktree", "current", "--json"],
                      ["orchestration", "run-current", "--json"],
                      ["orchestration", "request-show", "--request",
-                      "11111111-1111-4111-8111-111111111111", "--json"],
-                     ["orchestration", "task-list", "--run", "r", "--json"],
-                     ["orchestration", "worker-read", "--dispatch", "d", "--limit", "50", "--json"]):
+                      "11111111-1111-4111-8111-111111111111", "--json"]):
             with self.subTest(argv=argv):
                 with patch("pod.orca.executable", return_value=Path("orca")), \
                      patch("pod.orca.subprocess.run",
@@ -611,7 +621,7 @@ class ReviewFindingRegressions(unittest.TestCase):
 
     def test_the_quota_bucket_is_derived_and_cannot_be_asserted(self):
         """A caller could name the bucket and have it reported back as an observation."""
-        snapshot = {"status": "observed", "runtime": "r", "version": "1.4.206",
+        snapshot = {"status": "observed", "runtime": "r", "version": ORCA_VERSION,
                     "executable": "/fixture/orca", "capabilities": {}}
         accounts = {"runtime": "r", "providers": {"claude": {"managed_accounts": 0,
                                              "windows": {"weekly": {}},
@@ -639,8 +649,3 @@ class ReviewFindingRegressions(unittest.TestCase):
             with self.assertRaises(PodError) as caught:
                 worker_rows("run")
         self.assertEqual(caught.exception.code, "orca_scope_changed")
-
-    def test_a_dispatch_identity_is_read_across_both_spellings(self):
-        self.assertEqual(identity({"dispatch_id": "ctx_x"}, "dispatchId"), "ctx_x")
-        with self.assertRaises(PodError):
-            identity({"dispatchId": "ctx_a", "dispatch_id": "ctx_b"}, "dispatchId")

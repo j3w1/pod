@@ -273,11 +273,6 @@ def run(operation: str, request: dict) -> dict:
                              frozen_packet=request["packet"],
                              worktree=request.get("worktree", "current"),
                              task_policy=request.get("task_policy"))
-    if operation == "state-migrate":
-        exact(request, {"project", "objective", "owner"},
-              {"project", "objective", "owner"}, name="request")
-        from .operations import migrate_state
-        return migrate_state(Path(request["project"]), request["objective"], owner=request["owner"])
     raise PodError("unknown_operation", "Unsupported private helper operation")
 
 
@@ -286,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("operation", choices=("brief", "preview", "replay", "packet", "report", "source",
                                                "verify-sources", "acceptance", "integration-observe",
                                                "issue-intake", "issue-recheck", "project-context",
-                                               "checkpoint", "admission", "state-migrate", "release-gate",
+                                               "checkpoint", "admission", "release-gate",
                                                "governor", "governor-outcome", "governor-prepare",
                                                "governor-preflight", "governor-classify",
                                                "governor-correct", "governor-execute",

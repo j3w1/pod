@@ -12,11 +12,11 @@ from pod.errors import PodError
 from pod.internal import run as helper_run
 from pod.ledger import checkpoint, read, state_root, update_admission
 from pod.operations import (OrcaPort, _assignment_evidence,
-                            _capacity_refusal_classification, guarded_start,
+                            _preflight_refusal_classification, guarded_start,
                             recover_admission)
 from pod.orca import _mutation_envelope
 from pod.records import packet
-from tests.common import fixture
+from tests.common import ORCA_VERSION, fixture
 
 
 NOW = datetime(2026, 9, 22, 12, tzinfo=timezone.utc)
@@ -68,7 +68,7 @@ class FakePort:
     def establish(self, route, model_policy, *, child_delegation=False):
         observed_identity = self.actual_identity or route.get("account")
         return {"schema": "pod-route-establishment/v1", "runtime": self.runtime,
-                "version": "1.4.206", "executable": "/fixture/orca", "hard_stops": [],
+                "version": ORCA_VERSION, "executable": "/fixture/orca", "hard_stops": [],
                 "disclosures": [], "route": {**{key: route.get(key) for key in
                 ("agent", "model", "bucket", "effort", "context", "effective_context")},
                 "account": observed_identity},
@@ -463,22 +463,83 @@ class AdmissionTests(unittest.TestCase):
             shown["result"]["projection"]["outcome"] = ["succeeded"]
             self.assertFalse(_assignment_evidence(shown, admission)["settled"])
 
-    def test_native_capacity_full_is_durable_deferred_not_a_binding_or_retry(self):
+    def test_documented_preflight_refusal_is_durable_deferred_not_a_binding_or_retry(self):
+        for code in ("task_not_found", "task_not_startable", "inject_rejected"):
+            with self.subTest(code=code), fixture() as root:
+                project, assessment, capabilities, quotas, frozen = setup_case(root)
+                port = FakePort()
+                port.start_receipt = {"runtime": "runtime", "exit": 1,
+                                      "error": {"code": code, "message": "refused",
+                                                "data": {"taskId": "task", "runId": "run",
+                                                         "terminal": "term-1",
+                                                         "nextSteps": "create the Task first"}}}
+                first = start(project, assessment, capabilities, quotas, frozen, port)
+                self.assertEqual(first["status"], "deferred")
+                self.assertIsNone(first["admission"]["native_binding"])
+                self.assertIsNone(first["admission"]["request_uuid"])
+                self.assertEqual(first["admission"]["error"]["code"], code)
+                self.assertEqual(first["admission"]["recovery"]["preflight_refusal"], "authoritative")
+                self.assertEqual(first["admission"]["recovery"]["next"], "create the Task first")
+                second = start(project, assessment, capabilities, quotas, frozen, port)
+                self.assertEqual(second["status"], "deferred")
+                self.assertEqual(len(port.starts), 1)
+
+    def test_runtime_error_holds_unresolved_and_recovers_only_by_native_readback(self):
+        """Orca's catch-all proves nothing about effects, so Pod inspects rather than decides."""
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
             port = FakePort()
-            port.start_receipt = {"runtime": "runtime", "exit": 1,
-                                  "state": "deferred",
-                                  "error": {"code": "capacity_full", "message": "full"}}
-            first = start(project, assessment, capabilities, quotas, frozen, port)
-            self.assertEqual(first["status"], "deferred")
-            self.assertIsNone(first["admission"]["native_binding"])
-            self.assertIsNone(first["admission"]["request_uuid"])
-            second = start(project, assessment, capabilities, quotas, frozen, port)
-            self.assertEqual(second["status"], "deferred")
+            port.start_receipt = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST_UUID,
+                                  "error": {"code": "runtime_error", "message": "target busy"}}
+            held = start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(held["status"], "unresolved")
+            self.assertEqual(held["admission"]["error"]["code"], "native_runtime_error")
+            self.assertEqual(held["admission"]["request_uuid"], REQUEST_UUID)
+            self.assertIsNone(held["admission"]["native_binding"])
+            admission_id = held["admission"]["admission_id"]
             self.assertEqual(len(port.starts), 1)
 
-    def test_conflicting_or_malformed_capacity_request_identity_holds_without_retry(self):
+            # Completed readback that shows a documented refusal settles as deferred.
+            port.request_receipt = {"exit": 1, "error": {"code": "task_not_startable",
+                                                          "message": "not ready"}}
+            deferred = recover_admission(project, "objective", owner="owner",
+                                         admission_id=admission_id, worktree="current", port=port)
+            self.assertEqual((deferred["status"], deferred["action"]), ("deferred", "recorded_receipt"))
+            self.assertEqual(len(port.starts), 1)
+
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            port = FakePort()
+            port.start_receipt = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST_UUID,
+                                  "error": {"code": "runtime_error", "message": "target busy"}}
+            held = start(project, assessment, capabilities, quotas, frozen, port)
+            admission_id = held["admission"]["admission_id"]
+            # Completed readback whose receipt is another runtime_error stays unresolved.
+            port.request_receipt = {"exit": 1, "error": {"code": "runtime_error", "message": "again"}}
+            still = recover_admission(project, "objective", owner="owner",
+                                      admission_id=admission_id, worktree="current", port=port)
+            self.assertEqual(still["status"], "unresolved")
+            self.assertEqual(still["admission"]["error"]["code"], "native_runtime_error")
+            # Absent readback with no matching worker holds; nothing is started again.
+            port.request_state = "absent"
+            absent = recover_admission(project, "objective", owner="owner",
+                                       admission_id=admission_id, worktree="current", port=port)
+            self.assertEqual((absent["status"], absent["admission"]["error"]["code"]),
+                             ("unresolved", "native_attempt_absent"))
+            self.assertEqual(len(port.starts), 1)
+            # A completed readback carrying a real start binds through worker-show.
+            port.request_state = "completed"
+            port.request_receipt = None
+            port.workers["dispatch"] = {"run": "run", "task": "task",
+                                        "route": dict(held["admission"]["request"]),
+                                        "worktree": "current", "state": "ready",
+                                        "outcome": "in_progress", "stage_detail": "input_accepted"}
+            bound = recover_admission(project, "objective", owner="owner",
+                                      admission_id=admission_id, worktree="current", port=port)
+            self.assertEqual(bound["status"], "bound")
+            self.assertEqual(len(port.starts), 1)
+
+    def test_conflicting_or_malformed_refusal_request_identity_holds_without_retry(self):
         variants = (
             {"request_uuid": REQUEST_UUID, "_request_conflict": True},
             {"request_uuid": "not-a-uuid"},
@@ -488,89 +549,102 @@ class AdmissionTests(unittest.TestCase):
                 project, assessment, capabilities, quotas, frozen = setup_case(root)
                 port = FakePort()
                 port.start_receipt = {
-                    "runtime": "runtime", "exit": 1, "state": "deferred",
-                    "error": {"code": "capacity_full", "message": "full"}, **evidence}
+                    "runtime": "runtime", "exit": 1,
+                    "error": {"code": "task_not_found", "message": "refused"}, **evidence}
                 first = start(project, assessment, capabilities, quotas, frozen, port)
                 second = start(project, assessment, capabilities, quotas, frozen, port)
                 self.assertEqual((first["status"], second["status"]),
                                  ("unresolved", "unresolved"))
                 self.assertEqual(first["admission"]["error"]["code"],
-                                 "native_capacity_refusal_unverified")
+                                 "native_refusal_unverified")
                 self.assertEqual(len(port.starts), 1)
 
-    def test_capacity_full_with_partial_effect_evidence_remains_unresolved(self):
+    def test_refusal_with_partial_effect_evidence_remains_unresolved(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
             port = FakePort()
             port.start_receipt = {"runtime": "runtime", "exit": 1,
-                                  "request_uuid": REQUEST_UUID, "state": "deferred",
+                                  "request_uuid": REQUEST_UUID,
                                   "dispatchId": "partial-dispatch",
-                                  "error": {"code": "capacity_full", "message": "full"}}
+                                  "error": {"code": "inject_rejected", "message": "refused"}}
             result = start(project, assessment, capabilities, quotas, frozen, port)
             self.assertEqual(result["status"], "unresolved")
             self.assertIsNone(result["admission"]["native_binding"])
             self.assertEqual(result["admission"]["error"]["code"],
-                             "native_capacity_refusal_unverified")
+                             "native_refusal_unverified")
 
-    def test_capacity_refusal_preserves_error_data_request_reference(self):
+    def test_refusal_preserves_error_data_request_reference(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
             port = FakePort()
             port.start_receipt = {
-                "runtime": "runtime", "exit": 1, "state": "deferred",
-                "error": {"code": "capacity_full", "message": "full",
+                "runtime": "runtime", "exit": 1,
+                "error": {"code": "task_not_startable", "message": "refused",
                           "data": {"orchestrationRequestId": REQUEST_UUID}}}
             result = start(project, assessment, capabilities, quotas, frozen, port)
             self.assertEqual(result["status"], "deferred")
             self.assertEqual(result["admission"]["request_uuid"], REQUEST_UUID)
 
-    def test_capacity_refusal_classifier_rejects_runtime_and_envelope_contradictions(self):
+    def test_refusal_classifier_rejects_runtime_and_envelope_contradictions(self):
         admission = {"runtime": "runtime"}
         base = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST_UUID,
-                "state": "deferred", "error": {"code": "capacity_full", "message": "full"}}
-        self.assertEqual(_capacity_refusal_classification(base, admission), "authoritative")
+                "error": {"code": "task_not_startable", "message": "refused"}}
+        self.assertEqual(_preflight_refusal_classification(base, admission), "authoritative")
         data_request = {**base, "request_uuid": None,
                         "error": {**base["error"],
                                   "data": {"orchestrationRequestId": REQUEST_UUID}}}
-        self.assertEqual(_capacity_refusal_classification(data_request, admission),
+        self.assertEqual(_preflight_refusal_classification(data_request, admission),
                          "authoritative")
+        documented_detail = {**base, "error": {**base["error"], "data": {
+            "taskId": "task", "runId": "run", "status": "blocked",
+            "unmetDependencies": ["other"], "retryOf": None, "terminal": "term-1",
+            "reason": "no agent", "nextSteps": "wait"}}}
+        self.assertEqual(_preflight_refusal_classification(documented_detail, admission),
+                         "authoritative")
+        no_data = {**base, "error": {**base["error"], "data": None}}
+        self.assertEqual(_preflight_refusal_classification(no_data, admission), "authoritative")
+        self.assertIsNone(_preflight_refusal_classification(
+            {**base, "error": {"code": "runtime_error", "message": "x"}}, admission))
         variants = {
             "wrong_runtime": {**base, "runtime": "other"},
             "missing_runtime": {key: value for key, value in base.items() if key != "runtime"},
             "malformed_runtime": {**base, "runtime": 7},
+            "zero_exit": {**base, "exit": 0},
             "nested_dispatch": {**base, "error": {**base["error"],
                                 "data": {"dispatchId": "partial"}}},
             "nested_worker": {**base, "error": {**base["error"],
-                              "data": {"worker_id": "partial"}}},
+                              "data": {"workerId": "partial"}}},
             "nested_residual": {**base, "error": {**base["error"],
                                 "data": {"residualResources": [{"kind": "terminal"}]}}},
             "malformed_empty_residual": {**base, "error": {**base["error"],
                                          "data": {"residualResources": {}}}},
             "malformed_null_effects": {**base, "error": {**base["error"],
                                        "data": {"effects": None}}},
-            "alias_conflict": {**base, "dispatchId": None, "dispatch_id": "partial"},
+            "top_level_dispatch": {**base, "dispatchId": "partial"},
             "result_error_conflict": {**base, "_result_error": {"code": "other"}},
             "envelope_conflict": {**base, "_envelope_conflicts": {"workerId": "partial"}},
             "request_conflict": {**base, "_request_conflict": True},
             "malformed_data": {**base, "error": {**base["error"], "data": "unknown"}},
+            "foreign_runtime_in_data": {**base, "error": {**base["error"],
+                                        "data": {"runtimeId": "other"}}},
         }
         for name, receipt in variants.items():
             with self.subTest(name=name):
-                self.assertEqual(_capacity_refusal_classification(receipt, admission),
+                self.assertEqual(_preflight_refusal_classification(receipt, admission),
                                  "unverified")
 
-    def test_runtime_conflicting_capacity_refusal_is_held_with_request_reference(self):
+    def test_runtime_conflicting_refusal_is_held_with_request_reference(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
             port = FakePort()
             port.start_receipt = {"runtime": "other", "exit": 1,
-                                  "request_uuid": REQUEST_UUID, "state": "deferred",
-                                  "error": {"code": "capacity_full", "message": "full"}}
+                                  "request_uuid": REQUEST_UUID,
+                                  "error": {"code": "task_not_found", "message": "refused"}}
             result = start(project, assessment, capabilities, quotas, frozen, port)
             self.assertEqual(result["status"], "unresolved")
             self.assertEqual(result["admission"]["request_uuid"], REQUEST_UUID)
             self.assertEqual(result["admission"]["error"]["code"],
-                             "native_capacity_refusal_unverified")
+                             "native_refusal_unverified")
 
     def test_unapproved_policy_stops_before_native_effect(self):
         with fixture() as root:
@@ -713,23 +787,23 @@ class AdmissionTests(unittest.TestCase):
         self.assertIsNone(absent["admission"]["native_binding"])
         self.assertEqual(port.starts, [])
 
-    def test_legacy_conflict_signals_are_promoted_before_error_replacement(self):
-        for legacy_signal in ("error", "capacity_refusal"):
-            with self.subTest(legacy_signal=legacy_signal):
+    def test_earlier_conflict_signals_are_promoted_before_error_replacement(self):
+        for signal in ("error", "preflight_refusal"):
+            with self.subTest(signal=signal):
                 project, port, admission_id = self.recovery_case()
 
-                def make_legacy(row):
+                def mark_conflict(row):
                     row["recovery"].pop("request_conflict", None)
-                    if legacy_signal == "error":
+                    if signal == "error":
                         row["error"] = {"code": "native_request_conflict",
-                                        "detail": "legacy conflict"}
+                                        "detail": "earlier conflict"}
                     else:
-                        row["error"] = {"code": "native_capacity_refusal_unverified",
-                                        "detail": "legacy capacity conflict"}
-                        row["recovery"]["capacity_refusal"] = "unverified"
+                        row["error"] = {"code": "native_refusal_unverified",
+                                        "detail": "earlier refusal conflict"}
+                        row["recovery"]["preflight_refusal"] = "unverified"
 
                 update_admission(project, "objective", owner="owner",
-                                 admission_id=admission_id, update=make_legacy)
+                                 admission_id=admission_id, update=mark_conflict)
                 port.request_receipt = "malformed"
                 incomplete = recover_admission(
                     project, "objective", owner="owner", admission_id=admission_id,
@@ -747,7 +821,7 @@ class AdmissionTests(unittest.TestCase):
                                  ("unresolved", "hold"))
                 self.assertEqual(port.starts, [])
 
-    def test_capacity_request_conflict_survives_absent_adoption(self):
+    def test_refusal_request_conflict_survives_absent_adoption(self):
         variants = (
             {"request_uuid": REQUEST_UUID, "_request_conflict": True},
             {"request_uuid": "not-a-uuid"},
@@ -756,15 +830,15 @@ class AdmissionTests(unittest.TestCase):
             with self.subTest(request_evidence=request_evidence):
                 project, port, admission_id = self.recovery_case()
                 port.request_receipt = {
-                    "state": "deferred", "exit": 1,
-                    "error": {"code": "capacity_full", "message": "full"},
+                    "exit": 1,
+                    "error": {"code": "task_not_startable", "message": "refused"},
                     **request_evidence,
                 }
                 conflicted = recover_admission(
                     project, "objective", owner="owner", admission_id=admission_id,
                     worktree="current", port=port)
                 self.assertEqual(conflicted["admission"]["error"]["code"],
-                                 "native_capacity_refusal_unverified")
+                                 "native_refusal_unverified")
                 self.assertEqual(conflicted["admission"]["recovery"]["request_conflict"],
                                  "unresolved")
 
@@ -781,8 +855,8 @@ class AdmissionTests(unittest.TestCase):
         completed_receipts = (
             ({"runId": "run", "taskId": "task", "dispatchId": "dispatch",
               "state": "ready"}, "bound"),
-            ({"state": "deferred", "exit": 1,
-              "error": {"code": "capacity_full", "message": "full"}}, "deferred"),
+            ({"exit": 1,
+              "error": {"code": "task_not_startable", "message": "refused"}}, "deferred"),
         )
         for completed_receipt, expected in completed_receipts:
             with self.subTest(expected=expected):
@@ -844,10 +918,10 @@ class AdmissionTests(unittest.TestCase):
                     self.assertEqual(second["status"], "unresolved")
                     self.assertEqual(second["admission"]["request_uuid"], REQUEST_UUID)
 
-    def test_completed_capacity_refusal_defers_once_without_start(self):
+    def test_completed_refusal_defers_once_without_start(self):
         project, port, admission_id = self.recovery_case()
-        port.request_receipt = {"state": "deferred",
-                                "error": {"code": "capacity_full", "message": "full"}}
+        port.request_receipt = {"exit": 1,
+                                "error": {"code": "task_not_found", "message": "refused"}}
         first = recover_admission(project, "objective", owner="owner",
                                   admission_id=admission_id, worktree="current", port=port)
         second = recover_admission(project, "objective", owner="owner",
@@ -856,12 +930,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(first["admission"]["request_uuid"], REQUEST_UUID)
         self.assertEqual(port.starts, [])
 
-    def test_pending_capacity_refusal_defers_once_without_another_replay(self):
+    def test_pending_refusal_defers_once_without_another_replay(self):
         project, port, admission_id = self.recovery_case()
         port.request_state = "pending"
         port.start_receipt = {"runtime": "runtime", "exit": 1,
-                              "request_uuid": REQUEST_UUID, "state": "deferred",
-                              "error": {"code": "capacity_full", "message": "full"}}
+                              "request_uuid": REQUEST_UUID,
+                              "error": {"code": "inject_rejected", "message": "refused"}}
         first = recover_admission(project, "objective", owner="owner",
                                   admission_id=admission_id, worktree="current", port=port)
         second = recover_admission(project, "objective", owner="owner",
@@ -870,12 +944,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(port.retry_requests, [REQUEST_UUID])
         self.assertEqual(len(port.starts), 1)
 
-    def test_unverified_recovered_capacity_refusals_hold_without_replay_loop(self):
+    def test_unverified_recovered_refusals_hold_without_replay_loop(self):
         variants = (
-            {"runtime": "other", "state": "deferred",
-             "error": {"code": "capacity_full", "message": "full"}},
-            {"state": "deferred", "error": {"code": "capacity_full", "message": "full",
-                                              "data": {"dispatchId": "partial"}}},
+            {"runtime": "other", "exit": 1,
+             "error": {"code": "task_not_startable", "message": "refused"}},
+            {"exit": 1, "error": {"code": "task_not_startable", "message": "refused",
+                                  "data": {"dispatchId": "partial"}}},
         )
         for path in ("completed", "pending"):
             for receipt in variants:
@@ -896,7 +970,7 @@ class AdmissionTests(unittest.TestCase):
                     self.assertEqual((first["status"], second["status"]),
                                      ("unresolved", "unresolved"))
                     self.assertEqual(first["admission"]["error"]["code"],
-                                     "native_capacity_refusal_unverified")
+                                     "native_refusal_unverified")
                     self.assertLessEqual(len(port.starts), 1)
 
     def test_account_rotation_blocks_pending_replay_but_not_completed_observation(self):
@@ -1026,10 +1100,10 @@ class AdmissionTests(unittest.TestCase):
         project, port, admission_id = self.recovery_case()
         port.request_state = "pending"
         row = read(project, "objective")["admissions"][admission_id]
-        legacy_core = {key: row["recovery"]["checkpoint_binding"][key] for key in core}
+        earlier_core = {key: row["recovery"]["checkpoint_binding"][key] for key in core}
         update_admission(project, "objective", owner="owner", admission_id=admission_id,
                          update=lambda admission:
-                         admission["recovery"].update(checkpoint_binding=legacy_core))
+                         admission["recovery"].update(checkpoint_binding=earlier_core))
         checkpoint_value = read(project, "objective")["checkpoint"]
         checkpoint_value["objective_source"] = {
             "schema": "pod-issue-source/v1", "repository": "acme/widgets", "number": 7,

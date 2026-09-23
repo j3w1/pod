@@ -54,8 +54,6 @@ class InventoryIntegrityTests(unittest.TestCase):
         spec = (root / "docs" / "pod-spec.md").read_text()
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
         requirements = re.findall(r"^\| (R\d{2}) \|", spec, flags=re.M)
-        # Two digits was the original width; the list reached A99, and f"A{i:02}" already
-        # spells the next one A100, so only the pattern needed to admit it.
         scenarios = re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M)
         self.assertEqual(requirements, [f"R{i:02}" for i in range(1, len(requirements) + 1)])
         self.assertEqual(scenarios, [f"A{i:02}" for i in range(1, len(scenarios) + 1)])
@@ -63,25 +61,23 @@ class InventoryIntegrityTests(unittest.TestCase):
         for row in coverage["scenarios"]:
             with self.subTest(row=row["id"]):
                 self.assertTrue(row["required_evidence"])
-                self.assertIn(row["candidate_status"], ("NOT_RUN", "PASS", "RETIRED"))
-                if row["candidate_status"] == "RETIRED":
-                    self.assertTrue(row.get("retired"))
+                self.assertIn(row["candidate_status"], ("NOT_RUN", "PASS"))
 
-    def test_retired_scenarios_say_so_in_both_places(self):
-        """A retirement is recorded as a decision, never silently reported as a pass."""
+    def test_requirement_scenario_references_resolve(self):
         root = Path(__file__).resolve().parents[1]
         spec = (root / "docs" / "pod-spec.md").read_text()
-        coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
-        retired_in_spec = {match for match in re.findall(r"^\| (A\d{2,3}) \| RETIRED", spec, flags=re.M)}
-        retired_in_coverage = {row["id"] for row in coverage["scenarios"]
-                               if row["candidate_status"] == "RETIRED"}
-        self.assertEqual(retired_in_spec, retired_in_coverage)
-        self.assertTrue(retired_in_spec)
-        for row in coverage["scenarios"]:
-            if row["candidate_status"] == "RETIRED":
-                self.assertNotEqual(row["candidate_status"], "PASS")
+        scenarios = set(re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M))
+        for requirement, refs in re.findall(r"^\| (R\d{2}) \| [^|]* \| .* \| ([^|]*) \|$", spec, flags=re.M):
+            with self.subTest(requirement=requirement):
+                for ref in (item.strip() for item in refs.split(",") if item.strip()):
+                    if "–" in ref:
+                        first, last = ref.split("–")
+                        self.assertIn(first, scenarios)
+                        self.assertIn(last, scenarios)
+                    else:
+                        self.assertIn(ref, scenarios)
 
-    def test_no_evidence_type_survives_a_retired_platform(self):
+    def test_evidence_kinds_are_exact(self):
         root = Path(__file__).resolve().parents[1]
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
         kinds = {kind for row in coverage["scenarios"] for kind in row["required_evidence"]}
@@ -166,15 +162,20 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         for phrase in ("$pod https://github.com/owner/project/issues/123",
                        "Draft a Pod Execution Spec", "Authoring in ChatGPT",
                        "Plan only", "Continue after interruption", "visible agent tab",
-                       "config approve sol", "256,000 tokens", "Orca 1.4.209",
-                       "latest published release remains `v0.1.2`"):
+                       "config approve sol", "256,000 tokens", "release/NOTES.md",
+                       "release/evidence.json", "https://github.com/j3w1/pod/releases"):
             self.assertIn(phrase, text)
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
                       text)
 
-    def test_release_wording_keeps_candidate_and_published_state_distinct(self):
-        combined = "\n".join((self.root / path).read_text() for path in (
-            "README.md", "docs/pod-progress.md", "docs/release-notes/v0.3.0.md"))
-        self.assertIn("0.3.0 candidate", combined)
-        self.assertIn("v0.1.2", combined)
-        self.assertNotIn("Pod 0.3.0 is released", combined)
+    def test_release_notes_describe_only_the_declared_version(self):
+        from pod import __version__
+        from tools.release import notes
+        text = (self.root / "release" / "NOTES.md").read_text()
+        self.assertEqual(text.splitlines()[0], f"# Pod {__version__}")
+        self.assertTrue(notes(text, __version__).strip())
+        self.assertEqual(re.findall(r"^# .*$", text, flags=re.M), [f"# Pod {__version__}"])
+        workflow = (self.root / ".github" / "workflows" / "ci.yml").read_text()
+        for phrase in ("tools/release.py gate", "tools/release.py check", "tools/release.py notes",
+                       "gh release create"):
+            self.assertIn(phrase, workflow)
