@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from pod.records import (acceptance, integration_observation, packet, report,
                          source_identity, verify_sources)
+from pod.internal import run as helper_run
 from pod.errors import PodError
 from tests.common import fixture
 
@@ -22,6 +23,47 @@ def packet_body():
 
 
 class RecordTests(unittest.TestCase):
+    def test_final_acceptance_rechecks_issue_source(self):
+        source = {"schema": "pod-issue-source/v1", "repository": "acme/widgets",
+                  "number": 7, "locator": "https://github.com/acme/widgets/issues/7",
+                  "body_sha256": "b" * 64, "amendments": []}
+        evidence = {"schema": "pod-evidence/v1", "criterion": "works", "candidate": "c",
+                    "sources": [], "policy_revision": "p", "dependencies": [],
+                    "environment": "fixture", "check": "unit", "command": "unit",
+                    "result": "pass", "timestamp": "2026-09-20T00:00:00Z",
+                    "status": "PASS", "reference": "artifact"}
+        request = {"project": "/fixture", "objective_source": source,
+                   "criteria": ["works"], "evidence_rows": [evidence], "candidate": "c",
+                   "policy_revision": "p", "sources": [], "dependencies": [],
+                   "environment": "fixture", "review_required": False,
+                   "hosted_required": False}
+        integration = {"schema": "pod-integration-observation/v1", "candidate": "c",
+                       "base_ref": "origin/main", "ancestor_of_base": False,
+                       "tags": [], "reason": None}
+        with patch("pod.github.issue_recheck", return_value={"status": "current"}), \
+             patch("pod.internal.integration_observation", return_value=integration):
+            self.assertTrue(helper_run("acceptance", request)["required_checks_pass"])
+        with patch("pod.github.issue_recheck", return_value={
+                   "status": "reconciliation_required"}), self.assertRaises(PodError) as changed:
+            helper_run("acceptance", request)
+        self.assertEqual(changed.exception.code, "issue_reconciliation_required")
+
+    def test_packet_binds_issue_source_and_worktree_without_copying_body(self):
+        source = {"schema": "pod-issue-source/v1", "repository": "acme/widgets",
+                  "number": 7, "locator": "https://github.com/acme/widgets/issues/7",
+                  "body_sha256": "b" * 64,
+                  "amendments": [{"locator": "https://github.com/acme/widgets/issues/7#issuecomment-9",
+                                  "sha256": "c" * 64}]}
+        worktree = {"repository": "acme/widgets", "repo_key": "d" * 64,
+                    "path": "/fixture/objective", "branch": "orca/issue-7"}
+        frozen = packet({**packet_body(), "objective_source": source, "worktree": worktree})
+        self.assertEqual(frozen["body"]["objective_source"], source)
+        self.assertNotIn("Complete issue body", str(frozen))
+        with self.assertRaises(PodError):
+            packet({**packet_body(), "objective_source": {**source, "body_sha256": "bad"}})
+        with self.assertRaises(PodError):
+            packet({**packet_body(), "worktree": {**worktree, "path": "relative"}})
+
     def test_conventional_credential_paths_rejected_before_open_and_packet_admission(self):
         excluded = (
             ".env", ".env.production", "nested/.netrc", "nested/_netrc", "nested\\_netrc",

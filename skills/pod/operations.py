@@ -16,12 +16,74 @@ from .ledger import (admission_identity, binding_valid, migrate_v1, read, reserv
 from .orca import (account_evidence_stops, account_metadata_raw, agent_login_mode, bucket_for,
                    contract, current_run, hosts, identity, mutate_command, read_command,
                    require_route_establishment, route_establishment,
-                   selected_account_evidence, worker_rows, worker_show, worktree_selector)
+                   selected_account_evidence, worker_rows, worker_show, worktree_identity,
+                   worktree_selector)
 from .routing import preview
 from .util import bounded_text
 
 
 STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
+
+
+def _check_objective_source(project: Path, binding: dict | None, *, issue_port=None) -> None:
+    if binding is None:
+        return
+    from .github import issue_recheck
+    result = issue_recheck(project, binding, port=issue_port)
+    if result["status"] != "current":
+        raise PodError("issue_reconciliation_required",
+                       "Execution Spec issue changed or closed; reconcile before another effect")
+
+
+def _check_worktree_binding(project: Path, binding: dict | None) -> None:
+    if binding is None:
+        return
+    from .github import repository_context
+    current = repository_context(project)
+    current_repository = current["repository"]
+    expected_repository = binding.get("repository")
+    repository_matches = (current_repository is None and expected_repository is None
+                          or isinstance(current_repository, str)
+                          and isinstance(expected_repository, str)
+                          and current_repository.casefold() == expected_repository.casefold())
+    if (not repository_matches
+            or current["repo_key"] != binding.get("repo_key")
+            or current["worktree"] != binding.get("path")
+            or current["branch"] != binding.get("branch")):
+        raise PodError("worktree_binding_changed",
+                       "Current Git repository, branch, or worktree differs from the objective binding")
+
+
+def _check_native_placement(native_port, selector: str, binding: dict | None) -> dict | None:
+    """Join the selector Orca will use to the packet's explicit placement binding."""
+    if binding is None:
+        return None
+    try:
+        observed = native_port.resolve_worktree(selector)
+    except (AttributeError, PodError) as exc:
+        if isinstance(exc, PodError) and exc.code in (
+                "worktree_resolution_unavailable", "worktree_resolution_ambiguous"):
+            raise
+        raise PodError("worktree_resolution_unavailable",
+                       "Native worker placement could not be resolved") from exc
+    if not isinstance(observed, dict):
+        raise PodError("worktree_resolution_ambiguous", "Native worktree readback is malformed")
+    current_repository = observed.get("repository")
+    expected_repository = binding.get("repository")
+    repository_matches = (current_repository is None and expected_repository is None
+                          or isinstance(current_repository, str)
+                          and isinstance(expected_repository, str)
+                          and current_repository.casefold() == expected_repository.casefold())
+    if (not repository_matches or observed.get("repo_key") != binding.get("repo_key")
+            or observed.get("path") != binding.get("path")
+            or observed.get("branch") != binding.get("branch")):
+        raise PodError("worktree_binding_changed",
+                       "Resolved native worker placement differs from the frozen assignment workspace")
+    if not isinstance(observed.get("runtime"), str) or not observed["runtime"]:
+        raise PodError("worktree_resolution_ambiguous", "Native placement lacks runtime identity")
+    return observed
+
+
 def _assignment_evidence(shown: dict, admission: dict) -> dict:
     """Project settlement for one already-bound assignment, never terminal ownership."""
     binding = admission.get("native_binding")
@@ -60,6 +122,7 @@ class NativePort(Protocol):
     def request_show(self, request_uuid: str) -> dict: ...
     def find_worker(self, *, run: str, task: str) -> list[dict]: ...
     def show_worker(self, dispatch: str) -> dict: ...
+    def resolve_worktree(self, selector: str) -> dict: ...
 
 
 class OrcaPort:
@@ -73,6 +136,13 @@ class OrcaPort:
                                    accounts=account_metadata_raw(),
                                    login=agent_login_mode(route["agent"]), fleet=hosts(),
                                    child_delegation=child_delegation)
+
+    def resolve_worktree(self, selector: str) -> dict:
+        from .github import repository_context
+        resolved = worktree_identity(selector)
+        context = repository_context(Path(resolved["path"]))
+        return {**resolved, "repository": context["repository"],
+                "repo_key": context["repo_key"]}
 
     def read_native(self, owner: str, *, route: dict | None = None,
                     establishment: dict | None = None,
@@ -240,6 +310,8 @@ def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
             or worker.get("dispatchId") != dispatch):
         raise PodError("native_identity_unverified", "Worker readback does not join the admission")
     launch = worker.get("startOptions", {}).get("launch") if isinstance(worker.get("startOptions"), dict) else None
+    # Orca 1.4.209 exposes only model and effort on the native launch wire.
+    # Context proof remains in the separate Pod establishment/admission evidence.
     requested = {key: admission["request"][key] for key in ("agent", "model", "effort")}
     if not isinstance(launch, dict) or launch.get("requested") != requested or launch.get("effective") != requested:
         raise PodError("effective_launch_unverified", "Worker effective route differs from admission")
@@ -470,7 +542,7 @@ def _bound_assignments(state: dict | None) -> tuple[dict, ...]:
 
 
 def _current_authority(project: Path, objective: str, admission: dict,
-                       *, task_policy: dict | None) -> tuple[dict, dict]:
+                       *, task_policy: dict | None, issue_port=None) -> tuple[dict, dict]:
     """A pending replay is still a mutation, so current revocation/spending policy applies."""
     policy = effective(project, task=task_policy)
     if policy["revision"] != admission["route_decision"].get("policy_revision"):
@@ -478,12 +550,21 @@ def _current_authority(project: Path, objective: str, admission: dict,
     state = read(project, objective)
     checkpoint_value = state.get("checkpoint") if isinstance(state, dict) else None
     expected_checkpoint = admission.get("recovery", {}).get("checkpoint_binding")
-    current_checkpoint = ({key: checkpoint_value.get(key) for key in
-                           ("candidate", "criteria", "plan_revision", "policy_revision")}
+    core_checkpoint = {"candidate", "criteria", "plan_revision", "policy_revision"}
+    optional_checkpoint = {"objective_source", "worktree"}
+    allowed_checkpoint = core_checkpoint | optional_checkpoint
+    binding_valid_shape = (isinstance(expected_checkpoint, dict)
+                           and core_checkpoint <= set(expected_checkpoint) <= allowed_checkpoint)
+    expected_normalized = ({key: expected_checkpoint.get(key) for key in allowed_checkpoint}
+                           if binding_valid_shape else None)
+    current_normalized = ({key: checkpoint_value.get(key) for key in allowed_checkpoint}
                           if isinstance(checkpoint_value, dict) else None)
-    if not isinstance(expected_checkpoint, dict) or current_checkpoint != expected_checkpoint:
+    if expected_normalized is None or current_normalized != expected_normalized:
         raise PodError("checkpoint_binding_changed",
                        "Checkpoint semantics changed before native request replay")
+    _check_objective_source(project, expected_normalized.get("objective_source"),
+                            issue_port=issue_port)
+    _check_worktree_binding(project, expected_normalized.get("worktree"))
     route = admission["request"]
     model = policy["policy"]["models"].get(route.get("alias"))
     if (not isinstance(model, dict) or not model.get("approved")
@@ -528,7 +609,7 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
 
 def recover_admission(project: Path, objective: str, *, owner: str, admission_id: str,
                       worktree: str, port: NativePort | None = None,
-                      task_policy: dict | None = None) -> dict:
+                      task_policy: dict | None = None, issue_port=None) -> dict:
     """Recover the same admission; never issue a fresh semantic start."""
     native_port = port or OrcaPort(project)
     state = read(project, objective)
@@ -587,7 +668,11 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         if _known_request_conflict(admission):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         model, current_policy = _current_authority(
-            project, objective, admission, task_policy=task_policy)
+            project, objective, admission, task_policy=task_policy, issue_port=issue_port)
+        placement = _check_native_placement(
+            native_port, worktree, admission.get("recovery", {}).get("placement_binding"))
+        if placement is not None and placement["runtime"] != admission["runtime"]:
+            raise PodError("orca_runtime_changed", "Pending replay placement belongs to another runtime")
         fresh_establishment = native_port.establish(
             admission["request"], model,
             child_delegation=bool(current_policy.get("child_delegation")))
@@ -631,7 +716,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   plan_revision: str, frozen_packet: dict, capacity: int = DEFAULT_WORKER_CAPACITY,
                   capacity_reason: str | None = None, exceptional_grant: dict | None = None,
                   worktree: str = "current", port: NativePort | None = None,
-                  task_policy: dict | None = None, now: datetime | None = None) -> dict:
+                  task_policy: dict | None = None, now: datetime | None = None,
+                  issue_port=None) -> dict:
     """Policy check, durable reservation, then one native start or exact recovery."""
     from .records import packet
     from .ledger import check_bound_sources
@@ -648,11 +734,18 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     if isinstance(existing_state, dict) and admission_id in existing_state["admissions"]:
         recovered = recover_admission(project, objective, owner=owner,
                                       admission_id=admission_id, worktree=worktree,
-                                      port=native_port, task_policy=task_policy)
+                                      port=native_port, task_policy=task_policy,
+                                      issue_port=issue_port)
         return {**recovered,
                 "decision": recovered["admission"]["route_decision"],
                 "establishment": recovered["admission"]["effective_evidence"]}
     policy = effective(project, task=task_policy)
+    _check_objective_source(project, validated["body"].get("objective_source"),
+                            issue_port=issue_port)
+    packet_worktree = validated["body"].get("worktree")
+    _check_worktree_binding(project, packet_worktree)
+    placement_binding = validated["body"].get("placement", packet_worktree)
+    placement = _check_native_placement(native_port, worktree, placement_binding)
     decision = preview(assessment, policy, capabilities=capabilities, quotas=quotas,
                        objective=objective, now=now)
     if decision.get("status") != "usable":
@@ -662,6 +755,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         raise PodError("packet_mismatch", "Packet route differs from effective route")
     establishment = native_port.establish(route, policy["policy"]["models"][route["alias"]],
                                            child_delegation=bool(policy["policy"]["policy"].get("child_delegation")))
+    if placement is not None and placement["runtime"] != establishment.get("runtime"):
+        raise PodError("orca_runtime_changed", "Worker placement and route belong to different runtimes")
     check_bound_sources(project, objective, owner=owner, assignment=validated["packet_id"],
                         sources=validated["body"]["sources"])
     admission = reserve(project, objective, owner=owner, admission_id=admission_id,
@@ -682,7 +777,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     if admission["existing"]:
         recovered = recover_admission(project, objective, owner=owner,
                                       admission_id=admission_id, worktree=worktree,
-                                      port=native_port, task_policy=task_policy)
+                                      port=native_port, task_policy=task_policy,
+                                      issue_port=issue_port)
         return {**recovered, "decision": decision, "establishment": establishment}
     try:
         receipt = native_port.start_worker(run=run, task=task, owner=owner, route=route,

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pathlib
 import re
+import stat
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -21,6 +23,7 @@ FORBIDDEN = (
     ("personal account", re.compile(rb"[A-Za-z0-9._%+-]+@(?!example\.invalid)[A-Za-z0-9.-]+\.[a-z]{2,}")),
     ("live runtime identifier", re.compile(rb"\b(?:ctx|run|task|term|wtr)_[0-9a-f]{12}\b")),
     ("credential-shaped", re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}")),
+    ("machine-local task state", re.compile(rb"\.local/state/[^/\s]+/tasks/")),
 )
 # The retired platform, using the source audit's own definitions so there is exactly one.
 # The source audit owns the platform definitions; see tools/platform_audit.py for how an
@@ -47,6 +50,10 @@ def members(path: pathlib.Path):
                         yield info.name, handle.read()
 
 
+def _line_number(data: bytes, offset: int) -> int:
+    return data.count(b"\n", 0, offset) + 1
+
+
 def audit(paths: list[pathlib.Path]) -> list[str]:
     findings = []
     for artifact in paths:
@@ -54,14 +61,14 @@ def audit(paths: list[pathlib.Path]) -> list[str]:
             for label, pattern in FORBIDDEN:
                 match = pattern.search(data)
                 if match:
-                    findings.append(f"{artifact.name} :: {name} :: {label}: "
-                                    f"{match.group(0)[:60].decode('utf-8', 'replace')}")
+                    findings.append(f"{artifact.name} :: {name} :: {label} at line "
+                                    f"{_line_number(data, match.start())}")
             relative = name.split("/", 1)[1] if "/" in name and name.startswith(("pod/", "j3w1_pod-")) else name
             if any(marker in name for marker in HISTORICAL):
                 continue
             if relative.startswith(EXEMPT_PREFIXES):
                 continue
-            for raw in data.splitlines():
+            for line_number, raw in enumerate(data.splitlines(), 1):
                 try:
                     line = raw.decode("utf-8")
                 except UnicodeError:
@@ -69,26 +76,65 @@ def audit(paths: list[pathlib.Path]) -> list[str]:
                 if any(allowed.search(line) for allowed in ALLOWED):
                     continue
                 if any(pattern.search(line) for pattern in PATTERNS):
-                    findings.append(f"{artifact.name} :: {name} :: retired platform: "
-                                    f"{line.strip()[:80]}")
+                    findings.append(f"{artifact.name} :: {name} :: retired platform at line "
+                                    f"{line_number}")
                     break
     return findings
 
 
+def audit_source(root: pathlib.Path) -> list[str]:
+    """Scan bounded tracked source; history and sanitized captures keep their evidence."""
+    completed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                               capture_output=True, check=False)
+    if completed.returncode:
+        return ["tracked source inventory is unavailable"]
+    findings = []
+    for raw_name in completed.stdout.split(b"\0"):
+        if not raw_name:
+            continue
+        try:
+            name = raw_name.decode("utf-8")
+        except UnicodeError:
+            findings.append("tracked source path is not UTF-8")
+            continue
+        if name.startswith(("docs/history/", "tests/fixtures/")):
+            continue
+        path = root / name
+        try:
+            mode = path.lstat().st_mode
+            if not stat.S_ISREG(mode) or path.stat().st_size > 2_000_000:
+                continue
+            data = path.read_bytes()
+        except OSError:
+            findings.append(f"{name} :: tracked source is unreadable")
+            continue
+        for label, pattern in FORBIDDEN:
+            match = pattern.search(data)
+            if match:
+                findings.append(f"{name} :: {label} at line "
+                                f"{_line_number(data, match.start())}")
+    return findings
+
+
 def main(argv: list[str]) -> int:
-    paths = [pathlib.Path(a) for a in argv[1:]]
+    arguments = argv[1:]
+    source = None
+    if arguments[:1] == ["--source"] and len(arguments) >= 2:
+        source = pathlib.Path(arguments[1])
+        arguments = arguments[2:]
+    paths = [pathlib.Path(a) for a in arguments]
     paths = [p for p in paths if p.is_file() and p.name != "SHA256SUMS"]
-    if not paths:
-        print("Name the artifacts to audit.")
+    if source is None and not paths:
+        print("Name the artifacts to audit or pass --source ROOT.")
         return 2
-    findings = audit(paths)
+    findings = audit(paths) + (audit_source(source) if source is not None else [])
     if findings:
         print("Artifacts must not be published with these:")
         for finding in findings:
             print("  " + finding)
         return 1
-    print(f"{len(paths)} artifact(s) audited; no personal path, account, runtime identifier, "
-          "credential or retired-platform reference outside history.")
+    print(f"{len(paths)} artifact(s) and {'tracked source' if source else 'no source tree'} audited; "
+          "no personal path, account, runtime identifier, credential or retired-platform reference outside history.")
     return 0
 
 

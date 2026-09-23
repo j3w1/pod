@@ -882,6 +882,94 @@
       ],
       "offline_test": "tests.test_operations.AdmissionTests.test_native_capacity_full_is_durable_deferred_not_a_binding_or_retry",
       "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A106", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_one_canonical_execution_spec_reference", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A107", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_reference_has_readable_skeleton_and_numbered_proof", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A108", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_github.PortReadingTests.test_complete_issue_read_validates_identity_and_access", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A109", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_issue_intake_target_and_content_reconciliation", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A110", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_issue_intake_target_and_content_reconciliation", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A111", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_issue_intake_target_and_content_reconciliation", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A112", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_operations.AdmissionTests.test_issue_change_blocks_pending_replay_and_revised_duplicate_but_not_completed_read", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A113", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_preserves_direct_plan_and_continuation_paths", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A114", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_linked_worktree_reuses_state_and_restricts_private_main_policy", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A115", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_linked_worktree_reuses_state_and_restricts_private_main_policy", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A116", "required_evidence": ["offline_behavior", "live_native"],
+      "offline_test": null, "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A117", "required_evidence": ["offline_behavior", "live_native"],
+      "offline_test": null, "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A118", "required_evidence": ["offline_behavior", "live_native"],
+      "offline_test": null, "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A119", "required_evidence": ["offline_behavior", "live_native"],
+      "offline_test": "tests.test_orca_adapter.RouteEstablishmentTests.test_installed_worker_contract_refuses_context_before_effect", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A120", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_artifact_audit.TrackedSourceAuditTests.test_generic_source_hygiene_detects_private_residue", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A121", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_external_metadata_notice_is_short_and_not_a_product_dependency", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A122", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_readme_covers_practical_workflows_and_current_limits", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A123", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A124", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_setup_cli.SetupCliTests.test_status_joins_selected_run_to_checkpoint_compactly", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A125", "required_evidence": ["offline_behavior", "external_gate"],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_release_wording_keeps_candidate_and_published_state_distinct", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A126", "required_evidence": ["offline_behavior", "live_native"],
+      "offline_test": "tests.test_config.ConfigTests.test_active_catalog_and_context_defaults_are_exact", "candidate_status": "NOT_RUN"
+    },
+    {
+      "id": "A127", "required_evidence": ["offline_behavior"],
+      "offline_test": "tests.test_setup_cli.SetupCliTests.test_guided_approve_and_revoke_write_only_after_bound_confirmation", "candidate_status": "NOT_RUN"
     }
   ]
 }

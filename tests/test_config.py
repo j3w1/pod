@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pod.config import effective, personal_path, read_yaml, route_identity
+from pod.config import (CONTEXT_256K_TOKENS, DEFAULT, MODEL_CATALOG, effective,
+                        personal_path, read_yaml, route_identity)
 from pod.errors import PodError
 from pod.ledger import checkpoint, read, state_root
 from pod.util import native_home
@@ -15,6 +16,68 @@ ACCOUNT_IDENTITY = "a" * 64
 
 
 class ConfigTests(unittest.TestCase):
+    def test_unreadable_project_policy_is_never_treated_as_absent(self):
+        with fixture() as root:
+            project = root / "project"
+            policy_dir = project / ".pod"
+            policy_dir.mkdir(parents=True)
+            (policy_dir / "config.yaml").write_text(
+                "schema: pod/v1\npolicy: {max_workers: 1}\n")
+            self.assertEqual(effective(project)["policy"]["policy"]["max_workers"], 1)
+            policy_dir.chmod(0)
+            try:
+                with self.assertRaises(PodError) as unavailable:
+                    effective(project)
+                self.assertEqual(unavailable.exception.code, "unsafe_config")
+            finally:
+                policy_dir.chmod(0o700)
+
+    def test_active_catalog_and_context_defaults_are_exact(self):
+        self.assertEqual(CONTEXT_256K_TOKENS, 256_000)
+        self.assertEqual({alias: (row["agent"], row["model"])
+                          for alias, row in MODEL_CATALOG.items()}, {
+            "luna": ("codex", "gpt-6-luna"),
+            "sol": ("codex", "gpt-6-sol"),
+            "astra": ("codex", "gpt-6-astra"),
+            "sonnet": ("claude", "claude-sonnet-5"),
+            "opus": ("claude", "claude-opus-5-5"),
+            "fable": ("claude", "claude-fable-5-1"),
+        })
+        self.assertEqual(DEFAULT["routing"], {
+            "trivial": {"model": "luna", "effort": "low", "context": "256k"},
+            "simple": {"model": "sonnet", "effort": "medium", "context": "256k"},
+            "standard": {"model": "sol", "effort": "medium", "context": "256k"},
+            "complex": {"model": "opus", "effort": "high", "context": "max"},
+            "very_complex": {"model": "astra", "effort": "xhigh", "context": "max"},
+        })
+
+    def test_unknown_and_retired_model_identities_are_rejected_for_new_policy(self):
+        with fixture() as root:
+            personal = root / "personal.yaml"
+            for body in (
+                "models: {terra: {agent: codex, model: gpt-5.6-terra}}",
+                "models: {sol: {agent: codex, model: gpt-5.6-sol}}",
+                "models: {sonnet: {agent: claude, model: sonnet}}",
+                "models: {sol: {agent: claude, model: gpt-6-sol}}",
+            ):
+                personal.write_text("schema: pod/v1\n" + body + "\n")
+                with self.subTest(body=body), self.assertRaises(PodError) as caught:
+                    effective(root, personal=personal)
+                self.assertEqual(caught.exception.code, "invalid_config")
+
+    def test_project_and_task_context_may_narrow_but_not_expand(self):
+        with fixture() as root:
+            personal = root / "personal.yaml"
+            personal.write_text("schema: pod/v1\nrouting:\n  standard: {context: 256k}\n  complex: {context: max}\n")
+            (root / ".pod").mkdir()
+            local = root / ".pod" / "config.yaml"
+            local.write_text("schema: pod/v1\nrouting:\n  standard: {context: max}\n")
+            with self.assertRaises(PodError) as caught:
+                effective(root, personal=personal)
+            self.assertEqual(caught.exception.code, "authority_expansion")
+            local.write_text("schema: pod/v1\nrouting:\n  complex: {context: 256k}\n")
+            self.assertEqual(effective(root, personal=personal)["policy"]["routing"]["complex"]["context"],
+                             "256k")
     def test_fixture_ignores_and_restores_inherited_pod_homes(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get("POD_TEST_ROOT")) as cache_name:
             cache = Path(cache_name)
@@ -112,13 +175,13 @@ class ConfigTests(unittest.TestCase):
     def test_personal_approval_and_project_restriction(self):
         with fixture() as root:
             personal = root / "personal.yaml"
-            binding = route_identity({"agent": "codex", "model": "gpt-5.6-sol",
+            binding = route_identity({"agent": "codex", "model": "gpt-6-sol",
                                       "account": ACCOUNT_IDENTITY})
             personal.write_text(f"""schema: pod/v1
 models:
   sol:
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-sol
     account: {ACCOUNT_IDENTITY}
     approved: true
     approval_ref: reviewed-grant
@@ -142,7 +205,7 @@ policy:
             self.assertEqual(value["policy"]["models"]["sol"]["efforts"], ["high"])
             self.assertEqual(value["policy"]["policy"]["max_workers"], 2)
             self.assertEqual(value["provenance"]["models.sol"], "project")
-            self.assertEqual(value["policy"]["routing"]["complex"]["model"], "sol")
+            self.assertEqual(value["policy"]["routing"]["complex"]["model"], "opus")
 
     def test_project_cannot_grant_approval_or_capacity(self):
         with fixture() as root:
@@ -184,23 +247,24 @@ policy:
             personal.write_text("schema: pod/v1\nrouting:\n  complex: {model: sol, effort: high, strict: true}\n")
             (root / ".pod").mkdir()
             local = root / ".pod" / "config.yaml"
-            for row in ("{strict: false}", "{model: terra}"):
+            for row in ("{strict: false}", "{model: luna}"):
                 local.write_text(f"schema: pod/v1\nrouting:\n  complex: {row}\n")
                 with self.assertRaises(PodError) as caught:
                     effective(root, personal=personal)
                 self.assertEqual(caught.exception.code, "authority_expansion")
             local.write_text("schema: pod/v1\nrouting:\n  complex: {effort: xhigh}\n")
             row = effective(root, personal=personal)["policy"]["routing"]["complex"]
-            self.assertEqual(row, {"model": "sol", "effort": "xhigh", "strict": True})
+            self.assertEqual(row, {"model": "sol", "effort": "xhigh",
+                                   "context": "max", "strict": True})
             with self.assertRaises(PodError) as task_layer:
                 effective(root, personal=personal,
                           task={"schema": "pod/v1", "routing": {"complex": {"strict": False}}})
             self.assertEqual(task_layer.exception.code, "authority_expansion")
 
             personal.write_text("schema: pod/v1\nrouting:\n  complex: {model: sol, effort: high}\n")
-            local.write_text("schema: pod/v1\nrouting:\n  complex: {model: terra, strict: true}\n")
+            local.write_text("schema: pod/v1\nrouting:\n  complex: {model: luna, strict: true}\n")
             row = effective(root, personal=personal)["policy"]["routing"]["complex"]
-            self.assertEqual(row["model"], "terra")
+            self.assertEqual(row["model"], "luna")
             self.assertTrue(row["strict"])
 
     def test_account_label_cannot_substitute_for_redacted_native_identity(self):
@@ -210,7 +274,7 @@ policy:
 models:
   sol:
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-sol
     account: friendly-label
     approved: true
     approval_ref: review

@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .config import COMPLEXITIES, EFFORTS, route_identity, validate
+from .config import (COMPLEXITIES, CONTEXT_256K_TOKENS, EFFORTS, MODEL_CATALOG,
+                     route_identity, validate)
 from .errors import PodError
 from .util import bounded_text, digest, exact
 from .quota import validate_snapshot
@@ -92,6 +93,23 @@ def _grant(grants: list, *, action: str, route: dict, objective: str | None,
     return None
 
 
+def _context_tokens(alias: str, advertised: dict, requested: str) -> tuple[int | None, str | None]:
+    """Resolve context only from explicit synthetic/native capability evidence."""
+    contexts = advertised.get("contexts")
+    if advertised.get("context_control") != "native_per_launch" or not isinstance(contexts, dict):
+        return None, "installed route has no proven native per-worker context control"
+    tokens = contexts.get(requested)
+    catalog = MODEL_CATALOG.get(alias)
+    if catalog is None:
+        return None, "route is outside the active Pod model catalog"
+    ceiling = catalog["provider_ceiling"]
+    if type(tokens) is not int or tokens <= 0 or tokens > ceiling:
+        return None, "native context capability is invalid or exceeds the provider ceiling"
+    if requested == "256k" and tokens > CONTEXT_256K_TOKENS:
+        return None, "native context control would exceed the selected 256k profile"
+    return tokens, None
+
+
 def preview(assessment: dict, effective: dict, *, capabilities: dict | None = None,
             quotas: dict | None = None, strict_pin: str | None = None, safety_refusal: bool = False,
             objective: str | None = None, now: datetime | None = None) -> dict:
@@ -102,15 +120,20 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
     now = now or datetime.now(timezone.utc)
     preferred = rows[a["complexity"]]["model"]
     preferred_effort = rows[a["complexity"]]["effort"]
+    preferred_context = rows[a["complexity"]]["context"]
     pin = strict_pin or (preferred if rows[a["complexity"]].get("strict") else None)
     reasons: dict[str, list[str]] = {}
-    feasible: list[tuple[str, dict, str, str, dict | None]] = []
+    feasible: list[tuple[str, dict, str, str, int, dict | None]] = []
     if safety_refusal:
         return {"schema": "pod-route/v1", "status": "blocked", "preferred": preferred,
                 "selected": None, "reason": "provider safety refusal; rerouting prohibited",
                 "rejections": {}, "policy_revision": effective["revision"]}
     for alias, model in models.items():
         reject = []
+        catalog = MODEL_CATALOG.get(alias)
+        if (catalog is None or model.get("agent") != catalog["agent"]
+                or model.get("model") != catalog["model"]):
+            reject.append("route differs from the active Pod model catalog")
         if pin and alias != pin:
             reject.append("strict pin excludes substitution")
         if not model.get("approved") or not model.get("approval_ref") or model.get("approval_route") != route_identity(model):
@@ -130,6 +153,7 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
         if rules.get("allowed_locations") is not None and a.get("data_location") not in rules["allowed_locations"]:
             reject.append("data location is restricted")
         effort = preferred_effort
+        effective_context = None
         advertised = caps.get(alias)
         if not isinstance(advertised, dict) or advertised.get("agent") != model.get("agent") or advertised.get("model") != model.get("model") or advertised.get("account") != model.get("account"):
             reject.append("installed route capability is unverified")
@@ -152,6 +176,10 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
                 reject.append("requested effort is unsupported")
             if not set(a["capabilities"]) <= set(advertised.get("capabilities", [])):
                 reject.append("required capability is unsupported")
+            effective_context, context_error = _context_tokens(alias, advertised,
+                                                               preferred_context)
+            if context_error:
+                reject.append(context_error)
         billing = model.get("billing", "unknown")
         grant = None
         if billing != "included":
@@ -170,16 +198,17 @@ def preview(assessment: dict, effective: dict, *, capabilities: dict | None = No
         if reject:
             reasons[alias] = reject
         else:
-            feasible.append((alias, model, effort, qstate, grant))
+            feasible.append((alias, model, effort, qstate, effective_context, grant))
     order = [preferred] + [x for x in models if x != preferred]
     chosen = next((x for name in order for x in feasible if x[0] == name), None)
     if chosen is None:
         return {"schema": "pod-route/v1", "status": "blocked", "preferred": preferred,
                 "selected": None, "reason": "no approved, usable route", "rejections": reasons,
                 "policy_revision": effective["revision"]}
-    alias, model, effort, qstate, grant = chosen
+    alias, model, effort, qstate, effective_context, grant = chosen
     route = {"alias": alias, "agent": model["agent"], "model": model["model"], "account": model["account"],
-             "bucket": caps[alias].get("bucket"), "effort": effort}
+             "bucket": caps[alias].get("bucket"), "effort": effort,
+             "context": preferred_context, "effective_context": effective_context}
     return {"schema": "pod-route/v1", "status": "usable", "preferred": preferred,
             "selected": route, "reason": "preferred" if alias == preferred else "preferred infeasible: " + "; ".join(reasons.get(preferred, [])),
             "rejections": reasons, "quota_state": qstate, "approval_ref": model["approval_ref"],

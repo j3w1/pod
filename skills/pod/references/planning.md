@@ -1,8 +1,12 @@
 # Planning and packets
 
-Use a brief when it improves coordination: preserve the original criteria, map
+For issue-backed work, read [Pod Execution Spec](execution-spec.md) and bind its
+source/repository/worktree. Direct work skips source. Plan-only is read-only;
+authorized execution needs no second approval.
+
+Use a brief: preserve the original criteria, map
 each to a check or explicit dependency, and name assumptions that would change
-the approach. The private `brief` helper validates this map. Decomposition may
+the approach. The `brief` helper validates this map. Decomposition may
 change as evidence arrives; acceptance criteria change only with authority.
 
 Give each assignment one responsibility and an editing boundary. Serialize
@@ -11,12 +15,12 @@ use the project's supported isolation mechanism.
 
 Freeze a `pod-packet/v1` before admission. It binds objective, criteria,
 responsibility, scope, permitted actions, candidate, dependencies, route,
-policy/plan revisions, sources and reporting expectations. Native references
+policy/plan revisions, issue/objective-worktree/placement identity when applicable, sources and reporting expectations. Native references
 join the admission after Orca issues them; they are not predicted packet fields.
 
 Context entries are bounded source, instruction or summary references with
 digests. Include only relevant material, excluding secrets and the full
-conversation. Unavailable sources need a fresh actual binding before admission.
+conversation. Unavailable sources need a fresh binding before admission.
 Definitively changed or absent sources reject that assignment; restoring bytes
 does not erase the rejection. This check does not promise an atomic snapshot
 against external writers.

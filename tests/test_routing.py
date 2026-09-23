@@ -21,20 +21,24 @@ def assessment(**changes):
 
 def setup():
     p = deepcopy(DEFAULT)
-    for alias in ("sol", "terra"):
+    p["routing"]["complex"] = {"model": "sol", "effort": "high", "context": "max"}
+    for alias in ("sol", "astra"):
         p["models"][alias].update({"account": ACCOUNT_IDENTITY,
                                     "approved": True, "approval_ref": "personal-1",
-                                    "billing": "included", "efforts": ["high"], "capabilities": []})
+                                    "billing": "included", "efforts": ["high", "medium"],
+                                    "capabilities": []})
         p["models"][alias]["approval_route"] = route_identity(p["models"][alias])
     return {"policy": p, "revision": digest(p)}
 
 
 def caps():
     return {alias: {"agent": "codex", "model": model, "account": ACCOUNT_IDENTITY,
-                    "efforts": ["high"],
+                    "efforts": ["high", "medium"],
                     "capabilities": [], "suitable_for": ["complex"],
-                    "billing_preflight": True, "fanout_control": True, "bucket": "shared"}
-            for alias, model in (("sol", "gpt-5.6-sol"), ("terra", "gpt-5.6-terra"))}
+                    "billing_preflight": True, "fanout_control": True, "bucket": "shared",
+                    "context_control": "native_per_launch",
+                    "contexts": {"256k": 256000, "max": 900000}}
+            for alias, model in (("sol", "gpt-6-sol"), ("astra", "gpt-6-astra"))}
 
 
 def quota(percent=50):
@@ -54,6 +58,29 @@ class RoutingTests(unittest.TestCase):
         capture = {"assessment": assessment(), "effective": e, "capabilities": caps(),
                    "quotas": quota(), "at": NOW.isoformat()}
         self.assertEqual(replay(capture), result)
+        self.assertEqual(result["selected"]["context"], "max")
+        self.assertEqual(result["selected"]["effective_context"], 900000)
+
+    def test_context_needs_explicit_native_capability_and_respects_provider_ceiling(self):
+        e = setup()
+        unavailable = caps()
+        unavailable["sol"].pop("context_control")
+        self.assertEqual(preview(assessment(), e, capabilities=unavailable,
+                                 quotas=quota(), strict_pin="sol", now=NOW)["status"], "blocked")
+        excessive = caps()
+        excessive["sol"]["contexts"]["max"] = 1_050_001
+        result = preview(assessment(), e, capabilities=excessive, quotas=quota(), now=NOW)
+        self.assertIn("provider ceiling", " ".join(result["rejections"]["sol"]))
+
+        clamped = setup()
+        clamped["policy"]["routing"]["complex"]["context"] = "256k"
+        clamped["revision"] = digest(clamped["policy"])
+        capability = caps()
+        capability["sol"]["contexts"]["256k"] = 200000
+        decision = preview(assessment(), clamped, capabilities=capability,
+                           quotas=quota(), strict_pin="sol", now=NOW)
+        self.assertEqual(decision["selected"]["context"], "256k")
+        self.assertEqual(decision["selected"]["effective_context"], 200000)
 
     def test_strict_pin_blocks_fallback_and_safety_refusal_blocks_all(self):
         e = setup()
@@ -63,7 +90,7 @@ class RoutingTests(unittest.TestCase):
                          strict_pin="sol", now=NOW)
         self.assertEqual(pinned["status"], "blocked")
         self.assertIsNone(pinned["selected"])
-        self.assertIn("strict pin excludes substitution", pinned["rejections"]["terra"])
+        self.assertIn("strict pin excludes substitution", pinned["rejections"]["astra"])
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(),
                                  safety_refusal=True, now=NOW)["status"], "blocked")
 
@@ -97,22 +124,22 @@ class RoutingTests(unittest.TestCase):
     def test_changed_alias_and_paid_route_need_separate_grants(self):
         e = setup()
         e["policy"]["models"]["sol"]["model"] = "changed"
-        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(), now=NOW)["selected"]["alias"], "terra")
+        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(), now=NOW)["selected"]["alias"], "astra")
         e = setup()
         e["policy"]["models"]["sol"]["billing"] = "paid"
-        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(), now=NOW)["selected"]["alias"], "terra")
+        self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(), now=NOW)["selected"]["alias"], "astra")
         e["policy"]["policy"]["spending_grants"] = [{"id": "g", "action": "paid_usage",
                                                           "account": ACCOUNT_IDENTITY,
-            "model": "gpt-5.6-sol", "objective": "o",
+            "model": "gpt-6-sol", "objective": "o",
             "valid_until": (NOW + timedelta(days=1)).isoformat(), "max_units": 1}]
         self.assertEqual(preview(assessment(), e, capabilities=caps(), quotas=quota(), now=NOW, objective="o")["selected"]["alias"], "sol")
 
     def test_fallback_effort_is_independently_approved_and_location_restricts(self):
         e = setup()
-        e["policy"]["models"]["terra"]["efforts"] = ["medium"]
+        e["policy"]["models"]["astra"]["efforts"] = ["medium"]
         e["policy"]["models"]["sol"]["locations"] = ["eu"]
         cap = caps()
-        cap["terra"]["efforts"] = ["medium"]
+        cap["astra"]["efforts"] = ["medium"]
         result = preview(assessment(data_location="us"), e, capabilities=cap, quotas=quota(), now=NOW)
-        self.assertEqual(result["selected"]["alias"], "terra")
+        self.assertEqual(result["selected"]["alias"], "astra")
         self.assertEqual(result["selected"]["effort"], "medium")

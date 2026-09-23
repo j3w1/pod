@@ -8,9 +8,10 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | --- | --- | --- |
 | Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
 | Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
-| Compile and diff | `python -m compileall -q skills tests install.py`; `git diff --check 1b0aa6fc68ee2157f6f67ba4a60076d967791cc4 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
+| Compile and diff | `python -m compileall -q skills tests tools install.py`; `git diff --check 1b0aa6fc68ee2157f6f67ba4a60076d967791cc4 HEAD` | Local syntax and exact baseline-to-candidate whitespace |
 | Supported environment audit | `python tools/platform_audit.py` | No unsupported-platform implementation in the tracked product |
 | Artifact audit | `python tools/artifact_audit.py dist/*` | No personal path, account, runtime identifier, credential or retired-platform reference in a published artifact, outside the files that are history |
+| Tracked-source hygiene | `python tools/artifact_audit.py --source .` | Generic private-path/account/runtime/credential residue check with explicit history/sanitized-fixture boundaries |
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, frontmatter allowlist, helper invocation forms and references |
 | Bundle parity | `python -m pod.skill_validation --wheel dist/*.whl`; `--installed PATH` for a placed copy | The wheel and every placed copy carry the tracked bundle's exact bytes |
 | Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel and sdist there | Exact committed candidate |
@@ -38,13 +39,17 @@ installing a second active copy beside it. Which copy wins is the operator's dec
 something setup makes by writing.
 
 Inferred native homes (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `CODEX_HOME` and
-`CLAUDE_CONFIG_DIR`) must be absolute directories outside the current project,
+`CLAUDE_CONFIG_DIR`) must be absolute directories outside every known linked worktree for the current repository,
 both lexically and after resolving existing redirects. A profile home may itself be a symlink,
 as it commonly is on an ordinary machine; only the components Pod would create beneath it must
 be unredirected. Configuration and state access and global setup fail before writes when that
 boundary is not proven. Explicit absolute `POD_CONFIG_HOME` and
 `POD_STATE_HOME` remain Pod-only disposable overrides, and local project-scope setup intentionally
 writes its owned integration beneath the project.
+
+Repository/worktree identity uses Git reads that do not inspect dirtiness, run fsmonitor
+hooks or update optional index caches. Dirtiness is unknown unless a separately authorized
+operation observes it; failed identity reads never become a claim of cleanliness.
 
 The explicit installer requires pip 22.3 or newer on the invoking interpreter, creates the
 selected environment without pip, and uses isolated bootstrap pip's documented `--python`
@@ -56,6 +61,16 @@ installed `j3w1-pod` distribution and `pod` import; no system pip upgrade or pro
 is attempted.
 
 The [scenario coverage file](pod-coverage.json) lists every acceptance scenario. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised, and a retired scenario is recorded as `RETIRED` with its reason rather than as a pass.
+
+Issue fixtures use disposable Git repositories and injected GitHub read ports. They establish
+complete-body parsing, identity, digest/reconciliation and linked-worktree policy/state behavior;
+they do not prove private GitHub access or authorize issue writes. Live issue intake uses the
+installed authenticated `gh` read surface only. Source bindings retain identity and digests, not
+the issue body. Final verification rechecks the body; metadata-only changes do not invalidate it.
+
+Instruction budgets are measured with whitespace-delimited words: `SKILL.md` at most 750,
+each conditional reference at most 700, and all references together at most 2200. The
+Execution Spec reference is conditional; it is not loaded for an unrelated direct objective.
 
 Pod's automatic source and packet-reference boundary excludes conventional credential classes before opening a source: any `.env*` component; `.ssh`, `.secrets`, `secrets`, `credentials`, `.credentials`, `.aws`, `.azure`, `.kube`, `.docker`, `.gnupg` and `.password-store` components; `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.authinfo`, `.authinfo.gpg`, `.pgpass`, `pgpass.conf`, `.my.cnf`, `.dockercfg`, `auth.json`, `auth.yaml`, `auth.yml`, `credential.json`, `credentials.json`, `credentials.yaml`, `credentials.yml`, `token.json` and `tokens.json` components; `.config/gcloud`, `.config/gh` and `.local/share/keyrings` paths; files ending `.key`, `.pem`, `.p12` or `.pfx`; and `id_rsa`, `id_dsa`, `id_ecdsa` or `id_ed25519` private-key basenames with optional `_`, `-` or `.` variants. A basename ending `.pub` is allowed by the private-key-name rule when no other excluded path class applies. These explicit name classes are conservative exclusions, not a claim to detect every secret or to classify file contents.
 
@@ -216,10 +231,12 @@ rather than the usual two. That is
 conservative by design, and it means the documented default of two workers holds only while
 a fresh reading is available.
 
-The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: effective launch and native descendant-depth limit are enforceable controls; billing mode, exact redacted account identity and quota windows are supported observations; route approval, child delegation and logical descendant reservations are owner policy; physical capacity is unavailable. Pod claims no more. Refusing worker-initiated delegation is a Pod admission decision and behavioural instruction, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints and exposes only a digest of the runtime-selected account for personal approval. Reset credits have only an offline intent guard; no redemption transport is installed. An authoritative native `capacity_full` refusal is recorded as durable deferred evidence with no binding and no blind retry; a malformed or partial-effect response remains unresolved. This branch is synthetically covered unless a genuine runtime refusal is observed. Exact live start/request recovery and the live core and delegation matrices require separate evidence; worker lifecycle, disposition and actual capacity remain Orca/CE-owned.
+The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: effective launch and native descendant-depth limit are enforceable controls; billing mode, exact redacted account identity and quota windows are supported observations; route approval, child delegation and logical descendant reservations are owner policy; physical capacity is unavailable. Pod claims no more. Refusing worker-initiated delegation is a Pod admission decision and behavioural instruction, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints and exposes only a digest of the runtime-selected account for personal approval. Reset credits have only an offline intent guard; no redemption transport is installed. An authoritative native `capacity_full` refusal is recorded as durable deferred evidence with no binding and no blind retry; a malformed or partial-effect response remains unresolved. This branch is synthetically covered unless a genuine runtime refusal is observed. Exact live start/request recovery and the live core and delegation matrices require separate evidence; worker lifecycle, disposition and actual capacity remain Orca/host-owned.
 
 The installed Orca `worker-start` accepts model and effort but does not expose a scoped
-strict-route, noninteractive startup contract. Requested/effective evidence after start does
+context selector or strict-route, noninteractive startup contract. Pod's `256k` profile is a
+256,000-token policy upper bound, not a capability claim; lower proven clamps remain visible.
+Requested/effective evidence after start does
 not prove the provider accepted the route before task input. Codex/Sol high and Claude/Sonnet
 medium production startup cases stay `NOT_RUN` until Orca supplies that opt-in contract; an
 invocation-only profile override used to bootstrap a review worker is not equivalent evidence.

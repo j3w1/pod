@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import fcntl
 from pathlib import Path
 import os
 import re
+import stat
+import tempfile
 from typing import Any
 
 import yaml
@@ -21,7 +24,9 @@ EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approval_route",
                 "billing", "efforts", "capabilities", "locations"}
 POLICY_FIELDS = {"max_workers", "ordinary_max", "allowed_agents", "allowed_accounts", "allowed_locations", "quota_low", "quota_critical", "quota_fresh_seconds", "child_delegation", "review", "spending_grants", "reset_grants", "exceptional_grants"}
-ROUTE_FIELDS = {"model", "effort", "strict"}
+CONTEXT_PROFILES = ("256k", "max")
+CONTEXT_256K_TOKENS = 256_000
+ROUTE_FIELDS = {"model", "effort", "context", "strict"}
 # The waste governor's operator surface. Verification and trigger mappings are project
 # knowledge; the mode, cancellation authority, retry budget, host declaration and exception
 # grants are personal authority that a project file may narrow but never widen.
@@ -32,24 +37,28 @@ GOVERNED_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", 
                   "merge", "release", "deploy", "cancel_validation")
 TRIGGER_KINDS = ("push", "pr_update")
 EFFECT_PREFIXES = ("workflow:", "deploy:", "release:")
+MODEL_CATALOG = {
+    "luna": {"agent": "codex", "model": "gpt-6-luna", "provider_ceiling": 1_050_000},
+    "sol": {"agent": "codex", "model": "gpt-6-sol", "provider_ceiling": 1_050_000},
+    "astra": {"agent": "codex", "model": "gpt-6-astra", "provider_ceiling": 1_050_000},
+    "sonnet": {"agent": "claude", "model": "claude-sonnet-5", "provider_ceiling": 1_000_000},
+    "opus": {"agent": "claude", "model": "claude-opus-5-5", "provider_ceiling": 1_000_000},
+    "fable": {"agent": "claude", "model": "claude-fable-5-1", "provider_ceiling": 1_000_000},
+}
 STARTER = {
-    "luna": {"agent": "codex", "model": "gpt-5.6-luna", "approved": False, "billing": "unknown"},
-    "sonnet": {"agent": "claude", "model": "sonnet", "approved": False, "billing": "unknown"},
-    "terra": {"agent": "codex", "model": "gpt-5.6-terra", "approved": False, "billing": "unknown"},
-    "sol": {"agent": "codex", "model": "gpt-5.6-sol", "approved": False, "billing": "unknown"},
-    "astra": {"agent": "codex", "model": "gpt-6-astra", "approved": False, "billing": "unknown"},
-    "opus": {"agent": "claude", "model": "opus", "approved": False, "billing": "unknown"},
-    "fable": {"agent": "claude", "model": "fable", "approved": False, "billing": "unknown"},
+    alias: {"agent": row["agent"], "model": row["model"],
+            "approved": False, "billing": "unknown"}
+    for alias, row in MODEL_CATALOG.items()
 }
 DEFAULT = {
     "schema": SCHEMA,
     "models": STARTER,
     "routing": {
-        "trivial": {"model": "luna", "effort": "low"},
-        "simple": {"model": "sonnet", "effort": "medium"},
-        "standard": {"model": "terra", "effort": "medium"},
-        "complex": {"model": "sol", "effort": "high"},
-        "very_complex": {"model": "astra", "effort": "high"},
+        "trivial": {"model": "luna", "effort": "low", "context": "256k"},
+        "simple": {"model": "sonnet", "effort": "medium", "context": "256k"},
+        "standard": {"model": "sol", "effort": "medium", "context": "256k"},
+        "complex": {"model": "opus", "effort": "high", "context": "max"},
+        "very_complex": {"model": "astra", "effort": "xhigh", "context": "max"},
     },
     "policy": {
         # The normal starting capacity is DEFAULT_WORKER_CAPACITY. These are
@@ -110,15 +119,31 @@ def _shape(value: Any, depth: int = 0, counter: list[int] | None = None) -> None
 
 
 def read_yaml(path: Path) -> dict | None:
-    if not path.exists() and not path.is_symlink():
-        return None
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
-        raise PodError("unsafe_config", "Configuration must be a bounded regular file")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
-        value = yaml.load(path.read_bytes().decode("utf-8"), Loader=_StrictLoader)
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PodError("unsafe_config", "Configuration availability cannot be proven") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 64 * 1024:
+            raise PodError("unsafe_config", "Configuration must be a bounded regular file")
+        data = os.read(fd, 64 * 1024 + 1)
+        if len(data) > 64 * 1024:
+            raise PodError("yaml_resource_limit", "Configuration exceeds its size limit")
+        if len(data) != info.st_size:
+            raise PodError("unsafe_config", "Configuration changed while it was read")
+    except OSError as exc:
+        raise PodError("unsafe_config", "Configuration could not be read safely") from exc
+    finally:
+        os.close(fd)
+    try:
+        value = yaml.load(data.decode("utf-8"), Loader=_StrictLoader)
     except PodError:
         raise
-    except (OSError, UnicodeError, yaml.YAMLError, RecursionError) as exc:
+    except (UnicodeError, yaml.YAMLError, RecursionError) as exc:
         raise PodError("invalid_yaml", "Configuration cannot be safely decoded") from exc
     _shape(value)
     return validate(value)
@@ -200,11 +225,14 @@ def validate(value: Any) -> dict:
     if not isinstance(models, dict) or len(models) > 64:
         raise PodError("invalid_config", "models must be a bounded mapping")
     for alias, raw in models.items():
-        if not isinstance(alias, str) or len(alias) > 64:
-            raise PodError("invalid_config", "Invalid model alias")
+        if alias not in MODEL_CATALOG:
+            raise PodError("invalid_config", "Model alias is outside the active Pod catalog")
         m = exact(raw, MODEL_FIELDS, name="model")
-        if "agent" in m and m["agent"] not in ("codex", "claude"):
-            raise PodError("invalid_config", "Unsupported agent")
+        catalog = MODEL_CATALOG[alias]
+        if "agent" in m and m["agent"] != catalog["agent"]:
+            raise PodError("invalid_config", "Model agent differs from the active Pod catalog")
+        if "model" in m and m["model"] != catalog["model"]:
+            raise PodError("invalid_config", "Model identity differs from the active Pod catalog")
         for field in ("model", "approval_ref", "approval_route"):
             if field in m and (not isinstance(m[field], str) or not m[field] or len(m[field]) > 256):
                 raise PodError("invalid_config", f"Invalid {field}")
@@ -233,6 +261,8 @@ def validate(value: Any) -> dict:
             raise PodError("invalid_config", "Invalid routing model")
         if "effort" in r and r["effort"] not in EFFORTS:
             raise PodError("invalid_config", "Invalid routing effort")
+        if "context" in r and r["context"] not in CONTEXT_PROFILES:
+            raise PodError("invalid_config", "Invalid routing context profile")
         if "strict" in r and not isinstance(r["strict"], bool):
             raise PodError("invalid_config", "strict must be boolean")
     policy = obj.get("policy", {})
@@ -322,6 +352,10 @@ def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
                 and (row.get("strict") is False
                      or ("model" in row and row["model"] != prior_row.get("model")))):
             raise PodError("authority_expansion", "Project/task routing cannot weaken or replace a strict pin")
+        if (scope != "personal" and row.get("context") == "max"
+                and prior_row.get("context") == "256k"):
+            raise PodError("authority_expansion",
+                           "Project/task context cannot expand personal authority")
         base["routing"][complexity].update(row)
         provenance[f"routing.{complexity}"] = scope
     for key, val in layer.get("policy", {}).items():
@@ -373,14 +407,98 @@ def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
 def effective(project: Path, *, personal: Path | None = None, task: dict | None = None) -> dict:
     base = deepcopy(DEFAULT)
     provenance = {"defaults": "pending recommendations"}
-    for scope, layer in (
+    from .github import repository_context
+    context = repository_context(project)
+    roots = [Path(context["main_worktree"]), Path(context["worktree"])]
+    project_layers: list[tuple[str, dict | None]] = []
+    seen: set[Path] = set()
+    for root in roots:
+        policy_path = root / ".pod" / "config.yaml"
+        if policy_path in seen:
+            continue
+        seen.add(policy_path)
+        project_layers.append(("project", read_yaml(policy_path)))
+    for scope, layer in [
         ("personal", read_yaml(personal or personal_path(project))),
-        ("project", read_yaml(project / ".pod" / "config.yaml")),
+        *project_layers,
         ("task", validate(task) if task is not None else None),
-    ):
+    ]:
         if layer is not None:
             _merge(base, layer, scope, provenance)
     for row in base["routing"].values():
         if row["model"] not in base["models"]:
             raise PodError("invalid_route", "Routing references an unknown model alias")
     return {"schema": SCHEMA, "policy": base, "provenance": provenance, "revision": digest(base)}
+
+
+def personal_document(path: Path) -> dict:
+    """Return the canonical personal YAML document without creating it."""
+    return read_yaml(path) or {"schema": SCHEMA}
+
+
+def personal_revision(path: Path) -> str:
+    return digest(personal_document(path))
+
+
+def _safe_config_parent(path: Path) -> None:
+    # The native profile root may itself be a platform-managed symlink. Pod owns
+    # the directory beneath it, which must remain an ordinary directory.
+    if path.parent.is_symlink():
+        raise PodError("unsafe_config", "Pod's configuration directory is redirected")
+
+
+def guided_personal_update(path: Path, *, expected_revision: str, alias: str,
+                           approval: dict | None) -> dict:
+    """Atomically approve or revoke one catalog route in the sole YAML authority."""
+    if alias not in MODEL_CATALOG:
+        raise PodError("unknown_model_alias", "Alias is outside the active Pod catalog")
+    _safe_config_parent(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.parent.is_symlink() or path.is_symlink():
+        raise PodError("unsafe_config", "Configuration path is redirected")
+    lock_fd = os.open(path.parent / ".config.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        document = personal_document(path)
+        if digest(document) != expected_revision:
+            raise PodError("approval_evidence_changed",
+                           "Personal configuration changed after the proposal")
+        models = document.setdefault("models", {})
+        current = dict(models.get(alias, {}))
+        catalog = MODEL_CATALOG[alias]
+        current.update({"agent": catalog["agent"], "model": catalog["model"]})
+        if approval is None:
+            current.update({"approved": False, "billing": "unknown"})
+            for field in ("account", "approval_ref", "approval_route"):
+                current.pop(field, None)
+        else:
+            account = approval.get("account")
+            billing = approval.get("billing")
+            reference = approval.get("approval_ref")
+            if (not isinstance(account, str) or not re.fullmatch(r"[0-9a-f]{64}", account)
+                    or billing not in ("included", "paid", "unknown")
+                    or not isinstance(reference, str) or not reference):
+                raise PodError("invalid_approval", "Guided approval evidence is malformed")
+            current.update({"account": account, "approved": True,
+                            "approval_ref": reference, "billing": billing})
+            current["approval_route"] = route_identity(current)
+        models[alias] = current
+        validate(document)
+        encoded = yaml.safe_dump(document, sort_keys=False).encode("utf-8")
+        if len(encoded) > 64 * 1024:
+            raise PodError("yaml_resource_limit", "Configuration exceeds its size limit")
+        fd, temporary = tempfile.mkstemp(prefix=".pod-config-", dir=path.parent)
+        try:
+            os.chmod(temporary, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return document
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)

@@ -24,7 +24,7 @@ IDENTITY_TWINS = {"dispatchId": "dispatch_id", "taskId": "task_id", "runId": "ru
                   "lastFailure": "last_failure",
                   "worktreeId": "worktree_id", "agentTerminalHandle": "agent_terminal_handle",
                   "lastError": "last_error"}
-WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:")
+WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:", "issue:")
 
 
 def executable() -> Path:
@@ -62,6 +62,9 @@ def _read_allowed(argv: list[str]) -> bool:
         return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "request-show", "--request"]
             and _argument(argv[3]) and argv[4] == "--json"):
+        return True
+    if (len(argv) == 5 and argv[:3] == ["worktree", "show", "--worktree"]
+            and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
         return True
     if (len(argv) == 7 and argv[:3] == ["orchestration", "worker-read", "--dispatch"]
             and _argument(argv[3]) and argv[4] == "--limit"
@@ -210,8 +213,8 @@ def _worker_start_shape(tail: list[str]) -> bool:
 
 def worktree_selector(value: object) -> str | None:
     """Accept an existing-worktree selector only; creation modes are refused here."""
-    if value == "current":
-        return "current"
+    if value in ("current", "active"):
+        return value
     if not isinstance(value, str) or not value or len(value) > 4096:
         return None
     if value in ("new-child", "new-top-level"):
@@ -220,6 +223,33 @@ def worktree_selector(value: object) -> str | None:
         if value.startswith(prefix) and len(value) > len(prefix):
             return value
     return None
+
+
+def worktree_identity(selector: str) -> dict:
+    """Resolve an existing native selector to its actual local Git workspace."""
+    selected = worktree_selector(selector)
+    if selected is None:
+        raise PodError("invalid_worktree_selector", "Worker placement must name an existing worktree")
+    try:
+        response = read_command(["worktree", "show", "--worktree", selected, "--json"])
+    except PodError as exc:
+        raise PodError("worktree_resolution_unavailable",
+                       "Orca could not resolve the selected worker worktree") from exc
+    row = response["result"].get("worktree")
+    git = row.get("git") if isinstance(row, dict) else None
+    if not isinstance(row, dict) or not isinstance(git, dict):
+        raise PodError("worktree_resolution_unavailable", "Orca worktree readback is incomplete")
+    path, git_path = row.get("path"), git.get("path")
+    branch, git_branch = row.get("branch"), git.get("branch")
+    if (not isinstance(path, str) or not Path(path).is_absolute() or path != git_path
+            or branch != git_branch or row.get("isBare") is not False
+            or git.get("isBare") is not False):
+        raise PodError("worktree_resolution_ambiguous", "Orca worktree identity is contradictory")
+    normalized_branch = branch.removeprefix("refs/heads/") if isinstance(branch, str) else None
+    if normalized_branch is not None and (not normalized_branch or len(normalized_branch) > 256):
+        raise PodError("worktree_resolution_ambiguous", "Orca worktree branch is malformed")
+    return {"runtime": response["runtime"], "path": str(Path(path).resolve()),
+            "branch": normalized_branch}
 
 
 def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[int, ...] = (0,)) -> dict:
@@ -546,7 +576,7 @@ def agent_login_mode(agent: str) -> dict:
 
 def bucket_for(agent: str, model: str) -> str:
     """The quota window family a route draws on, as Pod labels it."""
-    if agent == "claude" and isinstance(model, str) and model.lower().startswith("fable"):
+    if agent == "claude" and model == "claude-fable-5-1":
         return "fable"
     return "default"
 
@@ -616,6 +646,10 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         "route_approval": _tier("route_approval", "owner_route_config",
                                 "personal policy approval provenance",
                                 billing=approved_billing),
+        "context_window": _tier(
+            "context_window", "unavailable",
+            "installed Orca worker-start exposes model and effort but no per-worker context control",
+            requested=route.get("context"), effective=None),
         "quota_bucket": _tier("quota_bucket",
                               "runtime_observation" if windows else "unavailable",
                               "provider rate-limit windows reported by Orca", bucket=bucket),
@@ -631,6 +665,9 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     hard_stops.extend(account_evidence_stops(
         account_evidence, expected_identity=expected_stamp,
         approved_billing=approved_billing))
+    if route.get("context") in ("256k", "max"):
+        hard_stops.append("context_control_unavailable")
+        disclosures.append("requested context cannot be established by this Orca worker-start contract")
     if not windows:
         disclosures.append("provider quota windows are unavailable to the installed runtime")
     if controls["quota_bucket"]["tier"] == "runtime_observation" and "bucket" not in account_block:
@@ -644,12 +681,13 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         disclosures.append("worker-initiated delegation is refused by Pod admission, not by a provider sandbox")
     if not host_block.get("local_only", True):
         disclosures.append("the runtime reports more than one host; Pod does not infer capacity from it")
-    disclosures.append("physical worker capacity is unavailable to Pod and enforced by Orca/CE")
+    disclosures.append("physical worker capacity is unavailable to Pod and enforced by Orca/the host")
     return {"schema": "pod-route-establishment/v1", "runtime": observed["runtime"],
             "version": observed.get("version"), "executable": observed.get("executable"),
             "route": {"agent": agent, "model": route.get("model"), "account": stamp,
                       "bucket": bucket,
-                      "effort": route.get("effort")},
+                      "effort": route.get("effort"), "context": route.get("context"),
+                      "effective_context": None},
             "controls": controls,
             "login": {"mode": mode, "auth": auth, "subscription": subscription,
                       "managed_accounts": managed, "identity_digest": stamp,
@@ -670,6 +708,14 @@ def require_route_establishment(establishment: dict, route: dict) -> None:
             raise PodError("account_binding_unverified", "Established route differs from the requested route")
     if route.get("bucket") is not None and established.get("bucket") != route["bucket"]:
         raise PodError("account_binding_unverified", "Established quota bucket differs from the requested one")
+    if route.get("context") is not None:
+        context_control = establishment.get("controls", {}).get("context_window")
+        if (established.get("context") != route.get("context")
+                or established.get("effective_context") != route.get("effective_context")
+                or not isinstance(context_control, dict)
+                or context_control.get("tier") != "enforceable_control"):
+            raise PodError("context_control_unavailable",
+                           "Installed Orca cannot establish the requested worker context")
     identity_control = establishment.get("controls", {}).get("account_identity")
     expected_identity = route.get("account")
     observed_identity = establishment.get("login", {}).get("identity_digest")
@@ -681,6 +727,7 @@ def require_route_establishment(establishment: dict, route: dict) -> None:
                        "Native account identity does not match personal route approval")
     for stop in establishment.get("hard_stops", []):
         raise PodError(stop if stop in ("billing_mode_unverified", "paid_route_forbidden",
+                                        "context_control_unavailable",
                                         "native_authority_unverified", "account_binding_unverified")
                        else "route_establishment_failed",
                        "Route establishment refuses this launch: " + str(stop))

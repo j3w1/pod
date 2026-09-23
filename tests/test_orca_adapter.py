@@ -10,7 +10,7 @@ from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, 
                       current_run, effective_launch, executable, hosts, identity,
                       mutate_command, read_command,
                       require_route_establishment, route_establishment, worker_rows,
-                      worktree_selector)
+                      worktree_identity, worktree_selector)
 from tests.common import envelope, receipt
 
 
@@ -140,15 +140,17 @@ class RouteEstablishmentTests(unittest.TestCase):
         with patch("pod.orca.read_command", return_value=envelope("host-list")):
             return hosts()
 
-    def established(self, *, agent="codex", model="gpt-5.6-sol", billing="included",
-                    login=None, bucket=None, delegation=False):
+    def established(self, *, agent="codex", model="gpt-6-sol", billing="included",
+                    login=None, bucket=None, delegation=False, context=None,
+                    effective_context=None):
         accounts = self.accounts()
         identity_digest = accounts["providers"][agent].get("identity_digest")
         login = login or {"auth": "oauth", "subscription": True,
                           "identity_digest": identity_digest or "a" * 64}
         identity_digest = identity_digest or login.get("identity_digest")
         route = {"agent": agent, "model": model, "account": identity_digest,
-                 "bucket": bucket, "effort": "high"}
+                 "bucket": bucket, "effort": "high", "context": context,
+                 "effective_context": effective_context}
         return route, route_establishment(
             route, {"billing": billing},
             snapshot=self.snapshot(), accounts=accounts, login=login,
@@ -184,9 +186,18 @@ class RouteEstablishmentTests(unittest.TestCase):
         self.assertEqual(len(established["login"]["identity_digest"]), 64)
         require_route_establishment(established, route)
 
+    def test_installed_worker_contract_refuses_context_before_effect(self):
+        route, established = self.established(context="max", effective_context=900000)
+        self.assertEqual(established["controls"]["context_window"]["tier"], "unavailable")
+        self.assertIsNone(established["route"]["effective_context"])
+        self.assertIn("context_control_unavailable", established["hard_stops"])
+        with self.assertRaises(PodError) as caught:
+            require_route_establishment(established, route)
+        self.assertEqual(caught.exception.code, "context_control_unavailable")
+
     def test_an_included_route_survives_an_unavailable_quota_bucket(self):
         """The regression: absent optional metadata is a disclosure, not a blocker."""
-        route, established = self.established(agent="claude", model="sonnet")
+        route, established = self.established(agent="claude", model="claude-sonnet-5")
         observed_identity = "a" * 64
         empty = {"runtime": "uuid-0001", "providers": {"claude": {
                      "managed_accounts": 0, "default_identity": observed_identity,
@@ -204,7 +215,7 @@ class RouteEstablishmentTests(unittest.TestCase):
         require_route_establishment(sparse, route)
 
     def test_account_rotation_and_unavailable_identity_fail_before_route_use(self):
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a" * 64,
+        route = {"agent": "codex", "model": "gpt-6-sol", "account": "a" * 64,
                  "bucket": "default", "effort": "high"}
         approved = "a" * 64
         base_accounts = {"runtime": "uuid-0001", "providers": {"codex": {
@@ -228,7 +239,7 @@ class RouteEstablishmentTests(unittest.TestCase):
 
     def test_managed_account_cannot_borrow_unrelated_host_subscription_proof(self):
         identity_digest = "a" * 64
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+        route = {"agent": "codex", "model": "gpt-6-sol", "account": identity_digest,
                  "bucket": "default", "effort": "high"}
         accounts = {"runtime": "uuid-0001", "providers": {"codex": {
             "managed_accounts": 1, "active_account": identity_digest,
@@ -244,7 +255,7 @@ class RouteEstablishmentTests(unittest.TestCase):
 
     def test_system_default_billing_cannot_be_overridden_by_another_login_context(self):
         identity_digest = "a" * 64
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+        route = {"agent": "codex", "model": "gpt-6-sol", "account": identity_digest,
                  "bucket": "default", "effort": "high"}
         base = {"runtime": "uuid-0001", "providers": {"codex": {
             "managed_accounts": 0, "default_identity": identity_digest,
@@ -298,12 +309,12 @@ class RouteEstablishmentTests(unittest.TestCase):
     def test_billing_and_paid_fallback_fail_closed(self):
         route, unknown = self.established(login={"auth": "unknown", "subscription": None,
                                                  "identity_digest": "a" * 64},
-                                          agent="claude", model="sonnet")
+                                          agent="claude", model="claude-sonnet-5")
         self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
         with self.assertRaises(PodError) as blocked:
             require_route_establishment(unknown, route)
         self.assertEqual(blocked.exception.code, "billing_mode_unverified")
-        route, paid = self.established(agent="claude", model="sonnet", billing="unknown",
+        route, paid = self.established(agent="claude", model="claude-sonnet-5", billing="unknown",
                                        login={"auth": "api_key", "subscription": False,
                                               "identity_digest": "a" * 64})
         self.assertEqual(paid["hard_stops"], ["paid_route_forbidden"])
@@ -508,10 +519,30 @@ class MutationAllowlistTests(unittest.TestCase):
         self.assertEqual(receipt_value["result"]["_envelope_conflicts"]["dispatchId"], "two")
 
     def test_worktree_selectors_accept_existing_placements_only(self):
-        for value in ("current", "path:/fixture/repo", "id:abc", "name:task", "branch:main"):
+        for value in ("current", "active", "path:/fixture/repo", "id:abc", "name:task",
+                      "branch:main", "issue:7"):
             self.assertEqual(worktree_selector(value), value)
         for value in ("new-child", "new-top-level", "", "--worktree", None, "path:"):
             self.assertIsNone(worktree_selector(value))
+
+    def test_native_worktree_resolution_requires_one_coherent_identity(self):
+        row = {"path": "/fixture/repo", "branch": "refs/heads/orca/task", "isBare": False,
+               "git": {"path": "/fixture/repo", "branch": "refs/heads/orca/task",
+                       "isBare": False}}
+        with patch("pod.orca.read_command", return_value={
+                   "runtime": "runtime", "result": {"worktree": row}}):
+            self.assertEqual(worktree_identity("name:task"), {
+                "runtime": "runtime", "path": "/fixture/repo", "branch": "orca/task"})
+        with patch("pod.orca.read_command", return_value={
+                   "runtime": "runtime", "result": {"worktree": {
+                       **row, "git": {**row["git"], "path": "/fixture/other"}}}}), \
+             self.assertRaises(PodError) as contradictory:
+            worktree_identity("current")
+        self.assertEqual(contradictory.exception.code, "worktree_resolution_ambiguous")
+        with patch("pod.orca.read_command", side_effect=PodError("orca_read_failed", "missing")), \
+             self.assertRaises(PodError) as unavailable:
+            worktree_identity("current")
+        self.assertEqual(unavailable.exception.code, "worktree_resolution_unavailable")
 
     def test_identity_twins_are_read_but_conflicts_refuse(self):
         self.assertEqual(identity({"taskId": "t"}, "taskId"), "t")
@@ -535,6 +566,7 @@ class MutationAllowlistTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, "unsupported_orca_read")
             runner.assert_not_called()
         for argv in (["status", "--json"], ["host", "list", "--json"],
+                     ["worktree", "show", "--worktree", "current", "--json"],
                      ["orchestration", "run-current", "--json"],
                      ["orchestration", "request-show", "--request",
                       "11111111-1111-4111-8111-111111111111", "--json"],
@@ -584,7 +616,7 @@ class ReviewFindingRegressions(unittest.TestCase):
         accounts = {"runtime": "r", "providers": {"claude": {"managed_accounts": 0,
                                              "windows": {"weekly": {}},
                                              "account_association": "host_login"}}}
-        asserted = {"agent": "claude", "model": "fable-5", "account": "a" * 64,
+        asserted = {"agent": "claude", "model": "claude-fable-5-1", "account": "a" * 64,
                     "bucket": "default", "effort": "high"}
         established = route_establishment(asserted, {"billing": "included"}, snapshot=snapshot,
                                           accounts=accounts,

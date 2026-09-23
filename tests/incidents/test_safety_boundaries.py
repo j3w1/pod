@@ -33,7 +33,7 @@ class SafetyBoundaryIncidents(unittest.TestCase):
         field can put such a record into admission in the first place.
         """
         from pod.orca import require_route_establishment
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a" * 64}
+        route = {"agent": "codex", "model": "gpt-6-sol", "account": "a" * 64}
         unestablished = {"schema": "pod-route-establishment/v1", "runtime": None,
                          "route": route, "controls": {}, "hard_stops": [], "disclosures": [],
                          "login": {}, "billing": {}}

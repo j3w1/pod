@@ -64,10 +64,15 @@ def native_home(name: str, *, default: Path | None = None,
             raise PodError("invalid_native_home", f"{name} must be an absolute directory path") from exc
     if not path.is_absolute() or (path.exists() and not path.is_dir()):
         raise PodError("invalid_native_home", f"{name} must be an absolute directory path")
-    boundary = project if project is not None else Path.cwd()
-    if _inside(path, boundary):
+    boundary = (project if project is not None else Path.cwd()).resolve()
+    boundaries = [boundary]
+    from .github import repository_context
+    context = repository_context(boundary)
+    if context.get("repo_key") is not None:
+        boundaries = [Path(value) for value in context["linked_worktrees"]]
+    if any(_inside(path, candidate) for candidate in boundaries):
         raise PodError("project_contained_native_home",
-                       f"{name} must remain outside the current project")
+                       f"{name} must remain outside every linked project worktree")
     return path
 
 

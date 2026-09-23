@@ -1,10 +1,8 @@
 # The Orca boundary
 
-Load the installed Orca orchestration guide before using runtime features.
-Its version-matched instructions own Run/Task/Dispatch creation, worker identity,
-placement, messaging, Delivery, lifecycle, retries and cleanup. Follow its named
-references when a conditional action requires them. Pod supplies no alternate
-procedure or lifecycle journal.
+Load Orca's installed, version-matched orchestration guide before runtime work.
+It owns Runs, Tasks, Dispatches, placement, messaging, Delivery, lifecycle,
+retries and cleanup. Pod supplies no alternate procedure or lifecycle journal.
 
 ## Pod admission
 
@@ -17,7 +15,12 @@ The objective lock reserves one slot per assignment. Exact native settlement of
 an already-bound assignment frees that slot even if its terminal is retained.
 An unresolved own request stays outstanding. Do not enumerate all Runs or
 workers, reconstruct foreign resources, infer terminal liveness, or deduplicate
-occupancy. Orca owns actual workers and capacity; CE owns physical limits.
+occupancy. Orca and the host own actual workers and physical limits.
+
+Normal workers use native worker-start and visible agent tabs. After validating
+and preserving an exact completed report, follow the guide's Delivery
+acknowledgment and worker-release order promptly. Reuse needs an immediate
+supported follow-up; uncertainty and protected resources remain retained.
 
 Treat an authoritative native `capacity_full` no-start receipt as durable
 `deferred`: record it without a successful binding and do not retry or audit the
@@ -35,10 +38,10 @@ A missing required capability blocks the affected operation. Diagnose or update
 Orca; do not substitute another runtime, execution host, account or direct
 provider worker API. Host-local serialization is not distributed fencing.
 
-The requested/effective readback detects a route mismatch only after worker start;
+The requested/effective readback detects a model/effort mismatch only after worker start;
 it is not a strict provider-startup guarantee before task delivery. The installed
-`worker-start` exposes model and effort selection but no per-launch strict-route or
-noninteractive flag, so that pre-delivery guarantee is unavailable. Do not automate
+`worker-start` exposes model and effort selection but no per-worker context,
+per-launch strict-route or noninteractive flag, so those guarantees are unavailable. Do not automate
 provider UI, write shared/personal provider settings or add a Pod provider wrapper.
 Any future strict automation control must be opt-in per launch and leave ordinary
 non-Pod sessions unchanged.

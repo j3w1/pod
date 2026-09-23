@@ -8,6 +8,7 @@ rewrites a workflow, changes branch protection, or infers what a repository requ
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -24,6 +25,10 @@ _RUN_ID = re.compile(r"[0-9]{1,20}\Z")
 _INPUT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}=[^\n\r\x00]{0,512}\Z")
 RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName"
 PR_FIELDS = "number,url,headRefOid,state,isDraft"
+ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
+AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
+_ISSUE_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)/?\Z")
+_COMMENT_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)\Z")
 
 
 def _name(value: object) -> bool:
@@ -95,7 +100,230 @@ def gh_allowed(argv: list[str]) -> bool:
     if argv[:2] == ["run", "rerun"] and len(argv) in (3, 4) and _RUN_ID.fullmatch(argv[2]) \
             and argv[3:] in ([], ["--failed"]):
         return True
+    if (len(argv) == 7 and argv[:2] == ["issue", "view"] and _RUN_ID.fullmatch(argv[2])
+            and argv[3] == "--repo" and _name(argv[4]) and argv[5:] == ["--json", ISSUE_FIELDS]):
+        return True
+    if (len(argv) == 4 and argv[0] == "api"
+            and re.fullmatch(r"repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/comments/[1-9][0-9]*", argv[1])
+            and argv[2:] == ["--jq", AMENDMENT_JQ]):
+        return True
     return False
+
+
+def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
+    allowed = (
+        argv == ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]
+        or argv == ["worktree", "list", "--porcelain"]
+        or argv == ["remote", "get-url", "origin"]
+        or argv == ["symbolic-ref", "--quiet", "--short", "HEAD"]
+    )
+    if not allowed:
+        raise PodError("unsupported_git_operation", "Project discovery accepts only bounded Git reads")
+    completed = _run([str(git_executable()), *argv], cwd=project, timeout=timeout, mutation=False)
+    if completed.returncode:
+        raise PodError("repository_identity_unavailable", "Git repository identity could not be read")
+    if len(completed.stdout) > MAX_OUTPUT:
+        raise PodError("git_contract", "Git discovery output exceeds its bound")
+    return completed.stdout
+
+
+def _github_repository(remote: str) -> str | None:
+    value = remote.strip()
+    patterns = (
+        r"git@github\.com:([^/]+)/(.+?)(?:\.git)?\Z",
+        r"ssh://git@github\.com/([^/]+)/(.+?)(?:\.git)?\Z",
+        r"https?://github\.com/([^/]+)/(.+?)(?:\.git)?/?\Z",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, value)
+        if match:
+            return f"{match.group(1)}/{match.group(2)}"
+    return None
+
+
+def repository_context(project: Path) -> dict:
+    """Resolve stable repository identity and this linked worktree through Git reads only."""
+    root = project.resolve()
+    try:
+        lines = _local_git(root, ["rev-parse", "--path-format=absolute", "--show-toplevel",
+                                  "--git-common-dir"]).splitlines()
+    except PodError:
+        if any((candidate / ".git").exists() for candidate in (root, *root.parents)):
+            raise
+        return {"repository": None, "repo_key": None, "worktree": str(root),
+                "main_worktree": str(root), "branch": None, "dirty": None,
+                "linked_worktrees": [str(root)]}
+    if len(lines) != 2:
+        raise PodError("git_contract", "Git repository identity is incomplete")
+    worktree = Path(lines[0]).resolve()
+    common = Path(lines[1]).resolve()
+    blocks = _local_git(worktree, ["worktree", "list", "--porcelain"]).strip().split("\n\n")
+    worktrees: list[dict] = []
+    for block in blocks:
+        fields: dict[str, str | bool] = {}
+        for line in block.splitlines():
+            key, _, value = line.partition(" ")
+            fields[key] = value if value else True
+        candidate = fields.get("worktree")
+        if isinstance(candidate, str):
+            worktrees.append({"path": str(Path(candidate).resolve()),
+                              "branch": (str(fields.get("branch", "")).removeprefix("refs/heads/")
+                                         or None),
+                              "detached": bool(fields.get("detached"))})
+    if not worktrees or not any(row["path"] == str(worktree) for row in worktrees):
+        raise PodError("git_contract", "Current worktree is absent from Git's worktree inventory")
+    try:
+        remote = _local_git(worktree, ["remote", "get-url", "origin"]).strip()
+    except PodError:
+        remote = ""
+    repository = _github_repository(remote)
+    current = next(row for row in worktrees if row["path"] == str(worktree))
+    return {"repository": repository, "repo_key": hashlib.sha256(str(common).encode()).hexdigest(),
+            "worktree": str(worktree), "main_worktree": worktrees[0]["path"],
+            "branch": current["branch"], "dirty": None,
+            "linked_worktrees": [row["path"] for row in worktrees]}
+
+
+def parse_issue_locator(locator: object) -> dict:
+    if not isinstance(locator, str) or len(locator) > 2048:
+        raise PodError("invalid_issue_locator", "Execution Spec issue must be a bounded GitHub issue URL")
+    match = _ISSUE_URL.fullmatch(locator)
+    if match is None:
+        raise PodError("invalid_issue_locator", "Execution Spec issue must use a canonical GitHub issue URL")
+    repository = f"{match.group(1)}/{match.group(2)}"
+    number = int(match.group(3))
+    return {"repository": repository, "number": number,
+            "locator": f"https://github.com/{repository}/issues/{number}"}
+
+
+def parse_amendment_locator(locator: object) -> dict:
+    if not isinstance(locator, str) or len(locator) > 2048:
+        raise PodError("invalid_issue_amendment", "Amendment must be a bounded GitHub comment URL")
+    match = _COMMENT_URL.fullmatch(locator)
+    if match is None:
+        raise PodError("invalid_issue_amendment", "Amendment must identify one GitHub issue comment")
+    return {"repository": f"{match.group(1)}/{match.group(2)}", "number": int(match.group(3)),
+            "comment": int(match.group(4)), "locator": locator}
+
+
+def _validate_amendment_observation(row: object, *, repository: str,
+                                    number: int, comment: int) -> dict:
+    try:
+        returned = parse_amendment_locator(str(row.get("url", ""))) if isinstance(row, dict) else None
+    except PodError as exc:
+        raise PodError("issue_identity_mismatch", "GitHub returned an invalid amendment URL") from exc
+    if (not isinstance(row, dict) or row.get("id") != comment or returned is None
+            or not isinstance(row.get("body"), str)
+            or returned["repository"].casefold() != repository.casefold()
+            or returned["number"] != number or returned["comment"] != comment):
+        raise PodError("issue_identity_mismatch", "GitHub returned another issue amendment")
+    return row
+
+
+def validate_issue_binding(value: object) -> dict:
+    from .util import exact
+    source = exact(value, {"schema", "repository", "number", "locator", "body_sha256",
+                           "amendments"}, {"schema", "repository", "number", "locator",
+                                           "body_sha256", "amendments"}, name="issue_source")
+    if source["schema"] != "pod-issue-source/v1":
+        raise PodError("invalid_issue_source", "Issue source schema is unsupported")
+    parsed = parse_issue_locator(source["locator"])
+    if (parsed["repository"].casefold() != str(source["repository"]).casefold()
+            or parsed["number"] != source["number"]
+            or not re.fullmatch(r"[0-9a-f]{64}", str(source["body_sha256"]))):
+        raise PodError("invalid_issue_source", "Issue source identity is inconsistent")
+    amendments = source["amendments"]
+    if not isinstance(amendments, list) or len(amendments) > 32:
+        raise PodError("invalid_issue_source", "Issue amendments must be bounded")
+    for row in amendments:
+        exact(row, {"locator", "sha256"}, {"locator", "sha256"}, name="issue_amendment")
+        if (not isinstance(row["locator"], str) or len(row["locator"]) > 2048
+                or not re.fullmatch(r"[0-9a-f]{64}", str(row["sha256"]))):
+            raise PodError("invalid_issue_source", "Issue amendment binding is invalid")
+        amendment = parse_amendment_locator(row["locator"])
+        if (amendment["repository"].casefold() != str(source["repository"]).casefold()
+                or amendment["number"] != source["number"]):
+            raise PodError("invalid_issue_source", "Issue amendment belongs to another source")
+    return source
+
+
+def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
+                 amendments: list[str] | None = None) -> dict:
+    parsed = parse_issue_locator(locator)
+    context = repository_context(project)
+    if context["repository"] is None or context["repository"].casefold() != parsed["repository"].casefold():
+        raise PodError("repository_mismatch", "Issue target differs from the actual checkout repository")
+    reader = port or GhPort(project)
+    row = reader.issue(repository=parsed["repository"], number=parsed["number"])
+    body = row.get("body")
+    title = row.get("title")
+    if (not isinstance(title, str) or not title.strip() or len(title) > 512
+            or not isinstance(body, str) or not body.strip() or len(body.encode()) > 512 * 1024):
+        raise PodError("incomplete_issue_source", "Issue body is empty or exceeds the bounded source size")
+    requested_amendments = amendments or []
+    if (not isinstance(requested_amendments, list) or len(requested_amendments) > 32
+            or any(not isinstance(value, str) for value in requested_amendments)
+            or len(set(requested_amendments)) != len(requested_amendments)):
+        raise PodError("invalid_issue_amendment", "Relevant amendments must be a bounded unique list")
+    amendment_bindings = []
+    for locator_value in requested_amendments:
+        amendment = parse_amendment_locator(locator_value)
+        if (amendment["repository"].casefold() != parsed["repository"].casefold()
+                or amendment["number"] != parsed["number"]):
+            raise PodError("invalid_issue_amendment", "Amendment belongs to another issue")
+        observed = _validate_amendment_observation(
+            reader.amendment(repository=parsed["repository"], number=parsed["number"],
+                             comment=amendment["comment"]),
+            repository=parsed["repository"], number=parsed["number"],
+            comment=amendment["comment"])
+        if len(observed["body"].encode()) > 128 * 1024:
+            raise PodError("incomplete_issue_source", "Relevant issue amendment exceeds its bound")
+        amendment_bindings.append({"locator": amendment["locator"],
+                                   "sha256": hashlib.sha256(observed["body"].encode()).hexdigest()})
+    binding = {"schema": "pod-issue-source/v1", "repository": parsed["repository"],
+               "number": parsed["number"], "locator": parsed["locator"],
+               "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+               "amendments": amendment_bindings}
+    validate_issue_binding(binding)
+    status = "reconciliation_required" if row["state"] == "CLOSED" else "ready"
+    return {"schema": "pod-issue-intake/v1", "status": status,
+            "reason": "closed_issue_requires_intent_reconciliation" if status != "ready" else None,
+            "source": binding, "title": title, "body": body,
+            "updated_at": row.get("updatedAt"),
+            "worktree": {"repository": context["repository"], "repo_key": context["repo_key"],
+                         "path": context["worktree"], "branch": context["branch"]}}
+
+
+def issue_recheck(project: Path, binding: dict, *, port: "GhPort | None" = None) -> dict:
+    source = validate_issue_binding(binding)
+    context = repository_context(project)
+    if context["repository"] is None or context["repository"].casefold() != source["repository"].casefold():
+        raise PodError("repository_mismatch", "Bound issue target differs from the actual checkout")
+    row = (port or GhPort(project)).issue(repository=source["repository"], number=source["number"])
+    digest_now = hashlib.sha256(row["body"].encode()).hexdigest()
+    changed = digest_now != source["body_sha256"]
+    amendment_changed = False
+    reader = port or GhPort(project)
+    for bound in source["amendments"]:
+        amendment = parse_amendment_locator(bound["locator"])
+        observed = _validate_amendment_observation(
+            reader.amendment(repository=source["repository"], number=source["number"],
+                             comment=amendment["comment"]),
+            repository=source["repository"], number=source["number"],
+            comment=amendment["comment"])
+        if len(observed["body"].encode()) > 128 * 1024:
+            raise PodError("incomplete_issue_source", "Relevant issue amendment exceeds its bound")
+        amendment_changed = (amendment_changed
+                             or hashlib.sha256(observed["body"].encode()).hexdigest() != bound["sha256"])
+    closed = row["state"] == "CLOSED"
+    return {"schema": "pod-issue-recheck/v1",
+            "status": "reconciliation_required" if changed or amendment_changed or closed else "current",
+            "body_changed": changed, "amendment_changed": amendment_changed,
+            "metadata_changed": None,
+            "state": row["state"], "updated_at": row.get("updatedAt"),
+            "reason": ("issue_body_changed" if changed else
+                       "issue_amendment_changed" if amendment_changed else
+                       "closed_issue_requires_intent_reconciliation" if closed else None)}
 
 
 def _run(command: list[str], *, cwd: Path, timeout: int, mutation: bool) -> subprocess.CompletedProcess:
@@ -143,6 +371,41 @@ class GhPort:
             return json.loads(completed.stdout or "null")
         except ValueError as exc:
             raise PodError("gh_contract", "gh returned invalid JSON") from exc
+
+    def issue(self, *, repository: str, number: int) -> dict:
+        try:
+            rows = self._gh_json(["issue", "view", str(number), "--repo", repository,
+                                  "--json", ISSUE_FIELDS])
+        except PodError as exc:
+            if exc.code == "remote_read_failed":
+                raise PodError("issue_access_unavailable",
+                               "Issue could not be read through the authenticated GitHub CLI") from exc
+            raise
+        if not isinstance(rows, dict):
+            raise PodError("gh_contract", "gh issue view returned an unsupported shape")
+        try:
+            returned = parse_issue_locator(str(rows.get("url", "")))
+        except PodError as exc:
+            raise PodError("issue_identity_mismatch", "GitHub returned an invalid issue URL") from exc
+        if (rows.get("number") != number or returned["number"] != number
+                or returned["repository"].casefold() != repository.casefold()
+                or rows.get("state") not in ("OPEN", "CLOSED")
+                or not isinstance(rows.get("title"), str)
+                or not isinstance(rows.get("body"), str)):
+            raise PodError("issue_identity_mismatch", "GitHub returned a different or incomplete issue")
+        return rows
+
+    def amendment(self, *, repository: str, number: int, comment: int) -> dict:
+        try:
+            row = self._gh_json(["api", f"repos/{repository}/issues/comments/{comment}",
+                                 "--jq", AMENDMENT_JQ])
+        except PodError as exc:
+            if exc.code == "remote_read_failed":
+                raise PodError("issue_access_unavailable",
+                               "Relevant issue amendment could not be read") from exc
+            raise
+        return _validate_amendment_observation(row, repository=repository,
+                                               number=number, comment=comment)
 
     def branch_head(self, *, remote: str, branch: str) -> str | None:
         completed = self._git(["ls-remote", "--heads", remote, "refs/heads/" + branch], mutation=False)
