@@ -196,22 +196,46 @@ def _compact(journal: dict) -> None:
 
 # --------------------------------------------------------------------------- validation
 
+AUTHORIZATION_SCHEMA = "pod-authorization/v1"
+AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
+_GIT_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\Z")
+
+
+def _utc_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or _UTC_TIMESTAMP.fullmatch(value) is None:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return parsed.utcoffset() is not None and parsed.utcoffset().total_seconds() == 0
+
+
 def validate_authorization(value: object, *, candidate: str | None = None, tree: str | None = None,
                            kind: str | None = None) -> dict | None:
-    """Accept only a complete owner authorization record bound to this candidate.
+    """Accept only a complete owner authorization for a governed merge, release or deploy.
 
-    The release gate owns the record's shape. Reusing its validator is what keeps a record
-    from passing here and being refused there, or the reverse.
+    The owner supplies this record for the governed project's own action. It is never
+    derived from check results, and passing checks never produce it.
     """
     if value is None:
         return None
-    from .release import validate_authorization as validate_release_authorization
-
-    record = validate_release_authorization(
-        value, candidate=value.get("candidate") if isinstance(value, dict) else None,
-        tree=value.get("tree") if isinstance(value, dict) else None, require_release=False)
-    if record is None:
-        return None
+    record = exact(value, AUTHORIZATION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
+    if record["schema"] != AUTHORIZATION_SCHEMA:
+        raise PodError("invalid_authorization", "Authorization schema is unsupported")
+    for field in ("authorized_by", "reference"):
+        bounded_text(record[field], name=field, limit=512)
+    if (not all(isinstance(record[key], str) and _GIT_OBJECT_ID.fullmatch(record[key])
+                for key in ("candidate", "tree"))
+            or len(record["candidate"]) != len(record["tree"])):
+        raise PodError("invalid_authorization", "Authorization candidate and tree must be Git object ids")
+    if not _utc_timestamp(record["utc"]):
+        raise PodError("invalid_authorization", "Authorization timestamp must be canonical UTC")
+    scope = record["scope"]
+    if (not isinstance(scope, list) or not scope or len(scope) > 8
+            or any(item not in AUTHORIZED_KINDS for item in scope)):
+        raise PodError("invalid_authorization", "Authorization scope is unsupported")
     if candidate is not None and record["candidate"] != candidate:
         return None
     if tree is not None and record["tree"] != tree:

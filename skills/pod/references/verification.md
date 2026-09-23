@@ -12,8 +12,9 @@ hosted CI and live adapter validation establish different facts.
 
 The acceptance helper evaluates recorded evidence; it does not manufacture
 missing proof or grant project acceptance. Synthetic fixtures cannot certify
-live behavior. A release gate reports technical readiness separately from an
-owner authorization bound to candidate, tree and scope.
+live behavior. The Governor reports a governed project's technical readiness
+separately from the owner authorization, bound to candidate, tree and scope, that
+its merge, release or deployment needs; project governance makes that decision.
 
 Report the original objective, achieved or blocked criteria, candidate/check
 evidence, material route exceptions, uncertainty and remaining gates. Keep

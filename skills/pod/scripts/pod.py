@@ -12,9 +12,9 @@ import os
 import sys
 
 MIN_PYTHON = (3, 13)
-REQUIRED = ("__init__.py", "cli.py", "internal.py", "SKILL.md")
+REQUIRED = ("__init__.py", "cli.py", "internal.py", "SKILL.md", "VERSION")
 PYYAML_STEP = "python3 -m pip install --user 'PyYAML>=6.0.2,<7'"
-REINSTALL = "npx skills add j3w1/pod --skill pod   (or re-run: pod setup)"
+REINSTALL = "npx skills add j3w1/pod --skill pod -a codex -a claude-code -g"
 
 
 def bundle_dir(script=None):

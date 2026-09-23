@@ -456,7 +456,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {result['error']['code']}: {result['error']['message']}")
         elif args.command == "doctor":
             ready = result["readiness"]
-            print("Pod ready for direct work")
+            print(f"Pod {result['bundle']['version']} ready for direct work")
+            print(f"  ✓ skill installed at {result['bundle']['path']}")
             print(f"  {'✓' if ready['orca'] == 'connected' else '!'} Orca {ready['orca']}")
             print(f"  {'✓' if ready['configuration'] == 'valid' else '!'} configuration {ready['configuration']}")
             print(f"  ! worker routes: {ready['approved_worker_routes']} approved, {ready['usable_worker_routes']} usable")

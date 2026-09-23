@@ -5,13 +5,12 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ['v*']
 
 permissions:
   contents: read
 
 # One group per pull request or ref: a newer push replaces the pull-request run it
-# superseded, and a push to main or a release tag is never canceled by anything.
+# superseded, and a push to main is never canceled by anything.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -27,16 +26,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Install build tooling
-        run: python -m pip install --upgrade build PyYAML
+      - name: Install PyYAML, the one runtime prerequisite
+        run: python -m pip install 'PyYAML>=6.0.2,<7'
 
       - name: Unit and incident suite
         run: python -m unittest discover -s tests -v
@@ -47,238 +44,78 @@ jobs:
         env:
           PYTHONPATH: skills
       - name: Compile
-        run: python -m compileall -q skills tests tools install.py
+        run: python -m compileall -q skills tests tools
       - name: Whitespace
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
 
-      - name: Validate the skill bundle
+      - name: Validate the skill bundle and its budgets
         run: python -m pod.skill_validation skills/pod
         env:
           PYTHONPATH: skills
 
-      - name: Release notes describe the declared version
-        run: python tools/release.py notes "$(python -c 'import pod; print(pod.__version__)')" > /dev/null
-        env:
-          PYTHONPATH: skills
-
-      - name: Product changes carry a version bump and current notes
-        if: github.event_name == 'pull_request'
-        run: python tools/release.py check "origin/${{ github.base_ref }}"
-
       - name: Tracked source hygiene audit
-        run: python tools/artifact_audit.py --source .
-
-      - name: Build a frozen wheel and sdist from the Git tree
-        run: |
-          EXPORT="$(mktemp -d)"
-          git archive HEAD | tar -x -C "$EXPORT"
-          (cd "$EXPORT" && python -m build)
-          mkdir -p dist
-          cp "$EXPORT"/dist/* dist/
-          echo "POD_EXPORT=$EXPORT" >> "$GITHUB_ENV"
-
-      - name: Wheel matches the bundle
-        run: python -m pod.skill_validation --wheel dist/*.whl
-        env:
-          PYTHONPATH: skills
-
-      - name: Audit the built distributions
-        run: python tools/artifact_audit.py dist/*
-
-      - name: Install the wheel into an isolated environment
-        run: |
-          python -m venv .venv-smoke
-          .venv-smoke/bin/python -m pip install dist/*.whl
-          for family in "" setup config doctor status; do
-            .venv-smoke/bin/pod $family --help > /dev/null
-          done
-          HOMES="$(mktemp -d)"
-          export HOME="$HOMES/home"
-          export POD_CONFIG_HOME="$HOMES/pod-config"
-          export POD_STATE_HOME="$HOMES/pod-state"
-          export XDG_CONFIG_HOME="$HOMES/xdg-config"
-          export XDG_STATE_HOME="$HOMES/xdg-state"
-          export CODEX_HOME="$HOMES/codex"
-          export CLAUDE_CONFIG_DIR="$HOMES/claude"
-          mkdir -p "$HOME" "$POD_CONFIG_HOME" "$POD_STATE_HOME" "$XDG_CONFIG_HOME" \
-            "$XDG_STATE_HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"
-          FIXTURE="$(mktemp -d)"
-          POD_BIN="$PWD/.venv-smoke/bin/pod"
-          (cd "$FIXTURE" && "$POD_BIN" setup --global --json)
-          (cd "$FIXTURE" && "$POD_BIN" setup --json)
-          (cd "$FIXTURE" && "$POD_BIN" config --check --json)
-          (cd "$FIXTURE" && "$POD_BIN" doctor --json)
-          PYTHONPATH=skills python -m pod.skill_validation --installed "$CODEX_HOME/skills/pod"
-
-      - name: Explicit reviewed-checkout installer
-        run: |
-          python install.py --venv "$RUNNER_TEMP/installer-venv" --expected-commit "$GITHUB_SHA"
-          "$RUNNER_TEMP/installer-venv/bin/pod" --help > /dev/null
+        run: python tools/source_audit.py .
 
       - name: The bundle runs as a plain copy, with no checkout
         run: |
           COPY="$RUNNER_TEMP/copy"
           mkdir -p "$COPY" "$RUNNER_TEMP/elsewhere" "$RUNNER_TEMP/copy-home"
-          cp -r "$POD_EXPORT/skills/pod" "$COPY/pod"
+          cp -rL skills/pod "$COPY/pod"
           cd "$RUNNER_TEMP/elsewhere"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" \
             python -I "$COPY/pod/scripts/pod.py" doctor --json > report.json
-          python - <<'PY'
-          import json, os, pathlib
+          python - "$GITHUB_WORKSPACE/VERSION" <<'PY'
+          import json, os, pathlib, sys
           report = json.loads(pathlib.Path("report.json").read_text())
           expected = os.path.join(os.environ["RUNNER_TEMP"], "copy", "pod")
           assert report["bundle"]["path"].startswith(expected), report["bundle"]
+          assert report["bundle"]["version"] == pathlib.Path(sys.argv[1]).read_text().strip(), report["bundle"]
           assert report["prerequisites"]["python"] == "ok", report["prerequisites"]
           PY
 
-      - name: Install the skill with the community skills CLI
+      - name: Install this commit with the skills CLI and run its helpers
         run: |
           # The skills CLI honours CODEX_HOME, CLAUDE_CONFIG_DIR and XDG_STATE_HOME, so a
           # smoke that only overrides HOME writes into the real profile. Scrub them all.
           SMOKE="$RUNNER_TEMP/skills-home"
           mkdir -p "$SMOKE"
           env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
-            HOME="$SMOKE" npx --yes skills@1.7.0 add "$POD_EXPORT" \
+            HOME="$SMOKE" npx --yes skills@1.7.0 add "$GITHUB_WORKSPACE" \
             --skill pod -a codex -a claude-code -g -y
-          # A local-path source records no lock entry, so assert the shape the installer
-          # actually produces: one canonical copy with every other agent linked at it.
+          # One canonical copy with every other agent linked at it.
           test -f "$SMOKE/.agents/skills/pod/SKILL.md"
-          test -f "$SMOKE/.agents/skills/pod/scripts/pod.py"
+          test -f "$SMOKE/.agents/skills/pod/VERSION" && ! test -L "$SMOKE/.agents/skills/pod/VERSION"
           test -L "$SMOKE/.claude/skills/pod"
           test "$(readlink -f "$SMOKE/.claude/skills/pod")" = "$(readlink -f "$SMOKE/.agents/skills/pod")"
           PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
-          env -u CODEX_HOME -u CLAUDE_CONFIG_DIR HOME="$SMOKE" \
-            python "$SMOKE/.claude/skills/pod/scripts/pod.py" doctor --json > /dev/null
-          HOME="$SMOKE" CODEX_HOME="$SMOKE/.agents" CLAUDE_CONFIG_DIR="$SMOKE/.claude" \
-            XDG_STATE_HOME="$SMOKE/.local/state" XDG_CONFIG_HOME="$SMOKE/.config" \
-            .venv-smoke/bin/pod setup --global --json > setup.json
-          python - <<'PY'
-          import json, pathlib
-          outcome = json.loads(pathlib.Path("setup.json").read_text())
-          for host, value in outcome["skills"].items():
+          POD="$SMOKE/.agents/skills/pod/scripts/pod.py"
+          export HOME="$SMOKE" CODEX_HOME="$SMOKE/.agents" CLAUDE_CONFIG_DIR="$SMOKE/.claude" \
+            XDG_STATE_HOME="$SMOKE/.local/state" XDG_CONFIG_HOME="$SMOKE/.config"
+          for family in "" setup config doctor status; do
+            python "$POD" $family --help > /dev/null
+          done
+          PROJECT="$(mktemp -d)"
+          git -C "$PROJECT" init -q
+          (cd "$PROJECT" && python "$POD" setup --global --json > "$RUNNER_TEMP/setup.json")
+          (cd "$PROJECT" && python "$POD" config --check --json > /dev/null)
+          (cd "$PROJECT" && python "$POD" doctor --json > "$RUNNER_TEMP/doctor.json")
+          python - "$RUNNER_TEMP/setup.json" "$RUNNER_TEMP/doctor.json" "$GITHUB_WORKSPACE/VERSION" <<'PY'
+          import json, pathlib, sys
+          setup = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          for host, value in setup["skills"].items():
               assert value == "managed_by_skills_cli", (host, value)
+          doctor = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          assert doctor["bundle"]["version"] == pathlib.Path(sys.argv[3]).read_text().strip(), doctor["bundle"]
           PY
 
-  release:
-    name: release
-    # A push to main or a v* tag; never a pull request. The job publishes only when the
-    # declared version has no tag and no release yet, and only when release/evidence.json
-    # passes Pod's release gate for this exact candidate. It is idempotent across reruns,
-    # a manual tag push of an already-bumped version, and merges that bump nothing. A
-    # blocked gate leaves main merged and unpublished, and says why in the job summary.
-    if: github.event_name == 'push'
-    needs: linux
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: release
-      cancel-in-progress: false
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - name: Install build tooling
-        run: python -m pip install --upgrade build PyYAML
-
-      - name: Decide whether this push publishes a version
+      - name: Install j3w1/pod itself the documented way
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          VERSION="$(PYTHONPATH=skills python -c 'import pod; print(pod.__version__)')"
-          TAG="v$VERSION"
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            # A pushed tag must name the version the tagged tree declares.
-            test "$GITHUB_REF_NAME" = "$TAG"
-            COMMIT="$(git rev-parse "$TAG^{commit}")"
-          else
-            COMMIT="$GITHUB_SHA"
-            if git rev-parse -q --verify "refs/tags/$TAG^{commit}" > /dev/null; then
-              EXISTING="$(git rev-parse "$TAG^{commit}")"
-              if [ "$EXISTING" != "$COMMIT" ]; then
-                echo "$TAG already names $EXISTING; this push declares no unreleased version."
-                echo "PUBLISH=no" >> "$GITHUB_ENV"
-                exit 0
-              fi
-            fi
-          fi
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "$TAG is already published."
-            echo "PUBLISH=no" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          printf 'PUBLISH=yes\nVERSION=%s\nTAG=%s\nCOMMIT=%s\n' "$VERSION" "$TAG" "$COMMIT" >> "$GITHUB_ENV"
-
-      - name: Pod's release gate decides from the committed evidence
-        if: env.PUBLISH == 'yes'
-        run: |
-          if python tools/release.py gate > "$RUNNER_TEMP/gate.txt"; then
-            PUBLISH=yes
-          else
-            STATUS=$?
-            if [ "$STATUS" -ne 3 ]; then cat "$RUNNER_TEMP/gate.txt"; exit "$STATUS"; fi
-            PUBLISH=no
-          fi
-          { echo "## Release gate for $TAG"; echo; echo '```'; cat "$RUNNER_TEMP/gate.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          cat "$RUNNER_TEMP/gate.txt"
-          if [ "$PUBLISH" = no ]; then echo "::notice title=Unpublished::$(head -1 "$RUNNER_TEMP/gate.txt")"; fi
-          echo "PUBLISH=$PUBLISH" >> "$GITHUB_ENV"
-
-      - name: Release notes are the current release/NOTES.md
-        if: env.PUBLISH == 'yes'
-        run: python tools/release.py notes "$VERSION" > "$RUNNER_TEMP/notes.md"
-
-      - name: Build the release artifacts from the exact commit
-        if: env.PUBLISH == 'yes'
-        run: |
-          EXPORT="$(mktemp -d)"
-          git archive "$COMMIT" | tar -x -C "$EXPORT"
-          (cd "$EXPORT" && python -m build)
-          mkdir -p dist
-          cp "$EXPORT"/dist/* dist/
-          git archive --format=tar.gz --prefix=pod/ \
-            -o "dist/pod-skill-$VERSION.tar.gz" "$COMMIT:skills/pod"
-          PYTHONPATH=skills python -m pod.skill_validation --wheel dist/*.whl
-          python tools/artifact_audit.py dist/*
-          (cd dist && sha256sum ./* > SHA256SUMS)
-
-      - name: Create the annotated tag
-        if: env.PUBLISH == 'yes' && github.ref_type == 'branch'
-        run: |
-          if ! git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
-            git -c user.name="$GITHUB_ACTOR" \
-                -c user.email="${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com" \
-                tag -a "$TAG" "$COMMIT" -m "Pod $VERSION"
-            git push origin "refs/tags/$TAG"
-          fi
-
-      - name: The published source installs as a skill
-        if: env.PUBLISH == 'yes'
-        run: |
-          SMOKE="$RUNNER_TEMP/release-home"
+          SMOKE="$RUNNER_TEMP/remote-home"
           mkdir -p "$SMOKE"
+          SOURCE="${GITHUB_REPOSITORY}"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then SOURCE="${GITHUB_REPOSITORY}#${GITHUB_HEAD_REF}"; fi
           env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
-            HOME="$SMOKE" npx --yes skills@1.7.0 add \
-            "${GITHUB_REPOSITORY}#${TAG}" --skill pod -a codex -a claude-code -g -y
+            HOME="$SMOKE" npx --yes skills@1.7.0 add "$SOURCE" --skill pod -a codex -a claude-code -g -y
           PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
-          # A remote source does record a lock entry, pinned to the tag that was installed.
-          python - "$SMOKE/.agents/.skill-lock.json" "$TAG" <<'PY'
-          import json, sys
-          lock = json.load(open(sys.argv[1]))
-          entry = lock["skills"]["pod"]
-          assert entry.get("ref") == sys.argv[2], entry
-          print("lock entry pinned to", entry["ref"])
-          PY
-
-      - name: Publish the release
-        if: env.PUBLISH == 'yes'
-        run: |
-          gh release create "$TAG" --verify-tag --title "Pod $VERSION" \
-            --notes-file "$RUNNER_TEMP/notes.md" dist/*
+          env -i PATH="$PATH" HOME="$SMOKE" python -I "$SMOKE/.agents/skills/pod/scripts/pod.py" doctor --json > /dev/null

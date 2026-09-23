@@ -49,38 +49,26 @@ not keep another worker database or use raw terminal closure as a lifecycle API.
 
 ## Installation
 
-Install from `main` for both supported agents:
+**Prerequisites:** Linux, Python 3.13+ as `python3`, PyYAML 6.x, Node for the
+skills CLI, and Orca with its version-matched orchestration guide.
+
+**Install** the current skill from `main` for both supported agents:
 
 ```bash
 npx skills add j3w1/pod --skill pod -a codex -a claude-code -g
 ```
 
-Then open the target project in Orca and start an authenticated Codex or Claude
-Code conversation. Invoke Pod before configuring worker routes; direct work is
-always valid. Approve a route only if delegation would actually help.
+That is the one way to install Pod. The skill carries its own Python helpers;
+loading it installs nothing and changes no provider setting. If PyYAML is
+missing, the first helper run prints the one user-space step that installs it.
 
-Requirements are Linux, Python 3.13+ as `python3`, PyYAML 6.x, and Orca with its
-version-matched orchestration guide. Loading Pod installs nothing or changes no
-provider setting.
+**Start:** open the target project in Orca and start an authenticated Codex or
+Claude Code conversation there. Invoke `$pod` in Codex or `/pod` in Claude Code.
+Direct work is always valid; approve a worker route only if delegation would
+actually help.
 
-To pin a release, use a tag from the [releases](https://github.com/j3w1/pod/releases)
-page:
-
-```bash
-npx skills add j3w1/pod#v0.4.0 --skill pod -a codex -a claude-code -g
-```
-
-Without Node, clone a reviewed published tag and use its explicit installer:
-
-```bash
-git clone --branch v0.4.0 --depth 1 https://github.com/j3w1/pod pod-release
-python3 pod-release/install.py --venv ~/.local/share/pod/venv \
-  --expected-commit "$(git -C pod-release rev-parse v0.4.0^{commit})"
-~/.local/share/pod/venv/bin/pod setup --global
-```
-
-Source on `main`, a published tag, and the copy currently loaded by your agent
-can differ. `doctor --json` shows the loaded bundle path and version.
+The copy your agent loaded stays as installed until you update it. `doctor`
+shows its path and the version from the repository's `VERSION` file.
 
 ## The basic workflow
 
@@ -208,7 +196,7 @@ by `doctor` and blocks only that objective; it is never converted.
 - Bounded issue/source, packet, checkpoint, admission and verification evidence.
 - Objective-local logical fan-out and exact Orca request recovery.
 - Candidate-bound Governor decisions: `ALLOW`, `REUSE` or `DEFER`.
-- One `skills/pod` tree serving as Python package, skill bundle and wheel payload.
+- One `skills/pod` tree serving as both the Python package and the skill.
 
 Pod has no scheduler, issue database, polling service, provider launcher,
 worktree manager, dashboard or duplicate Orca lifecycle state.
@@ -223,15 +211,15 @@ worktree manager, dashboard or duplicate Orca lifecycle state.
 
 ## Updating and removing
 
-Use the manager that installed the skill:
+The skills CLI manages the installed copy:
 
 ```bash
 npx skills update pod -g
 npx skills remove pod -g -a codex -a claude-code
 ```
 
-For the Python installer, update from a reviewed checkout and run `pod setup`
-again. Setup preserves modified copies and recognizes skills-CLI ownership.
+An update installs whatever `main` holds now. `setup` never overwrites or removes
+a copy the skills CLI manages, and it preserves copies you edited.
 
 ## Contributing
 
@@ -241,19 +229,12 @@ Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md), and the
 ```bash
 PYTHONPATH=skills python -m unittest discover -s tests -v
 PYTHONPATH=skills python -m pod.skill_validation skills/pod
-python tools/artifact_audit.py --source .
+python tools/source_audit.py .
 ```
 
-To release, bump `pod.__version__` and the `metadata.version` in `SKILL.md`,
-replace `release/NOTES.md` with this version's notes, and commit the
-`release/evidence.json` that records the [validation gates](docs/validation.md)
-and owner authorization for the exact releasable content: the candidate's whole
-tree, notes included, with only the evidence record left out. The evidence can
-land in a later commit; any other change after approval blocks publication. A pull request that changes
-product files without a bump fails its checks. On merge to `main`, the release
-workflow publishes the tag and GitHub release with the wheel, sdist and skill
-bundle only when that evidence passes Pod's release gate; otherwise `main` stays
-merged and unpublished, and the job summary says which gate is missing.
+`VERSION` at the repository root is the one authored version; the bundle's
+`skills/pod/VERSION` links to it, and every installed copy carries it. Changing it
+only changes what `doctor` reports.
 
 ## License
 

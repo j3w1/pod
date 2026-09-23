@@ -1,30 +1,29 @@
 # Pod validation
 
-Each result binds an exact commit and Git tree, host, UTC date, command, outcome and sanitized report reference. Commit and tree values are full lowercase Git object IDs (40 hexadecimal characters for SHA-1 repositories or 64 for SHA-256 repositories). One selected binding or validation record uses one repository-wide object format, so its commit and tree IDs must have the same width. The timestamp is canonical RFC 3339 UTC with a trailing `Z`, including seconds and at most six fractional-second digits. The report value is a repository-neutral relative artifact identifier followed by ` sha256:` and the artifact's full 64-character lowercase SHA-256 digest; the identifier begins with an ASCII letter or digit, and its path components may otherwise use ASCII letters, digits, `.`, `_`, and `-`, but must not be empty, `.` or `..`. Offline fixtures do not prove live Orca, provider behaviour, hosted CI, independent review or acceptance. Every row for a new candidate starts `NOT_RUN` until a matching result is recorded.
+These checks answer whether Pod works: whether the skill on `main` installs, runs, keeps its
+contracts and coordinates real Orca workers. Each recorded result names the exact commit,
+host, UTC date, command, outcome and a sanitized report reference. Offline fixtures do not
+prove live Orca, provider behaviour, hosted CI, independent review or acceptance, and a check
+that was not exercised stays `NOT_RUN`; it is never reported as a pass.
 
-## Required candidate checks
+## Checks
 
-| Gate | Command or evidence | Current boundary |
+| Check | Command or evidence | What it proves |
 | --- | --- | --- |
-| Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Disposable synthetic fixtures |
-| Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Tests must actually be discovered |
-| Compile and whitespace | `python -m compileall -q skills tests tools install.py`; `git diff --check "$(git hash-object -t tree /dev/null)" HEAD` | Local syntax and whole-tree whitespace |
-| Release notes | `python tools/release.py notes "$(python -c 'import pod; print(pod.__version__)')"` | `release/NOTES.md` opens with `# Pod <declared version>` and describes it |
-| Release readiness | `python tools/release.py check BASE` on each pull request | A change under `skills/pod/`, `pyproject.toml`, `install.py` or `MANIFEST.in` carries a version bump; notes and any committed evidence name the declared version |
-| Artifact audit | `python tools/artifact_audit.py dist/*` | No personal path, account, runtime identifier, credential or trail vocabulary in a published artifact |
-| Tracked-source hygiene | `python tools/artifact_audit.py --source .` | The same check over every tracked file; sanitized fixtures are not exempt |
-| Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, frontmatter allowlist, helper invocation forms and references |
-| Bundle parity | `python -m pod.skill_validation --wheel dist/*.whl`; `--installed PATH` for a placed copy | The wheel and every placed copy carry the tracked bundle's exact bytes |
-| Frozen build | `git archive HEAD` into a disposable cache directory, then build a wheel and sdist there | Exact committed candidate |
-| Fresh isolated install | Install the wheel into a new disposable venv; smoke `pod --help`, each family help, `pod config --check --json`, `pod doctor --json`, then `--installed` parity | No model or Orca mutation |
-| Copied-bundle form | Run `scripts/pod.py doctor --json` from a copy, in an unrelated directory, with no `PYTHONPATH` and no checkout | The installed skill needs nothing outside itself |
-| Skills-CLI install | `npx skills@1.7.0 add SOURCE --skill pod -a codex -a claude-code -g -y` in a disposable home, with `DISABLE_TELEMETRY=1` | The documented installation actually works, and `pod setup` then reports it as externally managed |
-| Hosted Linux | The same suite, incident discovery, audit, frozen build, installs and smokes in one candidate-bound job | Candidate-bound CI |
-| Release publication | The `release` job on a push to `main` or a `v*` tag | Idempotent: publishes only a declared version with no tag and no release, and only when `release/evidence.json` passes the release gate for that candidate and releasable tree; otherwise `main` stays merged and unpublished |
-| Independent audit | Fresh reviewer of the exact commit and tree with reproducible evidence | Findings only |
+| Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Current behaviour against disposable synthetic fixtures |
+| Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident regressions are actually discovered |
+| Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check "$(git hash-object -t tree /dev/null)" HEAD` | Local syntax and whole-tree whitespace |
+| Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, `VERSION`, frontmatter allowlist, helper invocation forms, references and instruction budgets |
+| Tracked-source hygiene | `python tools/source_audit.py .` | No personal path, account, runtime identifier, credential or unsupported mechanism in any tracked file, and nothing that packages or ships Pod as a versioned artifact; a governed project's own release vocabulary is allowed |
+| Copied-bundle form | Run `scripts/pod.py doctor --json` from a copy, in an unrelated directory, with no `PYTHONPATH` and no checkout | The skill needs nothing outside itself and reports its `VERSION` |
+| Skills-CLI install | `npx skills@1.7.0 add SOURCE --skill pod -a codex -a claude-code -g -y` in a disposable home, with `DISABLE_TELEMETRY=1`, for this commit and for `j3w1/pod` itself; then `--installed` parity and each helper family from the installed copy | The documented installation works, and `setup` reports the copy as managed by the skills CLI |
+| Hosted Linux | The checks above in one job on every pull request and every push to `main` | Hosted CI for the exact commit |
+| Independent audit | Fresh reviewer of the exact commit with reproducible evidence | Findings only |
 | Live core matrix | Codex and Claude Code, each on Linux: discovery, in-session coordination, authorized native worker and effective route, request recovery, verification and adoption | Separate live authorization and a disposable project |
 | Orca delegation | Each advertised worker adapter: request construction, account and authentication selection, launch identity, effective launch and request recovery; native messaging and disposition are observed from Orca | Production adapter against the installed runtime |
-| Project acceptance | Owner governance, merge, release and any publication decisions | External |
+| Project acceptance | Owner review and merge of the change to `main` | External |
+
+Live checks are run when a change touches the behaviour they cover, not on every commit.
 
 For disposable validation, `POD_CONFIG_HOME` may name an absolute directory containing
 `config.yaml`, and `POD_STATE_HOME` may name an absolute Pod state directory. These
@@ -53,16 +52,7 @@ Repository/worktree identity uses Git reads that do not inspect dirtiness, run f
 hooks or update optional index caches. Dirtiness is unknown unless a separately authorized
 operation observes it; failed identity reads never become a claim of cleanliness.
 
-The explicit installer requires pip 22.3 or newer on the invoking interpreter, creates the
-selected environment without pip, and uses isolated bootstrap pip's documented `--python`
-option to manage the exact target interpreter, with script-location warning traversal
-disabled. Process-only controls remove inherited Python and pip control variables, disable
-all pip configuration files for both pip phases and their target re-exec, and disable the
-user site. Before success, the target interpreter runs in isolated mode and verifies the
-installed `j3w1-pod` distribution and `pod` import; no system pip upgrade or profile change
-is attempted.
-
-The [scenario coverage file](pod-coverage.json) lists every acceptance scenario. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Candidate-bound live and hosted rows remain `NOT_RUN` until actually exercised.
+The [scenario coverage file](pod-coverage.json) lists every acceptance scenario. Its test paths identify intended offline cases; the file itself proves only inventory integrity. Live and hosted rows remain `NOT_RUN` until actually exercised.
 
 Issue fixtures use disposable Git repositories and injected GitHub read ports. They establish
 complete-body parsing, identity, digest/reconciliation and linked-worktree policy/state behavior;
@@ -114,27 +104,6 @@ no-start: the admission holds `unresolved` until request-show and worker-show se
 Pod never invents a UUID, starts a replacement, retries in a loop, or mutates release,
 terminal or lifecycle state.
 
-`python -m pod.internal release-gate --input RECORD.json` projects these exact rows. Every row
-records host `Linux`, the one supported execution environment. A complete set without an owner
-authorization returns `owner_decision_required`: technical readiness is reported, permission is
-withheld. Supplying a `pod-release-authorization/v1` record naming the exact candidate, tree and
-a scope containing `release` returns `authorized`; an incomplete set stays `blocked` whatever the
-authorization says. Missing live or delegation subchecks remain unavailable even if a top-level
-result says PASS. The gate performs no release.
-
-The release workflow consumes the same gate through `release/evidence.json`, a
-`pod-release-evidence/v1` record holding the declared `version`, the `candidate` commit, the
-`tree`, the validation `records` and the owner `authorization`. The tree is the releasable
-tree printed by `python tools/release.py tree CANDIDATE`: the candidate's whole tree,
-including `release/NOTES.md`, with only `release/evidence.json` left out, so the evidence can
-be committed after the candidate without binding itself. Authorization therefore binds the
-exact releasable content and candidate, not the later commit that adds the evidence and is
-tagged. On a push to `main`, `python tools/release.py gate` publishes only when the evidence
-names the declared version, its candidate is in the pushed history, the releasable tree of
-`HEAD` equals the bound tree, and the gate returns `authorized`; any other outcome leaves
-`main` merged and unpublished and is reported in the job summary. The file describes one
-version and is replaced for the next, like `release/NOTES.md`.
-
 ## Waste governor
 
 The governor's own evaluation runs offline: rule tests need no network, Orca, `gh` or model, and
@@ -182,23 +151,11 @@ Required-check reporting and merge-queue semantics remain `NOT_RUN` until exerci
 reference contract in [github-ci-contract](github-ci-contract.md) is documentation of a
 pattern, not evidence that a repository follows it.
 
-## Evidence record
+## Recording evidence
 
-```json
-{
-  "schema": "pod-validation/v1",
-  "candidate": "1111111111111111111111111111111111111111",
-  "tree": "2222222222222222222222222222222222222222",
-  "host": "Linux",
-  "utc": "2026-09-20T00:00:00Z",
-  "gate": "name",
-  "command": "sanitized command",
-  "outcome": "PASS | FAILED | NOT_RUN | UNAVAILABLE",
-  "report": "reports/unit-linux.txt sha256:4444444444444444444444444444444444444444444444444444444444444444"
-}
-```
-
-Do not store raw environments, credentials, source packets, personal paths or runtime IDs in tracked evidence. A passing offline suite cannot promote live, review, hosted, acceptance, merge or release labels.
+Do not store raw environments, credentials, source packets, personal paths or runtime IDs in
+tracked evidence. A passing offline suite cannot promote live, review, hosted or acceptance
+labels.
 
 ## Runtime boundary
 

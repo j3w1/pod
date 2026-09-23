@@ -1292,7 +1292,7 @@ class AdmissionTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
-    def test_removed_lifecycle_operations_are_not_exposed(self):
+    def test_lifecycle_operations_stay_with_orca(self):
         for operation in ("reconcile-launch", "delivery", "delivery-ack",
                           "release", "reconcile-release"):
             with self.subTest(operation=operation), self.assertRaises(PodError) as caught:

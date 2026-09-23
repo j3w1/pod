@@ -1,6 +1,6 @@
 from pathlib import Path
 import subprocess
-import tomllib
+import os
 import unittest
 
 from pod.bundle import BUNDLE_FILES, bundle_root, canonical, frontmatter, version
@@ -19,23 +19,24 @@ class BundleParityTests(unittest.TestCase):
         tracked = {line[len("skills/pod/"):] for line in listed.stdout.splitlines() if line.strip()}
         self.assertEqual(tracked, set(BUNDLE_FILES))
 
-    def test_one_version_across_package_skill_and_project_metadata(self):
-        metadata = frontmatter((BUNDLE / "SKILL.md").read_text(encoding="utf-8"))["metadata"]
-        self.assertEqual(metadata["metadata"]["version"], version())
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertIn("version", project["project"]["dynamic"])
-        self.assertEqual(project["tool"]["setuptools"]["dynamic"]["version"],
-                         {"attr": "pod.__version__"})
-        self.assertEqual(project["tool"]["setuptools"]["package-dir"], {"pod": "skills/pod"})
+    def test_one_authored_version(self):
+        """Root VERSION is authored; the bundle links to it, so the two cannot drift."""
+        text = (ROOT / "VERSION").read_text(encoding="ascii")
+        self.assertRegex(text, r"\A\d+\.\d+\.\d+\n\Z")
+        link = BUNDLE / "VERSION"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), "../../VERSION")
+        self.assertEqual(version(), text.strip())
+        self.assertNotIn("version", frontmatter((BUNDLE / "SKILL.md").read_text(encoding="utf-8"))
+                         ["metadata"]["metadata"])
+        listed = subprocess.run(["git", "-C", str(ROOT), "grep", "-n", "-E",
+                                 r"__version__ = \"[0-9]|^version = |(^|[[:space:]])version: \"?[0-9]",
+                                 "--", ".", ":!tests"],
+                                capture_output=True, text=True)
+        self.assertEqual(listed.stdout, "", "a second authored version appeared")
 
     def test_canonical_bytes_come_from_the_tracked_tree(self):
         source = canonical()
         self.assertEqual(set(source), set(BUNDLE_FILES))
         for name, data in source.items():
             self.assertEqual(data, (BUNDLE / name).read_bytes())
-
-    def test_the_distribution_targets_linux_only(self):
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        classifiers = project["project"]["classifiers"]
-        operating_systems = [row for row in classifiers if row.startswith("Operating System ::")]
-        self.assertEqual(operating_systems, ["Operating System :: POSIX :: Linux"])

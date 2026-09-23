@@ -108,5 +108,5 @@ class ScenarioFixtureTests(unittest.TestCase):
         inventory = json.loads((root / "docs" / "pod-coverage.json").read_text())
         ids = [row["id"] for row in inventory["scenarios"]]
         self.assertEqual(ids, [f"A{number:02d}" for number in range(1, len(ids) + 1)])
-        self.assertTrue(all(row["candidate_status"] in ("NOT_RUN", "PASS")
+        self.assertTrue(all(row["status"] in ("NOT_RUN", "PASS")
                             for row in inventory["scenarios"]))

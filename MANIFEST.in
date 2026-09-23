@@ -1,6 +1,0 @@
-include LICENSE README.md install.py
-recursive-include release *.md *.json
-recursive-include skills/pod *.md *.py *.yaml
-recursive-include tests *.py *.json
-recursive-include docs *.md *.json
-global-exclude __pycache__ *.py[cod]

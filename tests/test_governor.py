@@ -43,7 +43,7 @@ waste_governor:
 
 
 def authorization(candidate=COMMIT, tree=TREE, scope=("merge", "release")):
-    return {"schema": "pod-release-authorization/v1", "candidate": candidate, "tree": tree,
+    return {"schema": "pod-authorization/v1", "candidate": candidate, "tree": tree,
             "scope": list(scope), "authorized_by": "owner", "utc": "2026-09-21T00:00:00Z",
             "reference": "tasks/pod/authorization.md"}
 
@@ -1011,8 +1011,8 @@ class RecoveryTests(GovernorCase):
             decide(self.project, "objective", owner="other", action=action(), now=NOW)
         self.assertEqual(foreign.exception.code, "coordinator_conflict")
 
-    def test_the_governor_and_the_release_gate_agree_on_an_authorization(self):
-        from pod.release import validate_authorization as gate_validator
+    def test_a_malformed_owner_authorization_is_refused_for_every_governed_kind(self):
+        from pod.governor import validate_authorization
         binding = self.prepared()["candidate"]
         self.preflight(binding["id"])
         for broken in ({**authorization(), "candidate": "short"},
@@ -1020,6 +1020,6 @@ class RecoveryTests(GovernorCase):
                        {**authorization(), "scope": ["publish"]}):
             with self.subTest(broken=str(broken["scope"])):
                 with self.assertRaises(PodError):
-                    gate_validator(broken, candidate=COMMIT, tree=TREE)
+                    validate_authorization(broken, candidate=COMMIT, tree=TREE)
                 with self.assertRaises(PodError):
                     self.decide(action(kind="merge", target="main", candidate=binding["id"], authorization=broken))

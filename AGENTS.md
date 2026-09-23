@@ -11,11 +11,13 @@ ordinary Python to prevent incidental use on another system, and do not spend ef
 maintaining it there.
 
 Use Python 3.13+ and standard-library facilities where practical. `skills/pod` is one
-directory serving three roles at once: the importable `pod` package, the agent-skill bundle
-the skills ecosystem installs, and the wheel payload. Keep it that way. There is exactly one
-authoring source for each implementation and each policy; if you find yourself copying a
-file so two places can stay in step, the layout is wrong. `python -m pod.skill_validation`
-checks the bundle, a built wheel and any placed copy.
+directory serving two roles at once: the importable `pod` package and the agent skill that
+`npx skills add j3w1/pod --skill pod` installs from `main`. That is Pod's only distribution;
+there are no packages, releases or tags. There is exactly one authoring source for each
+implementation and each policy, including the version: the root `VERSION`, which
+`skills/pod/VERSION` links to. If you find yourself copying a file so two places can stay in
+step, the layout is wrong. `python -m pod.skill_validation` checks the bundle and any placed
+copy.
 
 Never embed personal paths, runtime identifiers, credentials, private source packets or live
 local bookkeeping in committed files. Captured third-party output under `tests/fixtures/` is
@@ -42,7 +44,7 @@ https://github.com/obra/superpowers/blob/main/README.md with original Pod wordin
 only implemented behaviour. Keep detailed contracts in the linked documents.
 
 Fixture execution uses disposable projects; existing host and ordinary project trials are
-read-only. No production or provider mutation, and no package-registry publication.
+read-only. No production or provider mutation, and no package or release publication.
 
 ## Upstream metadata governance
 

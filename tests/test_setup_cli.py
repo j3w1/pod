@@ -346,6 +346,24 @@ class SetupCliTests(unittest.TestCase):
             self.assertFalse((root / "codex").exists())
             self.assertFalse((root / "config").exists())
 
+    def test_human_doctor_names_the_version_and_where_the_skill_is(self):
+        with fixture() as root, \
+             patch("pod.cli.contract", return_value={
+                   "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+             patch("pod.cli.account_metadata_raw", return_value={"runtime": "runtime", "providers": {}}), \
+             patch("pod.cli.agent_login_mode", return_value={}):
+            out = io.StringIO()
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with redirect_stdout(out):
+                    main(["doctor"])
+            finally:
+                os.chdir(previous)
+        text = out.getvalue()
+        self.assertIn(f"Pod {version()} ready for direct work", text)
+        self.assertIn("skill installed at", text)
+
     def test_doctor_reports_unsupported_state_objective_scoped(self):
         with fixture() as root:
             foreign = Path(os.environ["XDG_STATE_HOME"]) / "pod" / "other-objective"
@@ -590,15 +608,13 @@ class SkillOwnershipTests(unittest.TestCase):
                                                         "CLAUDE_CONFIG_DIR": str(root / "claude")}):
             project = self.install_global(root)
             skill = root / "agents" / "skills" / "pod"
-            text = (skill / "SKILL.md").read_text(encoding="utf-8")
-            (skill / "SKILL.md").write_text(text.replace('version: "', 'version: "9.'),
-                                            encoding="utf-8")
+            (skill / "VERSION").write_text("9.0.0\n", encoding="ascii")
             report = inspect(project, global_scope=True)
             self.assertEqual(report["codex"]["status"], "other_version")
             self.assertTrue(report["codex"]["version"].startswith("9."))
             outcome = setup(project, global_scope=True)
             self.assertEqual(outcome["skills"]["codex"], "preserved_other_version")
-            self.assertTrue((skill / "SKILL.md").read_text(encoding="utf-8").count('version: "9.'))
+            self.assertEqual((skill / "VERSION").read_text(encoding="ascii"), "9.0.0\n")
 
     def test_an_installed_copy_carries_and_runs_its_own_helpers(self):
         with fixture() as root, patch.dict(os.environ, {"CODEX_HOME": str(root / "agents"),
@@ -775,9 +791,7 @@ class SeparateAgentHomeRegressions(unittest.TestCase):
         """Which copy wins is the operator's call, not something setup decides by writing."""
         with fixture() as root:
             canonical_copy = self.install_like_the_skills_cli(root)
-            text = (canonical_copy / "SKILL.md").read_text(encoding="utf-8")
-            (canonical_copy / "SKILL.md").write_text(text.replace('version: "', 'version: "9.'),
-                                                     encoding="utf-8")
+            (canonical_copy / "VERSION").write_text("9.0.0\n", encoding="ascii")
             elsewhere = root / "runtime-home"
             elsewhere.mkdir()
             project = root / "project"
