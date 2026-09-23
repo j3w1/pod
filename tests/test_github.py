@@ -47,17 +47,18 @@ def repository(root: Path, remote: str = "https://github.com/acme/widgets.git") 
 
 class IssuePort:
     def __init__(self, *, body="Complete issue body", state="OPEN",
-                 updated="2026-09-23T00:00:00Z", amendment="Decision"):
-        self.body, self.state, self.updated, self.amendment_body = body, state, updated, amendment
+                 updated="2026-09-23T00:00:00Z", amendment="Decision", amendment_issue=7):
+        self.body, self.state, self.updated = body, state, updated
+        self.amendment_body, self.amendment_issue = amendment, amendment_issue
 
     def issue(self, *, repository, number):
         return {"number": number, "title": "Implement widgets", "body": self.body,
                 "state": self.state, "url": f"https://github.com/{repository}/issues/{number}",
                 "updatedAt": self.updated}
 
-    def amendment(self, *, repository, comment):
+    def amendment(self, *, repository, number, comment):
         return {"id": comment, "body": self.amendment_body,
-                "url": f"https://github.com/{repository}/issues/7#issuecomment-{comment}",
+                "url": f"https://github.com/{repository}/issues/{self.amendment_issue}#issuecomment-{comment}",
                 "updatedAt": self.updated}
 
 
@@ -213,6 +214,17 @@ class PortReadingTests(unittest.TestCase):
             self.port.issue(repository="acme/widgets", number=7)
         self.assertEqual(denied.exception.code, "issue_access_unavailable")
 
+    def test_amendment_read_validates_the_exact_issue_identity(self):
+        matching = json.dumps({"id": 99, "body": "Decision",
+                               "url": "https://github.com/acme/widgets/issues/7#issuecomment-99"})
+        with self.run_with([completed(matching)]):
+            amendment = self.port.amendment(repository="acme/widgets", number=7, comment=99)
+        self.assertEqual(amendment["body"], "Decision")
+        wrong_issue = matching.replace("/issues/7", "/issues/8")
+        with self.run_with([completed(wrong_issue)]), self.assertRaises(PodError) as mismatch:
+            self.port.amendment(repository="acme/widgets", number=7, comment=99)
+        self.assertEqual(mismatch.exception.code, "issue_identity_mismatch")
+
 
 class RepositoryAndIssueTests(unittest.TestCase):
     def test_inaccessible_legacy_context_candidate_is_not_treated_as_absent(self):
@@ -316,6 +328,14 @@ class RepositoryAndIssueTests(unittest.TestCase):
             amendment = issue_recheck(worktree, intake["source"],
                                       port=IssuePort(amendment="Changed decision"))
             self.assertEqual(amendment["reason"], "issue_amendment_changed")
+            with self.assertRaises(PodError) as wrong_initial_amendment:
+                issue_intake(worktree, "https://github.com/acme/widgets/issues/7",
+                             port=IssuePort(amendment_issue=8), amendments=[
+                                 "https://github.com/acme/widgets/issues/7#issuecomment-99"])
+            self.assertEqual(wrong_initial_amendment.exception.code, "issue_identity_mismatch")
+            with self.assertRaises(PodError) as wrong_rechecked_amendment:
+                issue_recheck(worktree, intake["source"], port=IssuePort(amendment_issue=8))
+            self.assertEqual(wrong_rechecked_amendment.exception.code, "issue_identity_mismatch")
             with self.assertRaises(PodError) as mismatch:
                 issue_intake(worktree, "https://github.com/other/repo/issues/7", port=IssuePort())
             self.assertEqual(mismatch.exception.code, "repository_mismatch")

@@ -206,6 +206,20 @@ def parse_amendment_locator(locator: object) -> dict:
             "comment": int(match.group(4)), "locator": locator}
 
 
+def _validate_amendment_observation(row: object, *, repository: str,
+                                    number: int, comment: int) -> dict:
+    try:
+        returned = parse_amendment_locator(str(row.get("url", ""))) if isinstance(row, dict) else None
+    except PodError as exc:
+        raise PodError("issue_identity_mismatch", "GitHub returned an invalid amendment URL") from exc
+    if (not isinstance(row, dict) or row.get("id") != comment or returned is None
+            or not isinstance(row.get("body"), str)
+            or returned["repository"].casefold() != repository.casefold()
+            or returned["number"] != number or returned["comment"] != comment):
+        raise PodError("issue_identity_mismatch", "GitHub returned another issue amendment")
+    return row
+
+
 def validate_issue_binding(value: object) -> dict:
     from .util import exact
     source = exact(value, {"schema", "repository", "number", "locator", "body_sha256",
@@ -257,7 +271,11 @@ def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
         if (amendment["repository"].casefold() != parsed["repository"].casefold()
                 or amendment["number"] != parsed["number"]):
             raise PodError("invalid_issue_amendment", "Amendment belongs to another issue")
-        observed = reader.amendment(repository=parsed["repository"], comment=amendment["comment"])
+        observed = _validate_amendment_observation(
+            reader.amendment(repository=parsed["repository"], number=parsed["number"],
+                             comment=amendment["comment"]),
+            repository=parsed["repository"], number=parsed["number"],
+            comment=amendment["comment"])
         if len(observed["body"].encode()) > 128 * 1024:
             raise PodError("incomplete_issue_source", "Relevant issue amendment exceeds its bound")
         amendment_bindings.append({"locator": amendment["locator"],
@@ -288,7 +306,11 @@ def issue_recheck(project: Path, binding: dict, *, port: "GhPort | None" = None)
     reader = port or GhPort(project)
     for bound in source["amendments"]:
         amendment = parse_amendment_locator(bound["locator"])
-        observed = reader.amendment(repository=source["repository"], comment=amendment["comment"])
+        observed = _validate_amendment_observation(
+            reader.amendment(repository=source["repository"], number=source["number"],
+                             comment=amendment["comment"]),
+            repository=source["repository"], number=source["number"],
+            comment=amendment["comment"])
         if len(observed["body"].encode()) > 128 * 1024:
             raise PodError("incomplete_issue_source", "Relevant issue amendment exceeds its bound")
         amendment_changed = (amendment_changed
@@ -373,7 +395,7 @@ class GhPort:
             raise PodError("issue_identity_mismatch", "GitHub returned a different or incomplete issue")
         return rows
 
-    def amendment(self, *, repository: str, comment: int) -> dict:
+    def amendment(self, *, repository: str, number: int, comment: int) -> dict:
         try:
             row = self._gh_json(["api", f"repos/{repository}/issues/comments/{comment}",
                                  "--jq", AMENDMENT_JQ])
@@ -382,16 +404,8 @@ class GhPort:
                 raise PodError("issue_access_unavailable",
                                "Relevant issue amendment could not be read") from exc
             raise
-        try:
-            returned = parse_amendment_locator(str(row.get("url", ""))) if isinstance(row, dict) else None
-        except PodError as exc:
-            raise PodError("issue_identity_mismatch", "GitHub returned an invalid amendment URL") from exc
-        if (not isinstance(row, dict) or row.get("id") != comment or returned is None
-                or not isinstance(row.get("body"), str)
-                or returned["repository"].casefold() != repository.casefold()
-                or returned["comment"] != comment):
-            raise PodError("issue_identity_mismatch", "GitHub returned another issue amendment")
-        return row
+        return _validate_amendment_observation(row, repository=repository,
+                                               number=number, comment=comment)
 
     def branch_head(self, *, remote: str, branch: str) -> str | None:
         completed = self._git(["ls-remote", "--heads", remote, "refs/heads/" + branch], mutation=False)

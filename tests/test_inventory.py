@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import re
+import subprocess
 import unittest
 
 from pod.errors import PodError
@@ -16,6 +17,18 @@ EXAMPLE_SPEC = """> **Outcome:** Search results include archived documents.\n\n\
 ## Proof of Done\n- [ ] **PoD#1 — Filtered results.** A focused test proves both modes.\n\n\
 ## Validation\nRun the search unit suite.\n\n\
 ## Completion\n+Report the commit, checks, review and open delivery gates.\n"""
+
+
+def execution_spec_source(root: Path) -> Path:
+    """Return the sole tracked or ordinary untracked authoring source."""
+    completed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+         "--exclude-standard", "--", "*execution-spec*"],
+        capture_output=True, check=True)
+    matches = sorted(root / Path(value.decode()) for value in completed.stdout.split(b"\0") if value)
+    if len(matches) != 1:
+        raise ValueError("Execution Spec must have exactly one authoring source")
+    return matches[0]
 
 
 class InventoryIntegrityTests(unittest.TestCase):
@@ -96,11 +109,28 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
     def test_one_canonical_execution_spec_reference(self):
         canonical = self.root / "skills" / "pod" / "references" / "execution-spec.md"
         self.assertTrue(canonical.is_file())
-        matches = [path for path in self.root.rglob("*execution-spec*")
-                   if ".git" not in path.parts and path.is_file()]
-        self.assertEqual(matches, [canonical])
+        self.assertEqual(execution_spec_source(self.root), canonical)
         self.assertIn("references/execution-spec.md",
                       (self.root / "skills" / "pod" / "bundle.py").read_text())
+
+    def test_execution_spec_inventory_ignores_build_output_but_rejects_an_extra_source(self):
+        with fixture() as root:
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            canonical = root / "skills" / "pod" / "references" / "execution-spec.md"
+            canonical.parent.mkdir(parents=True)
+            canonical.write_text("canonical\n")
+            (root / ".gitignore").write_text("build/\n")
+            subprocess.run(["git", "-C", str(root), "add", ".gitignore",
+                            "skills/pod/references/execution-spec.md"], check=True)
+            generated = root / "build" / "lib" / "pod" / "references" / "execution-spec.md"
+            generated.parent.mkdir(parents=True)
+            generated.write_text("generated\n")
+            self.assertEqual(execution_spec_source(root), canonical)
+            duplicate = root / "docs" / "execution-spec.md"
+            duplicate.parent.mkdir()
+            duplicate.write_text("second authoring source\n")
+            with self.assertRaisesRegex(ValueError, "exactly one authoring source"):
+                execution_spec_source(root)
 
     def test_reference_has_readable_skeleton_and_numbered_proof(self):
         text = (self.root / "skills" / "pod" / "references" / "execution-spec.md").read_text()

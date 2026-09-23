@@ -241,6 +241,18 @@ def make_unresolved(project, admission_id, *, request_uuid=REQUEST_UUID):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_admission_works_beneath_a_symlinked_native_state_root(self):
+        with fixture() as root:
+            real = root.parent / "real-admission-state"
+            real.mkdir()
+            linked = root.parent / "linked-admission-state"
+            linked.symlink_to(real, target_is_directory=True)
+            with patch.dict(os.environ, {"XDG_STATE_HOME": str(linked)}):
+                project, assessment, capabilities, quotas, frozen = setup_case(root)
+                result = start(project, assessment, capabilities, quotas, frozen, FakePort())
+            self.assertEqual(result["status"], "bound")
+            self.assertTrue((real / "pod" / "admission" / ".lock").is_file())
+
     def test_native_selector_resolution_fences_start_replay_and_allows_bound_isolation(self):
         with fixture() as root:
             project_path = root / "project"

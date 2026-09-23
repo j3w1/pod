@@ -29,8 +29,12 @@ def state_root(project: Path | None = None) -> Path:
     override = explicit_home("POD_STATE_HOME")
     if override is not None:
         return override
-    return native_home("XDG_STATE_HOME", default=Path.home() / ".local" / "state",
-                       project=project) / "pod"
+    native_root = native_home("XDG_STATE_HOME", default=Path.home() / ".local" / "state",
+                              project=project)
+    # The validated native profile root may itself be a symlink. Anchor Pod's
+    # owned state below its physical root so generic no-follow record checks can
+    # still reject every redirect introduced beneath that boundary.
+    return native_root.resolve(strict=False) / "pod"
 
 
 def _record_exists(path: Path) -> bool:

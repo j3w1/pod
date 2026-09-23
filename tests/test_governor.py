@@ -219,6 +219,16 @@ class GovernorCase(unittest.TestCase):
 
 
 class CandidateTests(GovernorCase):
+    def test_governor_works_beneath_a_symlinked_native_state_root(self):
+        real = self.root / "real-governor-state"
+        real.mkdir()
+        linked = self.root / "linked-governor-state"
+        linked.symlink_to(real, target_is_directory=True)
+        with patch.dict(os.environ, {"XDG_STATE_HOME": str(linked)}):
+            candidate = self.prepared()
+        self.assertEqual(candidate["status"], "prepared")
+        self.assertTrue(next((real / "pod").glob("*/governor.json")).is_file())
+
     def test_generations_open_only_at_explicit_boundaries(self):
         first = self.prepared()
         self.assertEqual((first["status"], first["candidate"]["generation"]), ("prepared", 1))

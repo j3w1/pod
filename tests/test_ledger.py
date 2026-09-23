@@ -10,8 +10,9 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import (ADMISSION_STATES, _path, checkpoint, logical_projection,
-                        migrate_v1, migration_inventory, read, _quota_hold)
+                        migrate_v1, migration_inventory, read, state_root, _quota_hold)
 from pod.records import source_identity
+from pod.util import digest
 from tests.common import fixture
 
 
@@ -75,6 +76,31 @@ def effect(state, *, binding=None, grant=None):
 
 
 class V2StateTests(unittest.TestCase):
+    def test_native_state_root_symlink_is_allowed_but_owned_redirect_is_not(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            real = root.parent / "real-native-state"
+            real.mkdir()
+            linked = root.parent / "linked-native-state"
+            linked.symlink_to(real, target_is_directory=True)
+            with patch.dict(os.environ, {"XDG_STATE_HOME": str(linked)}):
+                checkpoint(project, "objective", owner="owner", value=checkpoint_body(),
+                           native={"runtime": "runtime"})
+                self.assertEqual(state_root(project), real / "pod")
+                self.assertTrue((real / "pod").is_dir())
+
+                outside = root.parent / "redirected-state"
+                outside.mkdir()
+                owned = real / "pod" / digest({"project": str(project.resolve()),
+                                                 "objective": "blocked"})
+                owned.symlink_to(outside, target_is_directory=True)
+                with self.assertRaises(PodError) as caught:
+                    checkpoint(project, "blocked", owner="owner", value=checkpoint_body(),
+                               native={"runtime": "runtime"})
+                self.assertEqual(caught.exception.code, "unsafe_state")
+                self.assertEqual(list(outside.iterdir()), [])
+
     def test_quota_exhaustion_is_monotonic_across_restart_and_window_renewal(self):
         with fixture() as root:
             now = datetime(2026, 9, 22, 12, tzinfo=timezone.utc)
@@ -226,6 +252,22 @@ class MigrationTests(unittest.TestCase):
             closed = next(row for row in state["admissions"].values() if row["state"] == "closed")
             self.assertEqual(closed["recovery"]["spending_grant"], grant)
             self.assertNotIn("deliveries", state)
+
+    def test_migration_works_beneath_a_symlinked_native_state_root(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            real = root.parent / "real-migration-state"
+            real.mkdir()
+            linked = root.parent / "linked-migration-state"
+            linked.symlink_to(real, target_is_directory=True)
+            with patch.dict(os.environ, {"XDG_STATE_HOME": str(linked)}):
+                self.write_old(project, legacy({"reserved": effect("reserved")}))
+                result = migrate_v1(project, "objective", owner="owner",
+                                    worker_reader=lambda dispatch: {})
+                self.assertEqual(result["status"], "migrated")
+                self.assertEqual(read(project, "objective")["schema"], "pod-context/v2")
+                self.assertTrue((real / "pod").is_dir())
 
     def test_migration_uses_the_same_coherent_assignment_settlement_rule(self):
         with fixture() as root:
