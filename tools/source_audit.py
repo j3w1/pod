@@ -26,21 +26,30 @@ FORBIDDEN = (
 # Mechanisms, documents and distribution channels Pod does not have. Each pattern names
 # Pod's own machinery precisely, so a governed project's release vocabulary never matches.
 TRAIL = (
-    ("removed mechanism", re.compile(
+    ("unsupported mechanism", re.compile(
         rb"orchestrate|legacy_hold|state[-_]migrate|\bcapacity_full\b|pod-context/v[12]|pod-governor/v1"
         rb"|docs/history|backwards?[ -]compat|migration_required|pod-migration|pod-progress"
         rb"|platform_audit")),
-    ("Pod publication", re.compile(
-        rb"release/evidence|release/NOTES|tools/release\.py|release_gate|release-gate|pod-release-"
-        rb"|github\.com/j3w1/pod/releases|j3w1/pod#|j3w1[-_]pod\b|pod-skill-|--expected-commit"
-        rb"|SHA256SUMS")),
     ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|migration|baseline commit)\b", re.I)),
+)
+# Pod publishing itself. Pod never creates releases or tags, not even for a governed project,
+# whose merge, release and deployment belong to that project's governance. So a release or
+# tag command anywhere here is Pod publication, while a governed project's own release words,
+# including its own release gate, are ordinary vocabulary.
+PUBLICATION = (
+    ("Pod publication", re.compile(
+        rb"release/evidence|release/NOTES|tools/release\.py|internal release-gate|pod-release-"
+        rb"|pod\.release\b|from \.release import|github\.com/j3w1/pod/releases|j3w1/pod#"
+        rb"|j3w1[-_]pod\b|pod-skill-|--expected-commit|SHA256SUMS"
+        rb"|gh release (?:create|upload|edit|delete)|git tag (?:-a |-s )?v?\d|git push [^\n]*--tags")),
 )
 # Tracked paths that would mean Pod is being packaged or published again.
 PUBLICATION_PATHS = ("release/", "CHANGELOG", "pyproject.toml", "setup.py", "setup.cfg",
                      "MANIFEST.in", "install.py", "skills/pod/release.py")
-# The guard names its own patterns, and sanitized captures are Orca's words, not Pod's.
-TRAIL_EXEMPT = ("tests/fixtures/", "tools/source_audit.py", "tests/test_source_audit.py")
+# The guard names its own patterns. Sanitized captures are Orca's words, not Pod's, so they
+# are exempt from Pod's wording rules but never from the publication rule.
+GUARD_FILES = ("tools/source_audit.py", "tests/test_source_audit.py")
+TRAIL_EXEMPT = ("tests/fixtures/",) + GUARD_FILES
 
 
 def _line_number(data: bytes, offset: int) -> int:
@@ -51,6 +60,8 @@ def _scan(name: str, data: bytes) -> list[str]:
     tables = [FORBIDDEN]
     if not name.startswith(TRAIL_EXEMPT):
         tables.append(TRAIL)
+    if not name.startswith(GUARD_FILES):
+        tables.append(PUBLICATION)
     findings = []
     for table in tables:
         for label, pattern in table:
@@ -103,7 +114,7 @@ def main(argv: list[str]) -> int:
             print("  " + finding)
         return 1
     print("Tracked source audited; no personal path, account, runtime identifier, credential, "
-          "removed mechanism or Pod publication material.")
+          "unsupported mechanism or Pod publication material.")
     return 0
 
 

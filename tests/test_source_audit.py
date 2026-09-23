@@ -57,11 +57,14 @@ class TrackedSourceAuditTests(unittest.TestCase):
                 "skills/pod/ledger.py": b"STATES = ('legacy_hold',)\n",
                 "README.md": b"pin it with npx skills add " + b"j3w1/pod#" + b"v0.1.0\n",
                 "docs/checks.md": b"run tools/" + b"release.py gate\n",
+                "docs/pod-install.md": b"Publish Pod with gh " + b"release create v0.5.0 and git " + b"tag v0.5.0\n",
                 "tests/fixtures/capture.json": b'{"note":"legacy migration capacity_full"}\n',
+                "tests/fixtures/sanitized.txt": b"pod-" + b"release-gate/v1\n",
             })
             findings = audit_source(root)
             self.assertEqual(sorted(row.split(" :: ")[0] for row in findings),
-                             ["README.md", "docs/checks.md", "docs/notes.md", "skills/pod/ledger.py"])
+                             ["README.md", "docs/checks.md", "docs/notes.md", "docs/pod-install.md",
+                              "skills/pod/ledger.py", "tests/fixtures/sanitized.txt"])
             self.assertFalse(any("legacy_hold" in row or "docs/history" in row for row in findings))
 
     def test_publication_paths_are_findings_but_skill_setup_is_not(self):
@@ -83,7 +86,8 @@ class TrackedSourceAuditTests(unittest.TestCase):
             tracked(root, {"skills/pod/references/governor.md":
                            b"Merge, release and deployment need an owner authorization.\n"
                            b"A release candidate of the governed project is prepared first.\n"
-                           b"The project's CHANGELOG and GitHub Release belong to that project.\n"})
+                           b"The project's CHANGELOG and GitHub Release belong to that project.\n"
+                           b"The governed project uses a release-gate for its own deployment.\n"})
             self.assertEqual(audit_source(root), [])
 
     def test_repository_tracked_source_is_clean(self):

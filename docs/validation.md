@@ -14,7 +14,7 @@ that was not exercised stays `NOT_RUN`; it is never reported as a pass.
 | Explicit incident discovery | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident regressions are actually discovered |
 | Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check "$(git hash-object -t tree /dev/null)" HEAD` | Local syntax and whole-tree whitespace |
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, `VERSION`, frontmatter allowlist, helper invocation forms, references and instruction budgets |
-| Tracked-source hygiene | `python tools/source_audit.py .` | No personal path, account, runtime identifier, credential, removed mechanism or Pod publication material in any tracked file; sanitized fixtures are not exempt |
+| Tracked-source hygiene | `python tools/source_audit.py .` | No personal path, account, runtime identifier, credential, unsupported mechanism or Pod publication material in any tracked file; sanitized fixtures are not exempt |
 | Copied-bundle form | Run `scripts/pod.py doctor --json` from a copy, in an unrelated directory, with no `PYTHONPATH` and no checkout | The skill needs nothing outside itself and reports its `VERSION` |
 | Skills-CLI install | `npx skills@1.7.0 add SOURCE --skill pod -a codex -a claude-code -g -y` in a disposable home, with `DISABLE_TELEMETRY=1`, for this commit and for `j3w1/pod` itself; then `--installed` parity and each helper family from the installed copy | The documented installation works, and `setup` reports the copy as managed by the skills CLI |
 | Hosted Linux | The checks above in one job on every pull request and every push to `main` | Hosted CI for the exact commit |

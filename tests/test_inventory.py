@@ -178,7 +178,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         self.assertEqual(triggers["push"], {"branches": ["main"]})
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertEqual(list(workflow["jobs"]), ["skill"])
-        for forbidden in ("gh release", "git tag", "git push", "tags:", "contents: write",
+        for forbidden in ("gh " + "release", "git " + "tag", "git push", "tags:", "contents: write",
                           "python -m build", "sha256sum", "upload-artifact", "twine"):
             self.assertNotIn(forbidden, text)
         for required in ("unittest discover -s tests", "pod.skill_validation skills/pod",
