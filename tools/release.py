@@ -48,9 +48,24 @@ def version_at(root: pathlib.Path, revision: str | None = None) -> str:
 
 
 def product_tree(root: pathlib.Path, revision: str = "HEAD") -> str:
-    """The tree of everything except release/, so evidence binds what it proves, not itself."""
-    entries = [line for line in _git(root, "ls-tree", revision).splitlines()
-               if line.split("\t", 1)[1] != "release"]
+    """The releasable tree: everything, including release/NOTES.md, except the evidence record.
+
+    Leaving out only release/evidence.json lets the evidence be committed after the candidate
+    without binding itself, while any later change to source, packaging, docs or the release
+    notes changes this tree and blocks publication.
+    """
+    root_entries = _git(root, "ls-tree", revision).splitlines()
+    entries = []
+    for line in root_entries:
+        meta, name = line.split("\t", 1)
+        if name != "release":
+            entries.append(line)
+            continue
+        kept = [row for row in _git(root, "ls-tree", f"{revision}:release").splitlines()
+                if row.split("\t", 1)[1] != "evidence.json"]
+        if kept:
+            subtree = _git(root, "mktree", input_text="\n".join(kept) + "\n").strip()
+            entries.append(f"040000 tree {subtree}\trelease")
     return _git(root, "mktree", input_text="\n".join(entries) + "\n").strip()
 
 
@@ -101,7 +116,7 @@ def gate(root: pathlib.Path) -> tuple[bool, str, dict | None]:
         return False, "evidence names a candidate outside this history: merged but unpublished", None
     tree = product_tree(root)
     if tree != evidence["tree"]:
-        return False, (f"evidence binds product tree {str(evidence['tree'])[:12]} but HEAD has "
+        return False, (f"evidence binds releasable tree {str(evidence['tree'])[:12]} but HEAD has "
                        f"{tree[:12]}: merged but unpublished"), None
     sys.path.insert(0, str(root / "skills"))
     from pod.errors import PodError

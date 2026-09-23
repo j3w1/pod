@@ -247,7 +247,9 @@ python tools/artifact_audit.py --source .
 To release, bump `pod.__version__` and the `metadata.version` in `SKILL.md`,
 replace `release/NOTES.md` with this version's notes, and commit the
 `release/evidence.json` that records the [validation gates](docs/validation.md)
-and owner authorization for the exact candidate. A pull request that changes
+and owner authorization for the exact releasable content: the candidate's whole
+tree, notes included, with only the evidence record left out. The evidence can
+land in a later commit; any other change after approval blocks publication. A pull request that changes
 product files without a bump fails its checks. On merge to `main`, the release
 workflow publishes the tag and GitHub release with the wheel, sdist and skill
 bundle only when that evidence passes Pod's release gate; otherwise `main` stays

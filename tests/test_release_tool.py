@@ -122,10 +122,11 @@ class PublishGateTests(unittest.TestCase):
             self.assertIn("no release/evidence.json", reason)
             candidate = git(root, "rev-parse", "HEAD")
             tree = product_tree(root)
-            self.assertNotEqual(tree, git(root, "rev-parse", "HEAD^{tree}"))
+            # With no evidence record yet, the releasable tree is the whole commit tree.
+            self.assertEqual(tree, git(root, "rev-parse", "HEAD^{tree}"))
             (root / "release" / "evidence.json").write_text(json.dumps(evidence(candidate, tree, "1.0.0")))
             git(root, "add", "."); git(root, "commit", "-qm", "evidence")
-            # The evidence commit changes only release/, so the product tree it binds still holds.
+            # The evidence commit adds only the evidence record, so the bound tree still holds.
             self.assertEqual(product_tree(root), tree)
             publish, reason, decision = gate(root)
             self.assertTrue(publish, reason)
@@ -135,7 +136,35 @@ class PublishGateTests(unittest.TestCase):
             git(root, "commit", "-qam", "drift")
             publish, reason, _ = gate(root)
             self.assertFalse(publish)
-            self.assertIn("product tree", reason)
+            self.assertIn("releasable tree", reason)
+
+    def test_notes_are_bound_and_only_the_evidence_record_is_not(self):
+        with fixture() as root:
+            repo(root)
+            candidate = git(root, "rev-parse", "HEAD")
+            tree = product_tree(root)
+            (root / "release" / "evidence.json").write_text(json.dumps(evidence(candidate, tree, "1.0.0")))
+            git(root, "add", "."); git(root, "commit", "-qm", "evidence")
+            self.assertTrue(gate(root)[0])
+            # Rewriting only the evidence record leaves the bound content intact.
+            record = evidence(candidate, tree, "1.0.0")
+            record["records"][0]["command"] = "reworded bounded check"
+            (root / "release" / "evidence.json").write_text(json.dumps(record))
+            git(root, "commit", "-qam", "evidence only")
+            self.assertEqual(product_tree(root), tree)
+            self.assertTrue(gate(root)[0])
+            # Changing the approved release notes after approval blocks publication.
+            (root / "release" / "NOTES.md").write_text("# Pod 1.0.0\n\n- different notes\n")
+            git(root, "commit", "-qam", "edit notes")
+            self.assertNotEqual(product_tree(root), tree)
+            publish, reason, _ = gate(root)
+            self.assertFalse(publish)
+            self.assertIn("releasable tree", reason)
+            # So does adding any other file under release/.
+            (root / "release" / "NOTES.md").write_text("# Pod 1.0.0\n\n- notes\n")
+            (root / "release" / "extra.md").write_text("extra\n")
+            git(root, "add", "."); git(root, "commit", "-qm", "extra")
+            self.assertFalse(gate(root)[0])
 
     def test_incomplete_or_unauthorized_evidence_blocks_without_error(self):
         with fixture() as root:

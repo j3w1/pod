@@ -20,7 +20,7 @@ Each result binds an exact commit and Git tree, host, UTC date, command, outcome
 | Copied-bundle form | Run `scripts/pod.py doctor --json` from a copy, in an unrelated directory, with no `PYTHONPATH` and no checkout | The installed skill needs nothing outside itself |
 | Skills-CLI install | `npx skills@1.7.0 add SOURCE --skill pod -a codex -a claude-code -g -y` in a disposable home, with `DISABLE_TELEMETRY=1` | The documented installation actually works, and `pod setup` then reports it as externally managed |
 | Hosted Linux | The same suite, incident discovery, audit, frozen build, installs and smokes in one candidate-bound job | Candidate-bound CI |
-| Release publication | The `release` job on a push to `main` or a `v*` tag | Idempotent: publishes only a declared version with no tag and no release, and only when `release/evidence.json` passes the release gate for that candidate and product tree; otherwise `main` stays merged and unpublished |
+| Release publication | The `release` job on a push to `main` or a `v*` tag | Idempotent: publishes only a declared version with no tag and no release, and only when `release/evidence.json` passes the release gate for that candidate and releasable tree; otherwise `main` stays merged and unpublished |
 | Independent audit | Fresh reviewer of the exact commit and tree with reproducible evidence | Findings only |
 | Live core matrix | Codex and Claude Code, each on Linux: discovery, in-session coordination, authorized native worker and effective route, request recovery, verification and adoption | Separate live authorization and a disposable project |
 | Orca delegation | Each advertised worker adapter: request construction, account and authentication selection, launch identity, effective launch and request recovery; native messaging and disposition are observed from Orca | Production adapter against the installed runtime |
@@ -124,11 +124,13 @@ result says PASS. The gate performs no release.
 
 The release workflow consumes the same gate through `release/evidence.json`, a
 `pod-release-evidence/v1` record holding the declared `version`, the `candidate` commit, the
-`tree`, the validation `records` and the owner `authorization`. The tree is the product tree
-printed by `python tools/release.py tree CANDIDATE`: the candidate's root tree with the
-`release/` entry removed, so the evidence can bind the content it proves without binding
-itself. On a push to `main`, `python tools/release.py gate` publishes only when the evidence
-names the declared version, its candidate is in the pushed history, the product tree of
+`tree`, the validation `records` and the owner `authorization`. The tree is the releasable
+tree printed by `python tools/release.py tree CANDIDATE`: the candidate's whole tree,
+including `release/NOTES.md`, with only `release/evidence.json` left out, so the evidence can
+be committed after the candidate without binding itself. Authorization therefore binds the
+exact releasable content and candidate, not the later commit that adds the evidence and is
+tagged. On a push to `main`, `python tools/release.py gate` publishes only when the evidence
+names the declared version, its candidate is in the pushed history, the releasable tree of
 `HEAD` equals the bound tree, and the gate returns `authorized`; any other outcome leaves
 `main` merged and unpublished and is reported in the job summary. The file describes one
 version and is replaced for the next, like `release/NOTES.md`.

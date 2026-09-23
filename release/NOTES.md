@@ -76,8 +76,8 @@
 
 - A push to `main` whose declared version has no tag publishes the GitHub Release with the
   wheel, sdist, skill bundle archive and checksums, but only when the committed
-  `release/evidence.json` passes Pod's release gate for that exact candidate with owner
-  authorization. A blocked gate leaves `main` merged and unpublished. `release/NOTES.md`
+  `release/evidence.json` passes Pod's release gate with owner authorization for the exact
+  releasable content, release notes included. A blocked gate leaves `main` merged and unpublished. `release/NOTES.md`
   holds only the current version's notes; earlier notes live on the releases page.
 
 ### Compatibility
