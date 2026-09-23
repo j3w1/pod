@@ -28,7 +28,6 @@ from .ledger import _intervention_locked, _lock, _path, _read, _write, objective
 from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact
 
 SCHEMA = "pod-governor/v2"
-LEGACY_SCHEMA = "pod-governor/v1"
 KINDS = GOVERNED_KINDS
 AUTHORIZED_KINDS = ("merge", "release", "deploy")
 VALIDATION_KINDS = ("workflow_dispatch", "validation_rerun")
@@ -115,46 +114,7 @@ def _empty_journal() -> dict:
 
 
 def _malformed(detail: str) -> PodError:
-    return PodError("state_migration_required", "Governor journal is malformed: " + detail)
-
-
-def _upgrade_legacy(value: dict) -> dict:
-    """Carry a v1 journal forward without losing a decision or an outcome."""
-    journal = _empty_journal()
-    journal["revision"] = value["revision"]
-    rows = list(value["actions"])
-    budget = MAX_ACTIONS - 16
-    if len(rows) > budget:
-        # The journal must fit its own bound after the upgrade. Open rows are kept whatever
-        # their age; the oldest settled rows go, and the count is recorded, not hidden.
-        open_rows = [row for row in rows if row["outcome"] in ("pending", "UNKNOWN")]
-        settled = [row for row in rows if row["outcome"] not in ("pending", "UNKNOWN")]
-        keep = settled[max(0, len(settled) - max(0, budget - len(open_rows))):]
-        journal["counters"]["legacy_rows_dropped"] = len(rows) - len(open_rows) - len(keep)
-        rows = [row for row in rows if row in open_rows or row in keep]
-    for row in rows:
-        action = dict(row["action"])
-        action.pop("diagnostic_value", None)
-        action.setdefault("unit", DEFAULT_UNIT)
-        action["effects"] = None
-        action["purpose"] = _purpose(action["kind"], validates=action["kind"] in VALIDATION_KINDS,
-                                     deploys=False, releases=False)
-        decision = "ALLOW" if row["decision"] == "WARN" else row["decision"]
-        journal["actions"].append({
-            "record_id": row["record_id"], "logical_key": _logical_key(action, None),
-            "attempt": 1, "action": action, "candidate_id": None, "commit": None, "decision": decision,
-            "phase": row.get("phase"), "at": row.get("at"), "outcome": row["outcome"],
-            "inputs": row.get("inputs"), "exception": row.get("override"),
-            "warnings": ["legacy_warn"] if row["decision"] == "WARN" else [],
-            "reasons": row.get("reasons", []), "purpose": action["purpose"],
-            "cancel_safe": False, "effects": [],
-            "receipt": {"started_at": row.get("at"), "finished_at": None, "observed_elapsed_s": None,
-                        "provider": None, "evidence": [], "detail": None},
-            "classification": None, "classifications": [], "attached_to": None,
-            # Marked at the point the binding is discarded, so nothing downstream has to
-            # infer from a null candidate whether a row was bound or merely carried over.
-            "legacy": True})
-    return journal
+    return PodError("state_unsupported", "Governor journal is malformed: " + detail)
 
 
 def _validate_row(row: object) -> None:
@@ -191,24 +151,11 @@ def _read_journal(path: Path) -> dict:
     if not path.exists():
         return _empty_journal()
     value = bounded_json(path, limit=MAX_JOURNAL)
-    if isinstance(value, dict) and value.get("schema") == LEGACY_SCHEMA:
-        exact(value, {"schema", "revision", "actions"}, {"schema", "revision", "actions"}, name="governor")
-        if not isinstance(value["actions"], list):
-            raise _malformed("legacy actions")
-        for row in value["actions"]:
-            if (not isinstance(row, dict) or not isinstance(row.get("record_id"), str)
-                    or not isinstance(row.get("action"), dict)
-                    or row["action"].get("kind") not in KINDS
-                    or not isinstance(row["action"].get("candidate"), str)
-                    or not isinstance(row["action"].get("target"), str)
-                    or row.get("decision") not in ("ALLOW", "WARN", "DEFER")
-                    or row.get("outcome") not in OUTCOMES):
-                raise _malformed("legacy action row")
-        return _upgrade_legacy(value)
+    if not isinstance(value, dict) or value.get("schema") != SCHEMA:
+        raise PodError("state_unsupported",
+                       f"Governor journal is not {SCHEMA}; archive or remove it before governed actions")
     exact(value, {"schema", "revision", "units", "actions", "counters"},
           {"schema", "revision", "units", "actions", "counters"}, name="governor")
-    if value["schema"] != SCHEMA:
-        raise PodError("state_migration_required", "Governor schema requires explicit migration")
     if (not isinstance(value["actions"], list) or len(value["actions"]) > MAX_ACTIONS
             or not isinstance(value["units"], dict) or len(value["units"]) > MAX_UNITS
             or not isinstance(value["counters"], dict)):
@@ -591,19 +538,7 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
             _reason(reasons, "efficiency", "publication_unsettled",
                     f"{starting[-1]['action']['kind']} {starting[-1]['record_id'][:12]} will start this workflow "
                     "once it lands; settle it first")
-    if latest is not None and not superseded and latest.get("legacy"):
-        # A pod-governor/v1 row records that something happened, not what it was bound to:
-        # the upgrade discards commit, workflow, base and environment because v1 never froze
-        # them. Reusing it would answer "is doing this again useful?" with evidence that
-        # cannot show it is the same work, so the row stays visible and the action proceeds.
-        _warn(warnings, "legacy_evidence_ignored",
-              f"{latest['record_id'][:12]} was carried forward from a pod-governor/v1 journal; "
-              "it binds no candidate or context, so it is history rather than proof")
-        if latest["outcome"] in ("pending", "UNKNOWN"):
-            _reason(reasons, "correctness", "effect_unresolved",
-                    f"attempt {latest['attempt']} of this action was carried forward from a "
-                    "pod-governor/v1 journal with no settled outcome and no provider to read back")
-    elif latest is not None and not superseded:
+    if latest is not None and not superseded:
         if latest["outcome"] == "pending":
             reuse = {"record_id": latest["record_id"], "kind": "attach",
                      "detail": "an identical action is already running"}

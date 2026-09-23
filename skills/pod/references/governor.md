@@ -69,9 +69,7 @@ Supersedence may cancel only pending, cancel-safe validation of the older
 candidate in the same unit, when policy permits. Its result cannot approve the
 new candidate.
 
-Legacy Governor rows lack the bindings needed for evidence reuse. Settled rows
-remain history; unresolved rows remain holds. They never become proof merely
-because a logical key matches.
+A journal in another schema is refused, never upgraded.
 
 ## Authority and reporting
 

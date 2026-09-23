@@ -52,9 +52,6 @@ jobs:
         env:
           PYTHONPATH: skills
 
-      - name: Supported execution environment audit
-        run: python tools/platform_audit.py
-
       - name: Tracked source hygiene audit
         run: python tools/artifact_audit.py --source .
 

@@ -41,15 +41,22 @@ class TrackedSourceAuditTests(unittest.TestCase):
             self.assertTrue(any("credential-shaped" in row for row in artifact_findings))
             self.assertNotIn(credential, "\n".join(artifact_findings))
 
-    def test_public_product_metadata_and_sanitized_history_are_permitted(self):
+    def test_public_product_metadata_is_permitted_and_no_path_is_exempt(self):
         with fixture() as root:
-            historical = b"/home/" + b"retired-user/old-record\n"
             tracked(root, {
                 "README.md": b"j3w1/pod https://github.com/j3w1/pod fixture@example.invalid\n",
-                "docs/history/record.md": historical,
                 "tests/fixtures/capture.json": b'{"runtime":"uuid-0001"}\n',
             })
             self.assertEqual(audit_source(root), [])
+            residue = b"/home/" + b"some-user/record\n"
+            for name in ("docs/notes/record.md", "tests/fixtures/capture.json"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(residue)
+                subprocess.run(["git", "-C", str(root), "add", name], check=True)
+                findings = audit_source(root)
+                self.assertTrue(any(row.startswith(name) and "personal path" in row for row in findings), findings)
+                (root / name).write_bytes(b"clean\n")
+                subprocess.run(["git", "-C", str(root), "add", name], check=True)
 
     def test_repository_tracked_source_is_clean(self):
         root = Path(__file__).resolve().parents[1]

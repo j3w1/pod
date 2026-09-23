@@ -4,7 +4,7 @@ description: Coordinate a software task as a pod of Orca-native workers from the
 license: MIT
 compatibility: Linux. Python 3.13+ as python3 with PyYAML 6.x. Orca CLI and its version-matched orchestration guide for delegation. An authenticated Codex or Claude Code conversation coordinates. No global pod executable required.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
   source: https://github.com/j3w1/pod
 ---
 
@@ -51,8 +51,8 @@ Required unknowns block; Pod never infers physical capacity.
 
 Use zero workers when sufficient; default fan-out is two. Three needs a reason,
 four–eight a bound grant, and above eight is prohibited. All assignments share
-the ceiling. Delegation needs authority; `capacity_full` defers without blind
-retry or fleet audit.
+the ceiling. Delegation needs authority; Orca's effect-free refusal defers
+without blind retry.
 
 ## Integrate and verify
 

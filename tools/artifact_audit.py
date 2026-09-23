@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Audit built distributions before they are published.
+"""Audit built distributions and tracked source for private residue.
 
-This reads the artifacts themselves, not the source tree, because a distribution can carry
-files the working tree does not. It distinguishes a deliberate historical reference from a
-leak: naming the retired product in migration notes is the point; carrying a personal path,
-account, runtime identifier or credential never is.
+Artifacts are read as archives, not from the working tree, because a distribution can carry
+files the tree does not. Findings name the file, the category and the line, never the
+matched text.
 """
 
 from __future__ import annotations
@@ -25,15 +24,6 @@ FORBIDDEN = (
     ("credential-shaped", re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}")),
     ("machine-local task state", re.compile(rb"\.local/state/[^/\s]+/tasks/")),
 )
-# The retired platform, using the source audit's own definitions so there is exactly one.
-# The source audit owns the platform definitions; see tools/platform_audit.py for how an
-# operating-system reference is told apart from a quota time window.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from platform_audit import ALLOWED, EXEMPT_PREFIXES, PATTERNS  # noqa: E402
-
-HISTORICAL = ("docs/history/", "CHANGELOG", "pod-migration", "release-notes",
-              "PKG-INFO", "METADATA", "README")
-
 
 def members(path: pathlib.Path):
     if path.suffix == ".whl":
@@ -63,27 +53,11 @@ def audit(paths: list[pathlib.Path]) -> list[str]:
                 if match:
                     findings.append(f"{artifact.name} :: {name} :: {label} at line "
                                     f"{_line_number(data, match.start())}")
-            relative = name.split("/", 1)[1] if "/" in name and name.startswith(("pod/", "j3w1_pod-")) else name
-            if any(marker in name for marker in HISTORICAL):
-                continue
-            if relative.startswith(EXEMPT_PREFIXES):
-                continue
-            for line_number, raw in enumerate(data.splitlines(), 1):
-                try:
-                    line = raw.decode("utf-8")
-                except UnicodeError:
-                    continue
-                if any(allowed.search(line) for allowed in ALLOWED):
-                    continue
-                if any(pattern.search(line) for pattern in PATTERNS):
-                    findings.append(f"{artifact.name} :: {name} :: retired platform at line "
-                                    f"{line_number}")
-                    break
     return findings
 
 
 def audit_source(root: pathlib.Path) -> list[str]:
-    """Scan bounded tracked source; history and sanitized captures keep their evidence."""
+    """Scan every tracked file; sanitized fixtures are held to the same rule."""
     completed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
                                capture_output=True, check=False)
     if completed.returncode:
@@ -96,8 +70,6 @@ def audit_source(root: pathlib.Path) -> list[str]:
             name = raw_name.decode("utf-8")
         except UnicodeError:
             findings.append("tracked source path is not UTF-8")
-            continue
-        if name.startswith(("docs/history/", "tests/fixtures/")):
             continue
         path = root / name
         try:
@@ -134,7 +106,7 @@ def main(argv: list[str]) -> int:
             print("  " + finding)
         return 1
     print(f"{len(paths)} artifact(s) and {'tracked source' if source else 'no source tree'} audited; "
-          "no personal path, account, runtime identifier, credential or retired-platform reference outside history.")
+          "no personal path, account, runtime identifier or credential.")
     return 0
 
 

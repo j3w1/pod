@@ -346,11 +346,11 @@ class SetupCliTests(unittest.TestCase):
             self.assertFalse((root / "codex").exists())
             self.assertFalse((root / "config").exists())
 
-    def test_doctor_keeps_unrelated_legacy_state_objective_scoped(self):
+    def test_doctor_reports_unsupported_state_objective_scoped(self):
         with fixture() as root:
-            legacy = Path(os.environ["XDG_STATE_HOME"]) / "pod" / "old-objective"
-            legacy.mkdir(parents=True)
-            (legacy / "context.json").write_text(json.dumps({"schema": "pod-context/v1"}))
+            foreign = Path(os.environ["XDG_STATE_HOME"]) / "pod" / "other-objective"
+            foreign.mkdir(parents=True)
+            (foreign / "context.json").write_text(json.dumps({"schema": "pod-context/v9"}))
             with patch("pod.cli.contract", return_value={
                        "status": "observed", "runtime": "runtime", "capabilities": {}}), \
                  patch("pod.cli.account_metadata_raw", return_value={
@@ -358,10 +358,11 @@ class SetupCliTests(unittest.TestCase):
                  patch("pod.cli.agent_login_mode", return_value={}):
                 report = execute(parser().parse_args(["doctor", "--json"]), root)
             self.assertEqual(report["readiness"]["direct_work"], "ready")
-            self.assertEqual(report["readiness"]["migration"]["v1"], 1)
-            self.assertEqual(report["readiness"]["migration"]["scope"],
+            self.assertEqual(report["readiness"]["state"]["unsupported"], 1)
+            self.assertTrue(report["readiness"]["state"]["blocked"])
+            self.assertEqual(report["readiness"]["state"]["scope"],
                              "affected_objectives_only")
-            self.assertFalse(report["readiness"]["migration"]["blocks_unrelated_objectives"])
+            self.assertFalse(report["readiness"]["state"]["blocks_unrelated_objectives"])
 
     def test_doctor_requires_runtime_identity_before_reporting_orca_connected(self):
         with fixture() as root, \

@@ -28,7 +28,7 @@ Defaults are 20% low, 5% critical and 60-second freshness. Low quota calls for a
 bounded task and reserved integration/reporting headroom. Stale or unknown quota
 allows one outstanding logical assignment on the objective's overlapping route,
 including reservations and uncertain admissions. It does not require a foreign-worker
-census or let historical work in an independent objective occupy the slot.
+census or let earlier work in an independent objective occupy the slot.
 Unknown buckets may overlap; known distinct buckets
 remain independent. An exhausted window needs fresh positive evidence for that
 same route before new work. Switching model labels replenishes nothing.

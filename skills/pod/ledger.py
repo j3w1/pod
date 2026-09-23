@@ -5,11 +5,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
-import hashlib
-import json
 import os
 from pathlib import Path
-import stat
 from typing import Callable, Iterator
 
 from .errors import PodError
@@ -19,10 +16,11 @@ from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
 
-ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred", "legacy_hold")
+ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred")
+CONTEXT_SCHEMA = "pod-context/v3"
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
-                   "interventions", "source_rejections", "legacy_archives"}
+                   "interventions", "source_rejections"}
 
 
 def state_root(project: Path | None = None) -> Path:
@@ -54,18 +52,7 @@ def objective_root(project: Path, objective: str) -> Path:
     context = repository_context(project)
     if context["repo_key"] is None:
         return root / digest({"project": str(project.resolve()), "objective": objective})
-    stable = root / digest({"repository": context["repo_key"], "objective": objective})
-    legacy = [root / digest({"project": path, "objective": objective})
-              for path in context["linked_worktrees"]]
-    existing = [candidate for candidate in legacy if _record_exists(candidate / "context.json")]
-    stable_exists = _record_exists(stable / "context.json")
-    if stable_exists and existing:
-        raise PodError("ambiguous_context",
-                       "Repository-keyed and path-keyed objective records both exist")
-    if len(existing) > 1:
-        raise PodError("ambiguous_context",
-                       "More than one path-keyed objective record belongs to this repository")
-    return stable if stable_exists else existing[0] if existing else stable
+    return root / digest({"repository": context["repo_key"], "objective": objective})
 
 
 def _path(project: Path, objective: str) -> Path:
@@ -92,9 +79,9 @@ def _lock(path: Path) -> Iterator[None]:
 
 
 def _empty() -> dict:
-    return {"schema": "pod-context/v2", "revision": 0, "owner": None,
+    return {"schema": CONTEXT_SCHEMA, "revision": 0, "owner": None,
             "admissions": {}, "checkpoint": None, "interventions": {},
-            "source_rejections": {}, "legacy_archives": []}
+            "source_rejections": {}}
 
 
 def binding_valid(binding: object) -> bool:
@@ -114,56 +101,53 @@ def _validate_admission(key: str, row: object) -> None:
                 "native_binding", "recovery", "error", "created_at", "updated_at"}
     value = exact(row, required, required, name="admission")
     if value["schema"] != "pod-admission/v2" or value["admission_id"] != key:
-        raise PodError("state_migration_required", "Admission identity or schema is unsupported")
+        raise PodError("state_unsupported", "Admission identity or schema is unsupported")
     if value["state"] not in ADMISSION_STATES:
-        raise PodError("state_migration_required", "Admission state is unsupported")
+        raise PodError("state_unsupported", "Admission state is unsupported")
     for field in ("objective", "owner", "run_id", "task_id", "plan_revision", "packet_id", "worktree"):
         if not isinstance(value[field], str) or not value[field]:
-            raise PodError("state_migration_required", "Admission binding is incomplete")
+            raise PodError("state_unsupported", "Admission binding is incomplete")
     if not isinstance(value["request"], dict) or not isinstance(value["route_decision"], dict):
-        raise PodError("state_migration_required", "Admission policy evidence is malformed")
+        raise PodError("state_unsupported", "Admission policy evidence is malformed")
     if not isinstance(value["effective_evidence"], dict):
-        raise PodError("state_migration_required", "Admission effective evidence is malformed")
+        raise PodError("state_unsupported", "Admission effective evidence is malformed")
     if not isinstance(value["runtime"], str) or not value["runtime"]:
-        raise PodError("state_migration_required", "Admission runtime is unavailable")
+        raise PodError("state_unsupported", "Admission runtime is unavailable")
     request_uuid = value["request_uuid"]
     if request_uuid is not None and (not isinstance(request_uuid, str) or not request_uuid):
-        raise PodError("state_migration_required", "Admission request UUID is malformed")
+        raise PodError("state_unsupported", "Admission request UUID is malformed")
     binding = value["native_binding"]
     if value["state"] in ("bound", "closed") and not binding_valid(binding):
-        raise PodError("state_migration_required", "Bound admission lacks exact native identity")
+        raise PodError("state_unsupported", "Bound admission lacks exact native identity")
     if binding is not None and not binding_valid(binding):
-        raise PodError("state_migration_required", "Admission native identity is malformed")
+        raise PodError("state_unsupported", "Admission native identity is malformed")
 
 
-def _validate_v2(value: object) -> dict:
+def _validate_context(value: object) -> dict:
+    """Accept exactly the current context schema; any other record is unsupported, not converted."""
+    if not isinstance(value, dict) or value.get("schema") != CONTEXT_SCHEMA:
+        raise PodError("state_unsupported",
+                       f"State record is not {CONTEXT_SCHEMA}; archive or remove it before new admissions")
     state = exact(value, _CONTEXT_FIELDS, _CONTEXT_FIELDS, name="context")
-    if state["schema"] != "pod-context/v2" or type(state["revision"]) is not int or state["revision"] < 0:
-        raise PodError("state_migration_required", "State schema requires explicit migration")
+    if type(state["revision"]) is not int or state["revision"] < 0:
+        raise PodError("state_unsupported", "State revision is malformed")
     if state["owner"] is not None and (not isinstance(state["owner"], str) or not state["owner"]):
-        raise PodError("state_migration_required", "Context owner is malformed")
+        raise PodError("state_unsupported", "Context owner is malformed")
     if not isinstance(state["admissions"], dict):
-        raise PodError("state_migration_required", "Admissions are malformed")
+        raise PodError("state_unsupported", "Admissions are malformed")
     for key, row in state["admissions"].items():
         if not isinstance(key, str) or not key:
-            raise PodError("state_migration_required", "Admission key is malformed")
+            raise PodError("state_unsupported", "Admission key is malformed")
         _validate_admission(key, row)
     if not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict):
-        raise PodError("state_migration_required", "Context evidence is malformed")
-    if not isinstance(state["legacy_archives"], list):
-        raise PodError("state_migration_required", "Legacy archive references are malformed")
-    for ref in state["legacy_archives"]:
-        exact(ref, {"path", "sha256", "schema"}, {"path", "sha256", "schema"}, name="legacy_archive")
+        raise PodError("state_unsupported", "Context evidence is malformed")
     return state
 
 
 def _read(path: Path) -> dict:
     if not _record_exists(path):
         return _empty()
-    value = bounded_json(path)
-    if isinstance(value, dict) and value.get("schema") == "pod-context/v1":
-        raise PodError("state_migration_required", "Pod v1 state requires `state-migrate`")
-    return _validate_v2(value)
+    return _validate_context(bounded_json(path))
 
 
 def read(project: Path, objective: str) -> dict | None:
@@ -173,7 +157,7 @@ def read(project: Path, objective: str) -> dict | None:
 
 def _write(path: Path, value: dict) -> None:
     value["revision"] += 1
-    _validate_v2(value)
+    _validate_context(value)
     atomic_json(path, value)
 
 
@@ -184,13 +168,13 @@ def context_root_for_run(run_id: str) -> Path | None:
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
     matches = []
-    migration_required = False
+    unsupported_seen = False
     for path in root.glob("*/context.json"):
         try:
             state = _read(path)
         except PodError as exc:
-            if exc.code == "state_migration_required":
-                migration_required = True
+            if exc.code == "state_unsupported":
+                unsupported_seen = True
                 continue
             raise
         checkpoint_value = state.get("checkpoint")
@@ -200,8 +184,8 @@ def context_root_for_run(run_id: str) -> Path | None:
             matches.append(path.parent)
     if len(matches) > 1:
         raise PodError("ambiguous_context", "Multiple local contexts bind this Run")
-    if not matches and migration_required:
-        raise PodError("state_migration_required", "Legacy state may bind this Run")
+    if not matches and unsupported_seen:
+        raise PodError("state_unsupported", "An unsupported state record may bind this Run")
     return matches[0] if matches else None
 
 
@@ -428,10 +412,10 @@ def _quota_hold(provider: str, account: str, bucket: str | None,
         raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v3", "holds": {}}
         exact(raw, {"schema", "holds"}, {"schema", "holds"}, name="quota_holds")
         if raw["schema"] != "pod-quota-holds/v3" or not isinstance(raw["holds"], dict):
-            raise PodError("state_migration_required", "Quota hold schema is unsupported")
+            raise PodError("state_unsupported", "Quota hold schema is unsupported")
         hold = raw["holds"].get(key, {"windows": {}})
         if not isinstance(hold, dict) or not isinstance(hold.get("windows"), dict):
-            raise PodError("state_migration_required", "Quota hold identity is malformed")
+            raise PodError("state_unsupported", "Quota hold identity is malformed")
         windows = dict(hold["windows"])
         supported = None
         if state != "unknown" and snapshot is not None:
@@ -459,15 +443,15 @@ def _quota_hold(provider: str, account: str, bucket: str | None,
                 previous_at = None
                 if previous is not None:
                     if not isinstance(previous, dict) or not isinstance(previous.get("observed_at"), str):
-                        raise PodError("state_migration_required", "Quota hold window is malformed")
+                        raise PodError("state_unsupported", "Quota hold window is malformed")
                     try:
                         previous_at = datetime.fromisoformat(
                             previous["observed_at"].replace("Z", "+00:00"))
                     except ValueError as exc:
-                        raise PodError("state_migration_required",
+                        raise PodError("state_unsupported",
                                        "Quota hold timestamp is malformed") from exc
                     if previous_at.tzinfo is None:
-                        raise PodError("state_migration_required",
+                        raise PodError("state_unsupported",
                                        "Quota hold timestamp has no timezone")
                 if remaining == 0 and (previous_at is None or observed > previous_at):
                     windows[name] = {"observed_at": observed.isoformat(), "reset_at": reset_at}
@@ -532,7 +516,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                 raise PodError("admission_conflict", "Admission identity was reused for different work")
             return {**existing, "existing": True}
         if any(row.get("run_id") == run_id and row.get("task_id") == task_id
-               and row.get("state") in ("reserved", "unresolved", "legacy_hold")
+               and row.get("state") in ("reserved", "unresolved")
                for row in state["admissions"].values() if isinstance(row, dict)):
             raise PodError("unresolved_prior_attempt",
                            "A revised packet cannot replace an uncertain attempt for the same native Task")
@@ -611,7 +595,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                         or type(prior_grant.get("units")) is not int
                         or prior_grant["units"] < 1
                         or not isinstance(prior_grant.get("scope"), str)):
-                    raise PodError("state_migration_required",
+                    raise PodError("state_unsupported",
                                    "Spending grant accounting is malformed")
                 if prior_grant["scope"] == grant_binding["scope"]:
                     used += prior_grant["units"]
@@ -653,209 +637,22 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
         return row
 
 
-def migration_inventory(project: Path) -> dict:
-    """Read-only state inventory for doctor/status; it never upgrades records."""
+def state_inventory(project: Path) -> dict:
+    """Read-only state inventory for doctor/status; it never rewrites a record."""
     root = state_root(project)
-    result = {"v1": 0, "v2": 0, "invalid": 0, "migration_required": False}
+    result = {"current": 0, "unsupported": 0, "unreadable": 0, "blocked": False}
     if not root.exists():
         return result
     for path in root.glob("*/context.json"):
         try:
-            raw = bounded_json(path)
-            schema = raw.get("schema") if isinstance(raw, dict) else None
-            if schema == "pod-context/v1":
-                result["v1"] += 1
-            elif schema == "pod-context/v2":
-                _validate_v2(raw)
-                result["v2"] += 1
-            else:
-                result["invalid"] += 1
-        except (OSError, PodError):
-            result["invalid"] += 1
-    result["migration_required"] = bool(result["v1"] or result["invalid"])
+            _validate_context(bounded_json(path))
+            result["current"] += 1
+        except PodError as exc:
+            result["unsupported" if exc.code == "state_unsupported" else "unreadable"] += 1
+        except OSError:
+            result["unreadable"] += 1
+    result["blocked"] = bool(result["unsupported"] or result["unreadable"])
     return result
-
-
-def _legacy_binding_matches(shown: dict, effect: dict, binding: dict, runtime: str) -> bool:
-    effect_run = effect.get("run_id")
-    if (not isinstance(effect_run, str) or not effect_run
-            or binding.get("runId") != effect_run):
-        return False
-    result = shown.get("result") if isinstance(shown, dict) else None
-    dispatch = result.get("dispatch") if isinstance(result, dict) else None
-    projection = result.get("projection") if isinstance(result, dict) else None
-    worker = result.get("worker") if isinstance(result, dict) else None
-    if not (shown.get("runtime") == runtime and isinstance(dispatch, dict)
-            and isinstance(projection, dict) and isinstance(worker, dict)
-            and dispatch.get("id") == binding.get("dispatchId")
-            and dispatch.get("runId") == binding.get("runId")
-            and dispatch.get("taskId") == binding.get("taskId")
-            and projection.get("id") == binding.get("workerId")
-            and projection.get("dispatchId") == binding.get("dispatchId")
-            and projection.get("runId") == binding.get("runId")
-            and projection.get("taskId") == binding.get("taskId")
-            and worker.get("dispatchId") == binding.get("dispatchId")):
-        return False
-    if "worktreeId" in binding and worker.get("worktreeId") != binding.get("worktreeId"):
-        return False
-    if "terminalHandle" in binding and worker.get("agentTerminalHandle") != binding.get("terminalHandle"):
-        return False
-    request = effect.get("request", {})
-    expected = {key: request.get(key) for key in ("agent", "model", "effort")}
-    launch = worker.get("startOptions", {}).get("launch") if isinstance(worker.get("startOptions"), dict) else None
-    if not isinstance(launch, dict) or launch.get("requested") != expected or launch.get("effective") != expected:
-        return False
-    return True
-
-
-def _legacy_assignment_settled(shown: dict) -> bool:
-    return _native_assignment_settled(shown)
-
-
-def _read_legacy_bytes(path: Path, *, limit: int = 1_048_576) -> bytes:
-    flags = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-             | getattr(os, "O_CLOEXEC", 0))
-    try:
-        fd = os.open(path, flags)
-    except OSError as exc:
-        raise PodError("state_migration_failed", "Legacy state cannot be opened safely") from exc
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise PodError("state_migration_failed", "Legacy state must be a regular file")
-        size = info.st_size
-        if size > limit:
-            raise PodError("state_migration_failed", "Legacy state exceeds the migration bound")
-        chunks = []
-        remaining = limit + 1
-        while remaining:
-            chunk = os.read(fd, min(65536, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        data = b"".join(chunks)
-        if len(data) > limit or len(data) != size:
-            raise PodError("state_migration_failed", "Legacy state changed during migration read")
-        return data
-    finally:
-        os.close(fd)
-
-
-def migrate_v1(project: Path, objective: str, *, owner: str,
-               worker_reader: Callable[[str], dict]) -> dict:
-    """Explicit read-only-native v1 to v2 migration with an immutable source archive."""
-    path = _path(project, objective)
-    with _lock(state_root(project) / "admission" / "state"), _lock(path):
-        if not path.exists():
-            raise PodError("state_missing", "No state exists for this objective")
-        raw_bytes = _read_legacy_bytes(path)
-        try:
-            old = json.loads(raw_bytes)
-        except (UnicodeError, ValueError) as exc:
-            raise PodError("state_migration_failed", "Legacy state is not valid JSON") from exc
-        required = {"schema", "revision", "owner", "effects", "checkpoint", "deliveries",
-                    "interventions", "source_rejections", "cleanup"}
-        exact(old, required, required, name="legacy_context")
-        if old["schema"] != "pod-context/v1" or not isinstance(old["effects"], dict):
-            raise PodError("state_migration_failed", "Only Pod v1 state can be migrated")
-        if (not isinstance(old["cleanup"], dict) or not isinstance(old["deliveries"], dict)
-                or not isinstance(old["interventions"], dict)
-                or not isinstance(old["source_rejections"], dict)):
-            raise PodError("state_migration_failed", "Legacy state collections are malformed")
-        if old["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        source_digest = hashlib.sha256(raw_bytes).hexdigest()
-        admissions = {}
-        for operation_id, effect in old["effects"].items():
-            if not isinstance(operation_id, str) or not isinstance(effect, dict):
-                raise PodError("state_migration_failed", "Legacy effect row is malformed")
-            request = effect.get("request")
-            runtime = effect.get("runtime")
-            if not isinstance(request, dict) or not isinstance(runtime, str) or not runtime:
-                raise PodError("state_migration_failed", "Legacy effect route or runtime is malformed")
-            admission_id = digest({"archive": source_digest, "legacy_effect": operation_id})
-            binding = effect.get("native_binding")
-            state = "legacy_hold"
-            recovery = {"legacy_effect": operation_id, "reason": "legacy_effect_unresolved"}
-            migrated_binding = None
-            if effect.get("state") == "confirmed" and isinstance(binding, dict):
-                predecessor = set(binding) == {"dispatchId", "workerId", "taskId", "runId"}
-                current = set(binding) == {"dispatchId", "workerId", "taskId", "runId",
-                                            "worktreeId", "terminalHandle", "terminalResourceId"}
-                if predecessor or current:
-                    try:
-                        shown = worker_reader(binding["dispatchId"])
-                    except Exception as exc:
-                        shown = {"error": type(exc).__name__}
-                    if _legacy_binding_matches(shown, effect, binding, runtime):
-                        result = shown["result"]
-                        worker = result["worker"]
-                        worktree = binding.get("worktreeId") or worker.get("worktreeId")
-                        terminal = binding.get("terminalHandle", worker.get("agentTerminalHandle"))
-                        migrated_binding = {"runId": binding["runId"], "taskId": binding["taskId"],
-                                            "dispatchId": binding["dispatchId"], "workerId": binding["workerId"],
-                                            "worktreeId": worktree, "terminalHandle": terminal}
-                        if binding_valid(migrated_binding):
-                            state = "closed" if _legacy_assignment_settled(shown) else "bound"
-                            recovery = {"legacy_effect": operation_id,
-                                        "native_read": "exact_assignment"}
-                        else:
-                            migrated_binding = None
-            stamp = datetime.now(timezone.utc).isoformat()
-            effect_run = effect.get("run_id")
-            binding_run = binding.get("runId") if isinstance(binding, dict) else None
-            legacy_run = (effect_run if isinstance(effect_run, str) and effect_run
-                          else binding_run if isinstance(binding_run, str) and binding_run
-                          else "legacy-unknown")
-            admissions[admission_id] = {"schema": "pod-admission/v2", "state": state,
-                "admission_id": admission_id, "objective": objective, "owner": owner,
-                "request": request, "route_decision": {"legacy": True,
-                    "policy_revision": effect.get("route_revision")},
-                "effective_evidence": {"legacy": True}, "runtime": runtime,
-                "request_uuid": None, "run_id": legacy_run,
-                "task_id": (binding or {}).get("taskId") or "legacy-unknown",
-                "plan_revision": effect.get("plan_revision") or "legacy-unknown",
-                "packet_id": effect.get("packet_id") or "legacy-unknown",
-                "worktree": (binding or {}).get("worktreeId") or "legacy-unknown",
-                "bucket": effect.get("bucket"), "native_binding": migrated_binding,
-                "recovery": {**recovery, "spending_grant": effect.get("spending_grant")},
-                "error": effect.get("native_failure"),
-                "created_at": effect.get("created_at") or stamp, "updated_at": stamp}
-        archive_ref = {"path": f"archives/context-v1-{source_digest}.json",
-                       "sha256": source_digest, "schema": "pod-context/v1"}
-        new = {"schema": "pod-context/v2", "revision": 0, "owner": owner,
-               "admissions": admissions, "checkpoint": old["checkpoint"],
-               "interventions": old["interventions"], "source_rejections": old["source_rejections"],
-               "legacy_archives": [archive_ref]}
-        _validate_v2(new)
-        archive = path.parent / archive_ref["path"]
-        archive.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if archive.parent.is_symlink():
-            raise PodError("state_migration_failed", "Legacy archive directory is redirected")
-        if archive.is_symlink():
-            raise PodError("state_migration_failed", "Legacy archive is redirected")
-        if archive.exists():
-            if hashlib.sha256(_read_legacy_bytes(archive)).hexdigest() != source_digest:
-                raise PodError("state_migration_failed", "Legacy archive identity conflicts")
-        else:
-            fd = os.open(archive, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
-            try:
-                view = memoryview(raw_bytes)
-                while view:
-                    written = os.write(fd, view)
-                    if written <= 0:
-                        raise PodError("state_migration_failed", "Legacy archive write was incomplete")
-                    view = view[written:]
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-        if hashlib.sha256(_read_legacy_bytes(archive)).hexdigest() != source_digest:
-            raise PodError("state_migration_failed", "Legacy archive verification failed")
-        atomic_json(path, new)
-        return {"status": "migrated", "archive": archive_ref,
-                "admissions": {state: sum(row["state"] == state for row in admissions.values())
-                               for state in ADMISSION_STATES}}
 
 
 def intervention(project: Path, objective: str, *, owner: str, correction: dict,

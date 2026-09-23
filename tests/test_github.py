@@ -227,21 +227,6 @@ class PortReadingTests(unittest.TestCase):
 
 
 class RepositoryAndIssueTests(unittest.TestCase):
-    def test_inaccessible_legacy_context_candidate_is_not_treated_as_absent(self):
-        with fixture() as root:
-            main, worktree = repository(root)
-            legacy = state_root(worktree) / digest({
-                "project": str(main.resolve()), "objective": "legacy"})
-            legacy.mkdir(parents=True)
-            (legacy / "context.json").write_text("{}")
-            legacy.chmod(0)
-            try:
-                with self.assertRaises(PodError) as unavailable:
-                    objective_root(worktree, "legacy")
-                self.assertEqual(unavailable.exception.code, "unsafe_state")
-            finally:
-                legacy.chmod(0o700)
-
     def test_linked_worktree_preserves_native_home_containment_and_explicit_overrides(self):
         with fixture() as root:
             main, worktree = repository(root)

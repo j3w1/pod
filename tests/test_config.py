@@ -51,12 +51,12 @@ class ConfigTests(unittest.TestCase):
             "very_complex": {"model": "astra", "effort": "xhigh", "context": "max"},
         })
 
-    def test_unknown_and_retired_model_identities_are_rejected_for_new_policy(self):
+    def test_model_identities_outside_the_catalog_are_rejected(self):
         with fixture() as root:
             personal = root / "personal.yaml"
             for body in (
-                "models: {terra: {agent: codex, model: gpt-5.6-terra}}",
-                "models: {sol: {agent: codex, model: gpt-5.6-sol}}",
+                "models: {nova: {agent: codex, model: gpt-9-nova}}",
+                "models: {sol: {agent: codex, model: gpt-6-sol-preview}}",
                 "models: {sonnet: {agent: claude, model: sonnet}}",
                 "models: {sol: {agent: claude, model: gpt-6-sol}}",
             ):
@@ -233,10 +233,10 @@ policy:
             local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 30}\n")
             self.assertEqual(effective(root, personal=personal)["policy"]["policy"]["quota_fresh_seconds"], 30)
 
-    def test_retired_idle_timer_is_rejected_instead_of_copying_lifecycle_policy(self):
+    def test_unknown_policy_keys_are_rejected(self):
         with fixture() as root:
             personal = root / "personal.yaml"
-            personal.write_text("schema: pod/v1\npolicy: {retain_idle_minutes: 30}\n")
+            personal.write_text("schema: pod/v1\npolicy: {unknown_timer: 30}\n")
             with self.assertRaises(PodError) as caught:
                 effective(root, personal=personal)
             self.assertEqual(caught.exception.code, "invalid_config")

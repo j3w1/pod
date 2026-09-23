@@ -22,9 +22,11 @@ and preserving an exact completed report, follow the guide's Delivery
 acknowledgment and worker-release order promptly. Reuse needs an immediate
 supported follow-up; uncertainty and protected resources remain retained.
 
-Treat an authoritative native `capacity_full` no-start receipt as durable
-`deferred`: record it without a successful binding and do not retry or audit the
-fleet. A malformed, lost or partial-effect receipt remains unresolved.
+Orca's documented preflight refusals `task_not_found`, `task_not_startable` and
+`inject_rejected` start nothing: record them as durable `deferred` with no binding
+and no blind retry. `runtime_error` proves nothing; read the request, Dispatch and
+worker back and hold `unresolved` until native evidence settles it. Unknown codes
+and malformed, lost or partial-effect receipts stay unresolved.
 
 A repeated admission must preserve its original request. Orca-issued mutation
 UUIDs are recovery references, never Pod-generated operation IDs. Use the same
@@ -46,19 +48,14 @@ provider UI, write shared/personal provider settings or add a Pod provider wrapp
 Any future strict automation control must be opt-in per launch and leave ordinary
 non-Pod sessions unchanged.
 
-## Private state and migration
+## Private state
 
-`pod-context/v2` stores policy admissions, checkpoints, source rejections,
-interventions and legacy archive references. Admission reservations and
-unresolved migration holds count conservatively against objective policy limits.
-Orca remains authoritative for current workers and lifecycle.
-
-Use `internal state-migrate` explicitly for v1 records. It archives old state
-and inspects Orca before producing v2; it does not perform lifecycle actions.
-Old Delivery and cleanup records remain historical evidence. An unresolved
-legacy record becomes a hold, not permission to repeat an action.
-Exact native assignment settlement can clear a bound hold; unbound ambiguity stays held.
-Read-only diagnostics never migrate automatically.
+`pod-context/v3` stores policy admissions (`reserved`, `bound`, `unresolved`,
+`closed`, `deferred`), checkpoints, source rejections and interventions.
+Reserved and unresolved admissions count against objective limits. A record in
+any other schema is reported by `doctor`/`status` and blocks new admissions for
+that objective; nothing converts it. Orca remains authoritative for current
+workers and lifecycle.
 
 On continuation, recover the objective's decisions, relevant evidence gaps and
 native references, then consult Orca. The checkpoint should identify the next
