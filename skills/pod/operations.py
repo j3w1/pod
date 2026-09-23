@@ -292,6 +292,22 @@ def _hold(project: Path, objective: str, *, owner: str, admission_id: str,
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
+def _request_conflict_result(project: Path, objective: str, *, owner: str,
+                             admission_id: str, receipt: dict,
+                             request_uuid: str | None) -> dict | None:
+    """Hold a decoder-detected request contradiction without choosing a fresh UUID."""
+    if not receipt.get("_request_conflict"):
+        return None
+    error = receipt.get("error")
+    capacity_refusal = isinstance(error, dict) and error.get("code") == "capacity_full"
+    return _hold(
+        project, objective, owner=owner, admission_id=admission_id,
+        request_uuid=request_uuid,
+        code=("native_capacity_refusal_unverified" if capacity_refusal
+              else "native_request_conflict"),
+        detail="native receipt carries contradictory or malformed request identity")
+
+
 def _record_request(project: Path, objective: str, *, owner: str, admission_id: str,
                     request_uuid: str, receipt: dict) -> dict:
     """Persist Orca's UUID before any follow-up read can fail."""
@@ -504,6 +520,9 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": admission["state"], "admission": admission, "action": action}
     request_uuid = admission.get("request_uuid")
     if request_uuid is None:
+        if ((admission.get("error") or {}).get("code") == "native_request_conflict"
+                or admission.get("recovery", {}).get("capacity_refusal") == "unverified"):
+            return {"status": admission["state"], "admission": admission, "action": "hold"}
         row = _hold(project, objective, owner=owner, admission_id=admission_id,
                     request_uuid=None, code="native_request_missing",
                     detail="no Orca-issued UUID can scope attempt discovery")
@@ -532,7 +551,11 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                         request_uuid=request_uuid, code="native_receipt_missing", detail="completed request")
         else:
             completed_receipt = {"runtime": admission["runtime"], **receipt}
-            row = _capacity_refusal_result(
+            row = _request_conflict_result(
+                project, objective, owner=owner, admission_id=admission_id,
+                receipt=completed_receipt, request_uuid=request_uuid)
+            if row is None:
+                row = _capacity_refusal_result(
                 project, objective, owner=owner, admission_id=admission_id,
                 admission=admission, receipt=completed_receipt,
                 request_uuid=request_uuid)
@@ -542,7 +565,8 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                             request_uuid=request_uuid)
         return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
     if status == "pending":
-        if admission.get("recovery", {}).get("capacity_refusal") == "unverified":
+        if (admission.get("recovery", {}).get("capacity_refusal") == "unverified"
+                or (admission.get("error") or {}).get("code") == "native_request_conflict"):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         model, current_policy = _current_authority(
             project, objective, admission, task_policy=task_policy)
@@ -560,7 +584,11 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         receipt = native_port.start_worker(run=admission["run_id"], task=admission["task_id"],
                                            owner=owner, route=admission["request"],
                                            worktree=worktree, retry_request=request_uuid)
-        row = _capacity_refusal_result(
+        row = _request_conflict_result(
+            project, objective, owner=owner, admission_id=admission_id,
+            receipt=receipt, request_uuid=request_uuid)
+        if row is None:
+            row = _capacity_refusal_result(
             project, objective, owner=owner, admission_id=admission_id,
             admission=admission, receipt=receipt, request_uuid=request_uuid)
         returned = receipt.get("request_uuid")
@@ -639,7 +667,11 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     try:
         receipt = native_port.start_worker(run=run, task=task, owner=owner, route=route,
                                            worktree=worktree)
-        row = _capacity_refusal_result(
+        row = _request_conflict_result(
+            project, objective, owner=owner, admission_id=admission_id,
+            receipt=receipt, request_uuid=None)
+        if row is None:
+            row = _capacity_refusal_result(
             project, objective, owner=owner, admission_id=admission_id,
             admission=admission, receipt=receipt)
         if row is not None:

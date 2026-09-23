@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from pathlib import Path
 import unittest
@@ -12,6 +13,7 @@ from pod.ledger import checkpoint, read, state_root, update_admission
 from pod.operations import (OrcaPort, _assignment_evidence,
                             _capacity_refusal_classification, guarded_start,
                             recover_admission)
+from pod.orca import _mutation_envelope
 from pod.records import packet
 from tests.common import fixture
 
@@ -19,6 +21,24 @@ from tests.common import fixture
 NOW = datetime(2026, 9, 22, 12, tzinfo=timezone.utc)
 REQUEST_UUID = "11111111-1111-4111-8111-111111111111"
 ACCOUNT_IDENTITY = "a" * 64
+OTHER_REQUEST_UUID = "22222222-2222-4222-8222-222222222222"
+
+
+def decoded_success_receipt(*, result_request=REQUEST_UUID,
+                            envelope_request=OTHER_REQUEST_UUID,
+                            malformed_result=False):
+    payload = {
+        "ok": True,
+        "result": {"runId": "run", "taskId": "task", "dispatchId": "dispatch",
+                   "state": "ready",
+                   "mutation": ("malformed" if malformed_result
+                                else {"requestId": result_request})},
+        "mutation": {"requestId": envelope_request},
+        "_meta": {"runtimeId": "runtime"},
+    }
+    decoded = _mutation_envelope(json.dumps(payload))
+    return {"runtime": decoded["runtime"], "exit": 0,
+            "request_uuid": decoded["request_uuid"], **decoded["result"]}
 
 
 class FakePort:
@@ -212,6 +232,29 @@ class AdmissionTests(unittest.TestCase):
             row = result["admission"]
             self.assertEqual(row["request_uuid"], REQUEST_UUID)
             self.assertEqual(row["native_binding"]["dispatchId"], "dispatch")
+
+    def test_decoded_success_request_contradiction_holds_fresh_admission_without_uuid_choice(self):
+        for malformed in (False, True):
+            with self.subTest(malformed=malformed), fixture() as root:
+                project, assessment, capabilities, quotas, frozen = setup_case(root)
+                port = FakePort()
+                port.start_receipt = decoded_success_receipt(malformed_result=malformed)
+                first = start(project, assessment, capabilities, quotas, frozen, port)
+                port.workers["dispatch"] = {
+                    "run": "run", "task": "task",
+                    "route": dict(first["admission"]["request"]),
+                    "worktree": "current", "state": "ready",
+                    "outcome": "in_progress", "stage_detail": "input_accepted"}
+                second = start(project, assessment, capabilities, quotas, frozen, port)
+                self.assertEqual((first["status"], second["status"]),
+                                 ("unresolved", "unresolved"))
+                self.assertEqual(first["admission"]["error"]["code"],
+                                 "native_request_conflict")
+                self.assertEqual(second["admission"]["error"]["code"],
+                                 "native_request_conflict")
+                self.assertIsNone(first["admission"]["request_uuid"])
+                self.assertIsNone(first["admission"]["native_binding"])
+                self.assertEqual(len(port.starts), 1)
 
     def test_objective_fanout_admits_two_blocks_third_and_settlement_frees_slot(self):
         with fixture() as root:
@@ -441,6 +484,33 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(result["status"], "bound")
         self.assertEqual(port.retry_requests, [REQUEST_UUID])
         self.assertEqual(len(port.starts), 1)
+
+    def test_decoded_success_request_contradiction_holds_completed_and_pending_recovery(self):
+        for path in ("completed", "pending"):
+            with self.subTest(path=path):
+                project, port, admission_id = self.recovery_case()
+                receipt = decoded_success_receipt()
+                if path == "completed":
+                    port.request_receipt = receipt
+                else:
+                    port.request_state = "pending"
+                    port.start_receipt = receipt
+                first = recover_admission(project, "objective", owner="owner",
+                                          admission_id=admission_id,
+                                          worktree="current", port=port)
+                second = recover_admission(project, "objective", owner="owner",
+                                           admission_id=admission_id,
+                                           worktree="current", port=port)
+                self.assertEqual((first["status"], second["status"]),
+                                 ("unresolved", "unresolved"))
+                self.assertEqual(first["admission"]["error"]["code"],
+                                 "native_request_conflict")
+                self.assertEqual(first["admission"]["request_uuid"], REQUEST_UUID)
+                self.assertIsNone(first["admission"]["native_binding"])
+                expected_starts = 0 if path == "completed" else 1
+                self.assertEqual(len(port.starts), expected_starts)
+                self.assertEqual(port.retry_requests,
+                                 [] if path == "completed" else [REQUEST_UUID])
 
     def test_completed_capacity_refusal_defers_once_without_start(self):
         project, port, admission_id = self.recovery_case()

@@ -301,6 +301,42 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual({name: by_effect[name] for name in names if name != "correct"},
                              {name: "legacy_hold" for name in names if name != "correct"})
 
+    def test_migration_requires_legacy_effect_run_to_join_binding_and_readback(self):
+        with fixture() as root:
+            project = root / "project"
+            project.mkdir()
+            cases = {}
+            for settlement in ("settled", "unsettled"):
+                for identity_shape in ("valid", "wrong", "missing", "malformed"):
+                    name = f"{settlement}_{identity_shape}"
+                    binding = old_binding(name)
+                    value = effect("confirmed", binding=binding)
+                    if identity_shape == "wrong":
+                        value["run_id"] = "other-run"
+                    elif identity_shape == "missing":
+                        value.pop("run_id")
+                    elif identity_shape == "malformed":
+                        value["run_id"] = ["run"]
+                    cases[name] = (value, binding, settlement == "settled")
+            self.write_old(project, legacy({name: value for name, (value, _, _) in cases.items()}))
+
+            def reader(dispatch):
+                _, binding, settled = next(case for case in cases.values()
+                                           if case[1]["dispatchId"] == dispatch)
+                return shown(binding, released=settled)
+
+            migrate_v1(project, "objective", owner="owner", worker_reader=reader)
+            migrated = read(project, "objective")["admissions"].values()
+            by_effect = {row["recovery"]["legacy_effect"]: row for row in migrated}
+            self.assertEqual(by_effect["settled_valid"]["state"], "closed")
+            self.assertEqual(by_effect["unsettled_valid"]["state"], "bound")
+            for name, row in by_effect.items():
+                if name.endswith("_valid"):
+                    self.assertEqual(row["run_id"], row["native_binding"]["runId"])
+                else:
+                    self.assertEqual(row["state"], "legacy_hold")
+                    self.assertIsNone(row["native_binding"])
+
     def test_fifo_legacy_context_is_rejected_without_blocking(self):
         with fixture() as root:
             project = root / "project"

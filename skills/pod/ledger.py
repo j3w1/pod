@@ -622,6 +622,10 @@ def migration_inventory(project: Path) -> dict:
 
 
 def _legacy_binding_matches(shown: dict, effect: dict, binding: dict, runtime: str) -> bool:
+    effect_run = effect.get("run_id")
+    if (not isinstance(effect_run, str) or not effect_run
+            or binding.get("runId") != effect_run):
+        return False
     result = shown.get("result") if isinstance(shown, dict) else None
     dispatch = result.get("dispatch") if isinstance(result, dict) else None
     projection = result.get("projection") if isinstance(result, dict) else None
@@ -744,12 +748,17 @@ def migrate_v1(project: Path, objective: str, *, owner: str,
                         else:
                             migrated_binding = None
             stamp = datetime.now(timezone.utc).isoformat()
+            effect_run = effect.get("run_id")
+            binding_run = binding.get("runId") if isinstance(binding, dict) else None
+            legacy_run = (effect_run if isinstance(effect_run, str) and effect_run
+                          else binding_run if isinstance(binding_run, str) and binding_run
+                          else "legacy-unknown")
             admissions[admission_id] = {"schema": "pod-admission/v2", "state": state,
                 "admission_id": admission_id, "objective": objective, "owner": owner,
                 "request": request, "route_decision": {"legacy": True,
                     "policy_revision": effect.get("route_revision")},
                 "effective_evidence": {"legacy": True}, "runtime": runtime,
-                "request_uuid": None, "run_id": effect.get("run_id") or (binding or {}).get("runId") or "legacy-unknown",
+                "request_uuid": None, "run_id": legacy_run,
                 "task_id": (binding or {}).get("taskId") or "legacy-unknown",
                 "plan_revision": effect.get("plan_revision") or "legacy-unknown",
                 "packet_id": effect.get("packet_id") or "legacy-unknown",
