@@ -511,6 +511,20 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(len(port.starts), expected_starts)
                 self.assertEqual(port.retry_requests,
                                  [] if path == "completed" else [REQUEST_UUID])
+                if path == "pending":
+                    port.request_state = "absent"
+                    absent = recover_admission(project, "objective", owner="owner",
+                                               admission_id=admission_id,
+                                               worktree="current", port=port)
+                    self.assertEqual(absent["status"], "unresolved")
+                    self.assertEqual(absent["admission"]["error"]["code"],
+                                     "native_request_conflict")
+                    port.request_state = "completed"
+                    completed = recover_admission(project, "objective", owner="owner",
+                                                  admission_id=admission_id,
+                                                  worktree="current", port=port)
+                    self.assertEqual(completed["status"], "bound")
+                    self.assertEqual(len(port.starts), 1)
 
     def test_completed_raw_receipt_joins_present_request_references_to_outer_uuid(self):
         base = {"runId": "run", "taskId": "task", "dispatchId": "dispatch",

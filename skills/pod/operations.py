@@ -311,6 +311,10 @@ def _request_conflict_result(project: Path, objective: str, *, owner: str,
         detail="native receipt carries contradictory or malformed request identity")
 
 
+def _known_request_conflict(admission: dict) -> bool:
+    return (admission.get("error") or {}).get("code") == "native_request_conflict"
+
+
 def _record_request(project: Path, objective: str, *, owner: str, admission_id: str,
                     request_uuid: str, receipt: dict) -> dict:
     """Persist Orca's UUID before any follow-up read can fail."""
@@ -522,7 +526,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": admission["state"], "admission": admission, "action": action}
     request_uuid = admission.get("request_uuid")
     if request_uuid is None:
-        if ((admission.get("error") or {}).get("code") == "native_request_conflict"
+        if (_known_request_conflict(admission)
                 or admission.get("recovery", {}).get("capacity_refusal") == "unverified"):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         row = _hold(project, objective, owner=owner, admission_id=admission_id,
@@ -568,7 +572,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
     if status == "pending":
         if (admission.get("recovery", {}).get("capacity_refusal") == "unverified"
-                or (admission.get("error") or {}).get("code") == "native_request_conflict"):
+                or _known_request_conflict(admission)):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         model, current_policy = _current_authority(
             project, objective, admission, task_policy=task_policy)
@@ -603,6 +607,8 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                 row = _bind(project, objective, owner=owner, admission_id=admission_id,
                             receipt=receipt, port=native_port, request_uuid=request_uuid)
         return {"status": row["state"], "admission": row, "action": "joined_pending_request"}
+    if _known_request_conflict(admission):
+        return {"status": admission["state"], "admission": admission, "action": "hold"}
     row = _adopt_unique(project, objective, owner=owner, admission_id=admission_id,
                         port=native_port, request_uuid=request_uuid)
     return {"status": row["state"], "admission": row, "action": "inspect_after_absent"}
