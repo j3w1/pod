@@ -1,20 +1,179 @@
 import json
 import os
+import io
+from contextlib import redirect_stdout
 from pathlib import Path
 import subprocess
 import sys
 import unittest
 from unittest.mock import patch
 
-from pod.cli import execute, parser
+from pod.cli import execute, main, parser
+from pod.config import read_yaml
 from pod.errors import PodError
 from pod.bundle import BUNDLE_FILES, canonical, version
 from pod.setup import _relative_key, inspect, setup
 from pod.ledger import checkpoint
 from tests.common import fixture
 
+ACCOUNT_IDENTITY = "a" * 64
+
 
 class SetupCliTests(unittest.TestCase):
+    def approval_native(self, *, identity=ACCOUNT_IDENTITY, auth="oauth"):
+        billing_login = {"auth": auth, "subscription": auth == "oauth",
+                         "identity_digest": None}
+        accounts = {"runtime": "runtime", "providers": {"codex": {
+            "managed_accounts": 0, "default_present": True,
+            "default_identity": identity, "default_auth": auth,
+            "default_has_auth": auth in ("oauth", "api_key"), "windows": {}}}}
+        return accounts, billing_login
+
+    def test_guided_approve_and_revoke_write_only_after_bound_confirmation(self):
+        with fixture() as root:
+            accounts, login = self.approval_native()
+            native = (patch("pod.cli.contract", return_value={
+                          "status": "observed", "runtime": "runtime", "capabilities": {}}),
+                      patch("pod.cli.account_metadata_raw", return_value=accounts),
+                      patch("pod.cli.agent_login_mode", return_value=login))
+            with native[0], native[1], native[2]:
+                proposal = execute(parser().parse_args(["config", "approve", "sol", "--json"]), root)
+            path = Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml"
+            self.assertEqual(proposal["status"], "confirmation_required")
+            self.assertFalse(proposal["written"])
+            self.assertFalse(path.exists())
+            self.assertNotIn("account", proposal["proposal"])
+            self.assertEqual(proposal["proposal"]["account_display"], "…aaaaaaaa")
+            self.assertEqual(proposal["proposal"]["context"]["status"], "unavailable")
+            with patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login):
+                approved = execute(parser().parse_args([
+                    "config", "approve", "sol", "--confirm", proposal["proposal"]["proposal"]]), root)
+            self.assertEqual(approved["status"], "approved")
+            saved = read_yaml(path)
+            self.assertTrue(saved["models"]["sol"]["approved"])
+            self.assertEqual(saved["models"]["sol"]["account"], ACCOUNT_IDENTITY)
+            self.assertRegex(saved["models"]["sol"]["approval_ref"], r"^guided:[0-9a-f]{64}$")
+            self.assertRegex(saved["models"]["sol"]["approval_route"], r"^[0-9a-f]{64}$")
+
+            revoke = execute(parser().parse_args(["config", "revoke", "sol", "--json"]), root)
+            self.assertTrue(path.exists())
+            revoked = execute(parser().parse_args([
+                "config", "revoke", "sol", "--confirm", revoke["proposal"]["proposal"]]), root)
+            self.assertEqual(revoked["status"], "revoked")
+            saved = read_yaml(path)["models"]["sol"]
+            self.assertFalse(saved["approved"])
+            self.assertNotIn("account", saved)
+            self.assertNotIn("approval_route", saved)
+
+    def test_guided_approval_rechecks_account_and_config_and_preserves_no_write_failures(self):
+        with fixture() as root:
+            accounts, login = self.approval_native()
+            with patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login):
+                proposal = execute(parser().parse_args(["config", "approve", "sol"]), root)
+            path = Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml"
+            changed, changed_login = self.approval_native(identity="b" * 64)
+            with patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=changed), \
+                 patch("pod.cli.agent_login_mode", return_value=changed_login), \
+                 self.assertRaises(PodError) as caught:
+                execute(parser().parse_args([
+                    "config", "approve", "sol", "--confirm", proposal["proposal"]["proposal"]]), root)
+            self.assertEqual(caught.exception.code, "approval_evidence_changed")
+            self.assertFalse(path.exists())
+
+            with patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login):
+                proposal = execute(parser().parse_args(["config", "approve", "sol"]), root)
+            path.parent.mkdir(parents=True)
+            path.write_text("schema: pod/v1\npolicy: {max_workers: 2}\n")
+            with patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login), \
+                 self.assertRaises(PodError) as changed_config:
+                execute(parser().parse_args([
+                    "config", "approve", "sol", "--confirm", proposal["proposal"]["proposal"]]), root)
+            self.assertEqual(changed_config.exception.code, "approval_evidence_changed")
+            self.assertNotIn("models:", path.read_text())
+
+            with self.assertRaises(PodError) as wrong:
+                execute(parser().parse_args(["config", "approve", "terra"]), root)
+            self.assertEqual(wrong.exception.code, "unknown_model_alias")
+            self.assertNotIn("models:", path.read_text())
+
+    def test_guided_approval_reports_paid_and_unknown_without_granting_spending(self):
+        for auth, expected in (("api_key", "paid"), ("unknown", "unknown")):
+            with self.subTest(auth=auth), fixture() as root:
+                accounts, login = self.approval_native(auth=auth)
+                # Preserve a selected identity even when authentication proof is unknown.
+                accounts["providers"]["codex"]["default_has_auth"] = auth != "unknown"
+                with patch("pod.cli.contract", return_value={
+                           "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                     patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                     patch("pod.cli.agent_login_mode", return_value=login):
+                    proposal = execute(parser().parse_args(["config", "approve", "sol"]), root)
+                self.assertEqual(proposal["proposal"]["billing"], expected)
+                self.assertFalse((Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml").exists())
+
+    def test_guided_interactive_cancellation_writes_nothing(self):
+        with fixture() as root:
+            accounts, login = self.approval_native()
+            with patch("pod.cli.Path.cwd", return_value=root), \
+                 patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login), \
+                 patch("pod.cli.sys.stdin.isatty", return_value=True), \
+                 patch("builtins.input", return_value="no"):
+                self.assertEqual(main(["config", "approve", "sol"]), 0)
+            self.assertFalse((Path(os.environ["XDG_CONFIG_HOME"]) / "pod" / "config.yaml").exists())
+
+    def test_noninteractive_human_proposal_hides_internal_digests(self):
+        with fixture() as root:
+            accounts, login = self.approval_native()
+            output = io.StringIO()
+            with patch("pod.cli.Path.cwd", return_value=root), \
+                 patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login), \
+                 patch("pod.cli.sys.stdin.isatty", return_value=False), \
+                 redirect_stdout(output):
+                self.assertEqual(main(["config", "approve", "sol"]), 0)
+            rendered = output.getvalue()
+            self.assertIn("…aaaaaaaa", rendered)
+            self.assertIn("No change written", rendered)
+            self.assertNotIn(ACCOUNT_IDENTITY, rendered)
+            self.assertNotRegex(rendered, r"[0-9a-f]{64}")
+
+    def test_guided_approval_refuses_redirected_personal_path_before_write(self):
+        with fixture() as root:
+            real = root.parent / "real-config"
+            real.mkdir()
+            redirected = root.parent / "redirected-config"
+            redirected.symlink_to(real, target_is_directory=True)
+            accounts, login = self.approval_native()
+            with patch.dict(os.environ, {"POD_CONFIG_HOME": str(redirected)}), \
+                 patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login):
+                proposal = execute(parser().parse_args(["config", "approve", "sol"]), root)
+                with self.assertRaises(PodError) as caught:
+                    execute(parser().parse_args([
+                        "config", "approve", "sol", "--confirm",
+                        proposal["proposal"]["proposal"]]), root)
+            self.assertEqual(caught.exception.code, "unsafe_config")
+            self.assertFalse((real / "config.yaml").exists())
     def test_nested_skill_paths_use_canonical_manifest_keys(self):
         root = Path("/project/.agents/skills/pod")
         nested = root / "references" / "planning.md"
@@ -146,6 +305,49 @@ class SetupCliTests(unittest.TestCase):
             self.assertFalse((root / ".pod").exists())
             self.assertFalse((root / "codex").exists())
             self.assertFalse((root / "config").exists())
+
+    def test_doctor_keeps_unrelated_legacy_state_objective_scoped(self):
+        with fixture() as root:
+            legacy = Path(os.environ["XDG_STATE_HOME"]) / "pod" / "old-objective"
+            legacy.mkdir(parents=True)
+            (legacy / "context.json").write_text(json.dumps({"schema": "pod-context/v1"}))
+            with patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value={
+                       "runtime": "runtime", "providers": {}}), \
+                 patch("pod.cli.agent_login_mode", return_value={}):
+                report = execute(parser().parse_args(["doctor", "--json"]), root)
+            self.assertEqual(report["readiness"]["direct_work"], "ready")
+            self.assertEqual(report["readiness"]["migration"]["v1"], 1)
+            self.assertEqual(report["readiness"]["migration"]["scope"],
+                             "affected_objectives_only")
+            self.assertFalse(report["readiness"]["migration"]["blocks_unrelated_objectives"])
+
+    def test_doctor_requires_runtime_identity_before_reporting_orca_connected(self):
+        with fixture() as root, \
+             patch("pod.cli.contract", return_value={
+                   "status": "observed", "runtime": None, "reason": "orca_read_failed",
+                   "capabilities": {}}), \
+             patch("pod.cli.account_metadata_raw", return_value={
+                   "runtime": "runtime", "providers": {}}), \
+             patch("pod.cli.agent_login_mode", return_value={}):
+            report = execute(parser().parse_args(["doctor", "--json"]), root)
+        self.assertEqual(report["readiness"]["orca"], "unavailable")
+        self.assertIn("orca_read_failed", report["readiness"]["limitations"])
+
+        output = io.StringIO()
+        with fixture() as root, \
+             patch("pod.cli.Path.cwd", return_value=root), \
+             patch("pod.cli.contract", return_value={
+                   "status": "observed", "runtime": None, "reason": "orca_read_failed",
+                   "capabilities": {}}), \
+             patch("pod.cli.account_metadata_raw", return_value={
+                   "runtime": "runtime", "providers": {}}), \
+             patch("pod.cli.agent_login_mode", return_value={}), \
+             patch("pod.cli.executable", side_effect=PodError("orca_unavailable", "offline")), \
+             redirect_stdout(output):
+            self.assertEqual(main(["doctor"]), 0)
+        self.assertIn("Orca did not answer; start or reconnect Orca", output.getvalue())
 
     def test_doctor_exposes_only_redacted_account_identities_for_personal_approval(self):
         with fixture() as root, \

@@ -29,14 +29,18 @@ def scenario_inputs():
                   "approved": True, "approval_ref": "personal",
                   "billing": "included", "efforts": ["high"], "capabilities": []})
     model["approval_route"] = route_identity(model)
+    policy["routing"]["complex"] = {"model": "sol", "effort": "high", "context": "max"}
     effective = {"policy": policy, "revision": digest(policy)}
     assessment = {"method": "delegate", "responsibility": "bounded edit", "complexity": "complex",
                   "risk": "low", "size": "small", "uncertainty": "low", "verifiability": "unit",
                   "capabilities": [], "context": [], "reason": "isolated edit", "bounded": True}
-    capabilities = {"sol": {"agent": "codex", "model": "gpt-5.6-sol",
+    capabilities = {"sol": {"agent": "codex", "model": "gpt-6-sol",
                             "account": ACCOUNT_IDENTITY,
                             "bucket": "shared", "efforts": ["high"], "capabilities": [],
-                            "billing_preflight": True, "fanout_control": True}}
+                            "billing_preflight": True, "fanout_control": True,
+                            "suitable_for": ["complex"],
+                            "context_control": "native_per_launch",
+                            "contexts": {"256k": 262144, "max": 900000}}}
     quota = {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
                          "account": ACCOUNT_IDENTITY,
                          "bucket": "shared", "windows": [{"name": "hour", "remaining_percent": 60}],
@@ -83,8 +87,9 @@ class ScenarioFixtureTests(unittest.TestCase):
             project = root / "project"
             project.mkdir()
             policy, assessment, capabilities, quota = scenario_inputs()
-            route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
-                     "account": ACCOUNT_IDENTITY, "bucket": "shared", "effort": "high"}
+            route = {"alias": "sol", "agent": "codex", "model": "gpt-6-sol",
+                     "account": ACCOUNT_IDENTITY, "bucket": "shared", "effort": "high",
+                     "context": "max", "effective_context": 900000}
             frozen = packet({"schema": "pod-packet/v1", "objective": "objective",
                              "criteria": ["works"], "responsibility": "worker",
                              "scope": ["notes.txt"], "actions": ["edit"],

@@ -546,7 +546,7 @@ def agent_login_mode(agent: str) -> dict:
 
 def bucket_for(agent: str, model: str) -> str:
     """The quota window family a route draws on, as Pod labels it."""
-    if agent == "claude" and isinstance(model, str) and model.lower().startswith("fable"):
+    if agent == "claude" and model == "claude-fable-5-1":
         return "fable"
     return "default"
 
@@ -616,6 +616,10 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         "route_approval": _tier("route_approval", "owner_route_config",
                                 "personal policy approval provenance",
                                 billing=approved_billing),
+        "context_window": _tier(
+            "context_window", "unavailable",
+            "installed Orca worker-start exposes model and effort but no per-worker context control",
+            requested=route.get("context"), effective=None),
         "quota_bucket": _tier("quota_bucket",
                               "runtime_observation" if windows else "unavailable",
                               "provider rate-limit windows reported by Orca", bucket=bucket),
@@ -631,6 +635,9 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
     hard_stops.extend(account_evidence_stops(
         account_evidence, expected_identity=expected_stamp,
         approved_billing=approved_billing))
+    if route.get("context") in ("256k", "max"):
+        hard_stops.append("context_control_unavailable")
+        disclosures.append("requested context cannot be established by this Orca worker-start contract")
     if not windows:
         disclosures.append("provider quota windows are unavailable to the installed runtime")
     if controls["quota_bucket"]["tier"] == "runtime_observation" and "bucket" not in account_block:
@@ -649,7 +656,8 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
             "version": observed.get("version"), "executable": observed.get("executable"),
             "route": {"agent": agent, "model": route.get("model"), "account": stamp,
                       "bucket": bucket,
-                      "effort": route.get("effort")},
+                      "effort": route.get("effort"), "context": route.get("context"),
+                      "effective_context": None},
             "controls": controls,
             "login": {"mode": mode, "auth": auth, "subscription": subscription,
                       "managed_accounts": managed, "identity_digest": stamp,
@@ -670,6 +678,14 @@ def require_route_establishment(establishment: dict, route: dict) -> None:
             raise PodError("account_binding_unverified", "Established route differs from the requested route")
     if route.get("bucket") is not None and established.get("bucket") != route["bucket"]:
         raise PodError("account_binding_unverified", "Established quota bucket differs from the requested one")
+    if route.get("context") is not None:
+        context_control = establishment.get("controls", {}).get("context_window")
+        if (established.get("context") != route.get("context")
+                or established.get("effective_context") != route.get("effective_context")
+                or not isinstance(context_control, dict)
+                or context_control.get("tier") != "enforceable_control"):
+            raise PodError("context_control_unavailable",
+                           "Installed Orca cannot establish the requested worker context")
     identity_control = establishment.get("controls", {}).get("account_identity")
     expected_identity = route.get("account")
     observed_identity = establishment.get("login", {}).get("identity_digest")
@@ -681,6 +697,7 @@ def require_route_establishment(establishment: dict, route: dict) -> None:
                        "Native account identity does not match personal route approval")
     for stop in establishment.get("hard_stops", []):
         raise PodError(stop if stop in ("billing_mode_unverified", "paid_route_forbidden",
+                                        "context_control_unavailable",
                                         "native_authority_unverified", "account_binding_unverified")
                        else "route_establishment_failed",
                        "Route establishment refuses this launch: " + str(stop))

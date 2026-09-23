@@ -240,6 +240,8 @@ def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
             or worker.get("dispatchId") != dispatch):
         raise PodError("native_identity_unverified", "Worker readback does not join the admission")
     launch = worker.get("startOptions", {}).get("launch") if isinstance(worker.get("startOptions"), dict) else None
+    # Orca 1.4.209 exposes only model and effort on the native launch wire.
+    # Context proof remains in the separate Pod establishment/admission evidence.
     requested = {key: admission["request"][key] for key in ("agent", "model", "effort")}
     if not isinstance(launch, dict) or launch.get("requested") != requested or launch.get("effective") != requested:
         raise PodError("effective_launch_unverified", "Worker effective route differs from admission")

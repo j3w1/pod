@@ -67,9 +67,12 @@ class FakePort:
         return {"schema": "pod-route-establishment/v1", "runtime": self.runtime,
                 "version": "1.4.206", "executable": "/fixture/orca", "hard_stops": [],
                 "disclosures": [], "route": {**{key: route.get(key) for key in
-                ("agent", "model", "bucket", "effort")}, "account": observed_identity},
+                ("agent", "model", "bucket", "effort", "context", "effective_context")},
+                "account": observed_identity},
                 "controls": {"account_identity": {"tier": "runtime_observation",
-                                                     "matched": observed_identity == route.get("account")}},
+                                                     "matched": observed_identity == route.get("account")},
+                             "context_window": {"tier": "enforceable_control",
+                                                "source": "explicit synthetic fixture"}},
                 "login": {"mode": "host_login", "auth": "oauth", "subscription": True,
                           "managed_accounts": 0,
                           "identity_digest": observed_identity},
@@ -151,14 +154,14 @@ def setup_case(root, *, paid=False):
     project.mkdir()
     config = Path(os.environ["XDG_CONFIG_HOME"]) / "pod"
     config.mkdir(parents=True)
-    binding = route_identity({"agent": "codex", "model": "gpt-5.6-sol",
+    binding = route_identity({"agent": "codex", "model": "gpt-6-sol",
                               "account": ACCOUNT_IDENTITY})
     paid_policy = f"""policy:
   spending_grants:
     - id: paid-once
       action: paid_usage
       account: {ACCOUNT_IDENTITY}
-      model: gpt-5.6-sol
+      model: gpt-6-sol
       objective: objective
       valid_until: '2026-09-23T00:00:00Z'
       max_units: 1
@@ -167,13 +170,15 @@ def setup_case(root, *, paid=False):
 models:
   sol:
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-sol
     account: {ACCOUNT_IDENTITY}
     approved: true
     approval_ref: review-1
     approval_route: {binding}
     billing: {"paid" if paid else "included"}
     efforts: [high]
+routing:
+  complex: {{model: sol, effort: high, context: max}}
 {paid_policy}""")
     revision = effective(project)["revision"]
     checkpoint(project, "objective", owner="owner", value={
@@ -181,8 +186,9 @@ models:
         "candidate": "candidate", "policy_revision": revision, "native_refs": [],
         "assignments": [], "questions": [], "verification_gaps": ["works"],
         "next_safe_action": "inspect"}, native={"runtime": "runtime"})
-    route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
-             "account": ACCOUNT_IDENTITY, "bucket": "shared", "effort": "high"}
+    route = {"alias": "sol", "agent": "codex", "model": "gpt-6-sol",
+             "account": ACCOUNT_IDENTITY, "bucket": "shared", "effort": "high",
+             "context": "max", "effective_context": 900000}
     frozen = packet({"schema": "pod-packet/v1", "objective": "objective",
                      "criteria": ["works"], "responsibility": "writer",
                      "scope": ["notes.txt"], "actions": ["edit"],
@@ -193,9 +199,12 @@ models:
                   "complexity": "complex", "risk": "low", "size": "small",
                   "uncertainty": "low", "verifiability": "unit", "capabilities": [],
                   "context": [], "reason": "independent", "bounded": True}
-    capabilities = {"sol": {"agent": "codex", "model": "gpt-5.6-sol",
+    capabilities = {"sol": {"agent": "codex", "model": "gpt-6-sol",
                              "account": ACCOUNT_IDENTITY, "efforts": ["high"],
-                             "capabilities": [], "bucket": "shared"}}
+                             "capabilities": [], "bucket": "shared",
+                             "suitable_for": ["complex"],
+                             "context_control": "native_per_launch",
+                             "contexts": {"256k": 262144, "max": 900000}}}
     quotas = {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
                            "account": ACCOUNT_IDENTITY, "bucket": "shared",
                            "observed_at": NOW.isoformat(), "source": "fixture",
@@ -1048,8 +1057,9 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(native["physical_capacity"], "unavailable")
 
     def test_fresh_account_read_never_relabels_a_rotated_identity(self):
-        route = {"alias": "sol", "agent": "codex", "model": "gpt-5.6-sol",
-                 "account": ACCOUNT_IDENTITY, "bucket": "default", "effort": "high"}
+        route = {"alias": "sol", "agent": "codex", "model": "gpt-6-sol",
+                 "account": ACCOUNT_IDENTITY, "bucket": "default", "effort": "high",
+                 "context": "max", "effective_context": 900000}
         established = FakePort().establish(route, {"billing": "included"})
         rotated = {"runtime": "runtime", "providers": {"codex": {
             "managed_accounts": 0, "default_identity": "b" * 64,

@@ -140,15 +140,17 @@ class RouteEstablishmentTests(unittest.TestCase):
         with patch("pod.orca.read_command", return_value=envelope("host-list")):
             return hosts()
 
-    def established(self, *, agent="codex", model="gpt-5.6-sol", billing="included",
-                    login=None, bucket=None, delegation=False):
+    def established(self, *, agent="codex", model="gpt-6-sol", billing="included",
+                    login=None, bucket=None, delegation=False, context=None,
+                    effective_context=None):
         accounts = self.accounts()
         identity_digest = accounts["providers"][agent].get("identity_digest")
         login = login or {"auth": "oauth", "subscription": True,
                           "identity_digest": identity_digest or "a" * 64}
         identity_digest = identity_digest or login.get("identity_digest")
         route = {"agent": agent, "model": model, "account": identity_digest,
-                 "bucket": bucket, "effort": "high"}
+                 "bucket": bucket, "effort": "high", "context": context,
+                 "effective_context": effective_context}
         return route, route_establishment(
             route, {"billing": billing},
             snapshot=self.snapshot(), accounts=accounts, login=login,
@@ -184,9 +186,18 @@ class RouteEstablishmentTests(unittest.TestCase):
         self.assertEqual(len(established["login"]["identity_digest"]), 64)
         require_route_establishment(established, route)
 
+    def test_installed_worker_contract_refuses_context_before_effect(self):
+        route, established = self.established(context="max", effective_context=900000)
+        self.assertEqual(established["controls"]["context_window"]["tier"], "unavailable")
+        self.assertIsNone(established["route"]["effective_context"])
+        self.assertIn("context_control_unavailable", established["hard_stops"])
+        with self.assertRaises(PodError) as caught:
+            require_route_establishment(established, route)
+        self.assertEqual(caught.exception.code, "context_control_unavailable")
+
     def test_an_included_route_survives_an_unavailable_quota_bucket(self):
         """The regression: absent optional metadata is a disclosure, not a blocker."""
-        route, established = self.established(agent="claude", model="sonnet")
+        route, established = self.established(agent="claude", model="claude-sonnet-5")
         observed_identity = "a" * 64
         empty = {"runtime": "uuid-0001", "providers": {"claude": {
                      "managed_accounts": 0, "default_identity": observed_identity,
@@ -204,7 +215,7 @@ class RouteEstablishmentTests(unittest.TestCase):
         require_route_establishment(sparse, route)
 
     def test_account_rotation_and_unavailable_identity_fail_before_route_use(self):
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": "a" * 64,
+        route = {"agent": "codex", "model": "gpt-6-sol", "account": "a" * 64,
                  "bucket": "default", "effort": "high"}
         approved = "a" * 64
         base_accounts = {"runtime": "uuid-0001", "providers": {"codex": {
@@ -228,7 +239,7 @@ class RouteEstablishmentTests(unittest.TestCase):
 
     def test_managed_account_cannot_borrow_unrelated_host_subscription_proof(self):
         identity_digest = "a" * 64
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+        route = {"agent": "codex", "model": "gpt-6-sol", "account": identity_digest,
                  "bucket": "default", "effort": "high"}
         accounts = {"runtime": "uuid-0001", "providers": {"codex": {
             "managed_accounts": 1, "active_account": identity_digest,
@@ -244,7 +255,7 @@ class RouteEstablishmentTests(unittest.TestCase):
 
     def test_system_default_billing_cannot_be_overridden_by_another_login_context(self):
         identity_digest = "a" * 64
-        route = {"agent": "codex", "model": "gpt-5.6-sol", "account": identity_digest,
+        route = {"agent": "codex", "model": "gpt-6-sol", "account": identity_digest,
                  "bucket": "default", "effort": "high"}
         base = {"runtime": "uuid-0001", "providers": {"codex": {
             "managed_accounts": 0, "default_identity": identity_digest,
@@ -298,12 +309,12 @@ class RouteEstablishmentTests(unittest.TestCase):
     def test_billing_and_paid_fallback_fail_closed(self):
         route, unknown = self.established(login={"auth": "unknown", "subscription": None,
                                                  "identity_digest": "a" * 64},
-                                          agent="claude", model="sonnet")
+                                          agent="claude", model="claude-sonnet-5")
         self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
         with self.assertRaises(PodError) as blocked:
             require_route_establishment(unknown, route)
         self.assertEqual(blocked.exception.code, "billing_mode_unverified")
-        route, paid = self.established(agent="claude", model="sonnet", billing="unknown",
+        route, paid = self.established(agent="claude", model="claude-sonnet-5", billing="unknown",
                                        login={"auth": "api_key", "subscription": False,
                                               "identity_digest": "a" * 64})
         self.assertEqual(paid["hard_stops"], ["paid_route_forbidden"])
@@ -584,7 +595,7 @@ class ReviewFindingRegressions(unittest.TestCase):
         accounts = {"runtime": "r", "providers": {"claude": {"managed_accounts": 0,
                                              "windows": {"weekly": {}},
                                              "account_association": "host_login"}}}
-        asserted = {"agent": "claude", "model": "fable-5", "account": "a" * 64,
+        asserted = {"agent": "claude", "model": "claude-fable-5-1", "account": "a" * 64,
                     "bucket": "default", "effort": "high"}
         established = route_establishment(asserted, {"billing": "included"}, snapshot=snapshot,
                                           accounts=accounts,

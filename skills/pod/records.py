@@ -106,9 +106,13 @@ def packet(value: Any) -> dict:
             raise PodError("invalid_source", "Packet source is not a safe bound path")
         if ref["state"] == "present" and not _sha256(ref.get("sha256")):
             raise PodError("invalid_source", "Present source needs a content digest")
-    route = exact(p["route"], {"alias", "agent", "model", "account", "bucket", "effort"}, {"agent"}, name="packet_route")
+    route = exact(p["route"], {"alias", "agent", "model", "account", "bucket", "effort",
+                                     "context", "effective_context"}, {"agent"}, name="packet_route")
     for key, value in route.items():
-        if value is not None:
+        if key == "effective_context":
+            if type(value) is not int or value <= 0:
+                raise PodError("invalid_packet_route", "Effective context must be a positive token limit")
+        elif value is not None:
             bounded_text(value, name="route " + key, limit=256)
     if len(str(p)) > 65536:
         raise PodError("invalid_packet", "Packet is too large")

@@ -48,8 +48,11 @@ def establishment(route, *, runtime="runtime", billing="included", observed="sub
             "route": {"agent": route.get("agent"), "model": route.get("model"),
                       "account": route.get("account"),
                       "bucket": route.get("bucket") if bucket is ... else bucket,
-                      "effort": route.get("effort")},
-            "controls": {"account_identity": {"tier": "runtime_observation", "matched": True}},
+                      "effort": route.get("effort"), "context": route.get("context"),
+                      "effective_context": route.get("effective_context")},
+            "controls": {"account_identity": {"tier": "runtime_observation", "matched": True},
+                         "context_window": {"tier": "enforceable_control",
+                                            "source": "explicit synthetic fixture"}},
             "login": {"mode": "host_login", "auth": "oauth", "subscription": True,
                       "managed_accounts": 0, "identity_digest": route.get("account")},
             "billing": {"observed": observed, "approved": billing}}
