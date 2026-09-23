@@ -15,7 +15,7 @@ latest `v0.1.2`; this task authorized no release or tag mutation.
 | Recovery and migration | Implemented locally. Orca-issued request UUIDs join completed, pending and absent recovery to the same admission. Conflicting or incomplete identity remains unresolved across later observations. Explicit v1 migration archives source state and promotes only exact native joins. |
 | Governor | Implemented locally. ALLOW/REUSE/DEFER decisions use candidate-bound evidence, the current Run's authority and exact objective assignments when relevant. They do not reconstruct foreign workers or physical capacity. |
 | Skill and package | The skill and Python package share one `skills/pod` source. Four public helper families remain: `setup`, `config`, `doctor` and `status`; guided approval/revocation stays inside `config`. |
-| Offline checks | Milestone A commit `cb55d52d3d3a9c9871c6f104d0e6447717ec27d0` passed 283 tests. The complete issue-14 working-tree candidate passed 302 tests, four explicit incident tests, compile/diff, platform, tracked-source and skill validation locally; the final commit still needs frozen packaging, hosted and independent gates. Prior evidence is not promoted automatically. |
+| Offline checks | Milestone A commit `cb55d52d3d3a9c9871c6f104d0e6447717ec27d0` passed 283 tests. The corrected issue-14 working-tree candidate passed 312 tests, four explicit incident tests, compile/diff, platform, tracked-source and skill validation locally; the final commit still needs frozen packaging, hosted and independent gates. Prior evidence is not promoted automatically. |
 
 ## Orca dependency
 

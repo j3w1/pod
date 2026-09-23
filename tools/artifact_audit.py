@@ -50,6 +50,10 @@ def members(path: pathlib.Path):
                         yield info.name, handle.read()
 
 
+def _line_number(data: bytes, offset: int) -> int:
+    return data.count(b"\n", 0, offset) + 1
+
+
 def audit(paths: list[pathlib.Path]) -> list[str]:
     findings = []
     for artifact in paths:
@@ -57,14 +61,14 @@ def audit(paths: list[pathlib.Path]) -> list[str]:
             for label, pattern in FORBIDDEN:
                 match = pattern.search(data)
                 if match:
-                    findings.append(f"{artifact.name} :: {name} :: {label}: "
-                                    f"{match.group(0)[:60].decode('utf-8', 'replace')}")
+                    findings.append(f"{artifact.name} :: {name} :: {label} at line "
+                                    f"{_line_number(data, match.start())}")
             relative = name.split("/", 1)[1] if "/" in name and name.startswith(("pod/", "j3w1_pod-")) else name
             if any(marker in name for marker in HISTORICAL):
                 continue
             if relative.startswith(EXEMPT_PREFIXES):
                 continue
-            for raw in data.splitlines():
+            for line_number, raw in enumerate(data.splitlines(), 1):
                 try:
                     line = raw.decode("utf-8")
                 except UnicodeError:
@@ -72,8 +76,8 @@ def audit(paths: list[pathlib.Path]) -> list[str]:
                 if any(allowed.search(line) for allowed in ALLOWED):
                     continue
                 if any(pattern.search(line) for pattern in PATTERNS):
-                    findings.append(f"{artifact.name} :: {name} :: retired platform: "
-                                    f"{line.strip()[:80]}")
+                    findings.append(f"{artifact.name} :: {name} :: retired platform at line "
+                                    f"{line_number}")
                     break
     return findings
 
@@ -107,8 +111,8 @@ def audit_source(root: pathlib.Path) -> list[str]:
         for label, pattern in FORBIDDEN:
             match = pattern.search(data)
             if match:
-                findings.append(f"{name} :: {label}: "
-                                f"{match.group(0)[:60].decode('utf-8', 'replace')}")
+                findings.append(f"{name} :: {label} at line "
+                                f"{_line_number(data, match.start())}")
     return findings
 
 

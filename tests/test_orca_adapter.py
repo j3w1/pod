@@ -10,7 +10,7 @@ from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, 
                       current_run, effective_launch, executable, hosts, identity,
                       mutate_command, read_command,
                       require_route_establishment, route_establishment, worker_rows,
-                      worktree_selector)
+                      worktree_identity, worktree_selector)
 from tests.common import envelope, receipt
 
 
@@ -519,10 +519,30 @@ class MutationAllowlistTests(unittest.TestCase):
         self.assertEqual(receipt_value["result"]["_envelope_conflicts"]["dispatchId"], "two")
 
     def test_worktree_selectors_accept_existing_placements_only(self):
-        for value in ("current", "path:/fixture/repo", "id:abc", "name:task", "branch:main"):
+        for value in ("current", "active", "path:/fixture/repo", "id:abc", "name:task",
+                      "branch:main", "issue:7"):
             self.assertEqual(worktree_selector(value), value)
         for value in ("new-child", "new-top-level", "", "--worktree", None, "path:"):
             self.assertIsNone(worktree_selector(value))
+
+    def test_native_worktree_resolution_requires_one_coherent_identity(self):
+        row = {"path": "/fixture/repo", "branch": "refs/heads/orca/task", "isBare": False,
+               "git": {"path": "/fixture/repo", "branch": "refs/heads/orca/task",
+                       "isBare": False}}
+        with patch("pod.orca.read_command", return_value={
+                   "runtime": "runtime", "result": {"worktree": row}}):
+            self.assertEqual(worktree_identity("name:task"), {
+                "runtime": "runtime", "path": "/fixture/repo", "branch": "orca/task"})
+        with patch("pod.orca.read_command", return_value={
+                   "runtime": "runtime", "result": {"worktree": {
+                       **row, "git": {**row["git"], "path": "/fixture/other"}}}}), \
+             self.assertRaises(PodError) as contradictory:
+            worktree_identity("current")
+        self.assertEqual(contradictory.exception.code, "worktree_resolution_ambiguous")
+        with patch("pod.orca.read_command", side_effect=PodError("orca_read_failed", "missing")), \
+             self.assertRaises(PodError) as unavailable:
+            worktree_identity("current")
+        self.assertEqual(unavailable.exception.code, "worktree_resolution_unavailable")
 
     def test_identity_twins_are_read_but_conflicts_refuse(self):
         self.assertEqual(identity({"taskId": "t"}, "taskId"), "t")
@@ -546,6 +566,7 @@ class MutationAllowlistTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, "unsupported_orca_read")
             runner.assert_not_called()
         for argv in (["status", "--json"], ["host", "list", "--json"],
+                     ["worktree", "show", "--worktree", "current", "--json"],
                      ["orchestration", "run-current", "--json"],
                      ["orchestration", "request-show", "--request",
                       "11111111-1111-4111-8111-111111111111", "--json"],

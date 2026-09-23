@@ -39,13 +39,17 @@ installing a second active copy beside it. Which copy wins is the operator's dec
 something setup makes by writing.
 
 Inferred native homes (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `CODEX_HOME` and
-`CLAUDE_CONFIG_DIR`) must be absolute directories outside the current project,
+`CLAUDE_CONFIG_DIR`) must be absolute directories outside every known linked worktree for the current repository,
 both lexically and after resolving existing redirects. A profile home may itself be a symlink,
 as it commonly is on an ordinary machine; only the components Pod would create beneath it must
 be unredirected. Configuration and state access and global setup fail before writes when that
 boundary is not proven. Explicit absolute `POD_CONFIG_HOME` and
 `POD_STATE_HOME` remain Pod-only disposable overrides, and local project-scope setup intentionally
 writes its owned integration beneath the project.
+
+Repository/worktree identity uses Git reads that do not inspect dirtiness, run fsmonitor
+hooks or update optional index caches. Dirtiness is unknown unless a separately authorized
+operation observes it; failed identity reads never become a claim of cleanliness.
 
 The explicit installer requires pip 22.3 or newer on the invoking interpreter, creates the
 selected environment without pip, and uses isolated bootstrap pip's documented `--python`

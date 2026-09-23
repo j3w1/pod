@@ -152,8 +152,23 @@ class SetupCliTests(unittest.TestCase):
             rendered = output.getvalue()
             self.assertIn("…aaaaaaaa", rendered)
             self.assertIn("No change written", rendered)
+            self.assertIn("Configured effort: medium", rendered)
+            self.assertIn("Configured context: 256k", rendered)
+            self.assertIn("model-specific support is unverified", rendered)
+            self.assertNotIn("requestable_not_model_verified", rendered)
             self.assertNotIn(ACCOUNT_IDENTITY, rendered)
             self.assertNotRegex(rendered, r"[0-9a-f]{64}")
+
+    def test_plain_config_hides_revision_and_skill_only_guidance_avoids_global_pod(self):
+        with fixture() as root:
+            output = io.StringIO()
+            with patch("pod.cli.Path.cwd", return_value=root), redirect_stdout(output):
+                self.assertEqual(main(["config"]), 0)
+            rendered = output.getvalue()
+            self.assertNotIn("Revision:", rendered)
+            self.assertNotRegex(rendered, r"[0-9a-f]{64}")
+            source = Path(__file__).resolve().parents[1] / "skills" / "pod" / "cli.py"
+            self.assertNotIn("`pod doctor --json`", source.read_text())
 
     def test_guided_approval_refuses_redirected_personal_path_before_write(self):
         with fixture() as root:

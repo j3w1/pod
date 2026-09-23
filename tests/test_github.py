@@ -1,17 +1,20 @@
 """The GitHub port: exact argv shapes, and what each response is read as."""
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import unittest
 from unittest.mock import patch
 
-from pod.config import effective
+from pod.config import effective, personal_path
 from pod.errors import PodError
 from pod.github import (AMENDMENT_JQ, GhPort, ISSUE_FIELDS, PR_FIELDS, RUN_FIELDS,
                         gh_allowed, git_allowed,
                         issue_intake, issue_recheck, repository_context)
-from pod.ledger import checkpoint, read
+from pod.ledger import checkpoint, objective_root, read, state_root
+from pod.setup import inspect
+from pod.util import digest
 from tests.common import fixture
 
 COMMIT = "a" * 40
@@ -212,6 +215,80 @@ class PortReadingTests(unittest.TestCase):
 
 
 class RepositoryAndIssueTests(unittest.TestCase):
+    def test_inaccessible_legacy_context_candidate_is_not_treated_as_absent(self):
+        with fixture() as root:
+            main, worktree = repository(root)
+            legacy = state_root(worktree) / digest({
+                "project": str(main.resolve()), "objective": "legacy"})
+            legacy.mkdir(parents=True)
+            (legacy / "context.json").write_text("{}")
+            legacy.chmod(0)
+            try:
+                with self.assertRaises(PodError) as unavailable:
+                    objective_root(worktree, "legacy")
+                self.assertEqual(unavailable.exception.code, "unsafe_state")
+            finally:
+                legacy.chmod(0o700)
+
+    def test_linked_worktree_preserves_native_home_containment_and_explicit_overrides(self):
+        with fixture() as root:
+            main, worktree = repository(root)
+            inside_config = main / "native-config"
+            inside_state = main / "native-state"
+            inside_agents = main / "native-agents"
+            for path in (inside_config, inside_state, inside_agents):
+                path.mkdir()
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(inside_config)}), \
+                 self.assertRaises(PodError) as config_error:
+                personal_path(worktree)
+            self.assertEqual(config_error.exception.code, "project_contained_native_home")
+            with patch.dict(os.environ, {"XDG_STATE_HOME": str(inside_state)}), \
+                 self.assertRaises(PodError) as state_error:
+                state_root(worktree)
+            self.assertEqual(state_error.exception.code, "project_contained_native_home")
+            with patch.dict(os.environ, {"CODEX_HOME": str(inside_agents),
+                                         "CLAUDE_CONFIG_DIR": str(root / "safe-claude")}), \
+                 self.assertRaises(PodError) as setup_error:
+                inspect(worktree, global_scope=True)
+            self.assertEqual(setup_error.exception.code, "project_contained_native_home")
+
+            with patch.dict(os.environ, {"POD_CONFIG_HOME": str(inside_config),
+                                         "POD_STATE_HOME": str(inside_state)}):
+                self.assertEqual(personal_path(worktree), inside_config / "config.yaml")
+                self.assertEqual(state_root(worktree), inside_state)
+
+            outside = root / "outside-native"
+            outside.mkdir()
+            linked = root / "linked-native"
+            linked.symlink_to(outside, target_is_directory=True)
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(linked)}):
+                self.assertEqual(personal_path(worktree), linked / "pod" / "config.yaml")
+
+    def test_passive_repository_and_config_reads_do_not_run_fsmonitor(self):
+        with fixture() as root:
+            main, worktree = repository(root)
+            marker = root / "fsmonitor-ran"
+            hook = root / "fsmonitor.sh"
+            hook.write_text(f"#!/bin/sh\ntouch '{marker}'\nprintf '2\\n'\n")
+            hook.chmod(0o700)
+            git(main, "config", "core.fsmonitor", str(hook))
+            context = repository_context(worktree)
+            self.assertIsNone(context["dirty"])
+            self.assertEqual(effective(worktree)["schema"], "pod/v1")
+            self.assertFalse(marker.exists())
+
+    def test_unavailable_git_identity_never_claims_a_clean_worktree(self):
+        with fixture() as root:
+            context = repository_context(root)
+            self.assertIsNone(context["dirty"])
+            nested = root / "repository"
+            nested.mkdir()
+            main, _ = repository(nested)
+            with patch("pod.github._local_git", side_effect=PodError("git_unavailable", "offline")), \
+                 self.assertRaises(PodError) as unavailable:
+                repository_context(main)
+            self.assertEqual(unavailable.exception.code, "git_unavailable")
+
     def test_local_git_repository_without_github_remote_still_supports_direct_work(self):
         with fixture() as root:
             main, worktree = repository(root)

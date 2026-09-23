@@ -16,6 +16,22 @@ ACCOUNT_IDENTITY = "a" * 64
 
 
 class ConfigTests(unittest.TestCase):
+    def test_unreadable_project_policy_is_never_treated_as_absent(self):
+        with fixture() as root:
+            project = root / "project"
+            policy_dir = project / ".pod"
+            policy_dir.mkdir(parents=True)
+            (policy_dir / "config.yaml").write_text(
+                "schema: pod/v1\npolicy: {max_workers: 1}\n")
+            self.assertEqual(effective(project)["policy"]["policy"]["max_workers"], 1)
+            policy_dir.chmod(0)
+            try:
+                with self.assertRaises(PodError) as unavailable:
+                    effective(project)
+                self.assertEqual(unavailable.exception.code, "unsafe_config")
+            finally:
+                policy_dir.chmod(0o700)
+
     def test_active_catalog_and_context_defaults_are_exact(self):
         self.assertEqual(CONTEXT_256K_TOKENS, 256_000)
         self.assertEqual({alias: (row["agent"], row["model"])

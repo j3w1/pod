@@ -33,6 +33,17 @@ def state_root(project: Path | None = None) -> Path:
                        project=project) / "pod"
 
 
+def _record_exists(path: Path) -> bool:
+    """Distinguish definite absence from an inaccessible state candidate."""
+    try:
+        os.lstat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise PodError("unsafe_state", "State record availability cannot be proven") from exc
+
+
 def objective_root(project: Path, objective: str) -> Path:
     from .github import repository_context
     root = state_root(project)
@@ -42,14 +53,15 @@ def objective_root(project: Path, objective: str) -> Path:
     stable = root / digest({"repository": context["repo_key"], "objective": objective})
     legacy = [root / digest({"project": path, "objective": objective})
               for path in context["linked_worktrees"]]
-    existing = [candidate for candidate in legacy if (candidate / "context.json").exists()]
-    if (stable / "context.json").exists() and existing:
+    existing = [candidate for candidate in legacy if _record_exists(candidate / "context.json")]
+    stable_exists = _record_exists(stable / "context.json")
+    if stable_exists and existing:
         raise PodError("ambiguous_context",
                        "Repository-keyed and path-keyed objective records both exist")
     if len(existing) > 1:
         raise PodError("ambiguous_context",
                        "More than one path-keyed objective record belongs to this repository")
-    return stable if (stable / "context.json").exists() else existing[0] if existing else stable
+    return stable if stable_exists else existing[0] if existing else stable
 
 
 def _path(project: Path, objective: str) -> Path:
@@ -142,7 +154,7 @@ def _validate_v2(value: object) -> dict:
 
 
 def _read(path: Path) -> dict:
-    if not path.exists():
+    if not _record_exists(path):
         return _empty()
     value = bounded_json(path)
     if isinstance(value, dict) and value.get("schema") == "pod-context/v1":
@@ -152,7 +164,7 @@ def _read(path: Path) -> dict:
 
 def read(project: Path, objective: str) -> dict | None:
     path = _path(project, objective)
-    return _read(path) if path.exists() else None
+    return _read(path) if _record_exists(path) else None
 
 
 def _write(path: Path, value: dict) -> None:
@@ -613,6 +625,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                    "checkpoint_binding": {key: checkpoint_value.get(key) for key in
                                           ("candidate", "criteria", "plan_revision",
                                            "policy_revision", "objective_source", "worktree")},
+                   **({"placement_binding": body.get("placement", body.get("worktree"))}
+                      if body.get("placement", body.get("worktree")) is not None else {}),
                    **({"spending_grant": grant_binding} if grant_binding else {})},
                "error": None, "created_at": stamp, "updated_at": stamp}
         state["owner"] = owner

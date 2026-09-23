@@ -261,13 +261,15 @@ def _config_proposal(root: Path, action: str, alias: str) -> dict:
                    else "paid" if evidence.get("billing") == "api" else "unknown")
         configured_efforts = sorted({row["effort"] for row in DEFAULT["routing"].values()
                                      if row["model"] == alias})
+        configured_contexts = sorted({row["context"] for row in DEFAULT["routing"].values()
+                                      if row["model"] == alias})
         proposal = {**base, "runtime": snapshot["runtime"], "account": account,
                     "account_display": "…" + account[-8:], "auth": evidence.get("auth", "unknown"),
                     "billing": billing,
                     "efforts": {"status": "requestable_not_model_verified",
                                 "requested": configured_efforts},
                     "context": {"status": "unavailable",
-                                "profiles": [],
+                                "profiles": configured_contexts,
                                 "reason": "installed Orca exposes no per-worker context control",
                                 "provider_ceiling": catalog["provider_ceiling"],
                                 "provider_ceiling_is_live_proof": False}}
@@ -423,8 +425,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Agent/model: {proposal['agent']} / {proposal['model']}")
         print(f"  Account: {proposal['account_display']}")
         print(f"  Authentication/billing: {proposal['auth']} / {proposal['billing']}")
-        print(f"  Effort support: {proposal['efforts']['status']}")
-        print(f"  Context capability: {proposal['context']['status']}")
+        requested_efforts = proposal["efforts"].get("requested", [])
+        if proposal["action"] == "approve":
+            configured = ", ".join(requested_efforts) if requested_efforts else "no default"
+            print(f"  Configured effort: {configured}; model-specific support is unverified")
+            contexts = proposal["context"].get("profiles", [])
+            configured_context = ", ".join(contexts) if contexts else "no default"
+            print(f"  Configured context: {configured_context}; native per-worker control is unavailable")
+        else:
+            print("  Effort/context: not applicable to revocation")
         if sys.stdin.isatty():
             answer = input(f"Explicitly confirm {proposal['action']}? [y/N] ").strip().lower()
             if answer in ("y", "yes"):
@@ -458,9 +467,9 @@ def main(argv: list[str] | None = None) -> int:
                     "native_authority_unverified":
                         "Orca connection is incomplete; start or reconnect Orca",
                     "account_binding_unverified":
-                        "worker account identity is unavailable or changed; run `pod doctor --json`",
+                        "worker account identity is unavailable or changed; rerun this helper with `doctor --json`",
                     "billing_mode_unverified":
-                        "worker billing/auth evidence is incomplete; run `pod doctor --json`",
+                        "worker billing/auth evidence is incomplete; rerun this helper with `doctor --json`",
                     "orca_read_failed":
                         "Orca did not answer; start or reconnect Orca, then rerun doctor",
                     "orca_unavailable":
@@ -471,7 +480,6 @@ def main(argv: list[str] | None = None) -> int:
             if migration["v1"] or migration["invalid"]:
                 print(f"  ! old/invalid state affects {migration['v1'] + migration['invalid']} objective(s) only")
         elif args.command == "config" and result.get("status") == "valid":
-            print(f"  Revision: {result['effective']['revision']}")
             for level, row in result["effective"]["policy"]["routing"].items():
                 model = result["effective"]["policy"]["models"][row["model"]]
                 print(f"  {level}: {model.get('agent', 'unknown')} / {model.get('model', 'unknown')} / {row['effort']} / {row['context']} ({'approved' if model.get('approved') else 'pending'})")

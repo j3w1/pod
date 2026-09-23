@@ -116,7 +116,6 @@ def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
         or argv == ["worktree", "list", "--porcelain"]
         or argv == ["remote", "get-url", "origin"]
         or argv == ["symbolic-ref", "--quiet", "--short", "HEAD"]
-        or argv == ["status", "--porcelain=v1", "--untracked-files=all"]
     )
     if not allowed:
         raise PodError("unsupported_git_operation", "Project discovery accepts only bounded Git reads")
@@ -149,8 +148,10 @@ def repository_context(project: Path) -> dict:
         lines = _local_git(root, ["rev-parse", "--path-format=absolute", "--show-toplevel",
                                   "--git-common-dir"]).splitlines()
     except PodError:
+        if any((candidate / ".git").exists() for candidate in (root, *root.parents)):
+            raise
         return {"repository": None, "repo_key": None, "worktree": str(root),
-                "main_worktree": str(root), "branch": None, "dirty": False,
+                "main_worktree": str(root), "branch": None, "dirty": None,
                 "linked_worktrees": [str(root)]}
     if len(lines) != 2:
         raise PodError("git_contract", "Git repository identity is incomplete")
@@ -177,10 +178,9 @@ def repository_context(project: Path) -> dict:
         remote = ""
     repository = _github_repository(remote)
     current = next(row for row in worktrees if row["path"] == str(worktree))
-    dirty = bool(_local_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"]).strip())
     return {"repository": repository, "repo_key": hashlib.sha256(str(common).encode()).hexdigest(),
             "worktree": str(worktree), "main_worktree": worktrees[0]["path"],
-            "branch": current["branch"], "dirty": dirty,
+            "branch": current["branch"], "dirty": None,
             "linked_worktrees": [row["path"] for row in worktrees]}
 
 

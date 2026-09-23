@@ -15,7 +15,7 @@ use the project's supported isolation mechanism.
 
 Freeze a `pod-packet/v1` before admission. It binds objective, criteria,
 responsibility, scope, permitted actions, candidate, dependencies, route,
-policy/plan revisions, issue/worktree identity when applicable, sources and reporting expectations. Native references
+policy/plan revisions, issue/objective-worktree/placement identity when applicable, sources and reporting expectations. Native references
 join the admission after Orca issues them; they are not predicted packet fields.
 
 Context entries are bounded source, instruction or summary references with

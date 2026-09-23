@@ -62,6 +62,8 @@ class FakePort:
         self.headless = False
         self.actual_identity = None
         self.start_receipt = None
+        self.placement = None
+        self.placement_error = None
 
     def establish(self, route, model_policy, *, child_delegation=False):
         observed_identity = self.actual_identity or route.get("account")
@@ -78,6 +80,13 @@ class FakePort:
                           "managed_accounts": 0,
                           "identity_digest": observed_identity},
                 "billing": {"observed": "subscription", "approved": "included"}}
+
+    def resolve_worktree(self, selector):
+        if self.placement_error is not None:
+            raise self.placement_error
+        if self.placement is None:
+            raise PodError("worktree_resolution_unavailable", "fixture placement absent")
+        return dict(self.placement)
 
     def read_native(self, owner, *, route=None, establishment=None, authority_runs=(),
                     assignments=()):
@@ -232,6 +241,67 @@ def make_unresolved(project, admission_id, *, request_uuid=REQUEST_UUID):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_native_selector_resolution_fences_start_replay_and_allows_bound_isolation(self):
+        with fixture() as root:
+            project_path = root / "project"
+            repo_key = "a" * 64
+            context = {"repository": None, "repo_key": repo_key,
+                       "worktree": str(project_path), "main_worktree": str(project_path),
+                       "linked_worktrees": [str(project_path)], "branch": "orca/objective",
+                       "dirty": None}
+            with patch("pod.github.repository_context", return_value=context):
+                project, assessment, capabilities, quotas, frozen = setup_case(root)
+                objective = {"repository": None, "repo_key": repo_key,
+                             "path": str(project), "branch": "orca/objective"}
+                isolation = {"repository": None, "repo_key": repo_key,
+                             "path": str(root / "assignment"), "branch": "orca/objective-check"}
+                frozen = packet({**deepcopy(frozen["body"]), "worktree": objective,
+                                 "placement": isolation})
+                checkpoint_value = read(project, "objective")["checkpoint"]
+                checkpoint_value["worktree"] = objective
+                checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                           native={"runtime": "runtime"})
+                port = FakePort()
+                port.placement = {"runtime": "runtime", **{**isolation,
+                                  "path": str(root / "wrong")}}
+                with self.assertRaises(PodError) as wrong:
+                    guarded_start(project, "objective", owner="owner", run="run", task="task",
+                                  assessment=assessment, capabilities=capabilities, quotas=quotas,
+                                  plan_revision="plan", frozen_packet=frozen,
+                                  worktree="name:isolation", port=port, now=NOW)
+                self.assertEqual(wrong.exception.code, "worktree_binding_changed")
+                self.assertEqual(port.starts, [])
+
+                for code in ("worktree_resolution_unavailable", "worktree_resolution_ambiguous"):
+                    port.placement_error = PodError(code, "fixture refusal")
+                    with self.subTest(code=code), self.assertRaises(PodError) as unresolved:
+                        guarded_start(project, "objective", owner="owner", run="run", task="task",
+                                      assessment=assessment, capabilities=capabilities, quotas=quotas,
+                                      plan_revision="plan", frozen_packet=frozen,
+                                      worktree="name:isolation", port=port, now=NOW)
+                    self.assertEqual(unresolved.exception.code, code)
+                    self.assertEqual(port.starts, [])
+                port.placement_error = None
+                port.placement = {"runtime": "runtime", **isolation}
+                started = guarded_start(
+                    project, "objective", owner="owner", run="run", task="task",
+                    assessment=assessment, capabilities=capabilities, quotas=quotas,
+                    plan_revision="plan", frozen_packet=frozen,
+                    worktree="name:isolation", port=port, now=NOW)
+                self.assertEqual(started["status"], "bound")
+
+                admission_id = started["admission"]["admission_id"]
+                make_unresolved(project, admission_id)
+                port.starts.clear()
+                port.request_state = "pending"
+                port.placement = {"runtime": "runtime", **{**isolation,
+                                  "repository": "other/repository"}}
+                with self.assertRaises(PodError) as replay_wrong:
+                    recover_admission(project, "objective", owner="owner",
+                                      admission_id=admission_id, worktree="name:isolation", port=port)
+                self.assertEqual(replay_wrong.exception.code, "worktree_binding_changed")
+                self.assertEqual(port.starts, [])
+
     def test_worktree_binding_mismatch_stops_before_native_effect(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)
@@ -920,6 +990,46 @@ class AdmissionTests(unittest.TestCase):
                                   admission_id=admission_id, worktree="current", port=port)
             self.assertEqual(checkpoint_change.exception.code, "checkpoint_binding_changed")
             self.assertEqual(port.starts, [])
+
+    def test_pending_replay_requires_complete_known_checkpoint_binding(self):
+        core = {"candidate", "criteria", "plan_revision", "policy_revision"}
+        variants = ({}, {"candidate": "candidate"},
+                    {"candidate": "candidate", "criteria": ["works"],
+                     "plan_revision": "plan", "policy_revision": "policy",
+                     "unknown": "field"})
+        # The value of a malformed/unknown binding is irrelevant: its shape must stop replay.
+        for index, binding in enumerate(variants):
+            with self.subTest(index=index):
+                project, port, admission_id = self.recovery_case()
+                port.request_state = "pending"
+                update_admission(project, "objective", owner="owner", admission_id=admission_id,
+                                 update=lambda row, value=binding:
+                                 row["recovery"].update(checkpoint_binding=value))
+                with self.assertRaises(PodError) as blocked:
+                    recover_admission(project, "objective", owner="owner",
+                                      admission_id=admission_id, worktree="current", port=port)
+                self.assertEqual(blocked.exception.code, "checkpoint_binding_changed")
+                self.assertEqual(port.starts, [])
+
+        project, port, admission_id = self.recovery_case()
+        port.request_state = "pending"
+        row = read(project, "objective")["admissions"][admission_id]
+        legacy_core = {key: row["recovery"]["checkpoint_binding"][key] for key in core}
+        update_admission(project, "objective", owner="owner", admission_id=admission_id,
+                         update=lambda admission:
+                         admission["recovery"].update(checkpoint_binding=legacy_core))
+        checkpoint_value = read(project, "objective")["checkpoint"]
+        checkpoint_value["objective_source"] = {
+            "schema": "pod-issue-source/v1", "repository": "acme/widgets", "number": 7,
+            "locator": "https://github.com/acme/widgets/issues/7",
+            "body_sha256": "a" * 64, "amendments": []}
+        checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                   native={"runtime": "runtime"})
+        with self.assertRaises(PodError) as added_semantics:
+            recover_admission(project, "objective", owner="owner",
+                              admission_id=admission_id, worktree="current", port=port)
+        self.assertEqual(added_semantics.exception.code, "checkpoint_binding_changed")
+        self.assertEqual(port.starts, [])
 
     def test_public_admission_reentry_recovers_completed_after_revocation(self):
         with fixture() as root:

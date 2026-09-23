@@ -8,6 +8,7 @@ import fcntl
 from pathlib import Path
 import os
 import re
+import stat
 import tempfile
 from typing import Any
 
@@ -118,15 +119,31 @@ def _shape(value: Any, depth: int = 0, counter: list[int] | None = None) -> None
 
 
 def read_yaml(path: Path) -> dict | None:
-    if not path.exists() and not path.is_symlink():
-        return None
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
-        raise PodError("unsafe_config", "Configuration must be a bounded regular file")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
-        value = yaml.load(path.read_bytes().decode("utf-8"), Loader=_StrictLoader)
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PodError("unsafe_config", "Configuration availability cannot be proven") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 64 * 1024:
+            raise PodError("unsafe_config", "Configuration must be a bounded regular file")
+        data = os.read(fd, 64 * 1024 + 1)
+        if len(data) > 64 * 1024:
+            raise PodError("yaml_resource_limit", "Configuration exceeds its size limit")
+        if len(data) != info.st_size:
+            raise PodError("unsafe_config", "Configuration changed while it was read")
+    except OSError as exc:
+        raise PodError("unsafe_config", "Configuration could not be read safely") from exc
+    finally:
+        os.close(fd)
+    try:
+        value = yaml.load(data.decode("utf-8"), Loader=_StrictLoader)
     except PodError:
         raise
-    except (OSError, UnicodeError, yaml.YAMLError, RecursionError) as exc:
+    except (UnicodeError, yaml.YAMLError, RecursionError) as exc:
         raise PodError("invalid_yaml", "Configuration cannot be safely decoded") from exc
     _shape(value)
     return validate(value)

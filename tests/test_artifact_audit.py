@@ -1,9 +1,10 @@
 from pathlib import Path
 import subprocess
 import unittest
+import zipfile
 
 from tests.common import fixture
-from tools.artifact_audit import audit_source
+from tools.artifact_audit import audit, audit_source
 
 
 def tracked(root: Path, files: dict[str, bytes]) -> None:
@@ -24,6 +25,21 @@ class TrackedSourceAuditTests(unittest.TestCase):
             (root / "leak.txt").write_bytes(leak)
             subprocess.run(["git", "-C", str(root), "add", "leak.txt"], check=True)
             self.assertTrue(any("personal path" in row for row in audit_source(root)))
+
+    def test_credential_findings_never_echo_the_credential(self):
+        credential = "gh" + "p_" + "A" * 24
+        with fixture() as root:
+            tracked(root, {"leak.txt": credential.encode()})
+            source_findings = audit_source(root)
+            self.assertTrue(any("credential-shaped" in row for row in source_findings))
+            self.assertNotIn(credential, "\n".join(source_findings))
+
+            wheel = root / "fixture.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr("pod/leak.txt", credential)
+            artifact_findings = audit([wheel])
+            self.assertTrue(any("credential-shaped" in row for row in artifact_findings))
+            self.assertNotIn(credential, "\n".join(artifact_findings))
 
     def test_public_product_metadata_and_sanitized_history_are_permitted(self):
         with fixture() as root:
