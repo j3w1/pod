@@ -18,7 +18,10 @@ import re
 
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 
-PACKET_FIELDS = {"schema", "objective", "criteria", "responsibility", "scope", "actions", "candidate", "context", "dependencies", "route", "policy_revision", "plan_revision", "report_contract", "sources"}
+PACKET_FIELDS = {"schema", "objective", "criteria", "responsibility", "scope", "actions",
+                 "candidate", "context", "dependencies", "route", "policy_revision",
+                 "plan_revision", "report_contract", "sources", "objective_source", "worktree"}
+PACKET_REQUIRED = PACKET_FIELDS - {"objective_source", "worktree"}
 REPORT_FIELDS = {"schema", "assignment", "attempt", "candidate", "outcome", "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"}
 EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt"}
 
@@ -75,7 +78,7 @@ def _sha256(value: Any) -> bool:
 
 
 def packet(value: Any) -> dict:
-    p = exact(value, PACKET_FIELDS, PACKET_FIELDS, name="packet")
+    p = exact(value, PACKET_FIELDS, PACKET_REQUIRED, name="packet")
     if p["schema"] != "pod-packet/v1":
         raise PodError("invalid_packet", "Unsupported packet schema")
     for key in ("objective", "responsibility", "candidate", "policy_revision", "plan_revision", "report_contract"):
@@ -106,6 +109,20 @@ def packet(value: Any) -> dict:
             raise PodError("invalid_source", "Packet source is not a safe bound path")
         if ref["state"] == "present" and not _sha256(ref.get("sha256")):
             raise PodError("invalid_source", "Present source needs a content digest")
+    if "objective_source" in p:
+        from .github import validate_issue_binding
+        validate_issue_binding(p["objective_source"])
+    if "worktree" in p:
+        worktree = exact(p["worktree"], {"repository", "repo_key", "path", "branch"},
+                         {"repository", "repo_key", "path", "branch"}, name="worktree_binding")
+        if (not isinstance(worktree["repository"], str) or "/" not in worktree["repository"]
+                or not _sha256(worktree["repo_key"])
+                or not isinstance(worktree["path"], str) or not Path(worktree["path"]).is_absolute()
+                or len(worktree["path"]) > 4096
+                or (worktree["branch"] is not None
+                    and (not isinstance(worktree["branch"], str) or not worktree["branch"]
+                         or len(worktree["branch"]) > 256))):
+            raise PodError("invalid_worktree_binding", "Packet worktree identity is malformed")
     route = exact(p["route"], {"alias", "agent", "model", "account", "bucket", "effort",
                                      "context", "effective_context"}, {"agent"}, name="packet_route")
     for key, value in route.items():

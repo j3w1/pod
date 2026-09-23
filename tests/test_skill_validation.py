@@ -24,6 +24,14 @@ def rewrite_frontmatter(skill: Path, replacement: str) -> None:
 
 
 class SkillValidationTests(unittest.TestCase):
+    def test_instruction_word_budgets(self):
+        skill_words = len((BUNDLE / "SKILL.md").read_text().split())
+        references = sorted((BUNDLE / "references").glob("*.md"))
+        counts = {path.name: len(path.read_text().split()) for path in references}
+        self.assertLessEqual(skill_words, 750)
+        self.assertTrue(all(count <= 700 for count in counts.values()), counts)
+        self.assertLessEqual(sum(counts.values()), 2200)
+        self.assertIn("execution-spec.md", counts)
     def test_repository_bundle_is_valid(self):
         result = validate_skill(BUNDLE)
         self.assertEqual(result["status"], "valid")

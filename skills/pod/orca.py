@@ -651,7 +651,7 @@ def route_establishment(route: dict, model_policy: dict, *, snapshot: dict | Non
         disclosures.append("worker-initiated delegation is refused by Pod admission, not by a provider sandbox")
     if not host_block.get("local_only", True):
         disclosures.append("the runtime reports more than one host; Pod does not infer capacity from it")
-    disclosures.append("physical worker capacity is unavailable to Pod and enforced by Orca/CE")
+    disclosures.append("physical worker capacity is unavailable to Pod and enforced by Orca/the host")
     return {"schema": "pod-route-establishment/v1", "runtime": observed["runtime"],
             "version": observed.get("version"), "executable": observed.get("executable"),
             "route": {"agent": agent, "model": route.get("model"), "account": stamp,

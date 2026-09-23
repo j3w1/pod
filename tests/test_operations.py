@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -204,7 +205,7 @@ routing:
                              "capabilities": [], "bucket": "shared",
                              "suitable_for": ["complex"],
                              "context_control": "native_per_launch",
-                             "contexts": {"256k": 262144, "max": 900000}}}
+                             "contexts": {"256k": 256000, "max": 900000}}}
     quotas = {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
                            "account": ACCOUNT_IDENTITY, "bucket": "shared",
                            "observed_at": NOW.isoformat(), "source": "fixture",
@@ -231,6 +232,75 @@ def make_unresolved(project, admission_id, *, request_uuid=REQUEST_UUID):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_worktree_binding_mismatch_stops_before_native_effect(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            bound = {"repository": "acme/widgets", "repo_key": "a" * 64,
+                     "path": str(project), "branch": "orca/issue-7"}
+            frozen = packet({**deepcopy(frozen["body"]), "worktree": bound})
+            checkpoint_value = read(project, "objective")["checkpoint"]
+            checkpoint_value["worktree"] = bound
+            checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                       native={"runtime": "runtime"})
+            observed = {"repository": "acme/widgets", "repo_key": None,
+                        "worktree": str(project), "main_worktree": str(project),
+                        "linked_worktrees": [str(project)], "branch": "orca/other",
+                        "dirty": False}
+            port = FakePort()
+            with patch("pod.github.repository_context", return_value=observed), \
+                 self.assertRaises(PodError) as mismatch:
+                start(project, assessment, capabilities, quotas, frozen, port)
+            self.assertEqual(mismatch.exception.code, "worktree_binding_changed")
+            self.assertEqual(port.starts, [])
+
+    def test_issue_change_blocks_pending_replay_and_revised_duplicate_but_not_completed_read(self):
+        with fixture() as root:
+            project, assessment, capabilities, quotas, frozen = setup_case(root)
+            source = {"schema": "pod-issue-source/v1", "repository": "acme/widgets",
+                      "number": 7, "locator": "https://github.com/acme/widgets/issues/7",
+                      "body_sha256": "a" * 64, "amendments": []}
+            body = {**deepcopy(frozen["body"]), "objective_source": source}
+            frozen = packet(body)
+            checkpoint_value = read(project, "objective")["checkpoint"]
+            checkpoint_value["objective_source"] = source
+            checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                       native={"runtime": "runtime"})
+            port = FakePort()
+            current = {"status": "current"}
+            with patch("pod.github.issue_recheck", return_value=current):
+                started = start(project, assessment, capabilities, quotas, frozen, port)
+            admission_id = started["admission"]["admission_id"]
+            make_unresolved(project, admission_id)
+            port.starts.clear()
+            port.request_state = "pending"
+            changed = {"status": "reconciliation_required"}
+            with patch("pod.github.issue_recheck", return_value=changed), \
+                 self.assertRaises(PodError) as blocked:
+                recover_admission(project, "objective", owner="owner",
+                                  admission_id=admission_id, worktree="current", port=port)
+            self.assertEqual(blocked.exception.code, "issue_reconciliation_required")
+            self.assertEqual(port.starts, [])
+
+            revised = {**source, "body_sha256": "b" * 64}
+            revised_packet = packet({**deepcopy(body), "objective_source": revised})
+            checkpoint_value = read(project, "objective")["checkpoint"]
+            checkpoint_value["objective_source"] = revised
+            checkpoint(project, "objective", owner="owner", value=checkpoint_value,
+                       native={"runtime": "runtime"})
+            with patch("pod.github.issue_recheck", return_value=current), \
+                 self.assertRaises(PodError) as duplicate:
+                start(project, assessment, capabilities, quotas, revised_packet, port)
+            self.assertEqual(duplicate.exception.code, "unresolved_prior_attempt")
+            self.assertEqual(port.starts, [])
+
+            port.request_state = "completed"
+            with patch("pod.github.issue_recheck",
+                       side_effect=AssertionError("completed recovery must stay observational")):
+                recovered = recover_admission(project, "objective", owner="owner",
+                                              admission_id=admission_id,
+                                              worktree="current", port=port)
+            self.assertEqual(recovered["status"], "bound")
+
     def test_policy_precedes_one_start_and_exact_binding(self):
         with fixture() as root:
             project, assessment, capabilities, quotas, frozen = setup_case(root)

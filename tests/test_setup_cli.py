@@ -174,6 +174,31 @@ class SetupCliTests(unittest.TestCase):
                         proposal["proposal"]["proposal"]]), root)
             self.assertEqual(caught.exception.code, "unsafe_config")
             self.assertFalse((real / "config.yaml").exists())
+
+    def test_guided_approval_allows_symlinked_native_profile_root(self):
+        with fixture() as root:
+            real = root.parent / "real-native-config"
+            real.mkdir()
+            linked = root.parent / "linked-native-config"
+            linked.symlink_to(real, target_is_directory=True)
+            accounts, login = self.approval_native()
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(linked)}), \
+                 patch("pod.cli.contract", return_value={
+                       "status": "observed", "runtime": "runtime", "capabilities": {}}), \
+                 patch("pod.cli.account_metadata_raw", return_value=accounts), \
+                 patch("pod.cli.agent_login_mode", return_value=login):
+                proposal = execute(parser().parse_args(["config", "approve", "sol"]), root)
+                approved = execute(parser().parse_args([
+                    "config", "approve", "sol", "--confirm",
+                    proposal["proposal"]["proposal"]]), root)
+                revoke = execute(parser().parse_args(["config", "revoke", "sol"]), root)
+                revoked = execute(parser().parse_args([
+                    "config", "revoke", "sol", "--confirm",
+                    revoke["proposal"]["proposal"]]), root)
+            self.assertEqual(approved["status"], "approved")
+            self.assertEqual(revoked["status"], "revoked")
+            self.assertTrue((real / "pod" / "config.yaml").is_file())
+            self.assertFalse(read_yaml(real / "pod" / "config.yaml")["models"]["sol"]["approved"])
     def test_nested_skill_paths_use_canonical_manifest_keys(self):
         root = Path("/project/.agents/skills/pod")
         nested = root / "references" / "planning.md"
@@ -399,11 +424,18 @@ class SetupCliTests(unittest.TestCase):
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state")}):
             project = root / "project"
             project.mkdir()
+            source = {"schema": "pod-issue-source/v1", "repository": "acme/widgets",
+                      "number": 7, "locator": "https://github.com/acme/widgets/issues/7",
+                      "body_sha256": "a" * 64, "amendments": []}
+            worktree_binding = {"repository": "acme/widgets", "repo_key": "b" * 64,
+                                "path": str(project), "branch": "orca/issue-7"}
             checkpoint(project, "objective", owner="owner", native={"runtime": "runtime"},
                        value={"schema": "pod-checkpoint/v1", "criteria": ["works"],
                               "plan_revision": "p", "candidate": "c", "policy_revision": "r",
                               "native_refs": [{"runId": "run"}], "assignments": [], "questions": [],
-                              "verification_gaps": ["works"], "next_safe_action": "run checks"})
+                              "verification_gaps": ["works"], "next_safe_action": "run checks",
+                              "objective_source": source, "worktree": worktree_binding,
+                              "blocker": "hosted CI", "remaining_gates": ["hosted", "review"]})
             workers = {"runtime": "runtime", "scope": {"source": "flag"}, "complete": True,
                        "workers": [{"terminalState": "active", "projection": {"attention": {"requiresAction": True}}},
                                    {"terminalState": "released", "projection": {}}]}
@@ -412,10 +444,23 @@ class SetupCliTests(unittest.TestCase):
             with patch("pod.cli.worker_rows", return_value=workers), \
                  patch("pod.operations.OrcaPort.read_native", return_value=native):
                 result = execute(parser().parse_args(["status", "--run", "run"]), project)
+                output = io.StringIO()
+                with patch("pod.cli.Path.cwd", return_value=project), redirect_stdout(output):
+                    self.assertEqual(main(["status", "--run", "run"]), 0)
             self.assertEqual(result["verification_gaps"], ["works"])
             self.assertEqual(result["next_safe_action"], "run checks")
+            self.assertEqual(result["objective"], "objective")
+            self.assertEqual(result["source"]["locator"], source["locator"])
+            self.assertEqual(result["selected_worktree"], worktree_binding)
+            self.assertEqual(result["blocker"], "hosted CI")
+            self.assertEqual(result["remaining_gates"], ["hosted", "review"])
             self.assertEqual(result["native"]["workers_by_state"], {"active": 1, "released": 1})
             self.assertNotIn("workers", result["native"])
+            rendered = output.getvalue()
+            self.assertIn(source["locator"], rendered)
+            self.assertIn("orca/issue-7", rendered)
+            self.assertIn("hosted CI", rendered)
+            self.assertNotIn("a" * 64, rendered)
 
 
 class SkillOwnershipTests(unittest.TestCase):

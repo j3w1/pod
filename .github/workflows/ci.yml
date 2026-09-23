@@ -45,7 +45,7 @@ jobs:
         env:
           PYTHONPATH: skills
       - name: Compile
-        run: python -m compileall -q skills tests install.py
+        run: python -m compileall -q skills tests tools install.py
 
       - name: Validate the skill bundle
         run: python -m pod.skill_validation skills/pod
@@ -54,6 +54,9 @@ jobs:
 
       - name: Supported execution environment audit
         run: python tools/platform_audit.py
+
+      - name: Tracked source hygiene audit
+        run: python tools/artifact_audit.py --source .
 
       - name: Build a frozen wheel and sdist from the Git tree
         run: |

@@ -34,7 +34,22 @@ def state_root(project: Path | None = None) -> Path:
 
 
 def objective_root(project: Path, objective: str) -> Path:
-    return state_root(project) / digest({"project": str(project.resolve()), "objective": objective})
+    from .github import repository_context
+    root = state_root(project)
+    context = repository_context(project)
+    if context["repo_key"] is None:
+        return root / digest({"project": str(project.resolve()), "objective": objective})
+    stable = root / digest({"repository": context["repo_key"], "objective": objective})
+    legacy = [root / digest({"project": path, "objective": objective})
+              for path in context["linked_worktrees"]]
+    existing = [candidate for candidate in legacy if (candidate / "context.json").exists()]
+    if (stable / "context.json").exists() and existing:
+        raise PodError("ambiguous_context",
+                       "Repository-keyed and path-keyed objective records both exist")
+    if len(existing) > 1:
+        raise PodError("ambiguous_context",
+                       "More than one path-keyed objective record belongs to this repository")
+    return stable if (stable / "context.json").exists() else existing[0] if existing else stable
 
 
 def _path(project: Path, objective: str) -> Path:
@@ -220,18 +235,33 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
     bounded_text(owner, name="owner")
     exact(value, {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
                   "assignments", "questions", "verification_gaps", "next_safe_action",
-                  "route_decisions", "quota_visibility"},
+                  "route_decisions", "quota_visibility", "objective", "objective_source",
+                  "worktree", "blocker", "remaining_gates"},
           {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
            "assignments", "questions", "verification_gaps", "next_safe_action"}, name="checkpoint")
     if value["schema"] != "pod-checkpoint/v1" or not isinstance(native.get("runtime"), str):
         raise PodError("invalid_checkpoint", "Checkpoint needs current native runtime readback")
+    if "objective" in value and value["objective"] != objective:
+        raise PodError("invalid_checkpoint", "Checkpoint objective differs from its state key")
+    if "objective_source" in value:
+        from .github import validate_issue_binding
+        validate_issue_binding(value["objective_source"])
+    if "worktree" in value:
+        from .records import packet
+        probe = {"schema": "pod-packet/v1", "objective": objective, "criteria": [],
+                 "responsibility": "checkpoint validation", "scope": [], "actions": [],
+                 "candidate": value["candidate"], "context": [], "dependencies": [],
+                 "route": {"agent": "direct"}, "policy_revision": value["policy_revision"],
+                 "plan_revision": value["plan_revision"], "report_contract": "checkpoint",
+                 "sources": [], "worktree": value["worktree"]}
+        packet(probe)
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         state["owner"] = owner
-        state["checkpoint"] = value
+        state["checkpoint"] = {**value, "objective": objective}
         _write(path, state)
         return state
 
@@ -485,6 +515,11 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             if immutable != expected:
                 raise PodError("admission_conflict", "Admission identity was reused for different work")
             return {**existing, "existing": True}
+        if any(row.get("run_id") == run_id and row.get("task_id") == task_id
+               and row.get("state") in ("reserved", "unresolved", "legacy_hold")
+               for row in state["admissions"].values() if isinstance(row, dict)):
+            raise PodError("unresolved_prior_attempt",
+                           "A revised packet cannot replace an uncertain attempt for the same native Task")
         native = native_reader()
         if (native.get("authoritative") is not True or native.get("owner") != owner
                 or native.get("runtime") != establishment.get("runtime")
@@ -498,7 +533,9 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                 or body.get("candidate") != (checkpoint_value or {}).get("candidate")
                 or body.get("criteria") != (checkpoint_value or {}).get("criteria")
                 or body.get("plan_revision") != plan_revision
-                or body.get("policy_revision") != current_policy["revision"]):
+                or body.get("policy_revision") != current_policy["revision"]
+                or body.get("objective_source") != (checkpoint_value or {}).get("objective_source")
+                or body.get("worktree") != (checkpoint_value or {}).get("worktree")):
             raise PodError("packet_plan_mismatch", "Packet differs from the current owned checkpoint")
         if "delegate" in body.get("actions", []) and not policy.get("child_delegation"):
             raise PodError("delegation_unauthorized", "Worker delegation is not authorized")
@@ -575,7 +612,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                "recovery": {
                    "checkpoint_binding": {key: checkpoint_value.get(key) for key in
                                           ("candidate", "criteria", "plan_revision",
-                                           "policy_revision")},
+                                           "policy_revision", "objective_source", "worktree")},
                    **({"spending_grant": grant_binding} if grant_binding else {})},
                "error": None, "created_at": stamp, "updated_at": stamp}
         state["owner"] = owner

@@ -1,26 +1,27 @@
 # Routing, quota and spending
 
-Personal `pod/v1` YAML supplies approved routes and limits. Project/task policy
-may refine preferences and tighten restrictions; it cannot grant model/provider
-approval or spending. The `config` helper displays the effective policy and
-provenance. Starter model rows remain pending recommendations.
+Personal `pod/v1` YAML is authority; project/task layers only narrow it. New work
+accepts exactly Luna/Sol/Astra on Codex (`gpt-6-luna`, `gpt-6-sol`,
+`gpt-6-astra`) and Sonnet/Opus/Fable on Claude (`claude-sonnet-5`,
+`claude-opus-5-5`, `claude-fable-5-1`). Discovery never expands the catalog.
 
-Approval binds the exact agent, model and redacted native account identity shown
-by the doctor's JSON output; the model alias is the human label. Quota and
-grants use that same identity, so discovery, relabeling or account rotation cannot
-inherit approval. Identity and billing proof must come from the same selected managed,
-native-default or, only when no native default exists, login context. Pod repeats that
-join just before start or pending replay, even without quota windows; it never relabels
-the observed account. Keep responsibility, application, model and effort
-distinct. Preview/replay evaluates supplied assessment, capability and quota
-snapshots; it does not infer an arbitrary task's difficulty. Bind the packet to
-the resulting route and policy revision.
+Complexity rows choose model, effort and `256k` or `max`. `256k` is a
+256,000-token upper bound; keep a lower proven clamp visible. `max` resolves only
+from native capability evidence, bounded by the catalog provider ceiling. Current
+Orca has no per-worker context control, so admission refuses before effect.
 
-Admission establishes the route against the installed runtime. Distinguish
-enforced controls, supported observations, owner configuration and unavailable
-metadata. Requested settings are not proof of effective settings. Unknown billing
-or missing required route controls blocks launch; optional gaps stay disclosed.
-Invalid policy blocks new admission without preventing read-only diagnosis.
+Guided `config approve ALIAS` shows the joined, redacted account/auth/billing and
+requires explicit confirmation before atomically editing personal YAML. It creates
+no spending/reset/capacity grant. `revoke` removes that authority. Manual YAML is
+advanced use. Approval binds agent, model and account; quota/grants use the same
+identity. Managed, native-default or (only when no default exists) login identity
+and billing proof must come from one context and are re-read before start/pending
+replay. Invalid policy blocks mutation but not diagnosis.
+
+Preview/replay uses supplied assessment/capability/quota snapshots and binds the
+packet to route and policy revision. Admission distinguishes enforced controls,
+observations, owner policy and unavailable metadata; requested values are not
+proof. Required unknowns block and optional gaps remain visible.
 
 Quota follows provider/account/bucket windows, with source, time and uncertainty.
 Defaults are 20% low, 5% critical and 60-second freshness. Low quota calls for a

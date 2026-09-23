@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .config import COMPLEXITIES, EFFORTS, MODEL_CATALOG, route_identity, validate
+from .config import (COMPLEXITIES, CONTEXT_256K_TOKENS, EFFORTS, MODEL_CATALOG,
+                     route_identity, validate)
 from .errors import PodError
 from .util import bounded_text, digest, exact
 from .quota import validate_snapshot
@@ -104,7 +105,7 @@ def _context_tokens(alias: str, advertised: dict, requested: str) -> tuple[int |
     ceiling = catalog["provider_ceiling"]
     if type(tokens) is not int or tokens <= 0 or tokens > ceiling:
         return None, "native context capability is invalid or exceeds the provider ceiling"
-    if requested == "256k" and tokens > 262_144:
+    if requested == "256k" and tokens > CONTEXT_256K_TOKENS:
         return None, "native context control would exceed the selected 256k profile"
     return tokens, None
 

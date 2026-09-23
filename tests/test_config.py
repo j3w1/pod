@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pod.config import DEFAULT, MODEL_CATALOG, effective, personal_path, read_yaml, route_identity
+from pod.config import (CONTEXT_256K_TOKENS, DEFAULT, MODEL_CATALOG, effective,
+                        personal_path, read_yaml, route_identity)
 from pod.errors import PodError
 from pod.ledger import checkpoint, read, state_root
 from pod.util import native_home
@@ -16,6 +17,7 @@ ACCOUNT_IDENTITY = "a" * 64
 
 class ConfigTests(unittest.TestCase):
     def test_active_catalog_and_context_defaults_are_exact(self):
+        self.assertEqual(CONTEXT_256K_TOKENS, 256_000)
         self.assertEqual({alias: (row["agent"], row["model"])
                           for alias, row in MODEL_CATALOG.items()}, {
             "luna": ("codex", "gpt-6-luna"),

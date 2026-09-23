@@ -37,7 +37,7 @@ def caps():
                     "capabilities": [], "suitable_for": ["complex"],
                     "billing_preflight": True, "fanout_control": True, "bucket": "shared",
                     "context_control": "native_per_launch",
-                    "contexts": {"256k": 262144, "max": 900000}}
+                    "contexts": {"256k": 256000, "max": 900000}}
             for alias, model in (("sol", "gpt-6-sol"), ("astra", "gpt-6-astra"))}
 
 

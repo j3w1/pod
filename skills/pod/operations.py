@@ -22,6 +22,32 @@ from .util import bounded_text
 
 
 STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
+
+
+def _check_objective_source(project: Path, binding: dict | None, *, issue_port=None) -> None:
+    if binding is None:
+        return
+    from .github import issue_recheck
+    result = issue_recheck(project, binding, port=issue_port)
+    if result["status"] != "current":
+        raise PodError("issue_reconciliation_required",
+                       "Execution Spec issue changed or closed; reconcile before another effect")
+
+
+def _check_worktree_binding(project: Path, binding: dict | None) -> None:
+    if binding is None:
+        return
+    from .github import repository_context
+    current = repository_context(project)
+    if (current["repository"] is None
+            or current["repository"].casefold() != str(binding.get("repository", "")).casefold()
+            or current["repo_key"] != binding.get("repo_key")
+            or current["worktree"] != binding.get("path")
+            or current["branch"] != binding.get("branch")):
+        raise PodError("worktree_binding_changed",
+                       "Current Git repository, branch, or worktree differs from the objective binding")
+
+
 def _assignment_evidence(shown: dict, admission: dict) -> dict:
     """Project settlement for one already-bound assignment, never terminal ownership."""
     binding = admission.get("native_binding")
@@ -472,7 +498,7 @@ def _bound_assignments(state: dict | None) -> tuple[dict, ...]:
 
 
 def _current_authority(project: Path, objective: str, admission: dict,
-                       *, task_policy: dict | None) -> tuple[dict, dict]:
+                       *, task_policy: dict | None, issue_port=None) -> tuple[dict, dict]:
     """A pending replay is still a mutation, so current revocation/spending policy applies."""
     policy = effective(project, task=task_policy)
     if policy["revision"] != admission["route_decision"].get("policy_revision"):
@@ -480,12 +506,18 @@ def _current_authority(project: Path, objective: str, admission: dict,
     state = read(project, objective)
     checkpoint_value = state.get("checkpoint") if isinstance(state, dict) else None
     expected_checkpoint = admission.get("recovery", {}).get("checkpoint_binding")
-    current_checkpoint = ({key: checkpoint_value.get(key) for key in
-                           ("candidate", "criteria", "plan_revision", "policy_revision")}
-                          if isinstance(checkpoint_value, dict) else None)
+    allowed_checkpoint = {"candidate", "criteria", "plan_revision", "policy_revision",
+                          "objective_source", "worktree"}
+    current_checkpoint = ({key: checkpoint_value.get(key) for key in expected_checkpoint}
+                          if (isinstance(checkpoint_value, dict)
+                              and isinstance(expected_checkpoint, dict)
+                              and set(expected_checkpoint) <= allowed_checkpoint) else None)
     if not isinstance(expected_checkpoint, dict) or current_checkpoint != expected_checkpoint:
         raise PodError("checkpoint_binding_changed",
                        "Checkpoint semantics changed before native request replay")
+    _check_objective_source(project, expected_checkpoint.get("objective_source"),
+                            issue_port=issue_port)
+    _check_worktree_binding(project, expected_checkpoint.get("worktree"))
     route = admission["request"]
     model = policy["policy"]["models"].get(route.get("alias"))
     if (not isinstance(model, dict) or not model.get("approved")
@@ -530,7 +562,7 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
 
 def recover_admission(project: Path, objective: str, *, owner: str, admission_id: str,
                       worktree: str, port: NativePort | None = None,
-                      task_policy: dict | None = None) -> dict:
+                      task_policy: dict | None = None, issue_port=None) -> dict:
     """Recover the same admission; never issue a fresh semantic start."""
     native_port = port or OrcaPort(project)
     state = read(project, objective)
@@ -589,7 +621,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         if _known_request_conflict(admission):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         model, current_policy = _current_authority(
-            project, objective, admission, task_policy=task_policy)
+            project, objective, admission, task_policy=task_policy, issue_port=issue_port)
         fresh_establishment = native_port.establish(
             admission["request"], model,
             child_delegation=bool(current_policy.get("child_delegation")))
@@ -633,7 +665,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   plan_revision: str, frozen_packet: dict, capacity: int = DEFAULT_WORKER_CAPACITY,
                   capacity_reason: str | None = None, exceptional_grant: dict | None = None,
                   worktree: str = "current", port: NativePort | None = None,
-                  task_policy: dict | None = None, now: datetime | None = None) -> dict:
+                  task_policy: dict | None = None, now: datetime | None = None,
+                  issue_port=None) -> dict:
     """Policy check, durable reservation, then one native start or exact recovery."""
     from .records import packet
     from .ledger import check_bound_sources
@@ -650,11 +683,20 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     if isinstance(existing_state, dict) and admission_id in existing_state["admissions"]:
         recovered = recover_admission(project, objective, owner=owner,
                                       admission_id=admission_id, worktree=worktree,
-                                      port=native_port, task_policy=task_policy)
+                                      port=native_port, task_policy=task_policy,
+                                      issue_port=issue_port)
         return {**recovered,
                 "decision": recovered["admission"]["route_decision"],
                 "establishment": recovered["admission"]["effective_evidence"]}
     policy = effective(project, task=task_policy)
+    _check_objective_source(project, validated["body"].get("objective_source"),
+                            issue_port=issue_port)
+    packet_worktree = validated["body"].get("worktree")
+    _check_worktree_binding(project, packet_worktree)
+    if (packet_worktree is not None
+            and worktree not in ("current", "path:" + packet_worktree["path"])):
+        raise PodError("worktree_binding_changed",
+                       "Native worker placement differs from the frozen objective worktree")
     decision = preview(assessment, policy, capabilities=capabilities, quotas=quotas,
                        objective=objective, now=now)
     if decision.get("status") != "usable":
@@ -684,7 +726,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     if admission["existing"]:
         recovered = recover_admission(project, objective, owner=owner,
                                       admission_id=admission_id, worktree=worktree,
-                                      port=native_port, task_policy=task_policy)
+                                      port=native_port, task_policy=task_policy,
+                                      issue_port=issue_port)
         return {**recovered, "decision": decision, "establishment": establishment}
     try:
         receipt = native_port.start_worker(run=run, task=task, owner=owner, route=route,

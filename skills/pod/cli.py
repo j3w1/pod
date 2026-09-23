@@ -115,7 +115,12 @@ def _status(root: Path, run: str | None) -> dict:
     except PodError as exc:
         context = {"error": exc.code}
     checkpoint_value = context.get("checkpoint") if isinstance(context, dict) else None
+    source = checkpoint_value.get("objective_source") if checkpoint_value else None
+    worktree = checkpoint_value.get("worktree") if checkpoint_value else None
     return {"status": "observed", "run": run,
+            "objective": checkpoint_value.get("objective") if checkpoint_value else None,
+            "source": dict(source) if isinstance(source, dict) else "direct_objective",
+            "selected_worktree": worktree or "unknown",
             "native": {"runtime_observed": True, "scope": workers["scope"],
                        "workers_by_state": counts, "attention_count": attention,
                        "complete": workers["complete"]},
@@ -124,6 +129,8 @@ def _status(root: Path, run: str | None) -> dict:
                                       for a in context.get("admissions", {}).values()) if checkpoint_value else "unknown",
             "route_decisions": checkpoint_value.get("route_decisions", "unknown") if checkpoint_value else "unknown",
             "quota_visibility": checkpoint_value.get("quota_visibility", "unknown") if checkpoint_value else "unknown",
+            "blocker": checkpoint_value.get("blocker") if checkpoint_value else None,
+            "remaining_gates": checkpoint_value.get("remaining_gates", []) if checkpoint_value else "unknown",
             "next_safe_action": checkpoint_value.get("next_safe_action") if checkpoint_value else "inspect native Run",
             "governor": governor,
             "usage": "unknown", "cost": "unknown"}
@@ -474,6 +481,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {result['alias']}: {result['model']}")
             if result["status"] == "approved":
                 print(f"  Account/billing: {result['account']} / {result['billing']}")
+        elif args.command == "status" and result.get("status") == "observed":
+            print(f"  Objective: {result.get('objective') or 'not recorded'}")
+            source = result.get("source")
+            print(f"  Source: {source.get('locator') if isinstance(source, dict) else source}")
+            selected = result.get("selected_worktree")
+            if isinstance(selected, dict):
+                print(f"  Worktree: {selected.get('branch') or 'detached'} at {selected.get('path')}")
+            else:
+                print(f"  Worktree: {selected}")
+            print(f"  Native work: {json.dumps(result['native'], ensure_ascii=False)}")
+            print(f"  Blocker: {result.get('blocker') or 'none'}")
+            print(f"  Next: {result.get('next_safe_action')}")
+            print(f"  Remaining gates: {json.dumps(result.get('remaining_gates'), ensure_ascii=False)}")
         else:
             for key, value in result.items():
                 if key not in ("schema", "status"):

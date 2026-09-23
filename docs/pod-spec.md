@@ -70,7 +70,7 @@ These retirements are architecture decisions, not passing results:
 
 | Retired | Replacement | Reason |
 | --- | --- | --- |
-| All-Run pagination, worker-fleet census, terminal liveness and retained/released/resource reconstruction for admission | Serialized objective-local logical reservations plus exact settlement of already-bound assignments | Orca owns workers and lifecycle; CE owns physical limits. Reconstructing their state in Pod created a shadow resource model. |
+| All-Run pagination, worker-fleet census, terminal liveness and retained/released/resource reconstruction for admission | Serialized objective-local logical reservations plus exact settlement of already-bound assignments | Orca owns workers and lifecycle; the host owns physical limits. Reconstructing their state in Pod created a shadow resource model. |
 | Occupancy deduplication, foreign historical worker reconstruction and cross-objective runtime-capacity inference | One logical reservation per Pod assignment; independent objectives do not census each other's history | Pod decides desired fan-out, not physical occupancy. |
 | Governor fleet-completeness prerequisite | Stable native current-Run/coordinator/generation authority and exact objective assignment evidence when relevant | Governor needs authority and objective readiness, not a machine-wide capacity audit. |
 | Terminal release as the signal that an assignment frees a Pod slot (A68, A103) | Exact native assignment settlement frees the logical slot regardless of retained terminal; unresolved own requests remain held | Terminal disposition is independent of objective work settlement. |
@@ -78,6 +78,16 @@ These retirements are architecture decisions, not passing results:
 An authoritative native `capacity_full` refusal creates a durable deferred admission with
 no binding and no blind retry. A malformed, lost or partial-effect response remains
 unresolved. Pod does not query, infer or claim physical capacity.
+
+### Owner decision of 2026-09-23 (issue #14)
+
+Pod Execution Spec is the recommended persistent objective input while direct objectives
+remain first-class. Requirements R67–R79 and scenarios A106–A127 extend this specification.
+They supersede the earlier open-ended starter-model wording in R14 with the exact six-model
+catalog in R78, define `256k` as a 256,000-token policy upper bound, and add issue/worktree
+source bindings without creating issue or worktree managers. The host branch-option bootstrap
+is complete external infrastructure and creates no Pod dependency. The existing four public
+families, Orca ownership, personal authority, recovery and Governor safeguards remain in force.
 
 ## Normative requirements
 
@@ -96,7 +106,7 @@ unresolved. Pod does not query, infer or claim physical capacity.
 | R11 | B | Resolve personal YAML, optional project overrides and current-task preferences into one effective table with provenance. Derive agent from the model entry. Support validation and explicit editing; display must not write configuration. | F3–4; PB,H | A05,A32,A48,A82 |
 | R12 | H | Parse bounded YAML safely. Reject duplicate keys, invalid types, unsupported schema/policy fields, arbitrary tags, executable includes and resource-exhausting structures. Preference data must never execute shell commands. | F4; PB | A49 |
 | R13 | H | Merge soft preferences by specificity and hard restrictions restrictively. Resolve keyed entries consistently; local lists cannot broaden restrictive lists. Project/task files cannot expand model/provider approval, spending authority, destructive permissions or hard ceilings. | F4; PB | A09,A12,A48 |
-| R14 | B | Supply five starter preferences as pending capability-validated recommendations. Offer Opus/Fable as additional approvable alternatives. Exact identifiers/efforts depend on the approved installed route; names are not permanent rankings. | F4; PB,P | A10,A47,A50 |
+| R14 | B | Supply the five R78 complexity defaults as pending capability-validated recommendations and Fable as an alternative. The closed catalog fixes launch identities but never proves installed access, billing, effort or context capability. | F4; PB,P; issue 14 R12 | A10,A47,A50,A126 |
 | R15 | B,H | Start with the matching preference, filter infeasible routes and depart only for a concrete recorded reason. Strict pins prohibit substitution. The approved model, effort and account route is immutable for one assignment: never silently substitute it or ask a worker/user to select another model mid-attempt. Unavailability or startup failure holds/fails that attempt for a fresh policy decision. Exceptions do not edit saved preferences. Never reroute to circumvent a provider safety refusal. | F4–5; PB–C | A05,A06,A07,A38 |
 | R16 | H | Bind each assignment to immutable configuration/catalog revisions, assessment and route. Preferences affect future assignments; hard revocations apply at the next enforceable mutation boundary. Invalid configuration blocks a pending replay or new dispatch without blocking read-only diagnosis or binding a completed native effect; never silently use an older revision. | F4; PB,J | A11,A12,A51 |
 | R17 | B | Provide dispatch-free routing preview and deterministic replay from supplied assessment, policy, capability and quota snapshots. Helpers validate/explain decisions; they do not claim to understand arbitrary tasks through numerical lookup. | F2,10; PJ | A36,A52 |
@@ -149,6 +159,19 @@ unresolved. Pod does not query, infer or claim physical capacity.
 | R64 | H | Derive release authorization from an owner record naming the exact candidate, tree and scope. Report technical readiness accurately and separately; passing checks never grant permission, and a projection never withholds a readiness fact it has evidence for. | O8 | A89 |
 | R65 | B,H | Keep host integration optional. Pod works on a suitable Linux environment without the owner's host tooling, paths, accounts or evidence, detecting and respecting host policies when present. | O2 | A84 |
 | R66 | B,H | Govern expensive Pod-mediated remote actions with one deterministic kernel inside the existing execution path, evaluated at boundaries with zero model calls and bounded state reads. Bind each request to a delivery unit's explicitly prepared candidate generation, which freezes commit, tree, base, workflow digests, verification commands, toolchain, environment and policy revision; judge effects, require configured local preflight, reuse compatible evidence, classify failures, journal admitted actions and reconcile lost responses read-only. ALLOW/REUSE/DEFER decisions consume objective-local logical assignment evidence when readiness depends on delegated work, never an all-Run or worker-fleet census. Before preparation, admission, execution or any journal mutation, require the existing Pod owner plus a stable native current-Run/coordinator/generation binding to one of the objective's exact Run references on the same runtime. Read-only status remains available without mutation authority. Report enforcement as advisory unless host controls prove otherwise; project policy may only narrow authority; Orca keeps worker lifecycle and project governance keeps merge, release and deployment. | O9; owner 2026-09-22 | A90–A99,A101,A105 |
+| R67 | B | Keep one conditional `execution-spec.md` as the authoring and interpretation source for human-readable Pod Execution Specs, numbered Proof of Done items and explicit delivery endpoints. Equivalent clear Markdown is valid; there is no parser, DSL, required frontmatter or second template. | issue 14 R1 | A106,A107 |
+| R68 | B,H | Accept a direct objective or a canonical GitHub issue URL through one workflow. Retrieve the complete issue with authorized host access, validate returned identity and target against the actual checkout, treat issue content as scope rather than authority, block inaccessible/incomplete/mismatched sources, and reconcile a closed issue with user intent before repeated work. | issue 14 R2,R4 | A108,A109,A110 |
+| R69 | B,H | Bind issue identity, canonical locator, body digest and relevant amendment references into checkpoints, packets and final verification without copying the issue body into state. Recheck at intake, continuation, affected admission and final verification. Body change requires reconciliation; metadata alone does not. Preserve unaffected proof and never replace an admitted uncertain native request with a revised packet. | issue 14 R3 | A111,A112 |
+| R70 | B,H | Normal invocation plans proportionately and proceeds within authorization; plan-only remains read-only under actual host Plan Mode; plan-then-execute needs no ceremonial approval; continuation reuses reconciled objective/native state; small direct work needs no issue, worktree ceremony or worker. | issue 14 R4 | A113 |
+| R71 | B,H | Before implementation select or create the exact Orca-managed objective worktree, normally branch `orca/<task-slug>`. Bind actual Git repository/common-dir, branch and path separately from display labels; reuse only the same objective; preserve dirty/colliding work. Resolve state across linked worktrees and apply canonical private project policy plus worktree restrictions restrictively without copying private files. Native/host mechanisms own creation/removal. | issue 14 R5 | A114,A115 |
+| R72 | B,H | Normal delegated workers use native worker-start and a visible Orca agent tab. Terminal absence alone is not proof that no tab exists. After consuming and preserving an exact report, follow native Delivery acknowledgment and worker-release ordering promptly; reuse only for an immediate supported follow-up. Final cleanup checks exact objective workers only and retains uncertainty/protected resources. Pod adds no lifecycle/cleanup helper. | issue 14 R6 | A116,A117,A118 |
+| R73 | B,H | Discover Orca progressively from its installed guide and operation-specific help/capabilities. Missing delegation support blocks only delegation. Do not mirror Orca's catalog, automate provider UI, invent receipt fields, wrap providers or alter shared settings. | issue 14 R7 | A119 |
+| R74 | B,H | Keep the public product independent of owner services and machine-local state. Maintain a small generic tracked-source/artifact hygiene audit that permits product identity, public links and sanitized/history evidence. The upstream metadata service remains external governance with only a short contributor notice and no Pod integration or competing writer. | issue 14 R8 | A120,A121 |
+| R75 | B | README is the practical guide: issue-first and direct workflows, authoring versus authorized publication, installation/open/auth/invoke, planning/continuation, objective worktrees, visible workers/release, verification/outcome, helpers, catalog/context/approval, limits, update/removal and source-versus-published-versus-loaded versions. | issue 14 R9 | A122 |
+| R76 | B,H | Keep SKILL at most 750 words, each conditional reference at most 700 and combined references at most 2200. Load the issue reference only when relevant; workers receive bounded criteria/source references. Human status shows objective/source, worktree, relevant native work, blocker/next action and remaining gates while JSON retains detail. | issue 14 R10 | A123,A124 |
+| R77 | B,H | Inspect release facts and preserve history. Implementation and validation do not authorize publishing or deleting releases/tags; until separately authorized and completed, 0.3.0 remains an unpublished candidate and v0.1.2 remains the latest published tag. | issue 14 R11 | A125 |
+| R78 | B,H | New policy accepts exactly Luna/Codex/gpt-6-luna, Sol/Codex/gpt-6-sol, Astra/Codex/gpt-6-astra, Sonnet/Claude/claude-sonnet-5, Opus/Claude/claude-opus-5-5 and Fable/Claude/claude-fable-5-1. Routing includes `256k` (a 256,000-token upper bound) or `max`, preserves requested versus proven effective context and provider ceilings, and refuses before effect where native per-worker context control is unavailable. Historical evidence stays truthful and cannot authorize new work. | issue 14 R12; owner correction 2026-09-23 | A126 |
+| R79 | B,H | Guided `config approve/revoke ALIAS` resolves and rechecks joined native account/auth/billing evidence, shows a concise redacted proposal, requires explicit confirmation, atomically edits only personal YAML and creates no spending/reset/capacity grant. Direct work needs no approved worker; human doctor distinguishes direct readiness, approved/usable routes, actionable limitations and objective-scoped migration. | issue 14 R13 | A127 |
 
 ## Public interfaces
 
@@ -160,12 +183,16 @@ These contracts elaborate R03, R11 and R48–R50, not a second authority.
   inference calls; invalid validation returns an actionable unsuccessful result.
 - `pod config --edit [--scope personal|project]`: default personal; project explicitly
   selected. Validate after editing and preserve invalid user edits while blocking dispatch.
+- `pod config approve ALIAS` / `revoke ALIAS`: interactive guided personal-YAML edits.
+  Machine/host flow reads a redacted JSON proposal and passes its proposal identity only
+  after explicit human confirmation; changed account/config/runtime evidence refuses.
 - `pod doctor [--json]`: read-only installation, scope, capability, account visibility,
   policy and drift diagnostics. Active probes are not a doctor side effect.
-- `pod status [--run RUN] [--json]`: native status plus decisions/verification; require
-  selection when ambiguous.
+- `pod status [--run RUN] [--json]`: native status plus objective/source, selected
+  worktree, blocker/next action and remaining gates; require selection when ambiguous.
 - Skill: Codex `$pod ...`, Claude Code `/pod ...`; no portable `@pod` convention.
-- Private helper: bounded structured operation through the installed package interpreter;
+- Private helper: bounded structured operation through the installed package interpreter,
+  including issue intake/recheck and project-context reads;
   validated operation-specific inputs/outputs, no arbitrary shell-command field, no
   additional global executable, scheduler or provider worker launcher.
 
@@ -195,19 +222,20 @@ Personal approval is separate from repository overrides. Changed model identity 
 inherit approval just because its alias is unchanged. A missing personal file displays
 a pending template without creating it.
 
-| Complexity | Starter agent/model preference | Effort |
-| --- | --- | --- |
-| Trivial | Codex / Luna | low |
-| Simple | Claude Code / Sonnet | medium |
-| Standard | Codex / Terra | medium |
-| Complex | Codex / Sol | high |
-| Very complex | Codex / Astra | high |
+| Complexity | Starter agent/model preference | Effort | Context |
+| --- | --- | --- | --- |
+| Trivial | Codex / Luna (`gpt-6-luna`) | low | `256k` |
+| Simple | Claude Code / Sonnet (`claude-sonnet-5`) | medium | `256k` |
+| Standard | Codex / Sol (`gpt-6-sol`) | medium | `256k` |
+| Complex | Claude Code / Opus (`claude-opus-5-5`) | high | `max` |
+| Very complex | Codex / Astra (`gpt-6-astra`) | xhigh | `max` |
 
-All entries remain pending until explicitly approved against the real route. Opus/Fable
-are pending alternatives, not mandatory defaults. IDs such as gpt-5.6-luna,
-gpt-5.6-terra, gpt-5.6-sol and gpt-6-astra are onboarding suggestions, not access proof.
-xhigh requires evidence/support; max is exceptional/bounded; Ultra/ultracode are not
-ordinary effort values. Default worker ceiling 2; ordinary maximum 3; explicitly granted
+All entries remain pending until explicitly approved against the real route. Fable
+(`claude-fable-5-1`) is a pending alternative, not a mandatory default. `256k` is a
+conservative 256,000-token upper bound; a lower proven clamp remains visible. `max`
+resolves only from native capability evidence and is bounded by 1.05M for catalog Codex
+models and 1M for catalog Claude models; those ceilings are not live capability proof.
+Ultra/ultracode are not ordinary effort values. Default worker ceiling 2; ordinary maximum 3; explicitly granted
 exceptional maximum 8. Quota low 20%, critical 5%, freshness 60 seconds. Unknown quota
 conservative, extra usage/reset credits require explicit authorization. Child delegation
 requires coordinator authorization; independent review for substantial/high-risk work
@@ -223,6 +251,8 @@ R16–R18, R28, R31, R34, R41 and R44–R46 define bounded records with explicit
 | Record | Required information |
 | --- | --- |
 | Assessment | Method, responsibility, complexity, risk, size, uncertainty, verifiability, capabilities, relevant context, reason. |
+| Objective source | GitHub repository/issue identity, canonical locator, body digest and relevant amendment bindings; never the copied issue body. |
+| Worktree binding | Stable Git repository/common-dir identity, exact worktree path and branch; display labels are not identity. |
 | Route decision | Assessment; preferred/requested/effective route; policy digest/catalog revision; quota/capabilities; authorization references, provenance, exception reason. |
 | Quota snapshot | Provider/account-route/bucket, applicable windows, observed values, resets, timestamp, source, freshness/confidence, explicit unknowns. |
 | Worker packet | Objective/criteria, responsibility, scope/actions, candidate, bounded context, dependencies, route, revisions, report contract. |
@@ -352,9 +382,31 @@ multiple scenarios. Behavioral/live claims cannot be certified by checking docum
 | A100 | A `pod-governor/v1` row carried forward by the upgrade is marked and never reused as evidence, because the migration cannot supply the candidate and context binding v1 never froze; one left pending or UNKNOWN defers as an unresolved effect rather than attaching to a run with no provider identity. |
 | A101 | Pod exposes no private Delivery, cleanup, release, terminal or lifecycle mutation operation; Orca owns those states, while reports and Governor decisions use exact objective assignment evidence when needed. |
 | A102 | Completed, pending and absent Orca request recovery binds the same immutable admission without a second semantic start; invalid UUID, changed authority/worktree, contradictory receipt or ambiguous native attempt holds. |
-| A103 | RETIRED 2026-09-22. Fleet occupancy, resource-release reconstruction, foreign-history census and occupancy deduplication were removed because Orca and CE own runtime capacity. |
+| A103 | RETIRED 2026-09-22. Fleet occupancy, resource-release reconstruction, foreign-history census and occupancy deduplication were removed because Orca and the host own runtime capacity. |
 | A104 | Explicit v1 migration archives and hashes the untouched source, reads Orca without mutation, binds only exact proven effects, converts uncertainty to `legacy_hold`, atomically installs v2, and leaves v1 untouched on failure; doctor/status never migrate. |
 | A105 | An authoritative native `capacity_full` refusal records durable deferred evidence with no successful binding, fleet audit or blind retry; a malformed or partial-effect refusal remains unresolved, and physical-capacity enforcement stays unavailable unless genuinely observed. |
+| A106 | One installed conditional reference defines the readable Pod Execution Spec skeleton, terms, numbered PoD items and explicit delivery endpoint; no parallel template exists. |
+| A107 | A representative filled spec remains ordinary readable Markdown without parser-only boilerplate or empty ceremony. |
+| A108 | Complete authorized issue intake returns the full body and exact identity, while inaccessible or incomplete reads fail clearly without requesting credentials or claiming success. |
+| A109 | An issue for another repository is rejected against actual Git identity before implementation; issue text/comments cannot grant authority. |
+| A110 | A closed issue requires outcome and user-intent reconciliation rather than silently repeating work. |
+| A111 | Body changes require reconciliation while metadata-only updates preserve valid derived work; relevant amendment bindings remain bounded. |
+| A112 | Continuation reuses objective/native state across linked worktrees, preserves unaffected evidence and prevents a revised packet from replacing an uncertain same-Task attempt. |
+| A113 | Issue and direct objectives share proportionate plan-only, plan-then-execute, continuation and direct-work behavior under actual host permissions. |
+| A114 | Actual Git repository/common-dir, branch and path bind the objective worktree; matching display text is insufficient and dirty/colliding owner work is preserved. |
+| A115 | Canonical private project policy remains effective in a linked objective worktree and worktree/task policy can only narrow it, without copying the private file. |
+| A116 | A normal delegated worker is started through native Orca into its own visible agent tab; terminal absence alone is not treated as proof of no tab. |
+| A117 | After exact report consumption/preservation, native Delivery acknowledgment and worker release occur promptly in guide order; reuse requires an immediate supported follow-up. |
+| A118 | Final cleanup checks exact objective workers only, protects uncertainty/foreign resources and removes a worktree only after integration, preservation and cleanliness. |
+| A119 | Installed Orca guidance is loaded progressively and missing delegation controls do not block safe direct work or diagnostics; no wrapper/shared-setting workaround appears. |
+| A120 | Generic tracked-source/artifact hygiene detects representative private residue while permitting Pod identity, public links and sanitized/history fixtures. |
+| A121 | Public code and guidance require no external metadata service; AGENTS keeps only the short upstream ownership notice and introduces no competing writer. |
+| A122 | README practically covers install/open/auth/invoke, author/publish/execute, direct/planning/continuation, worktrees, visible workers/release, verification/outcome, catalog/context/approval, helpers, limits and update/removal. |
+| A123 | SKILL remains at most 750 words, each conditional reference at most 700 and their combined total at most 2200; Execution Spec loads only for issue/spec work. |
+| A124 | Human status shows objective/source, selected worktree, relevant native work, blocker/next action and remaining gates; JSON retains detailed evidence without side effects. |
+| A125 | Candidate, published, review, hosted, live and acceptance/release facts remain distinct; v0.1.2 stays the latest published tag and no release/tag is removed without later authorization. |
+| A126 | The exact six-model catalog and five context-aware defaults govern new work; `256k` means 256,000 tokens, lower clamps remain visible, provider ceilings are not proof and current missing native context control refuses before effect. |
+| A127 | Guided approval/revocation needs explicit confirmation, rechecks native/config evidence, edits only personal YAML atomically, shows paid/unknown honestly and creates no spending/reset/capacity grant; direct work and objective-scoped doctor remain available. |
 
 ## Implementation sequence and verification
 

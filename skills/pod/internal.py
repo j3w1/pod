@@ -110,14 +110,36 @@ def run(operation: str, request: dict) -> dict:
         exact(request, {"project", "sources"}, {"project", "sources"}, name="request")
         verify_sources(Path(request["project"]), request["sources"])
         return {"status": "current"}
+    if operation == "issue-intake":
+        exact(request, {"project", "locator", "amendments"}, {"project", "locator"}, name="request")
+        from .github import issue_intake
+        return issue_intake(Path(request["project"]), request["locator"],
+                            amendments=request.get("amendments"))
+    if operation == "issue-recheck":
+        exact(request, {"project", "source"}, {"project", "source"}, name="request")
+        from .github import issue_recheck
+        return issue_recheck(Path(request["project"]), request["source"])
+    if operation == "project-context":
+        exact(request, {"project"}, {"project"}, name="request")
+        from .github import repository_context
+        return repository_context(Path(request["project"]))
     if operation == "acceptance":
         exact(request, {"criteria", "evidence_rows", "candidate", "policy_revision",
                         "sources", "dependencies", "environment", "review_required",
-                        "hosted_required", "owner_acceptance", "project"},
+                        "hosted_required", "owner_acceptance", "project", "objective_source"},
               {"criteria", "evidence_rows", "candidate", "policy_revision",
                "sources", "dependencies", "environment", "review_required",
                "hosted_required"}, name="request")
         arguments = {key: value for key, value in request.items() if key != "project"}
+        objective_source = arguments.pop("objective_source", None)
+        if objective_source is not None:
+            if "project" not in request:
+                raise PodError("invalid_request", "Issue-bound acceptance requires the checkout")
+            from .github import issue_recheck
+            current = issue_recheck(Path(request["project"]), objective_source)
+            if current["status"] != "current":
+                raise PodError("issue_reconciliation_required",
+                               "Execution Spec issue changed before final verification")
         # Whether a candidate is merged or released is read from Git here. A caller cannot
         # hand in that answer, because it is the one the final report rests on.
         if "project" in request:
@@ -263,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
     parser.add_argument("operation", choices=("brief", "preview", "replay", "packet", "report", "source",
                                                "verify-sources", "acceptance", "integration-observe",
+                                               "issue-intake", "issue-recheck", "project-context",
                                                "checkpoint", "admission", "state-migrate", "release-gate",
                                                "governor", "governor-outcome", "governor-prepare",
                                                "governor-preflight", "governor-classify",

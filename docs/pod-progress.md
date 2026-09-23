@@ -3,20 +3,25 @@
 The 0.3.0 implementation is a candidate, not a published release. The last
 published tag remains `v0.1.2`. The specification's historical baseline is
 `1b0aa6fc68ee2157f6f67ba4a60076d967791cc4`.
+A read-only 2026-09-23 inspection found releases/tags `v0.1.0`, `v0.1.1` and
+latest `v0.1.2`; this task authorized no release or tag mutation.
 
 | Area | Current evidence |
 | --- | --- |
+| Execution Spec | Implemented locally. One installed conditional reference defines the human Markdown contract; bounded issue intake validates full body, exact issue/repository identity and source digest. Checkpoints/packets bind the source without copying it. |
+| Objective worktree | Implemented locally. Git common-directory identity joins linked worktrees to one objective state; canonical private project policy remains effective and worktree policy can only narrow it. Creation, tabs, release and removal remain native Orca/host operations. |
 | Runtime boundary | Implemented locally. Orca owns Runs, Tasks, Dispatches, requests, worker capacity, messaging and lifecycle. Pod retains policy admissions and native references, with no fleet-wide occupancy or cleanup model. |
-| Routing and admission | Implemented locally. An admitted model, effort and account route stays fixed. Objective-local reservations enforce logical fan-out; exact native assignment settlement frees a slot, even if a terminal is retained. Orca's definite `capacity_full` refusal creates a durable deferred admission. |
+| Routing and admission | Implemented locally. New policy accepts the exact six-model catalog. Routes bind effort plus requested/effective context; `256k` is a 256,000-token ceiling. Current Orca exposes no per-worker context control, so production worker routes refuse before effect while direct work remains available. |
 | Recovery and migration | Implemented locally. Orca-issued request UUIDs join completed, pending and absent recovery to the same admission. Conflicting or incomplete identity remains unresolved across later observations. Explicit v1 migration archives source state and promotes only exact native joins. |
 | Governor | Implemented locally. ALLOW/REUSE/DEFER decisions use candidate-bound evidence, the current Run's authority and exact objective assignments when relevant. They do not reconstruct foreign workers or physical capacity. |
-| Skill and package | The skill and Python package share one `skills/pod` source. Four public helper families remain: `setup`, `config`, `doctor` and `status`. |
-| Offline checks | Implementation commit `914ac0523c3330c577d23c2ff9a6d12988d198ba` passed 270 unit tests, four explicit incident tests, 25 frozen build/install gates and 24 independent recovery sequences on Linux/Python 3.13. A fresh Sol/xhigh correction audit found no actionable issue. The main integration candidate receives its own checks before push. |
+| Skill and package | The skill and Python package share one `skills/pod` source. Four public helper families remain: `setup`, `config`, `doctor` and `status`; guided approval/revocation stays inside `config`. |
+| Offline checks | Milestone A commit `cb55d52d3d3a9c9871c6f104d0e6447717ec27d0` passed 283 tests. The complete issue-14 working-tree candidate passed 302 tests, four explicit incident tests, compile/diff, platform, tracked-source and skill validation locally; the final commit still needs frozen packaging, hosted and independent gates. Prior evidence is not promoted automatically. |
 
 ## Orca dependency
 
 Pod can freeze a selected route and compare Orca's requested and effective
-launch evidence after start. The installed Orca launcher has no opt-in,
+model/effort launch evidence after start. Installed Orca 1.4.209 has no per-worker
+context selector or opt-in,
 noninteractive strict-startup control that proves the provider accepted the
 selected model and effort before task input. Provider migration prompts may
 therefore interrupt startup. This feature belongs in Orca's provider adapter and
@@ -34,6 +39,9 @@ automate prompts or change shared provider settings.
 - Hosted candidate CI and external project acceptance require their own
   candidate-bound evidence. Merging development work into `main` does not
   publish a 0.3.0 tag, package or release.
+- Normal native visible-tab startup, prompt report consumption/Delivery acknowledgment,
+  worker release and final objective cleanup remain `NOT_RUN` on the issue-14 candidate;
+  instructions and offline adapter tests are not live proof.
 
 The [validation gates](validation.md) define the proof required for release.
 Scenario paths in [coverage](pod-coverage.json) describe intended offline tests;

@@ -24,6 +24,7 @@ MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approv
                 "billing", "efforts", "capabilities", "locations"}
 POLICY_FIELDS = {"max_workers", "ordinary_max", "allowed_agents", "allowed_accounts", "allowed_locations", "quota_low", "quota_critical", "quota_fresh_seconds", "child_delegation", "review", "spending_grants", "reset_grants", "exceptional_grants"}
 CONTEXT_PROFILES = ("256k", "max")
+CONTEXT_256K_TOKENS = 256_000
 ROUTE_FIELDS = {"model", "effort", "context", "strict"}
 # The waste governor's operator surface. Verification and trigger mappings are project
 # knowledge; the mode, cancellation authority, retry budget, host declaration and exception
@@ -389,11 +390,22 @@ def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
 def effective(project: Path, *, personal: Path | None = None, task: dict | None = None) -> dict:
     base = deepcopy(DEFAULT)
     provenance = {"defaults": "pending recommendations"}
-    for scope, layer in (
+    from .github import repository_context
+    context = repository_context(project)
+    roots = [Path(context["main_worktree"]), Path(context["worktree"])]
+    project_layers: list[tuple[str, dict | None]] = []
+    seen: set[Path] = set()
+    for root in roots:
+        policy_path = root / ".pod" / "config.yaml"
+        if policy_path in seen:
+            continue
+        seen.add(policy_path)
+        project_layers.append(("project", read_yaml(policy_path)))
+    for scope, layer in [
         ("personal", read_yaml(personal or personal_path(project))),
-        ("project", read_yaml(project / ".pod" / "config.yaml")),
+        *project_layers,
         ("task", validate(task) if task is not None else None),
-    ):
+    ]:
         if layer is not None:
             _merge(base, layer, scope, provenance)
     for row in base["routing"].values():
@@ -412,11 +424,10 @@ def personal_revision(path: Path) -> str:
 
 
 def _safe_config_parent(path: Path) -> None:
-    cursor = path.parent
-    while cursor != cursor.parent:
-        if cursor.is_symlink():
-            raise PodError("unsafe_config", "Configuration ancestry is redirected")
-        cursor = cursor.parent
+    # The native profile root may itself be a platform-managed symlink. Pod owns
+    # the directory beneath it, which must remain an ordinary directory.
+    if path.parent.is_symlink():
+        raise PodError("unsafe_config", "Pod's configuration directory is redirected")
 
 
 def guided_personal_update(path: Path, *, expected_revision: str, alias: str,

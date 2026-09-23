@@ -40,7 +40,7 @@ def scenario_inputs():
                             "billing_preflight": True, "fanout_control": True,
                             "suitable_for": ["complex"],
                             "context_control": "native_per_launch",
-                            "contexts": {"256k": 262144, "max": 900000}}}
+                            "contexts": {"256k": 256000, "max": 900000}}}
     quota = {ACCOUNT_IDENTITY: {"schema": "pod-quota/v1", "provider": "codex",
                          "account": ACCOUNT_IDENTITY,
                          "bucket": "shared", "windows": [{"name": "hour", "remaining_percent": 60}],

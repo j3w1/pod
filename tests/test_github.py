@@ -1,12 +1,18 @@
 """The GitHub port: exact argv shapes, and what each response is read as."""
 
+import json
 from pathlib import Path
 import subprocess
 import unittest
 from unittest.mock import patch
 
+from pod.config import effective
 from pod.errors import PodError
-from pod.github import GhPort, PR_FIELDS, RUN_FIELDS, gh_allowed, git_allowed
+from pod.github import (AMENDMENT_JQ, GhPort, ISSUE_FIELDS, PR_FIELDS, RUN_FIELDS,
+                        gh_allowed, git_allowed,
+                        issue_intake, issue_recheck, repository_context)
+from pod.ledger import checkpoint, read
+from tests.common import fixture
 
 COMMIT = "a" * 40
 OLD = "b" * 40
@@ -14,6 +20,42 @@ OLD = "b" * 40
 
 def completed(stdout="", returncode=0):
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+
+
+def git(project: Path, *argv: str) -> str:
+    return subprocess.run(["git", "-C", str(project), *argv], capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+def repository(root: Path, remote: str = "https://github.com/acme/widgets.git") -> tuple[Path, Path]:
+    main = root / "main"
+    main.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(main)], check=True, capture_output=True)
+    git(main, "config", "user.name", "Fixture")
+    git(main, "config", "user.email", "fixture@example.invalid")
+    (main / "README.md").write_text("fixture\n")
+    git(main, "add", "README.md")
+    git(main, "commit", "-m", "fixture")
+    git(main, "remote", "add", "origin", remote)
+    worktree = root / "objective"
+    git(main, "worktree", "add", "-b", "orca/issue-7", str(worktree))
+    return main, worktree
+
+
+class IssuePort:
+    def __init__(self, *, body="Complete issue body", state="OPEN",
+                 updated="2026-09-23T00:00:00Z", amendment="Decision"):
+        self.body, self.state, self.updated, self.amendment_body = body, state, updated, amendment
+
+    def issue(self, *, repository, number):
+        return {"number": number, "title": "Implement widgets", "body": self.body,
+                "state": self.state, "url": f"https://github.com/{repository}/issues/{number}",
+                "updatedAt": self.updated}
+
+    def amendment(self, *, repository, comment):
+        return {"id": comment, "body": self.amendment_body,
+                "url": f"https://github.com/{repository}/issues/7#issuecomment-{comment}",
+                "updatedAt": self.updated}
 
 
 class AllowlistTests(unittest.TestCase):
@@ -42,6 +84,8 @@ class AllowlistTests(unittest.TestCase):
                    ["workflow", "run", "ci.yml", "--ref", "agent/x", "-f", "probe=ruleset"],
                    ["run", "list", "--workflow", "ci.yml", "--commit", COMMIT, "--json", RUN_FIELDS, "--limit", "20"],
                    ["run", "view", "123", "--json", RUN_FIELDS],
+                   ["issue", "view", "7", "--repo", "acme/widgets", "--json", ISSUE_FIELDS],
+                   ["api", "repos/acme/widgets/issues/comments/99", "--jq", AMENDMENT_JQ],
                    ["run", "cancel", "123"], ["run", "rerun", "123"], ["run", "rerun", "123", "--failed"])
         for argv in allowed:
             with self.subTest(argv=argv[:3]):
@@ -52,6 +96,7 @@ class AllowlistTests(unittest.TestCase):
                         ["workflow", "run", "ci", "--ref", "agent/x"],
                         ["run", "view", "abc", "--json", RUN_FIELDS],
                         ["run", "cancel", "123", "--force"],
+                        ["issue", "view", "7", "--repo", "acme/widgets"],
                         ["pr", "list", "--head", "agent/x", "--base", "main", "--state", "all", "--json", PR_FIELDS,
                          "--limit", "5"],
                         ["pr", "create", "--head", "agent/x", "--base", "main", "--title", "", "--body", ""]):
@@ -147,3 +192,93 @@ class PortReadingTests(unittest.TestCase):
             self.port.cancel(run_id="123")
             self.port.rerun(run_id="123", failed_only=True)
         self.assertEqual(self.commands[-2:], [["run", "cancel", "123"], ["run", "rerun", "123", "--failed"]])
+
+    def test_complete_issue_read_validates_identity_and_access(self):
+        body = json.dumps({"number": 7, "title": "Title", "body": "Complete body",
+                           "state": "OPEN", "url": "https://github.com/acme/widgets/issues/7",
+                           "updatedAt": "2026-09-23T00:00:00Z"})
+        with self.run_with([completed(body)]):
+            issue = self.port.issue(repository="acme/widgets", number=7)
+        self.assertEqual(issue["body"], "Complete body")
+        self.assertEqual(self.commands[-1], ["issue", "view", "7", "--repo", "acme/widgets",
+                                             "--json", ISSUE_FIELDS])
+        wrong = body.replace("/issues/7", "/issues/8")
+        with self.run_with([completed(wrong)]), self.assertRaises(PodError) as mismatch:
+            self.port.issue(repository="acme/widgets", number=7)
+        self.assertEqual(mismatch.exception.code, "issue_identity_mismatch")
+        with self.run_with([completed("", 1)]), self.assertRaises(PodError) as denied:
+            self.port.issue(repository="acme/widgets", number=7)
+        self.assertEqual(denied.exception.code, "issue_access_unavailable")
+
+
+class RepositoryAndIssueTests(unittest.TestCase):
+    def test_local_git_repository_without_github_remote_still_supports_direct_work(self):
+        with fixture() as root:
+            main, worktree = repository(root)
+            git(main, "remote", "remove", "origin")
+            context = repository_context(worktree)
+            self.assertIsNone(context["repository"])
+            self.assertIsNotNone(context["repo_key"])
+            self.assertEqual(effective(worktree)["schema"], "pod/v1")
+
+    def test_issue_intake_target_and_content_reconciliation(self):
+        with fixture() as root:
+            main, worktree = repository(root)
+            intake = issue_intake(worktree, "https://github.com/acme/widgets/issues/7",
+                                  port=IssuePort(), amendments=[
+                                      "https://github.com/acme/widgets/issues/7#issuecomment-99"])
+            self.assertEqual(intake["status"], "ready")
+            self.assertEqual(intake["body"], "Complete issue body")
+            self.assertEqual(intake["worktree"]["branch"], "orca/issue-7")
+            metadata = issue_recheck(worktree, intake["source"],
+                                     port=IssuePort(updated="2026-09-24T00:00:00Z"))
+            self.assertEqual(metadata["status"], "current")
+            changed = issue_recheck(worktree, intake["source"], port=IssuePort(body="Changed"))
+            self.assertEqual((changed["status"], changed["reason"]),
+                             ("reconciliation_required", "issue_body_changed"))
+            amendment = issue_recheck(worktree, intake["source"],
+                                      port=IssuePort(amendment="Changed decision"))
+            self.assertEqual(amendment["reason"], "issue_amendment_changed")
+            with self.assertRaises(PodError) as mismatch:
+                issue_intake(worktree, "https://github.com/other/repo/issues/7", port=IssuePort())
+            self.assertEqual(mismatch.exception.code, "repository_mismatch")
+            with self.assertRaises(PodError) as incomplete:
+                issue_intake(worktree, "https://github.com/acme/widgets/issues/7",
+                             port=IssuePort(body=""))
+            self.assertEqual(incomplete.exception.code, "incomplete_issue_source")
+            closed = issue_intake(main, "https://github.com/acme/widgets/issues/7",
+                                  port=IssuePort(state="CLOSED"))
+            self.assertEqual(closed["reason"], "closed_issue_requires_intent_reconciliation")
+
+    def test_linked_worktree_reuses_state_and_restricts_private_main_policy(self):
+        with fixture() as root:
+            main, worktree = repository(root)
+            main_context, worktree_context = repository_context(main), repository_context(worktree)
+            self.assertEqual(main_context["repo_key"], worktree_context["repo_key"])
+            self.assertNotEqual(main_context["worktree"], worktree_context["worktree"])
+            self.assertEqual(worktree_context["branch"], "orca/issue-7")
+
+            (main / ".pod").mkdir()
+            (main / ".pod" / "config.yaml").write_text(
+                "schema: pod/v1\npolicy: {max_workers: 2}\n")
+            (worktree / ".pod").mkdir()
+            (worktree / ".pod" / "config.yaml").write_text(
+                "schema: pod/v1\npolicy: {max_workers: 1}\n")
+            self.assertEqual(effective(worktree)["policy"]["policy"]["max_workers"], 1)
+
+            value = {"schema": "pod-checkpoint/v1", "criteria": ["works"],
+                     "plan_revision": "plan", "candidate": "candidate",
+                     "policy_revision": "policy", "native_refs": [], "assignments": [],
+                     "questions": [], "verification_gaps": ["works"],
+                     "next_safe_action": "continue"}
+            checkpoint(main, "issue-7", owner="owner", value=value,
+                       native={"runtime": "runtime"})
+            self.assertEqual(read(worktree, "issue-7")["checkpoint"]["objective"], "issue-7")
+
+            dirty = main / "owner-change.txt"
+            dirty.write_text("preserve")
+            collision = root / "collision"
+            collision.mkdir()
+            repository_context(main)
+            self.assertEqual(dirty.read_text(), "preserve")
+            self.assertTrue(collision.is_dir())
