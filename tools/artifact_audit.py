@@ -24,6 +24,17 @@ FORBIDDEN = (
     ("credential-shaped", re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}")),
     ("machine-local task state", re.compile(rb"\.local/state/[^/\s]+/tasks/")),
 )
+# Vocabulary of things Pod no longer has. Main describes the present product only; a
+# reference to a removed mechanism, document or version state is a defect, not history.
+TRAIL = (
+    ("trail vocabulary", re.compile(
+        rb"orchestrate|legacy_hold|state[-_]migrate|\bcapacity_full\b|pod-context/v[12]|pod-governor/v1"
+        rb"|docs/history|release-notes/|backwards?[ -]compat|migration_required|pod-migration|pod-progress"
+        rb"|platform_audit|\b\d+\.\d+\.\d+ candidate\b|release candidate|latest published")),
+    ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|migration|baseline commit)\b", re.I)),
+)
+# The guard names its own patterns, and sanitized captures are Orca's words, not Pod's.
+TRAIL_EXEMPT = ("tests/fixtures/", "tools/artifact_audit.py", "tests/test_artifact_audit.py")
 
 def members(path: pathlib.Path):
     if path.suffix == ".whl":
@@ -48,11 +59,30 @@ def audit(paths: list[pathlib.Path]) -> list[str]:
     findings = []
     for artifact in paths:
         for name, data in members(artifact):
-            for label, pattern in FORBIDDEN:
-                match = pattern.search(data)
-                if match:
-                    findings.append(f"{artifact.name} :: {name} :: {label} at line "
-                                    f"{_line_number(data, match.start())}")
+            findings.extend(f"{artifact.name} :: {name} :: {finding}"
+                            for finding in _scan(_artifact_relative(name), data))
+    return findings
+
+
+def _artifact_relative(name: str) -> str:
+    """The path a distribution member would have in the source tree, for exemptions."""
+    if "/" in name and name.startswith("j3w1_pod-"):
+        return name.split("/", 1)[1]
+    if name.startswith("pod/"):
+        return "skills/" + name
+    return name
+
+
+def _scan(name: str, data: bytes) -> list[str]:
+    tables = [FORBIDDEN]
+    if not name.startswith(TRAIL_EXEMPT):
+        tables.append(TRAIL)
+    findings = []
+    for table in tables:
+        for label, pattern in table:
+            match = pattern.search(data)
+            if match:
+                findings.append(f"{label} at line {_line_number(data, match.start())}")
     return findings
 
 
@@ -80,11 +110,7 @@ def audit_source(root: pathlib.Path) -> list[str]:
         except OSError:
             findings.append(f"{name} :: tracked source is unreadable")
             continue
-        for label, pattern in FORBIDDEN:
-            match = pattern.search(data)
-            if match:
-                findings.append(f"{name} :: {label} at line "
-                                f"{_line_number(data, match.start())}")
+        findings.extend(f"{name} :: {finding}" for finding in _scan(name, data))
     return findings
 
 
@@ -106,7 +132,7 @@ def main(argv: list[str]) -> int:
             print("  " + finding)
         return 1
     print(f"{len(paths)} artifact(s) and {'tracked source' if source else 'no source tree'} audited; "
-          "no personal path, account, runtime identifier or credential.")
+          "no personal path, account, runtime identifier, credential or trail vocabulary.")
     return 0
 
 

@@ -300,7 +300,7 @@ scenarios. Behavioral/live claims cannot be certified by checking document text.
 | A73 | Reviewed isolated install works on Linux, rejects old Python, handles command paths, no automatic PATH/Orca repair. |
 | A74 | Unregistered canonical relocation/prohibited placement refused; owner-managed registration is a separate cutover gate. |
 | A75 | Missing live PASS for Claude Code or Codex on Linux, or for either delegation adapter, blocks release despite synthetic CI and a read-only doctor. |
-| A76 | Frozen build, isolated install, hosted Linux CI, incident discovery, compile/diff, independent audit and implemented-only docs bind the release candidate. |
+| A76 | Frozen build, isolated install, hosted Linux CI, incident discovery, compile/diff, independent audit and implemented-only docs bind the candidate under release review. |
 | A77 | Explicit config edit defaults personal; project scope explicit; preserve invalid edits and block dispatch, never silently restore/sanitize. |
 | A78 | `npx skills add j3w1/pod --skill pod`, its per-agent and global forms, and a release-pinned source all install a bundle whose helpers run without a checkout. |
 | A79 | A copied bundle runs from an unrelated directory with no `PYTHONPATH` and no source tree; a missing prerequisite prints one actionable step, never an import traceback or an invented payment requirement. |
