@@ -512,6 +512,36 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(port.retry_requests,
                                  [] if path == "completed" else [REQUEST_UUID])
 
+    def test_completed_raw_receipt_joins_present_request_references_to_outer_uuid(self):
+        base = {"runId": "run", "taskId": "task", "dispatchId": "dispatch",
+                "state": "ready"}
+        variants = {
+            "optional_absent": (base, "bound"),
+            "wrong_request_uuid": ({**base, "request_uuid": OTHER_REQUEST_UUID},
+                                   "unresolved"),
+            "wrong_mutation": ({**base,
+                                "mutation": {"requestId": OTHER_REQUEST_UUID}},
+                               "unresolved"),
+            "malformed_mutation": ({**base, "mutation": "malformed"}, "unresolved"),
+        }
+        for name, (receipt, expected) in variants.items():
+            with self.subTest(name=name):
+                project, port, admission_id = self.recovery_case()
+                port.request_receipt = receipt
+                first = recover_admission(project, "objective", owner="owner",
+                                          admission_id=admission_id,
+                                          worktree="current", port=port)
+                self.assertEqual(first["status"], expected)
+                self.assertEqual(port.starts, [])
+                if expected == "unresolved":
+                    self.assertEqual(first["admission"]["error"]["code"],
+                                     "native_request_conflict")
+                    second = recover_admission(project, "objective", owner="owner",
+                                               admission_id=admission_id,
+                                               worktree="current", port=port)
+                    self.assertEqual(second["status"], "unresolved")
+                    self.assertEqual(second["admission"]["request_uuid"], REQUEST_UUID)
+
     def test_completed_capacity_refusal_defers_once_without_start(self):
         project, port, admission_id = self.recovery_case()
         port.request_receipt = {"state": "deferred",

@@ -295,8 +295,11 @@ def _hold(project: Path, objective: str, *, owner: str, admission_id: str,
 def _request_conflict_result(project: Path, objective: str, *, owner: str,
                              admission_id: str, receipt: dict,
                              request_uuid: str | None) -> dict | None:
-    """Hold a decoder-detected request contradiction without choosing a fresh UUID."""
-    if not receipt.get("_request_conflict"):
+    """Hold a carried request contradiction without choosing a fresh UUID."""
+    observed_request, request_valid = _capacity_request_reference(receipt)
+    if (not receipt.get("_request_conflict") and request_valid
+            and (request_uuid is None or observed_request is None
+                 or observed_request == request_uuid)):
         return None
     error = receipt.get("error")
     capacity_refusal = isinstance(error, dict) and error.get("code") == "capacity_full"
@@ -352,12 +355,11 @@ def _capacity_request_reference(receipt: dict) -> tuple[str | None, bool]:
     values = []
     if receipt.get("request_uuid") is not None:
         values.append(receipt["request_uuid"])
-    mutation = receipt.get("mutation")
-    if mutation is not None:
-        if not isinstance(mutation, dict):
+    if "mutation" in receipt:
+        mutation = receipt["mutation"]
+        if not isinstance(mutation, dict) or mutation.get("requestId") is None:
             return None, False
-        if mutation.get("requestId") is not None:
-            values.append(mutation["requestId"])
+        values.append(mutation["requestId"])
     error = receipt.get("error")
     data = error.get("data") if isinstance(error, dict) else None
     if isinstance(data, dict) and data.get("orchestrationRequestId") is not None:
