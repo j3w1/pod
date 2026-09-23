@@ -27,32 +27,47 @@ FORBIDDEN = (
 # words, so sanitized fixtures are held to them too.
 MECHANISM = (
     ("unsupported mechanism", re.compile(
-        rb"orchestrate|legacy_hold|state[-_]migrate|\bcapacity_full\b|pod-context/v[12]|pod-governor/v1"
-        rb"|docs/history|backwards?[ -]compat|migration_required|pod-migration|pod-progress"
-        rb"|platform_audit")),
+        rb"\borchestrate\b|legacy_hold|state[-_]migrate|\bcapacity_full\b|pod-context/v[12]"
+        rb"|pod-governor/v1|docs/history|backwards?[ -]compat|migration_required|pod-migration"
+        rb"|pod-progress|platform_audit")),
 )
 # Wording that describes an earlier Pod rather than this one. Orca's captures may use these
 # words for their own reasons, so sanitized fixtures are exempt from this table only.
 WORDING = (
-    ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|migration|baseline commit)\b", re.I)),
+    ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|baseline commit)\b", re.I)),
 )
-# Pod publishing itself: its own schemas, operations and release files, a pinned or packaged
-# Pod source, or prose that names Pod as the thing released, tagged or published. A governed
-# project's own release vocabulary, its release gate and its gh/git release commands are
-# ordinary Pod functionality and never match.
+# Pod publishing itself, in any file: Pod's own release schemas, operations and files, a
+# pinned or packaged Pod source, and the few prose forms that can only mean Pod is the
+# thing released, tagged or published. A governed project's release vocabulary, its release
+# gate and its gh/git release commands never match, and neither does ordinary tagging.
 PUBLICATION = (
     ("Pod publication", re.compile(
         rb"release/evidence|release/NOTES|tools/release\.py|internal release-gate|pod-release-"
-        rb"|pod\.release\b|from \.release import|github\.com/j3w1/pod/releases|j3w1/pod#"
-        rb"|j3w1[-_]pod\b|pod-skill-|--expected-commit|SHA256SUMS"
-        rb"|\bPod(?:'s)?(?: own)? (?:releases?|release[-_ ](?:gate|notes|evidence|workflow)|tags?|publication)\b"
-        rb"|(?i:\b(?:publish(?:es|ed|ing)?|releas(?:e|es|ed|ing)|tag(?:s|ged|ging)?) Pod\b)")),
+        rb"|pod\.release\b|from \.release import|--expected-commit|SHA256SUMS"
+        rb"|j3w1/pod#|github\.com/j3w1/pod/(?:releases|tree|archive|tags?|blob/v)\b"
+        rb"|j3w1[-_]pod\b|pod-skill-"
+        rb"|\bPod v\d"
+        rb"|\bPod(?:'s)?(?: own)? (?:releases?|release[-_ ](?:gate|notes|evidence|workflow)|publication)\b"
+        rb"|\bPod (?:is|was|gets|will be|has been) (?:released|published|tagged)\b"
+        rb"|(?i:\b(?:publish(?:es|ed|ing)?|releas(?:e|es|ed|ing)) Pod\b)")),
+)
+# Pod's own automation: its workflows and its code. Pod never builds, tags or releases
+# anything, not even for a governed project, whose merge, release and deployment belong to that
+# project. So a build, tag or release step there is Pod publishing itself, however it is worded.
+# Skill references and docs may still describe a governed project's own release commands.
+AUTOMATION_CODE = (".py", ".sh", ".bash", ".mjs", ".js", ".ts")
+AUTOMATION_STEP = (
+    ("Pod publication step", re.compile(
+        rb"gh release|git tag\b|git push[^\n]*--tags|python3? -m build\b|\btwine\b|upload-artifact"
+        rb"|action-gh-release|contents:\s*write|^\s*tags:", re.M)),
 )
 # Tracked paths that would mean Pod is being packaged or published again.
 PUBLICATION_PATHS = ("release/", "CHANGELOG", "pyproject.toml", "setup.py", "setup.cfg",
-                     "MANIFEST.in", "install.py", "skills/pod/release.py")
-# The guard names its own patterns, so its two files are exempt from every table but FORBIDDEN.
-GUARD_FILES = ("tools/source_audit.py", "tests/test_source_audit.py")
+                     "MANIFEST.in", "install.py", "skills/pod/release.py", "dist/", "build/")
+PACKAGE_SUFFIXES = (".whl", ".tar.gz", ".tgz", ".egg", ".zip")
+# The guard names its own patterns, so exactly these two files are exempt from every table
+# but FORBIDDEN.
+GUARD_FILES = frozenset({"tools/source_audit.py", "tests/test_source_audit.py"})
 FIXTURES = "tests/fixtures/"
 
 
@@ -62,10 +77,13 @@ def _line_number(data: bytes, offset: int) -> int:
 
 def _scan(name: str, data: bytes) -> list[str]:
     tables = [FORBIDDEN]
-    if not name.startswith(GUARD_FILES):
+    if name not in GUARD_FILES:
         tables += [MECHANISM, PUBLICATION]
         if not name.startswith(FIXTURES):
             tables.append(WORDING)
+        if name.startswith(".github/") or (not name.startswith(("tests/", FIXTURES))
+                                           and name.endswith(AUTOMATION_CODE)):
+            tables.append(AUTOMATION_STEP)
     findings = []
     for table in tables:
         for label, pattern in table:
@@ -73,6 +91,13 @@ def _scan(name: str, data: bytes) -> list[str]:
             if match:
                 findings.append(f"{label} at line {_line_number(data, match.start())}")
     return findings
+
+
+def _publication_path(name: str) -> bool:
+    if name == "skills/pod/setup.py":
+        return False
+    return (name.startswith(PUBLICATION_PATHS) or name.endswith(PACKAGE_SUFFIXES)
+            or (name.startswith(".github/workflows/") and "release" in name.lower()))
 
 
 def audit_source(root: pathlib.Path) -> list[str]:
@@ -90,7 +115,7 @@ def audit_source(root: pathlib.Path) -> list[str]:
         except UnicodeError:
             findings.append("tracked source path is not UTF-8")
             continue
-        if name.startswith(PUBLICATION_PATHS) and name != "skills/pod/setup.py":
+        if _publication_path(name):
             findings.append(f"{name} :: Pod publication path")
             continue
         path = root / name
