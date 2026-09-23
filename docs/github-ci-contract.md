@@ -58,6 +58,6 @@ validation of one candidate and context, not exactly one workflow run regardless
 repository requires: local preflight receipts are preparation evidence and never replace an
 independently required remote proof.
 
-Pod 0.3.0 also supplies Governor decisions with a fresh read-only Orca projection for the
-selected objective and Tasks. That projection affects whether related native work is still
-active; Pod does not reconstruct worker lifecycle from its remote-action journal.
+Pod 0.3.0 also supplies Governor decisions with exact read-only Orca evidence for
+the selected objective's assignments when readiness depends on their settlement.
+Pod does not reconstruct worker lifecycle or fleet capacity from its journal.

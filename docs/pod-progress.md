@@ -1,32 +1,40 @@
 # Pod 0.3.0 progress
 
-Specification baseline: `1b0aa6fc68ee2157f6f67ba4a60076d967791cc4`.
-The current read-only observation found Orca 1.4.207; the reconciliation record in the
-specification preserves the earlier 1.4.205 observation. Codex CLI 0.155.1 and Claude Code
-2.1.278; version discovery alone does not prove execution. This page reports candidate
-implementation, not release.
+The 0.3.0 implementation is a candidate, not a published release. The last
+published tag remains `v0.1.2`. The specification's historical baseline is
+`1b0aa6fc68ee2157f6f67ba4a60076d967791cc4`.
 
-| Area | State | Evidence / limit |
-| --- | --- | --- |
-| Runtime boundary | IMPLEMENTED locally | Orca owns Runs, Tasks, Dispatches, requests, messaging, terminals/resources and lifecycle. Pod's mutation adapter exposes only worker start and exact same-request replay. Removed Pod Delivery, cleanup, release and retry state machines have no private helper surface. |
-| Admission | IMPLEMENTED locally | Serialized v2 policy reservations re-read effective personal/project/task approval, route, source, packet, quota, spending and objective fan-out under lock before one native start. Identity and authentication/billing come from one selected account context and are rejoined immediately before start or pending replay; rotation and partial/contradictory native defaults block without relabeling. Objective-local reservations and exact bound-assignment settlement drive logical admission; all-Run and unscoped worker enumeration are rejected by the adapter. Independent objectives do not consume each other's slots. |
-| Recovery | IMPLEMENTED locally | The Orca-issued request UUID is persisted before worker readback. Completed, pending and method-less absent request paths record, join or inspect the same immutable admission; revocation blocks mutation but not completed/absent read-only reconciliation. |
-| State migration | IMPLEMENTED locally | Explicit `state-migrate` validates bounded regular-file input, resolves exact assignments through Orca reads only, preserves v1 in a boundedly verified archive, and atomically installs v2. Exact assignment settlement closes a migrated binding regardless of terminal retention; unbound ambiguity remains outstanding. |
-| Packets and reports | IMPLEMENTED locally | Existing bounded packet/source/report contracts remain. Report admission joins a fresh worker-show to exact runtime and Dispatch identity. |
-| Waste governor | IMPLEMENTED locally | ALLOW/REUSE/DEFER, candidate/preflight/authorization/failure/correction and remote-action semantics remain. Production decisions use objective-local logical admissions and exact assignment evidence when needed, never a fleet-completeness prerequisite. Every preparation/admission/execution/journal mutation joins a stable native current Run/coordinator/generation to the objective's exact Run refs, runtime and existing Pod owner; read-only status remains diagnostic. |
-| Skill and package | IMPLEMENTED locally | Package and skill are 0.3.0 candidates; CLI/helper envelopes are v2. The lean skill loads the installed Orca guide and on-demand Pod references. The last published installation pin remains `v0.1.2`; no v0.3.0 tag or publication is claimed. |
-| Candidate validation | OFFLINE PASS | The 248-test suite and explicit four-test incident discovery pass on Python 3.13.15, as do compile, supported-platform audit and repository skill validation. Focused cases cover configured two-slot fan-out, exact settlement, independent objectives, unresolved duplicate prevention, authoritative `capacity_full` deferral and partial-effect uncertainty. Frozen build/install checks are recorded in the private implementation report. Native real-capacity enforcement remains unavailable unless a genuine Orca refusal is observed; fixtures prove only the boundary. |
+| Area | Current evidence |
+| --- | --- |
+| Runtime boundary | Implemented locally. Orca owns Runs, Tasks, Dispatches, requests, worker capacity, messaging and lifecycle. Pod retains policy admissions and native references, with no fleet-wide occupancy or cleanup model. |
+| Routing and admission | Implemented locally. An admitted model, effort and account route stays fixed. Objective-local reservations enforce logical fan-out; exact native assignment settlement frees a slot, even if a terminal is retained. Orca's definite `capacity_full` refusal creates a durable deferred admission. |
+| Recovery and migration | Implemented locally. Orca-issued request UUIDs join completed, pending and absent recovery to the same admission. Conflicting or incomplete identity remains unresolved across later observations. Explicit v1 migration archives source state and promotes only exact native joins. |
+| Governor | Implemented locally. ALLOW/REUSE/DEFER decisions use candidate-bound evidence, the current Run's authority and exact objective assignments when relevant. They do not reconstruct foreign workers or physical capacity. |
+| Skill and package | The skill and Python package share one `skills/pod` source. Four public helper families remain: `setup`, `config`, `doctor` and `status`. |
+| Offline checks | Implementation commit `914ac0523c3330c577d23c2ff9a6d12988d198ba` passed 270 unit tests, four explicit incident tests, 25 frozen build/install gates and 24 independent recovery sequences on Linux/Python 3.13. A fresh Sol/xhigh correction audit found no actionable issue. The main integration candidate receives its own checks before push. |
 
-## Candidate evidence
+## Orca dependency
 
-The coordinator receives the exact commit and tree after the frozen-candidate checks. Coverage
-rows remain `NOT_RUN` until candidate-bound evidence is recorded; a test path is an intended
-offline case, not proof by itself.
+Pod can freeze a selected route and compare Orca's requested and effective
+launch evidence after start. The installed Orca launcher has no opt-in,
+noninteractive strict-startup control that proves the provider accepted the
+selected model and effort before task input. Provider migration prompts may
+therefore interrupt startup. This feature belongs in Orca's provider adapter and
+must be scoped per launch so ordinary sessions keep their behavior. Pod does not
+automate prompts or change shared provider settings.
 
-## Remaining external gates
+## Open gates
 
-- Required Codex and Claude Code live core and Orca delegation evidence is `NOT_RUN` here.
-- Native real-capacity enforcement is unavailable; synthetic `capacity_full` coverage is not live evidence.
-- Hosted candidate CI, fresh independent review and project acceptance are `NOT_RUN` here.
-- Merge, tag, release, deployment and package-registry publication are not authorized by this
-  implementation task.
+- Production Codex/Sol high and Claude/Sonnet medium strict-startup probes are
+  `NOT_RUN` pending that Orca control. They are not replaced by supervised
+  implementation or review workers.
+- The required live Codex and Claude core/delegation matrices are `NOT_RUN` on
+  this candidate. Synthetic `capacity_full` cases do not prove actual runtime
+  capacity behavior.
+- Hosted candidate CI and external project acceptance require their own
+  candidate-bound evidence. Merging development work into `main` does not
+  publish a 0.3.0 tag, package or release.
+
+The [validation gates](validation.md) define the proof required for release.
+Scenario paths in [coverage](pod-coverage.json) describe intended offline tests;
+they do not promote live or hosted rows from `NOT_RUN`.

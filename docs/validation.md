@@ -87,7 +87,11 @@ UUID; absent, whose native record has no method, permits only a unique matching 
 Run/Task/Dispatch readback. Current policy is rechecked immediately before pending replay or a new
 start, while completed/absent diagnosis remains read-only after revocation. Invalid UUID, changed
 worktree, missing receipt, runtime mismatch or ambiguous/contradictory identity holds the
-admission. Pod never invents a UUID, starts a replacement, retries in a loop, or mutates release,
+admission. A request identity conflict remains recorded across later incomplete receipts or
+capacity-classified errors. Pending replay and absent unique-worker adoption stay blocked until
+a coherent completed receipt resolves that same admission. An authoritative definite no-start
+`capacity_full` response may have no UUID; absent identity alone is not a contradiction.
+Pod never invents a UUID, starts a replacement, retries in a loop, or mutates release,
 terminal or lifecycle state.
 
 `internal state-migrate` is the only v1-to-v2 state transition. It locks and validates a
@@ -213,3 +217,9 @@ conservative by design, and it means the documented default of two workers holds
 a fresh reading is available.
 
 The current installed Orca worker contract supports workers without terminals, and Pod's read adapter treats terminal identity as optional. Route establishment states which control backs each part of a route and how strongly: effective launch and native descendant-depth limit are enforceable controls; billing mode, exact redacted account identity and quota windows are supported observations; route approval, child delegation and logical descendant reservations are owner policy; physical capacity is unavailable. Pod claims no more. Refusing worker-initiated delegation is a Pod admission decision and behavioural instruction, not a provider sandbox. The metadata adapter does not scrape credential stores or undocumented quota endpoints and exposes only a digest of the runtime-selected account for personal approval. Reset credits have only an offline intent guard; no redemption transport is installed. An authoritative native `capacity_full` refusal is recorded as durable deferred evidence with no binding and no blind retry; a malformed or partial-effect response remains unresolved. This branch is synthetically covered unless a genuine runtime refusal is observed. Exact live start/request recovery and the live core and delegation matrices require separate evidence; worker lifecycle, disposition and actual capacity remain Orca/CE-owned.
+
+The installed Orca `worker-start` accepts model and effort but does not expose a scoped
+strict-route, noninteractive startup contract. Requested/effective evidence after start does
+not prove the provider accepted the route before task input. Codex/Sol high and Claude/Sonnet
+medium production startup cases stay `NOT_RUN` until Orca supplies that opt-in contract; an
+invocation-only profile override used to bootstrap a review worker is not equivalent evidence.

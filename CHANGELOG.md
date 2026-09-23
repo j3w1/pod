@@ -2,28 +2,27 @@
 
 ## 0.3.0 — candidate
 
-- Orca is now the only runtime and lifecycle authority. Pod retains a serialized policy
-  admission seam, frozen packets, evidence and governance, while its private Delivery,
-  cleanup, release, terminal, liveness and retry state machines are removed.
-- `pod-context/v2` records compact admissions and exact native references. Capacity and the
-  waste governor use fresh Orca projection; missing, ambiguous, retained or unresolved work
-  remains conservative, and exact released projection can free capacity.
-- Native recovery records Orca's request UUID before readback and handles completed, pending
-  and method-less absent request states without a second semantic start. Read-only completed
-  or absent reconciliation remains possible after revocation; only pending replay rechecks
-  current mutation authority. Pod never selects a retry UUID.
-- Explicit `state-migrate` archives and hashes v1, performs read-only native reconciliation,
-  preserves spent grants and uncertain holds, then atomically installs v2 from bounded regular
-  files. Exact later release proof frees a bound legacy hold; doctor and status report migration
-  requirements without changing state.
-- Package/skill metadata is 0.3.0 and CLI/helper envelopes are v2. The last published install
-  pin remains `v0.1.2`; this candidate does not claim a tag or publication.
-- Personal approval, quota, capacity and grants now share Orca's redacted selected-account
-  identity; one selected context supplies identity and billing at establishment and the final
-  start/replay gate, so labels, partial defaults, rotated accounts and unrelated login evidence
-  fail without relabeling. Capacity reads paginate every native Run with a stable double inventory,
-  and Governor mutations require an unchanged current Run/coordinator/generation joined to the
-  objective refs, runtime and existing owner while read-only status remains usable.
+- Orca owns worker creation, capacity and lifecycle. Pod keeps objective-level
+  admission, routing, spending and evidence without a fleet occupancy census,
+  terminal release counter or private cleanup state machine.
+- `pod-context/v2` stores one logical reservation per assignment. Exact native
+  assignment settlement frees its objective slot even when the terminal remains;
+  an authoritative `capacity_full` refusal becomes a durable deferral.
+- Each admitted model, effort and account route stays immutable. Pod rejects
+  contradictory request identities and retains their unresolved provenance
+  across later incomplete responses, preventing an accidental second start or
+  an unjustified binding. Orca-issued UUIDs recover the same admission.
+- Personal approval, quota and grants use Orca's redacted selected-account
+  identity. Route and billing evidence must come from the same selected context
+  and are rechecked before start or pending replay.
+- Explicit `state-migrate` archives and hashes v1, reconciles exact native
+  bindings by read only operations, and holds uncertainty. A migrated binding
+  closes on exact native assignment settlement, not terminal release.
+- Governor decisions use the current Run's stable authority and relevant exact
+  objective assignments. They do not reconstruct foreign workers or capacity.
+- The skill and Python package share one source; CLI/helper envelopes are v2.
+  Strict, noninteractive provider startup remains an Orca dependency. The last
+  published installation tag is `v0.1.2`; this candidate is not a release.
 
 ## 0.2.0 — 2026-09-22
 
