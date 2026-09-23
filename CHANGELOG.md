@@ -1,60 +1,95 @@
 # Changelog
 
-## 0.3.0 — candidate
+The section whose heading matches `pod.__version__` is the body of that version's GitHub
+Release. A push to `main` that declares a version with no tag publishes it.
 
-- Orca owns worker creation, capacity and lifecycle. Pod keeps objective-level
-  admission, routing, spending and evidence without a fleet occupancy census,
-  terminal release counter or private cleanup state machine.
-- `pod-context/v2` stores one logical reservation per assignment. Exact native
-  assignment settlement frees its objective slot even when the terminal remains;
-  an authoritative `capacity_full` refusal becomes a durable deferral.
-- Each admitted model, effort and account route stays immutable. Pod rejects
-  contradictory request identities and retains their unresolved provenance
-  across later incomplete responses, preventing an accidental second start or
-  an unjustified binding. Orca-issued UUIDs recover the same admission.
-- Personal approval, quota and grants use Orca's redacted selected-account
-  identity. Route and billing evidence must come from the same selected context
-  and are rechecked before start or pending replay.
-- Explicit `state-migrate` archives and hashes v1, reconciles exact native
-  bindings by read only operations, and holds uncertainty. A migrated binding
-  closes on exact native assignment settlement, not terminal release.
-- Governor decisions use the current Run's stable authority and relevant exact
-  objective assignments. They do not reconstruct foreign workers or capacity.
-- The skill and Python package share one source; CLI/helper envelopes are v2.
-  Strict, noninteractive provider startup remains an Orca dependency. The last
-  published installation tag is `v0.1.2`; this candidate is not a release.
+## 0.4.0 — 2026-09-23
 
-## 0.2.0 — 2026-09-22
+### Coordination boundary
 
-- The governor is now a waste-governor kernel: a small deterministic control layer inside the
-  existing execution path that prevents a still-converging piece of work from repeatedly
-  crossing the pull-request, CI and release boundary. Work is grouped into delivery units,
-  each with explicitly prepared candidate generations bound to commit, tree, base, workflow
-  digests, verification commands, toolchain, environment and policy revision, so a changed
-  workflow or base is a new candidate even on the same commit. Decisions are ALLOW, REUSE or
-  DEFER with the reason and the next useful action; WARN is an annotation. What an action
-  triggers is judged rather than its verb, so a push that starts CI is validation and needs
-  the configured local preflight first.
-- `internal governor-execute` admits and performs push, pull-request reuse or creation,
-  workflow dispatch, rerun and cancellation against the bound commit through an exact `git`
-  and `gh` allowlist; a lost response stays UNKNOWN and `internal governor-reconcile` settles
-  it from readback without resubmitting. Two callers requesting the same validation admit one
-  execution. A push that triggers CI journals the run it started, so a later dispatch of the
-  same workflow attaches to it instead of doubling it. Supersedence cancels only a pending,
-  cancel-safe validation, never a deployment or a worker.
-- A remote failure is classified before another attempt: a code defect goes through the
-  ledger's existing intervention rule, so a third equivalent correction needs a diagnosis; a
-  remote-only question gets a bounded diagnostic; a transient failure gets the configured
-  retry; an external blocker is reported as one.
-- `waste_governor` joins the personal and project policy: mode, consolidation, cancellation
-  authority, retry budget, preflight checks, trigger mapping, a host-control declaration and
-  scoped exception grants. A project may only narrow it. The enforcement level is reported
-  as advisory unless the owner declares a host control, and never as a proven sandbox.
-- `status` and `internal governor-status` show units, candidates, preflight, the last decision
-  and blocker, active and unresolved validation, counters, enforcement and a read-only trigger
-  proposal discovered from the repository's workflows.
+- Orca owns Runs, Tasks, Dispatches, request recovery, placement, messaging, actual
+  capacity and worker lifecycle. Pod keeps objective-level admission, routing, spending and
+  evidence: one logical reservation per assignment, freed by exact native assignment
+  settlement, with no fleet census, Delivery, cleanup or release state of its own.
+- Normal workers start through native `worker-start` into visible agent tabs. After a
+  report is validated and preserved, Delivery acknowledgment and worker release follow
+  Orca's order promptly; uncertain or protected resources are retained.
 
-## 0.1.2
+### Issue-first workflow
+
+- A GitHub issue URL or a direct objective enters one workflow. The complete issue is read
+  through authorized `gh` access, its target is checked against the actual checkout, and
+  checkpoints and packets bind its identity and body digest without copying the body.
+- The `references/execution-spec.md` reference defines the readable Pod Execution Spec
+  with numbered Proof of Done items and an explicit delivery endpoint.
+- Implementation binds an Orca-managed objective worktree, normally on an
+  `orca/<task-slug>` branch, by Git common directory, branch and path. Linked worktrees
+  share one objective state, and canonical private project policy can only be narrowed.
+
+### Routing and admission
+
+- The catalog is exactly Luna, Sol and Astra on Codex and Sonnet, Opus and Fable on
+  Claude. Routes carry effort plus a `256k` (256,000-token upper bound) or `max` context
+  profile and keep requested and proven effective limits distinct. Where the installed Orca
+  exposes no per-worker context control, a context-dependent route refuses before effect.
+- `config approve ALIAS` and `config revoke ALIAS` recheck the joined native account, auth
+  and billing evidence, show a redacted proposal, require explicit confirmation and edit
+  only the personal YAML. Direct work needs no approved route.
+- Orca's redacted selected-account identity is the one key for approval, quota and grants.
+  Identity and billing proof come from the same selected context and are re-read
+  immediately before a start or pending replay; a rotated account is never relabeled.
+
+### Recovery
+
+- Orca-issued request UUIDs join completed, pending and absent recovery to the same
+  admission. A contradictory request identity stays unresolved across later incomplete
+  responses, and nothing starts a replacement.
+- Orca's documented effect-free refusals `task_not_found`, `task_not_startable` and
+  `inject_rejected` are recorded as durable `deferred` admissions with no binding and no
+  blind retry. `runtime_error` holds `unresolved` until request and worker readback settle
+  it. Any other refusal code stays fail-closed.
+
+### Governor
+
+- The governor is a deterministic kernel inside the execution path. Work is grouped into
+  delivery units with candidate generations frozen from Git: commit, tree, base, workflow
+  digests, verification commands, toolchain, environment and policy revision. A changed
+  workflow or base is a new candidate even on the same commit.
+- Decisions are `ALLOW`, `REUSE` or `DEFER` with the reason and next action; `WARN` is an
+  annotation. A push that starts CI is validation and needs the configured local preflight.
+  An identical running action is attached to, and a passing result for the same candidate
+  and context is reused.
+- `internal governor-execute` performs push, pull-request reuse or creation, workflow
+  dispatch, rerun and cancellation against the bound commit through an exact `git` and `gh`
+  allowlist. A lost response stays `UNKNOWN` and `internal governor-reconcile` settles it
+  from provider readback without resubmitting. Supersedence cancels only a pending,
+  cancel-safe validation.
+- Remote failures are classified before another attempt: a code defect goes through the
+  intervention ledger, a remote-only question gets a bounded diagnostic, and enforcement is
+  reported as advisory unless the owner declares a host control.
+
+### Interfaces and state
+
+- Public helper families remain `setup`, `config`, `doctor` and `status`. Private state is
+  `pod-context/v3` with admissions `reserved`, `bound`, `unresolved`, `closed` and
+  `deferred`; CLI envelopes are `pod-cli/v3`. A state record or governor journal in another
+  schema is reported by `doctor` and `status`, blocks that objective, and is never converted.
+- `policy.retain_idle_minutes` is not a configuration key; worker retention and disposition
+  are explicit Orca operations.
+
+### Release process
+
+- A push to `main` whose declared version has no tag creates the annotated tag and the
+  GitHub Release with the wheel, sdist, skill bundle archive and checksums. This file is
+  the only release-notes source, and a version bump without a section fails the checks.
+
+### Compatibility
+
+- Developed against Orca 1.4.209. Capabilities are discovered from the installed runtime per
+  operation; no minimum version is enforced. Supported execution environment: Linux with
+  Python 3.13+ and PyYAML 6.x.
+
+## 0.1.2 — 2026-09-21
 
 - `doctor` reports a skill where it actually is. An agent reads the conventional
   `~/.agents/skills` as well as its configured home, so on a host whose `CODEX_HOME` points
@@ -63,7 +98,7 @@
   configured one. 0.1.1 stopped setup writing a duplicate in that situation; this stops the
   diagnostic recommending one.
 
-## 0.1.1
+## 0.1.1 — 2026-09-21
 
 - Global setup no longer installs a second active copy beside the one the skills ecosystem
   already placed. A host may point `CODEX_HOME` somewhere other than the agents home, as one
@@ -72,10 +107,10 @@
   per-agent symlink, and reports `present_elsewhere` rather than writing. Which copy wins is
   the operator's decision. Found by installing 0.1.0 on such a host.
 
-## 0.1.0
+## 0.1.0 — 2026-09-21
 
-First release under the name `pod`. This is a rewrite, not an upgrade: the retired
-`orchestrate` controller is gone, and nothing from it is kept as a compatibility alias.
+First release under the name `pod`. Pod replaces the earlier controller and keeps nothing
+from it as a compatibility alias.
 
 ### What Pod is
 
@@ -110,8 +145,6 @@ lifecycle; your project owns source, checks, review and acceptance.
   a second worker.
 - A worker this coordinator never launched no longer blocks admission. A worker started by a
   worker is counted, and refused when policy does not allow it.
-- Delivery, settlement and release run through the production adapter: a settlement releases
-  once, and a Delivery can only be acknowledged after every item has a durable effect.
 
 ### Governance
 
@@ -125,10 +158,7 @@ lifecycle; your project owns source, checks, review and acceptance.
 
 ### Removed
 
-- Support for the second platform and its transport: implementation, tests, continuous
-  integration, packaging and documentation, not merely the gates. Supported execution
-  environment: Linux.
+- Support for a second platform and its transport: implementation, tests, continuous
+  integration, packaging and documentation. Supported execution environment: Linux.
 - The comparative three-mode benchmark as a release prerequisite.
 - The hard-coded negative assurance values that made every delegation fail closed.
-
-The retired product's own records are preserved unchanged in `docs/history/`.

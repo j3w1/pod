@@ -819,4 +819,3 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         _hold(project, objective, owner=owner, admission_id=admission_id,
               request_uuid=request_uuid, code=code, detail=str(exc))
         raise
-

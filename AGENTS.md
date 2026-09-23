@@ -1,8 +1,7 @@
 # Pod contributor instructions
 
-Read `docs/pod-spec.md` and `docs/validation.md` before implementation. `docs/history/`
-holds the retired product's records: it is evidence, never guidance. Inspect Git state and
-preserve unrelated work. Pod is a skill plus bounded Python helpers over Orca; Orca owns
+Read `docs/pod-spec.md` and `docs/validation.md` before implementation. Inspect Git state
+and preserve unrelated work. Pod is a skill plus bounded Python helpers over Orca; Orca owns
 native Runs, Tasks, Dispatches, environments and worker lifecycle, and project governance
 owns authority and acceptance.
 
@@ -33,10 +32,10 @@ report findings and do not repair. Consolidate corrections and preserve prior fi
 Worker success, local verification, hosted CI, independent review and external project
 acceptance are distinct facts and are reported separately.
 
-Run focused tests during development and the documented final checks at milestone
+Run focused tests during development and the gates in `docs/validation.md` at milestone
 boundaries. Missing live Orca, model or provider evidence must remain unavailable or
-NOT_RUN. Do not weaken a check or fabricate compatibility. A retired requirement is recorded
-as retired with its reason, never as a pass.
+NOT_RUN. Do not weaken a check or fabricate compatibility. Removing a requirement removes
+its scenario and coverage row in the same change.
 
 Keep README.md approachable and follow the editorial structure of
 https://github.com/obra/superpowers/blob/main/README.md with original Pod wording. Document

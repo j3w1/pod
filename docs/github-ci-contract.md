@@ -17,8 +17,8 @@ concurrency:
 
 The group is one pull request or one ref, so a newer push to the same pull request replaces
 the run it superseded and a push to `main` or a release tag is never canceled by anything.
-This repository's own `ci.yml` uses exactly this. A deployment or migration job belongs in
-a workflow of its own with no `cancel-in-progress`, which is also why the governor's own
+This repository's own `ci.yml` uses exactly this. A deployment job belongs in a workflow of
+its own with no `cancel-in-progress`, which is also why the governor's own
 cancellation touches only a pending validation run.
 
 ## Required checks and selective jobs
@@ -46,7 +46,7 @@ The project maps what its actions trigger in `.pod/config.yaml`:
 ```yaml
 schema: pod/v1
 waste_governor:
-  preflight: [unit, skill-validation]
+  preflight: [unit-and-incident-suite, skill-validation, compile]
   triggers:
     push: ["workflow:ci.yml"]
     pr_update: ["workflow:ci.yml"]
@@ -57,7 +57,3 @@ proposal is never policy until it is written here. The target is no unnecessary 
 validation of one candidate and context, not exactly one workflow run regardless of what the
 repository requires: local preflight receipts are preparation evidence and never replace an
 independently required remote proof.
-
-Pod 0.3.0 also supplies Governor decisions with exact read-only Orca evidence for
-the selected objective's assignments when readiness depends on their settlement.
-Pod does not reconstruct worker lifecycle or fleet capacity from its journal.

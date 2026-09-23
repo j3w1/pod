@@ -1,4 +1,4 @@
-name: Pod candidate checks
+name: Pod checks
 
 on:
   pull_request:
@@ -46,9 +46,16 @@ jobs:
           PYTHONPATH: skills
       - name: Compile
         run: python -m compileall -q skills tests tools install.py
+      - name: Whitespace
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
 
       - name: Validate the skill bundle
         run: python -m pod.skill_validation skills/pod
+        env:
+          PYTHONPATH: skills
+
+      - name: CHANGELOG has this version's section
+        run: python tools/release_notes.py "$(python -c 'import pod; print(pod.__version__)')" > /dev/null
         env:
           PYTHONPATH: skills
 
@@ -96,7 +103,6 @@ jobs:
           (cd "$FIXTURE" && "$POD_BIN" config --check --json)
           (cd "$FIXTURE" && "$POD_BIN" doctor --json)
           PYTHONPATH=skills python -m pod.skill_validation --installed "$CODEX_HOME/skills/pod"
-          echo "$HOMES" > "$RUNNER_TEMP/smoke-homes"
 
       - name: Explicit reviewed-checkout installer
         run: |
@@ -149,15 +155,24 @@ jobs:
 
   release:
     name: release
-    if: github.ref_type == 'tag'
+    # A push to main or a v* tag; never a pull request. The job publishes only when the
+    # declared version has no tag and no release yet, so it is idempotent across reruns,
+    # a manual tag push of an already-bumped version, and merges that bump nothing.
+    if: github.event_name == 'push'
     needs: linux
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -167,34 +182,71 @@ jobs:
       - name: Install build tooling
         run: python -m pip install --upgrade build PyYAML
 
-      - name: The tag names the package version
+      - name: Decide whether this push publishes a version
         run: |
-          DECLARED="$(PYTHONPATH=skills python -c 'import pod; print(pod.__version__)')"
-          test "${GITHUB_REF_NAME#v}" = "$DECLARED"
+          VERSION="$(PYTHONPATH=skills python -c 'import pod; print(pod.__version__)')"
+          TAG="v$VERSION"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # A pushed tag must name the version the tagged tree declares.
+            test "$GITHUB_REF_NAME" = "$TAG"
+            COMMIT="$(git rev-parse "$TAG^{commit}")"
+          else
+            COMMIT="$GITHUB_SHA"
+            if git rev-parse -q --verify "refs/tags/$TAG^{commit}" > /dev/null; then
+              EXISTING="$(git rev-parse "$TAG^{commit}")"
+              if [ "$EXISTING" != "$COMMIT" ]; then
+                echo "$TAG already names $EXISTING; this push declares no unreleased version."
+                echo "PUBLISH=no" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            fi
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "$TAG is already published."
+            echo "PUBLISH=no" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          printf 'PUBLISH=yes\nVERSION=%s\nTAG=%s\nCOMMIT=%s\n' "$VERSION" "$TAG" "$COMMIT" >> "$GITHUB_ENV"
 
-      - name: Build the release artifacts from the exact tag
+      - name: Release notes are the CHANGELOG section for this version
+        if: env.PUBLISH == 'yes'
+        run: python tools/release_notes.py "$VERSION" > "$RUNNER_TEMP/notes.md"
+
+      - name: Build the release artifacts from the exact commit
+        if: env.PUBLISH == 'yes'
         run: |
           EXPORT="$(mktemp -d)"
-          git archive "$GITHUB_REF_NAME" | tar -x -C "$EXPORT"
+          git archive "$COMMIT" | tar -x -C "$EXPORT"
           (cd "$EXPORT" && python -m build)
           mkdir -p dist
           cp "$EXPORT"/dist/* dist/
-          VERSION="${GITHUB_REF_NAME#v}"
           git archive --format=tar.gz --prefix=pod/ \
-            -o "dist/pod-skill-$VERSION.tar.gz" "$GITHUB_REF_NAME:skills/pod"
+            -o "dist/pod-skill-$VERSION.tar.gz" "$COMMIT:skills/pod"
+          PYTHONPATH=skills python -m pod.skill_validation --wheel dist/*.whl
           python tools/artifact_audit.py dist/*
           (cd dist && sha256sum ./* > SHA256SUMS)
 
+      - name: Create the annotated tag
+        if: env.PUBLISH == 'yes' && github.ref_type == 'branch'
+        run: |
+          if ! git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+            git -c user.name="$GITHUB_ACTOR" \
+                -c user.email="${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com" \
+                tag -a "$TAG" "$COMMIT" -m "Pod $VERSION"
+            git push origin "refs/tags/$TAG"
+          fi
+
       - name: The published source installs as a skill
+        if: env.PUBLISH == 'yes'
         run: |
           SMOKE="$RUNNER_TEMP/release-home"
           mkdir -p "$SMOKE"
           env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
             HOME="$SMOKE" npx --yes skills@1.7.0 add \
-            "${GITHUB_REPOSITORY}#${GITHUB_REF_NAME}" --skill pod -a codex -a claude-code -g -y
+            "${GITHUB_REPOSITORY}#${TAG}" --skill pod -a codex -a claude-code -g -y
           PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
           # A remote source does record a lock entry, pinned to the tag that was installed.
-          python - "$SMOKE/.agents/.skill-lock.json" "$GITHUB_REF_NAME" <<'PY'
+          python - "$SMOKE/.agents/.skill-lock.json" "$TAG" <<'PY'
           import json, sys
           lock = json.load(open(sys.argv[1]))
           entry = lock["skills"]["pod"]
@@ -203,10 +255,7 @@ jobs:
           PY
 
       - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: env.PUBLISH == 'yes'
         run: |
-          NOTES="docs/release-notes/${GITHUB_REF_NAME}.md"
-          test -f "$NOTES"
-          gh release create "$GITHUB_REF_NAME" --verify-tag \
-            --title "Pod $GITHUB_REF_NAME" --notes-file "$NOTES" dist/*
+          gh release create "$TAG" --verify-tag --title "Pod $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" dist/*
