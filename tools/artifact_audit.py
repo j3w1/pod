@@ -30,7 +30,7 @@ TRAIL = (
     ("trail vocabulary", re.compile(
         rb"orchestrate|legacy_hold|state[-_]migrate|\bcapacity_full\b|pod-context/v[12]|pod-governor/v1"
         rb"|docs/history|release-notes/|backwards?[ -]compat|migration_required|pod-migration|pod-progress"
-        rb"|platform_audit|\b\d+\.\d+\.\d+ candidate\b|release candidate|latest published")),
+        rb"|platform_audit|\b\d+\.\d+\.\d+ candidate\b|release candidate|latest published|CHANGELOG|[Cc]hangelog")),
     ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|migration|baseline commit)\b", re.I)),
 )
 # The guard names its own patterns, and sanitized captures are Orca's words, not Pod's.

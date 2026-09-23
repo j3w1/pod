@@ -976,7 +976,7 @@
         "offline_behavior",
         "external_gate"
       ],
-      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_changelog_is_the_release_notes_source",
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_release_notes_describe_only_the_declared_version",
       "candidate_status": "NOT_RUN"
     },
     {

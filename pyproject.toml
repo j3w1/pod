@@ -23,7 +23,7 @@ dependencies = ["PyYAML>=6.0.2,<7"]
 Homepage = "https://github.com/j3w1/pod"
 Repository = "https://github.com/j3w1/pod"
 Issues = "https://github.com/j3w1/pod/issues"
-Changelog = "https://github.com/j3w1/pod/blob/main/CHANGELOG.md"
+Releases = "https://github.com/j3w1/pod/releases"
 
 [project.scripts]
 pod = "pod.cli:main"

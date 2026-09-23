@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -54,10 +56,14 @@ jobs:
         env:
           PYTHONPATH: skills
 
-      - name: CHANGELOG has this version's section
-        run: python tools/release_notes.py "$(python -c 'import pod; print(pod.__version__)')" > /dev/null
+      - name: Release notes describe the declared version
+        run: python tools/release.py notes "$(python -c 'import pod; print(pod.__version__)')" > /dev/null
         env:
           PYTHONPATH: skills
+
+      - name: Product changes carry a version bump and current notes
+        if: github.event_name == 'pull_request'
+        run: python tools/release.py check "origin/${{ github.base_ref }}"
 
       - name: Tracked source hygiene audit
         run: python tools/artifact_audit.py --source .
@@ -156,8 +162,10 @@ jobs:
   release:
     name: release
     # A push to main or a v* tag; never a pull request. The job publishes only when the
-    # declared version has no tag and no release yet, so it is idempotent across reruns,
-    # a manual tag push of an already-bumped version, and merges that bump nothing.
+    # declared version has no tag and no release yet, and only when release/evidence.json
+    # passes Pod's release gate for this exact candidate. It is idempotent across reruns,
+    # a manual tag push of an already-bumped version, and merges that bump nothing. A
+    # blocked gate leaves main merged and unpublished, and says why in the job summary.
     if: github.event_name == 'push'
     needs: linux
     runs-on: ubuntu-latest
@@ -208,9 +216,24 @@ jobs:
           fi
           printf 'PUBLISH=yes\nVERSION=%s\nTAG=%s\nCOMMIT=%s\n' "$VERSION" "$TAG" "$COMMIT" >> "$GITHUB_ENV"
 
-      - name: Release notes are the CHANGELOG section for this version
+      - name: Pod's release gate decides from the committed evidence
         if: env.PUBLISH == 'yes'
-        run: python tools/release_notes.py "$VERSION" > "$RUNNER_TEMP/notes.md"
+        run: |
+          if python tools/release.py gate > "$RUNNER_TEMP/gate.txt"; then
+            PUBLISH=yes
+          else
+            STATUS=$?
+            if [ "$STATUS" -ne 3 ]; then cat "$RUNNER_TEMP/gate.txt"; exit "$STATUS"; fi
+            PUBLISH=no
+          fi
+          { echo "## Release gate for $TAG"; echo; echo '```'; cat "$RUNNER_TEMP/gate.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/gate.txt"
+          if [ "$PUBLISH" = no ]; then echo "::notice title=Unpublished::$(head -1 "$RUNNER_TEMP/gate.txt")"; fi
+          echo "PUBLISH=$PUBLISH" >> "$GITHUB_ENV"
+
+      - name: Release notes are the current release/NOTES.md
+        if: env.PUBLISH == 'yes'
+        run: python tools/release.py notes "$VERSION" > "$RUNNER_TEMP/notes.md"
 
       - name: Build the release artifacts from the exact commit
         if: env.PUBLISH == 'yes'

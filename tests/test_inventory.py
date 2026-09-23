@@ -162,23 +162,20 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         for phrase in ("$pod https://github.com/owner/project/issues/123",
                        "Draft a Pod Execution Spec", "Authoring in ChatGPT",
                        "Plan only", "Continue after interruption", "visible agent tab",
-                       "config approve sol", "256,000 tokens", "CHANGELOG.md",
-                       "https://github.com/j3w1/pod/releases"):
+                       "config approve sol", "256,000 tokens", "release/NOTES.md",
+                       "release/evidence.json", "https://github.com/j3w1/pod/releases"):
             self.assertIn(phrase, text)
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
                       text)
 
-    def test_changelog_is_the_release_notes_source(self):
+    def test_release_notes_describe_only_the_declared_version(self):
         from pod import __version__
-        from tools.release_notes import section
-        changelog = (self.root / "CHANGELOG.md").read_text()
-        headings = re.findall(r"^## .*$", changelog, flags=re.M)
-        self.assertTrue(headings)
-        self.assertEqual(headings[0].split()[1], __version__)
-        for heading in headings:
-            self.assertRegex(heading, r"^## \d+\.\d+\.\d+ — \d{4}-\d{2}-\d{2}$")
-        self.assertTrue(section(changelog, __version__).strip())
+        from tools.release import notes
+        text = (self.root / "release" / "NOTES.md").read_text()
+        self.assertEqual(text.splitlines()[0], f"# Pod {__version__}")
+        self.assertTrue(notes(text, __version__).strip())
+        self.assertEqual(re.findall(r"^# .*$", text, flags=re.M), [f"# Pod {__version__}"])
         workflow = (self.root / ".github" / "workflows" / "ci.yml").read_text()
-        self.assertIn("tools/release_notes.py", workflow)
-        self.assertNotIn("--notes-file docs/", workflow)
-        self.assertIn("gh release create", workflow)
+        for phrase in ("tools/release.py gate", "tools/release.py check", "tools/release.py notes",
+                       "gh release create"):
+            self.assertIn(phrase, workflow)

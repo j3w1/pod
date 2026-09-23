@@ -64,7 +64,7 @@ version-matched orchestration guide. Loading Pod installs nothing or changes no
 provider setting.
 
 To pin a release, use a tag from the [releases](https://github.com/j3w1/pod/releases)
-page or the [CHANGELOG](CHANGELOG.md):
+page:
 
 ```bash
 npx skills add j3w1/pod#v0.4.0 --skill pod -a codex -a claude-code -g
@@ -244,10 +244,14 @@ PYTHONPATH=skills python -m pod.skill_validation skills/pod
 python tools/artifact_audit.py --source .
 ```
 
-To release, bump `pod.__version__` and the `metadata.version` in `SKILL.md`, add
-the matching section to [CHANGELOG.md](CHANGELOG.md), and merge to `main`. The
-release workflow tags the commit and publishes the GitHub release with the
-wheel, sdist and skill bundle. A merge without a version bump publishes nothing.
+To release, bump `pod.__version__` and the `metadata.version` in `SKILL.md`,
+replace `release/NOTES.md` with this version's notes, and commit the
+`release/evidence.json` that records the [validation gates](docs/validation.md)
+and owner authorization for the exact candidate. A pull request that changes
+product files without a bump fails its checks. On merge to `main`, the release
+workflow publishes the tag and GitHub release with the wheel, sdist and skill
+bundle only when that evidence passes Pod's release gate; otherwise `main` stays
+merged and unpublished, and the job summary says which gate is missing.
 
 ## License
 
