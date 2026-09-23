@@ -100,6 +100,44 @@ class TrackedSourceAuditTests(unittest.TestCase):
                            b"gh release create v1.0.0 for the governed project\n"})
             self.assertEqual(audit_source(root), [])
 
+    def test_pod_automation_cannot_build_tag_or_release(self):
+        """Pod's own workflows and tools never build, tag or release, whatever the wording."""
+        with fixture() as root:
+            tracked(root, {
+                ".github/workflows/checks.yml": b"steps:\n  - run: python -m " + b"build\n  - run: gh " + b"release create v2.0 dist/*\n",
+                "tools/publish.py": b"subprocess.run(['gh', 'release', 'create'])\nrun('gh " + b"release create v2')\n",
+                "dist/pod-2.0-py3-none-any.whl": b"PK",
+                ".github/workflows/release.yml": b"name: checks\n",
+                "pod-0.4.0.tar.gz": b"x",
+            })
+            flagged = sorted(row.split(" :: ")[0] for row in audit_source(root))
+            self.assertEqual(flagged, [".github/workflows/checks.yml", ".github/workflows/release.yml",
+                                       "dist/pod-2.0-py3-none-any.whl", "pod-0.4.0.tar.gz",
+                                       "tools/publish.py"])
+
+    def test_pinned_sources_and_passive_pod_publication_prose_are_findings(self):
+        with fixture() as root:
+            tracked(root, {
+                "a.md": b"Pod is " + b"released as a versioned archive.\n",
+                "b.md": b"Pod is " + b"published to PyPI.\n",
+                "c.md": b"Pod " + b"v2.0 is tagged and published.\n",
+                "d.md": b"Install from https://github.com/j3w1/pod/" + b"tree/v2.0.\n",
+                "tests/test_source_audit.py.backup": b"Pod " + b"v2.0 is out\n",
+            })
+            self.assertEqual(sorted(row.split(" :: ")[0] for row in audit_source(root)),
+                             ["a.md", "b.md", "c.md", "d.md", "tests/test_source_audit.py.backup"])
+
+    def test_ordinary_current_wording_is_allowed(self):
+        with fixture() as root:
+            tracked(root, {"README.md": b"Pod tags the objective with its source digest.\n"
+                                        b"Orca orchestrates native workers.\n"
+                                        b"Pod can coordinate a project migration.\n"
+                                        b"Orca releases the worker once its report is preserved.\n"
+                                        b"See https://github.com/j3w1/pod and its README.\n",
+                           "skills/pod/references/governor.md":
+                           b"The governed project runs gh release create v2.0.0 and git tag v2.0.0.\n"})
+            self.assertEqual(audit_source(root), [])
+
     def test_repository_tracked_source_is_clean(self):
         root = Path(__file__).resolve().parents[1]
         self.assertEqual(audit_source(root), [])
