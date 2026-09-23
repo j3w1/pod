@@ -16,7 +16,7 @@ concurrency:
 ```
 
 The group is one pull request or one ref, so a newer push to the same pull request replaces
-the run it superseded and a push to `main` or a release tag is never canceled by anything.
+the run it superseded and a push to `main` is never canceled by anything.
 This repository's own `ci.yml` uses exactly this. A deployment job belongs in a workflow of
 its own with no `cancel-in-progress`, which is also why the governor's own
 cancellation touches only a pending validation run.

@@ -10,13 +10,13 @@ import yaml
 
 from .errors import PodError
 
-BUNDLE_TEXT = ("SKILL.md", "agents/openai.yaml", "scripts/pod.py",
+BUNDLE_TEXT = ("SKILL.md", "VERSION", "agents/openai.yaml", "scripts/pod.py",
                "references/execution-spec.md", "references/planning.md", "references/routing.md",
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md")
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "bundle.py", "cli.py", "config.py", "context.py",
                   "errors.py", "github.py", "governor.py", "internal.py", "ledger.py", "operations.py",
-                  "orca.py", "quota.py", "records.py", "release.py", "routing.py", "setup.py",
+                  "orca.py", "quota.py", "records.py", "routing.py", "setup.py",
                   "skill_validation.py", "util.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))
 IGNORED_DIRS = frozenset({"__pycache__"})
@@ -81,20 +81,9 @@ def installed_files(target: Path) -> set[str]:
 
 
 def installed_version(target: Path) -> str | None:
-    """The metadata.version a placed copy declares, or None when unreadable."""
-    path = target / "SKILL.md"
+    """The VERSION a placed copy carries, or None when unreadable."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = (target / "VERSION").read_text(encoding="ascii").strip()
     except (OSError, UnicodeError):
         return None
-    if len(text.encode()) > MAX_SKILL:
-        return None
-    try:
-        metadata = frontmatter(text)["metadata"]
-    except PodError:
-        return None
-    declared = metadata.get("metadata")
-    if not isinstance(declared, dict):
-        return None
-    found = declared.get("version")
-    return found if isinstance(found, str) and re.fullmatch(r"[0-9A-Za-z.\-+]{1,32}", found) else None
+    return text if re.fullmatch(r"\d+\.\d+\.\d+", text) else None

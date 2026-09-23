@@ -61,7 +61,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         for row in coverage["scenarios"]:
             with self.subTest(row=row["id"]):
                 self.assertTrue(row["required_evidence"])
-                self.assertIn(row["candidate_status"], ("NOT_RUN", "PASS"))
+                self.assertIn(row["status"], ("NOT_RUN", "PASS"))
 
     def test_requirement_scenario_references_resolve(self):
         root = Path(__file__).resolve().parents[1]
@@ -162,20 +162,40 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         for phrase in ("$pod https://github.com/owner/project/issues/123",
                        "Draft a Pod Execution Spec", "Authoring in ChatGPT",
                        "Plan only", "Continue after interruption", "visible agent tab",
-                       "config approve sol", "256,000 tokens", "release/NOTES.md",
-                       "release/evidence.json", "https://github.com/j3w1/pod/releases"):
+                       "config approve sol", "256,000 tokens",
+                       "npx skills add j3w1/pod --skill pod -a codex -a claude-code -g",
+                       "npx skills update pod -g", "npx skills remove pod -g", "`VERSION`"):
             self.assertIn(phrase, text)
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
                       text)
 
-    def test_release_notes_describe_only_the_declared_version(self):
-        from pod import __version__
-        from tools.release import notes
-        text = (self.root / "release" / "NOTES.md").read_text()
-        self.assertEqual(text.splitlines()[0], f"# Pod {__version__}")
-        self.assertTrue(notes(text, __version__).strip())
-        self.assertEqual(re.findall(r"^# .*$", text, flags=re.M), [f"# Pod {__version__}"])
-        workflow = (self.root / ".github" / "workflows" / "ci.yml").read_text()
-        for phrase in ("tools/release.py gate", "tools/release.py check", "tools/release.py notes",
-                       "gh release create"):
-            self.assertIn(phrase, workflow)
+    def test_ci_validates_the_skill_and_publishes_nothing(self):
+        import yaml
+        text = (self.root / ".github" / "workflows" / "ci.yml").read_text()
+        workflow = yaml.safe_load(text)
+        triggers = workflow[True] if True in workflow else workflow["on"]
+        self.assertEqual(set(triggers), {"pull_request", "push"})
+        self.assertEqual(triggers["push"], {"branches": ["main"]})
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(list(workflow["jobs"]), ["skill"])
+        for forbidden in ("gh release", "git tag", "git push", "tags:", "contents: write",
+                          "python -m build", "sha256sum", "upload-artifact", "twine"):
+            self.assertNotIn(forbidden, text)
+        for required in ("unittest discover -s tests", "pod.skill_validation skills/pod",
+                         "tools/source_audit.py", "npx --yes skills@", "--installed",
+                         "setup --global --json", "doctor --json"):
+            self.assertIn(required, text)
+
+    def test_removed_publication_modules_are_not_referenced(self):
+        tracked = subprocess.run(["git", "-C", str(self.root), "ls-files"], capture_output=True,
+                                 text=True, check=True).stdout.split()
+        for path in ("skills/pod/release.py", "tools/" + "release.py", "install.py", "pyproject.toml",
+                     "MANIFEST.in", "CHANGELOG.md"):
+            self.assertNotIn(path, tracked)
+        self.assertFalse(any(path.startswith("release/") for path in tracked))
+        referenced = subprocess.run(
+            ["git", "-C", str(self.root), "grep", "-n", "-E",
+             r"from \.release import|from pod\.release|import pod\.release|pod\.internal release|\bvalidate_wheel\b",
+             "--", ".", ":!tests/test_inventory.py"],
+            capture_output=True, text=True)
+        self.assertEqual(referenced.stdout, "")

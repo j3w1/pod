@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 from pathlib import Path
 import re
-import zipfile
 
 from .bundle import (BUNDLE_FILES, BUNDLE_TEXT, MAX_SKILL, bundle_root, canonical,
                      frontmatter, installed_files, version)
@@ -62,14 +62,23 @@ def _check_metadata(metadata: dict) -> None:
         raise PodError("invalid_skill", "Skill license is invalid")
     declared = metadata.get("metadata")
     if declared is None:
-        raise PodError("invalid_skill", "Skill metadata must declare version and source")
+        raise PodError("invalid_skill", "Skill metadata must declare its source")
     if not isinstance(declared, dict) or any(not isinstance(key, str) or not isinstance(value, str)
                                              for key, value in declared.items()):
         raise PodError("invalid_skill", "Skill metadata must map strings to strings")
-    if declared.get("version") != version():
-        raise PodError("invalid_skill", "Skill metadata version must match the package version")
+    if "version" in declared:
+        raise PodError("invalid_skill", "The version lives only in VERSION, not in SKILL.md")
     if not str(declared.get("source", "")).startswith(SOURCE_PREFIX):
         raise PodError("invalid_skill", "Skill metadata source must name this repository")
+
+
+def _check_version(root: Path) -> None:
+    try:
+        text = (root / "VERSION").read_text(encoding="ascii")
+    except (OSError, UnicodeError) as exc:
+        raise PodError("invalid_skill", "The bundle VERSION is unreadable") from exc
+    if re.fullmatch(r"\d+\.\d+\.\d+\n", text) is None:
+        raise PodError("invalid_skill", "VERSION must hold one MAJOR.MINOR.PATCH line")
 
 
 def _check_body(root: Path, body: str) -> None:
@@ -133,12 +142,24 @@ def _check_interface(root: Path) -> None:
         raise PodError("invalid_skill", "agents/openai.yaml has unsupported fields")
 
 
+def _repository_version_link(root: Path, path: Path) -> bool:
+    """In the repository, the bundle's VERSION is a link to the one root VERSION.
+
+    The skills CLI copies the file it points at, so every installed copy carries a regular
+    VERSION. No other link is allowed anywhere in the skill tree.
+    """
+    return (path.parent == root and path.name == "VERSION"
+            and os.readlink(path) == "../../VERSION" and path.resolve().is_file())
+
+
 def validate_skill(root: Path) -> dict:
     if root.is_symlink() or not root.is_dir():
         raise PodError("invalid_skill", "Skill root must be a regular directory")
     if root.name != "pod":
         raise PodError("invalid_skill", "Skill directory must be named pod")
     for path in root.rglob("*"):
+        if path.is_symlink() and _repository_version_link(root, path):
+            continue
         if path.is_symlink() or (path.exists() and not path.is_file() and not path.is_dir()):
             raise PodError("invalid_skill", "Skill tree contains a redirected or special node")
     actual = installed_files(root)
@@ -147,6 +168,7 @@ def validate_skill(root: Path) -> dict:
         extra = sorted(actual - set(BUNDLE_FILES))
         raise PodError("invalid_skill",
                        f"Bundle inventory mismatch; missing {missing}, unexpected {extra}")
+    _check_version(root)
     parsed = frontmatter(_skill_text(root))
     _check_metadata(parsed["metadata"])
     _check_body(root, parsed["body"])
@@ -168,25 +190,6 @@ def compare_bundle(actual: dict[str, bytes]) -> list[str]:
     return differences
 
 
-def validate_wheel(path: Path) -> dict:
-    """Prove a built wheel carries the exact bundle bytes."""
-    with zipfile.ZipFile(path) as archive:
-        entries = {}
-        for info in archive.infolist():
-            if info.is_dir() or not info.filename.startswith("pod/") or ".dist-info/" in info.filename:
-                continue
-            name = info.filename[len("pod/"):]
-            if name.split("/")[0] == "__pycache__" or name.endswith((".pyc", ".pyo")):
-                continue
-            if info.file_size > 4 * 1024 * 1024:
-                raise PodError("invalid_skill", f"Wheel entry {name} is oversized")
-            entries[name] = archive.read(info)
-    differences = compare_bundle(entries)
-    if differences:
-        raise PodError("bundle_parity", "Wheel differs from the bundle: " + "; ".join(differences))
-    return {"status": "valid", "wheel": str(path), "files": sorted(entries)}
-
-
 def validate_installed(path: Path) -> dict:
     """Prove a placed copy carries the exact bundle bytes."""
     if not path.is_dir():
@@ -206,14 +209,9 @@ def validate_installed(path: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.skill_validation")
     parser.add_argument("skill", type=Path, nargs="?", default=None)
-    parser.add_argument("--wheel", type=Path, default=None)
     parser.add_argument("--installed", type=Path, default=None)
     args = parser.parse_args(argv)
     try:
-        if args.wheel is not None:
-            validate_wheel(args.wheel)
-            print("Wheel matches the bundle!")
-            return 0
         if args.installed is not None:
             validate_installed(args.installed)
             print("Installed skill matches the bundle!")

@@ -11,7 +11,6 @@ from .errors import PodError
 from .records import (acceptance, integration_observation, packet, report, source_identity,
                       verify_sources)
 from .routing import preview, replay
-from .release import release_gate
 from .util import bounded_json, exact
 from .context import execution_brief
 
@@ -150,10 +149,6 @@ def run(operation: str, request: dict) -> dict:
         exact(request, {"project", "candidate", "base_ref"}, {"project", "candidate"}, name="request")
         return integration_observation(Path(request["project"]), request["candidate"],
                                        base_ref=request.get("base_ref", "origin/main"))
-    if operation == "release-gate":
-        exact(request, {"candidate", "tree", "records", "authorization"},
-              {"candidate", "tree", "records"}, name="request")
-        return release_gate(**request)
     if operation == "checkpoint":
         exact(request, {"project", "objective", "owner", "value"},
               {"project", "objective", "owner", "value"}, name="request")
@@ -281,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("operation", choices=("brief", "preview", "replay", "packet", "report", "source",
                                                "verify-sources", "acceptance", "integration-observe",
                                                "issue-intake", "issue-recheck", "project-context",
-                                               "checkpoint", "admission", "release-gate",
+                                               "checkpoint", "admission",
                                                "governor", "governor-outcome", "governor-prepare",
                                                "governor-preflight", "governor-classify",
                                                "governor-correct", "governor-execute",

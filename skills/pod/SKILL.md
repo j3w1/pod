@@ -4,7 +4,6 @@ description: Coordinate a software task as a pod of Orca-native workers from the
 license: MIT
 compatibility: Linux. Python 3.13+ as python3 with PyYAML 6.x. Orca CLI and its version-matched orchestration guide for delegation. An authenticated Codex or Claude Code conversation coordinates. No global pod executable required.
 metadata:
-  version: "0.4.0"
   source: https://github.com/j3w1/pod
 ---
 
