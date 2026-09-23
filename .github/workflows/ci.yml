@@ -21,8 +21,8 @@ env:
   DO_NOT_TRACK: "1"
 
 jobs:
-  skill:
-    name: skill
+  linux:
+    name: linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

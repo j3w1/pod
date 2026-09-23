@@ -177,7 +177,8 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         self.assertEqual(set(triggers), {"pull_request", "push"})
         self.assertEqual(triggers["push"], {"branches": ["main"]})
         self.assertEqual(workflow["permissions"], {"contents": "read"})
-        self.assertEqual(list(workflow["jobs"]), ["skill"])
+        # `linux` is the status check the main branch ruleset requires.
+        self.assertEqual(list(workflow["jobs"]), ["linux"])
         for forbidden in ("gh " + "release", "git " + "tag", "git push", "tags:", "contents: write",
                           "python -m build", "sha256sum", "upload-artifact", "twine"):
             self.assertNotIn(forbidden, text)
