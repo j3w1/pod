@@ -269,6 +269,7 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
     def apply(row: dict) -> None:
         recovery = dict(row.get("recovery", {}))
         recovery.pop("capacity_refusal", None)
+        recovery.pop("request_conflict", None)
         recovery["receipt"] = "recorded"
         row["state"] = "bound"
         row["native_binding"] = binding
@@ -279,12 +280,19 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
 
 
 def _hold(project: Path, objective: str, *, owner: str, admission_id: str,
-          request_uuid: str | None, code: str, detail: object) -> dict:
+          request_uuid: str | None, code: str, detail: object,
+          request_conflict: bool = False) -> dict:
     def apply(row: dict) -> None:
         recovery = {**row.get("recovery", {}),
                     "next": "request-show" if request_uuid else "exact Run/Task/Dispatch read"}
+        previous_error = (row.get("error") or {}).get("code")
+        previous_capacity_refusal = recovery.get("capacity_refusal")
         if code == "native_capacity_refusal_unverified":
             recovery["capacity_refusal"] = "unverified"
+        if (request_conflict or code == "native_request_conflict"
+                or previous_error == "native_request_conflict"
+                or previous_capacity_refusal == "unverified"):
+            recovery["request_conflict"] = "unresolved"
         row["state"] = "unresolved"
         row["request_uuid"] = request_uuid
         row["error"] = {"code": code, "detail": detail}
@@ -308,11 +316,15 @@ def _request_conflict_result(project: Path, objective: str, *, owner: str,
         request_uuid=request_uuid,
         code=("native_capacity_refusal_unverified" if capacity_refusal
               else "native_request_conflict"),
-        detail="native receipt carries contradictory or malformed request identity")
+        detail="native receipt carries contradictory or malformed request identity",
+        request_conflict=True)
 
 
 def _known_request_conflict(admission: dict) -> bool:
-    return (admission.get("error") or {}).get("code") == "native_request_conflict"
+    recovery = admission.get("recovery", {})
+    return (recovery.get("request_conflict") == "unresolved"
+            or (admission.get("error") or {}).get("code") == "native_request_conflict"
+            or recovery.get("capacity_refusal") == "unverified")
 
 
 def _record_request(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -435,11 +447,13 @@ def _capacity_refusal_result(project: Path, objective: str, *, owner: str,
 def _defer_capacity(project: Path, objective: str, *, owner: str, admission_id: str,
                     receipt: dict, request_uuid: str | None) -> dict:
     def apply(row: dict) -> None:
+        recovery = dict(row.get("recovery", {}))
+        recovery.pop("request_conflict", None)
         row["state"] = "deferred"
         row["request_uuid"] = request_uuid
         row["native_binding"] = None
         row["error"] = {"code": "capacity_full", "detail": receipt.get("error")}
-        row["recovery"] = {**row.get("recovery", {}),
+        row["recovery"] = {**recovery,
                            "capacity_refusal": "authoritative",
                            "native_start_state": "deferred",
                            "next": "explicit new policy admission after native capacity changes"}
@@ -526,8 +540,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": admission["state"], "admission": admission, "action": action}
     request_uuid = admission.get("request_uuid")
     if request_uuid is None:
-        if (_known_request_conflict(admission)
-                or admission.get("recovery", {}).get("capacity_refusal") == "unverified"):
+        if _known_request_conflict(admission):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         row = _hold(project, objective, owner=owner, admission_id=admission_id,
                     request_uuid=None, code="native_request_missing",
@@ -571,8 +584,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                             request_uuid=request_uuid)
         return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
     if status == "pending":
-        if (admission.get("recovery", {}).get("capacity_refusal") == "unverified"
-                or _known_request_conflict(admission)):
+        if _known_request_conflict(admission):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         model, current_policy = _current_authority(
             project, objective, admission, task_policy=task_policy)

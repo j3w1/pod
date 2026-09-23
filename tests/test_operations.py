@@ -526,6 +526,133 @@ class AdmissionTests(unittest.TestCase):
                     self.assertEqual(completed["status"], "bound")
                     self.assertEqual(len(port.starts), 1)
 
+    def test_request_conflict_survives_incomplete_completed_then_absent(self):
+        project, port, admission_id = self.recovery_case()
+        port.request_receipt = decoded_success_receipt()
+        conflicted = recover_admission(
+            project, "objective", owner="owner", admission_id=admission_id,
+            worktree="current", port=port)
+        self.assertEqual(conflicted["admission"]["recovery"]["request_conflict"],
+                         "unresolved")
+
+        port.request_receipt = "malformed"
+        incomplete = recover_admission(
+            project, "objective", owner="owner", admission_id=admission_id,
+            worktree="current", port=port)
+        self.assertEqual(incomplete["admission"]["error"]["code"],
+                         "native_receipt_missing")
+        self.assertEqual(incomplete["admission"]["recovery"]["request_conflict"],
+                         "unresolved")
+
+        port.request_state = "absent"
+        absent = recover_admission(
+            project, "objective", owner="owner", admission_id=admission_id,
+            worktree="current", port=port)
+        self.assertEqual((absent["status"], absent["action"]), ("unresolved", "hold"))
+        self.assertIsNone(absent["admission"]["native_binding"])
+        self.assertEqual(port.starts, [])
+
+    def test_legacy_conflict_signals_are_promoted_before_error_replacement(self):
+        for legacy_signal in ("error", "capacity_refusal"):
+            with self.subTest(legacy_signal=legacy_signal):
+                project, port, admission_id = self.recovery_case()
+
+                def make_legacy(row):
+                    row["recovery"].pop("request_conflict", None)
+                    if legacy_signal == "error":
+                        row["error"] = {"code": "native_request_conflict",
+                                        "detail": "legacy conflict"}
+                    else:
+                        row["error"] = {"code": "native_capacity_refusal_unverified",
+                                        "detail": "legacy capacity conflict"}
+                        row["recovery"]["capacity_refusal"] = "unverified"
+
+                update_admission(project, "objective", owner="owner",
+                                 admission_id=admission_id, update=make_legacy)
+                port.request_receipt = "malformed"
+                incomplete = recover_admission(
+                    project, "objective", owner="owner", admission_id=admission_id,
+                    worktree="current", port=port)
+                self.assertEqual(incomplete["admission"]["error"]["code"],
+                                 "native_receipt_missing")
+                self.assertEqual(incomplete["admission"]["recovery"]["request_conflict"],
+                                 "unresolved")
+
+                port.request_state = "absent"
+                absent = recover_admission(
+                    project, "objective", owner="owner", admission_id=admission_id,
+                    worktree="current", port=port)
+                self.assertEqual((absent["status"], absent["action"]),
+                                 ("unresolved", "hold"))
+                self.assertEqual(port.starts, [])
+
+    def test_capacity_request_conflict_survives_absent_adoption(self):
+        variants = (
+            {"request_uuid": REQUEST_UUID, "_request_conflict": True},
+            {"request_uuid": "not-a-uuid"},
+        )
+        for request_evidence in variants:
+            with self.subTest(request_evidence=request_evidence):
+                project, port, admission_id = self.recovery_case()
+                port.request_receipt = {
+                    "state": "deferred", "exit": 1,
+                    "error": {"code": "capacity_full", "message": "full"},
+                    **request_evidence,
+                }
+                conflicted = recover_admission(
+                    project, "objective", owner="owner", admission_id=admission_id,
+                    worktree="current", port=port)
+                self.assertEqual(conflicted["admission"]["error"]["code"],
+                                 "native_capacity_refusal_unverified")
+                self.assertEqual(conflicted["admission"]["recovery"]["request_conflict"],
+                                 "unresolved")
+
+                port.request_state = "absent"
+                absent = recover_admission(
+                    project, "objective", owner="owner", admission_id=admission_id,
+                    worktree="current", port=port)
+                self.assertEqual((absent["status"], absent["action"]),
+                                 ("unresolved", "hold"))
+                self.assertIsNone(absent["admission"]["native_binding"])
+                self.assertEqual(port.starts, [])
+
+    def test_request_conflict_holds_pending_until_coherent_completed_reconciliation(self):
+        completed_receipts = (
+            ({"runId": "run", "taskId": "task", "dispatchId": "dispatch",
+              "state": "ready"}, "bound"),
+            ({"state": "deferred", "exit": 1,
+              "error": {"code": "capacity_full", "message": "full"}}, "deferred"),
+        )
+        for completed_receipt, expected in completed_receipts:
+            with self.subTest(expected=expected):
+                project, port, admission_id = self.recovery_case()
+                port.request_receipt = decoded_success_receipt()
+                recover_admission(project, "objective", owner="owner",
+                                  admission_id=admission_id, worktree="current", port=port)
+                port.request_receipt = "malformed"
+                recover_admission(project, "objective", owner="owner",
+                                  admission_id=admission_id, worktree="current", port=port)
+
+                port.request_state = "pending"
+                first_pending = recover_admission(
+                    project, "objective", owner="owner", admission_id=admission_id,
+                    worktree="current", port=port)
+                second_pending = recover_admission(
+                    project, "objective", owner="owner", admission_id=admission_id,
+                    worktree="current", port=port)
+                self.assertEqual((first_pending["action"], second_pending["action"]),
+                                 ("hold", "hold"))
+                self.assertEqual(port.starts, [])
+
+                port.request_state = "completed"
+                port.request_receipt = completed_receipt
+                reconciled = recover_admission(
+                    project, "objective", owner="owner", admission_id=admission_id,
+                    worktree="current", port=port)
+                self.assertEqual(reconciled["status"], expected)
+                self.assertNotIn("request_conflict", reconciled["admission"]["recovery"])
+                self.assertEqual(port.starts, [])
+
     def test_completed_raw_receipt_joins_present_request_references_to_outer_uuid(self):
         base = {"runId": "run", "taskId": "task", "dispatchId": "dispatch",
                 "state": "ready"}
