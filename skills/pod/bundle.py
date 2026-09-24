@@ -17,7 +17,8 @@ BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "agents/openai.yaml", "scr
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "bundle.py", "catalog.py", "cli.py", "config.py", "context.py",
                   "errors.py", "github.py", "governor.py", "internal.py", "ledger.py", "operations.py",
                   "orca.py", "placement.py", "records.py", "selection.py",
-                  "skill_validation.py", "util.py")
+                  "skill_validation.py", "term.py", "tui.py", "tui_render.py",
+                  "tui_state.py", "util.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))
 IGNORED_DIRS = frozenset({"__pycache__"})
 IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})

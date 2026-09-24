@@ -183,6 +183,13 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command is None and sys.stdin.isatty() and sys.stdout.isatty():
+        from .tui import run as run_tui
+        try:
+            return run_tui(Path.cwd())
+        except PodError as exc:
+            print(f"pod: {exc.code}: {exc}", file=sys.stderr)
+            return 1
     try:
         result = execute(args, Path.cwd())
     except PodError as exc:
@@ -190,8 +197,12 @@ def main(argv: list[str] | None = None) -> int:
                   "error": {"code": exc.code, "message": str(exc)}}
     if getattr(args, "json", False):
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
-    elif args.command is None and sys.stdout.isatty():
-        print("Pod model TUI arrives with the terminal milestone; use `pod config --json` now.")
+    elif args.command is None:
+        from .tui_render import summary
+        if result["status"] == "blocked":
+            print(f"pod: {result['error']['code']}: {result['error']['message']}")
+        else:
+            print(summary(result))
     elif args.command in (None, "config"):
         if result["status"] == "invalid":
             print(f"Pod preferences need attention: {result['path']}")

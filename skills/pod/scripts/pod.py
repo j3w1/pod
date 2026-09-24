@@ -12,7 +12,8 @@ import os
 import sys
 
 MIN_PYTHON = (3, 13)
-REQUIRED = ("__init__.py", "cli.py", "internal.py", "catalog.json", "catalog.py", "SKILL.md", "VERSION")
+REQUIRED = ("__init__.py", "cli.py", "internal.py", "catalog.json", "catalog.py",
+            "term.py", "tui.py", "tui_state.py", "tui_render.py", "SKILL.md", "VERSION")
 REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
 
 

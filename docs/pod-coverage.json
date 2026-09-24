@@ -980,7 +980,7 @@
         "pty_subprocess",
         "live_native"
       ],
-      "offline_test": "tests.test_config.PreferencesTests.test_defaults_and_three_state_toggle_round_trip_across_restart",
+      "offline_test": "tests.test_tui_pty.TuiPtyTests.test_all_six_guidance_panels_change_on_focus",
       "status": "NOT_RUN"
     },
     {
@@ -1045,9 +1045,10 @@
     {
       "id": "A125",
       "required_evidence": [
-        "unit"
+        "unit",
+        "pty_subprocess"
       ],
-      "offline_test": "tests.test_selection.SelectionTests.test_one_three_zero_pools_and_preferred_does_not_rank",
+      "offline_test": "tests.test_tui_pty.TuiPtyTests.test_sort_filter_focus_identity_and_space_edits_same_id",
       "status": "NOT_RUN"
     },
     {
@@ -1073,7 +1074,7 @@
         "unit",
         "pty_subprocess"
       ],
-      "offline_test": "tests.test_config.PreferencesTests.test_external_edits_preserve_other_keys_and_comments",
+      "offline_test": "tests.test_tui_pty.TuiPtyTests.test_two_tuis_staged_conflict_and_recovery",
       "status": "NOT_RUN"
     },
     {
@@ -1175,7 +1176,7 @@
         "pty_subprocess",
         "independent_review"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_tui_pty.TuiPtyTests.test_all_six_guidance_panels_change_on_focus",
       "status": "NOT_RUN"
     },
     {
@@ -1184,7 +1185,7 @@
         "unit",
         "pty_subprocess"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_tui_pty.TuiPtyTests.test_fleet_toggle_across_restart_and_edit_in_all_mode",
       "status": "NOT_RUN"
     },
     {

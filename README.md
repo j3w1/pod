@@ -40,8 +40,8 @@ result consumption, Orca's Delivery acknowledgment and release order applies.
 ## Installation
 
 The one-shot Linux installer and global user-local launcher are being built
-in this implementation branch. The current source tree has the 0.5 core CLI,
-preferences, catalog and admission helpers; the documented public installation
+in this implementation branch. The current source tree has the core CLI,
+model TUI, preferences, catalog and admission helpers; the documented public installation
 command will appear here after its real endpoint passes the installer suite.
 
 Development prerequisites are Linux, Python 3.13+, PyYAML 6.x and Orca for
@@ -94,8 +94,9 @@ an eligible model and supported effort separately for each assignment.
 
 `pod config --json` reads the effective pool. `pod config edit` opens the
 personal file in your editor and validates afterward, retaining invalid edits
-for correction. The model TUI arrives in the terminal milestone. Its All
-models mode will preserve the My selection map. The bundled catalog has
+for correction. Running `pod` in an interactive terminal opens the model TUI;
+without a TTY it prints a plain summary. Space cycles model state and `r`
+switches All models and My selection without discarding saved choices. The bundled catalog has
 official guidance and a dated Artificial Analysis reference snapshot; those
 metrics do not select a worker or describe your account usage.
 
