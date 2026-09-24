@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -82,6 +83,7 @@ def _config(project: Path, *, edit: bool) -> dict:
 
 
 def _doctor(project: Path) -> dict:
+    from . import installer
     preferences = load_config(project)
     snapshot = contract()
     try:
@@ -89,15 +91,48 @@ def _doctor(project: Path) -> dict:
     except PodError as exc:
         state = {"blocked": True, "reason": exc.code}
     state = {**state, "scope": "affected_objectives_only", "blocks_unrelated_objectives": False}
-    receipt = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "pod" / "install.json"
-    launcher = Path.home() / ".local" / "bin" / "pod"
-    installed = "not installed by the one-shot installer" if not receipt.is_file() else "receipt_present"
-    path_entries = os.environ.get("PATH", "").split(os.pathsep)
-    shadowed = any((Path(entry) / "pod").exists() for entry in path_entries
-                   if entry and Path(entry).resolve() != launcher.parent.resolve())
+    try:
+        paths = installer._paths()
+        receipt_path = paths["data"] / "install.json"
+        receipt = installer.read_receipt(receipt_path)
+        target = receipt.get("target") if isinstance(receipt, dict) and isinstance(receipt.get("target"), dict) else {}
+        canonical_digest = installer.optional_digest(paths["canonical"])
+        venv = installer._venv_path(paths)
+        launcher = paths["launcher"]
+        template = installer._launcher_template(venv / "bin/python", paths["canonical"])
+        launcher_ownership = installer.launcher_info(launcher, template)
+        found = shutil.which("pod")
+        shadowed = bool(found and Path(found).resolve(strict=False) != launcher.resolve(strict=False))
+        installed = ("not installed by the one-shot installer" if receipt is None else
+                     "installed" if receipt.get("status") == "installed" else "installing")
+        installation_checks = {"receipt_path": str(receipt_path), "receipt_status": receipt.get("status") if receipt else None,
+                               "receipt_version": target.get("version"),
+                               "receipt_digest": target.get("digest"),
+                               "canonical_digest": canonical_digest,
+                               "digest_matches": bool(receipt and canonical_digest == target.get("digest")),
+                               "venv": {"path": str(venv), "ready": installer._venv_ready(venv), "pin": installer.PIN},
+                               "duplicates": installer._duplicates(paths),
+                               "lock_entry": skills_cli_entry()}
+        installation_checks["healthy"] = bool(installed == "installed" and installation_checks["digest_matches"]
+                                               and installation_checks["venv"]["ready"]
+                                               and launcher_ownership["owned"]
+                                               and (paths["claude"] / "skills/pod").resolve(strict=False)
+                                               == paths["canonical"].resolve(strict=False))
+        if receipt is not None and not installation_checks["healthy"]:
+            installed = "installation needs attention"
+            installation_checks["next_action"] = "rerun the one-shot installer"
+    except (installer.InstallError, OSError, ValueError) as exc:
+        receipt = None
+        launcher = Path.home() / ".local/bin/pod"
+        launcher_ownership = {"owned": False, "reason": "unavailable"}
+        shadowed = False
+        installed = "installation needs attention"
+        installation_checks = {"error": str(exc)}
     return {"schema": "pod-cli/v4", "status": "observed", "version": version(),
             "bundle": str(bundle_root()), "installation": installed,
-            "launcher": {"path": str(launcher), "exists": launcher.is_file(), "shadowed": shadowed},
+            "installation_checks": installation_checks,
+            "launcher": {"path": str(launcher), "exists": launcher.is_file(), "shadowed": shadowed,
+                         "ownership": launcher_ownership},
             "placements": inspect_placements(project), "skills_cli": skills_cli_entry(),
             "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
                                                            "max_active", "errors", "policy_revision")},
@@ -201,12 +236,15 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
     if args.command == "status":
         return _status(project, args.run)
     if args.command == "update":
-        raise PodError("installer_unavailable", "The one-shot installer update path is not installed yet")
+        raise PodError("update_route", "Update must run through the installer entrypoint")
     raise PodError("unknown_command", "Unsupported public command")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "update":
+        from .installer import main as installer_main
+        return installer_main(["--update"])
     if args.command is None and sys.stdin.isatty() and sys.stdout.isatty():
         from .tui import run as run_tui
         try:
@@ -244,6 +282,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"pod: {result['error']['code']}: {result['error']['message']}")
     elif args.command == "doctor":
         print(f"Pod {version()}: {result['installation']}")
+        checks = result["installation_checks"]
+        if checks.get("receipt_status"):
+            print(f"Installer: receipt {checks['receipt_status']}; bundle "
+                  f"{'matches' if checks['digest_matches'] else 'differs from'} receipt; "
+                  f"venv {'ready' if checks['venv']['ready'] else 'unavailable'}")
+        if checks.get("next_action"):
+            print(f"Next: {checks['next_action']}")
+        if result["launcher"]["shadowed"]:
+            print("Launcher: another pod command is earlier on PATH")
+        for duplicate in checks.get("duplicates", []):
+            print(f"Duplicate skill: {duplicate}")
         print(f"Preferences: {'valid' if not result['preferences']['errors'] else 'invalid'}")
         if result["preferences"]["not_set"]:
             print("Not set (not eligible): " + ", ".join(result["preferences"]["not_set"]))

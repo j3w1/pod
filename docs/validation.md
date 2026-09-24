@@ -16,7 +16,7 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, root VERSION link, frontmatter, launcher forms and word budgets. |
 | Catalog check | `PYTHONPATH=skills python -m pod.catalog --check` | Six exact identities, efforts, attributed guidance and coherent dated reference metrics. |
 | Source hygiene | `python tools/source_audit.py .` | Tracked-source privacy and removed-mechanism guard; no Pod package, tag or release path. |
-| PTY and subprocess | `POD_REQUIRE_PTY=1 PYTHONPATH=skills python -m unittest tests.test_tui_pty -v` plus installer subprocess suite | Actual terminal and shell entrypoints, immediate persistence, responsive focus, install interruption and safe recovery. |
+| PTY and subprocess | `POD_REQUIRE_PTY=1 PYTHONPATH=skills python -m unittest tests.test_tui_pty -v`; `PYTHONPATH=skills python -m unittest tests.test_installer -v` | Actual terminal and shell entrypoints, immediate persistence, responsive focus, install interruption and safe recovery. |
 | Copied bundle | Run installed `pod --version`, `pod config --json` and `pod doctor --json` from an unrelated directory with no checkout or `PYTHONPATH` | One placed bundle works independently. |
 | Disposable installer | `POD_INSTALL_SOURCE=file://… sh install.sh` in a scrubbed temporary home, then `--installed` parity and launcher checks | Real install, dependencies, both skills, receipt, preferences, PATH and update. |
 | SHA-pinned public install | Download `install.sh` from `raw.githubusercontent.com` at the commit SHA and set `POD_INSTALL_SOURCE` to the matching `codeload.github.com` SHA tarball in hosted CI | Public endpoints serve the reviewed commit. |
@@ -38,8 +38,9 @@ CPU, Python, ncurses, TERM, locale and terminal size; focus/save p95 must be
 under 500 ms and refresh within one second. Visual review examines actual TUI
 and installer terminal output, including the multi-orca banner.
 
-The installer suite uses disposable homes and a local tarball/test double for
-network installation mechanics. It exercises first and repeated install,
+The installer suite uses scrubbed disposable homes, a local tarball and HTTP
+server, an offline PyYAML wheel and an npx test double; it makes no external
+network request. It exercises first and repeated install,
 update, custom profile paths, command collision, PATH absent/present, foreign or
 changed files, invalid preferences, download and dependency failure, interruption,
 concurrent installers and recovery. It does not touch ordinary host profiles.

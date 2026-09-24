@@ -99,10 +99,52 @@ def load_pod(bundle):
     return module
 
 
+def _installer(bundle):
+    """Load the stdlib installer before any package or PyYAML import."""
+    path = os.path.join(bundle, "installer.py")
+    spec = importlib.util.spec_from_file_location("pod_installer", path)
+    if spec is None or spec.loader is None:
+        raise OSError("installer is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _integrity_failure(bundle):
+    if not os.path.isfile(os.path.join(bundle, "installer.py")):
+        return None  # The ordinary inventory check reports a missing module.
+    try:
+        installer = _installer(bundle)
+        receipt = installer.read_receipt(installer.receipt_path())
+        if receipt is None or receipt.get("status") != "installing":
+            return None
+        actual = installer.optional_digest(__import__("pathlib").Path(bundle))
+        allowed = {item.get("digest") for item in (receipt.get("previous"), receipt.get("target"))
+                   if isinstance(item, dict)}
+        if actual in allowed and actual is not None:
+            return None
+    except Exception:
+        return {"code": "install_incomplete", "message": "Installation receipt or bundle is incomplete; rerun: " + REINSTALL}
+    return {"code": "install_incomplete", "message": "Installation stopped during skill copy; rerun: " + REINSTALL}
+
+
 def main(argv=None):
     sys.dont_write_bytecode = True
     arguments = list(sys.argv[1:] if argv is None else argv)
     root = bundle_dir()
+    if arguments[:1] == ["__install"]:
+        try:
+            return _installer(root).main(arguments[1:])
+        except (OSError, ValueError):
+            print("pod-install: installer bundle is incomplete", file=sys.stderr)
+            return 2
+    integrity = _integrity_failure(root)
+    if integrity is not None:
+        if "--json" in arguments:
+            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": integrity}, sort_keys=True))
+        else:
+            print("pod: " + integrity["message"], file=sys.stderr)
+        return 2
     if arguments == ["--version"]:
         try:
             with open(os.path.join(root, "VERSION"), encoding="ascii") as stream:

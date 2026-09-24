@@ -271,7 +271,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_installer.InstallerTests.test_shadowing_duplicate_and_drift_are_reported",
       "status": "NOT_RUN"
     },
     {
@@ -280,7 +280,7 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": "tests.test_cli.CliTests.test_placement_reports_canonical_and_missing_claude_link_precisely",
+      "offline_test": "tests.test_installer.InstallerTests.test_fresh_rerun_placements_receipt_and_untouched_agent_configs",
       "status": "NOT_RUN"
     },
     {
@@ -598,7 +598,7 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": "tests.test_cli.CliTests.test_placement_reports_canonical_and_missing_claude_link_precisely",
+      "offline_test": "tests.test_installer.InstallerTests.test_update_a_to_b_preserves_edit_and_fast_path",
       "status": "NOT_RUN"
     },
     {
@@ -642,7 +642,7 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_installer.InstallerTests.test_fresh_rerun_placements_receipt_and_untouched_agent_configs",
       "status": "NOT_RUN"
     },
     {
@@ -669,7 +669,7 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": "tests.test_cli.CliTests.test_placement_reports_canonical_and_missing_claude_link_precisely",
+      "offline_test": "tests.test_installer.InstallerTests.test_shadowing_duplicate_and_drift_are_reported",
       "status": "NOT_RUN"
     },
     {
@@ -942,7 +942,7 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_readme_covers_practical_workflows_and_current_limits",
       "status": "NOT_RUN"
     },
     {
@@ -1124,7 +1124,7 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_installer.InstallerTests.test_update_a_to_b_preserves_edit_and_fast_path",
       "status": "NOT_RUN"
     },
     {
@@ -1157,7 +1157,7 @@
         "pty_subprocess",
         "installed_bundle"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_installer.InstallerTests.test_partial_copy_returns_three_and_integrity_gate_is_json",
       "status": "NOT_RUN"
     },
     {
@@ -1204,7 +1204,7 @@
         "installed_bundle",
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_installer.InstallerTests.test_update_a_to_b_preserves_edit_and_fast_path",
       "status": "NOT_RUN"
     }
   ]

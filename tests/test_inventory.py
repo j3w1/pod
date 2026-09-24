@@ -180,11 +180,14 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
 
     def test_readme_covers_practical_workflows_and_current_limits(self):
         text = (self.root / "README.md").read_text()
-        for phrase in ("$pod https://github.com/owner/project/issues/123",
+        for phrase in ("curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh",
+                       "$pod https://github.com/owner/project/issues/123",
                        "Pod Execution Spec reference", "Authoring in ChatGPT",
                        "Plan only", "Continue after interruption", "visible agent tab",
-                       "pod config --json", "native_default", "gpt-6-luna", "`VERSION`"):
+                       "pod config --json", "native_default", "gpt-6-luna", "`VERSION`",
+                       "pod update", "docs/installation.md"):
             self.assertIn(phrase, text)
+        self.assertLess(text.index("curl -fsSL"), text.index("## Contents"))
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
                       text)
 
@@ -202,9 +205,13 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                           "python -m build", "sha256sum", "upload-artifact", "twine"):
             self.assertNotIn(forbidden, text)
         for required in ("unittest discover -s tests", "pod.skill_validation skills/pod",
-                         "tools/source_audit.py", "npx --yes skills@", "--installed",
-                         "setup --global --json", "doctor --json"):
+                         "pod.catalog --check", "tools/source_audit.py", "--installed",
+                         "POD_REQUIRE_PTY", "git archive", "POD_INSTALL_SOURCE=\"file://",
+                         "raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh",
+                         "codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${GITHUB_SHA}",
+                         "doctor --json", "pod\" update"):
             self.assertIn(required, text)
+        self.assertNotIn("setup --global", text)
 
     def test_removed_publication_modules_are_not_referenced(self):
         tracked = subprocess.run(["git", "-C", str(self.root), "ls-files"], capture_output=True,
