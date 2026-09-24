@@ -89,6 +89,10 @@ def _key(raw: int) -> str:
         return "UP"
     if raw == curses.KEY_DOWN:
         return "DOWN"
+    if raw == curses.KEY_NPAGE:
+        return "PAGE_DOWN"
+    if raw == curses.KEY_PPAGE:
+        return "PAGE_UP"
     if raw in (curses.KEY_ENTER, 10, 13):
         return "ENTER"
     if raw in (curses.KEY_BACKSPACE, 8, 127):
@@ -107,16 +111,25 @@ def _key(raw: int) -> str:
 def _styles(caps: Capabilities) -> dict[str, int]:
     styles = {"normal": 0, "focus": curses.A_REVERSE | curses.A_BOLD,
               "title": curses.A_BOLD, "heading": curses.A_BOLD,
-              "header": curses.A_BOLD, "footer": 0, "notice": curses.A_BOLD}
+              "header": curses.A_BOLD, "footer": curses.A_DIM, "notice": curses.A_BOLD,
+              "preferred": curses.A_BOLD, "available": 0,
+              "disabled": curses.A_DIM, "unknown": curses.A_DIM}
     if caps.color:
         try:
             curses.start_color()
             curses.use_default_colors()
-            curses.init_pair(1, curses.COLOR_CYAN, -1)
-            curses.init_pair(2, curses.COLOR_BLUE, -1)
+            rich = curses.COLORS >= 256
+            curses.init_pair(1, 30 if rich else curses.COLOR_CYAN, -1)
+            curses.init_pair(2, 37 if rich else curses.COLOR_CYAN, -1)
+            curses.init_pair(3, 214 if rich else curses.COLOR_YELLOW, -1)
+            curses.init_pair(4, 244 if rich else curses.COLOR_WHITE, -1)
             styles["title"] |= curses.color_pair(1)
             styles["heading"] |= curses.color_pair(1)
             styles["header"] |= curses.color_pair(2)
+            styles["available"] |= curses.color_pair(1)
+            styles["preferred"] |= curses.color_pair(3)
+            styles["disabled"] |= curses.color_pair(4)
+            styles["unknown"] |= curses.color_pair(4)
         except curses.error:
             pass
     return styles
@@ -132,6 +145,13 @@ def _draw(window, picture: Frame, caps: Capabilities, styles: dict[str, int]) ->
             text = pad(text, max(0, picture.columns - 1), ascii_only=caps.ascii_only)
         try:
             window.addnstr(index, 0, text, max(0, picture.columns - 1), styles.get(line.role, 0))
+            if line.state and line.state_width:
+                start = 1
+                state_text = text[start:start + line.state_width]
+                style = styles.get(line.state, styles["unknown"])
+                if line.role == "focus":
+                    style |= curses.A_REVERSE | curses.A_BOLD
+                window.addnstr(index, start, state_text, line.state_width, style)
         except curses.error:
             pass
     window.noutrefresh()

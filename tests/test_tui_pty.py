@@ -58,7 +58,7 @@ class TuiPtyTests(unittest.TestCase):
                     session.wait_for(lambda s:name in self.focused(s))
                 self.assertIn(name,self.focused(session))
                 self.assertIn('Pod example:',session.text())
-                self.assertIn('context native_default',session.text())
+                self.assertIn('context native default',session.text())
                 self.assertIn('AA ',session.text())
 
     def test_sort_filter_focus_identity_and_space_edits_same_id(self):
@@ -81,12 +81,12 @@ class TuiPtyTests(unittest.TestCase):
 
     def test_sizes_resize_and_tiny_recovery(self):
         session=self.open()
-        self.assertIn('Runtime',session.lines()[3])
+        self.assertIn('Runtime',session.lines()[2])
         session.resize(60,20)
-        session.wait_for(lambda s:'Runtime' not in s.lines()[3] and 'Details' in s.text())
-        self.assertIn('USD/task',session.lines()[3])
+        session.wait_for(lambda s:'Runtime' not in s.lines()[2] and 'Details' in s.text())
+        self.assertIn('USD/task',session.lines()[2])
         session.resize(40,15)
-        session.wait_for(lambda s:'Rank' not in s.lines()[3] and 'Details' in s.text())
+        session.wait_for(lambda s:'Rank' not in s.lines()[2] and 'Details' in s.text())
         session.resize(39,11)
         session.wait_for('Terminal too small')
         session.resize(40,15)
@@ -137,7 +137,8 @@ class TuiPtyTests(unittest.TestCase):
     def test_invalid_missing_partial_and_external_refresh(self):
         session=self.open()
         self.config.unlink()
-        session.wait_for('read-only',timeout=2)
+        session.wait_for('Reason:',timeout=2)
+        session.settle()
         session.send(' ')
         session.wait_for('no change saved')
         self.assertFalse(self.config.exists())
@@ -237,3 +238,43 @@ class TuiPtyTests(unittest.TestCase):
         session.wait_for(lambda _s:self.load(personal=self.config)['saved']['claude-opus-5-5']=='available')
         self.assertEqual(set(self.load(personal=self.config)['eligible']),
                          {'gpt-6-sol','claude-opus-5-5'})
+
+    def test_render_width_wrapping_and_expanded_variants(self):
+        session=self.open()
+        from pod.catalog import load as load_catalog
+        catalog=load_catalog()
+        guidance=next(row['guidance'] for row in catalog['models'] if row['id']=='claude-opus-5-5')
+        self.assertIn(guidance,' '.join(session.text().split()))
+        session.resize(60,20)
+        session.wait_for(lambda s:'Runtime' not in s.lines()[2])
+        session.settle()
+        self.assertNotIn('agenti\n',session.text())
+        self.assertNotIn('$5.98 …',session.text())
+        session.resize(40,15)
+        session.wait_for(lambda s:'Runtime' in s.text() and 'Unknown' in s.text())
+        session.send('\n')
+        session.resize(80,24)
+        session.wait_for('Official source:')
+        for variant in catalog['reference_benchmark']['models']['claude-opus-5-5']['variants']:
+            self.assertIn(variant['profile']+': score',session.text())
+        session.send('\x1b')
+        session.wait_for(lambda s:'Details' in self.focused(s) and '[expanded]' not in s.text())
+        self.assertIn('Claude Opus 5.5',self.focused(session))
+
+    def test_long_preferences_path_help_scroll_and_invalid_action(self):
+        long_home=self.root/('very-long-component-'*8)
+        long_config=long_home/'pod'/'config.yaml'
+        fixture_config(long_config)
+        session=self.open(cols=40,rows=15,XDG_CONFIG_HOME=str(long_home))
+        session.send('?')
+        session.wait_for('Help')
+        session.send('j'*15)
+        session.wait_for(lambda s:'Preferences:' in s.text())
+        self.assertIn('…',session.text())
+        self.assertIn('https://artificialanalysis.ai/leaderboa\nrds/models',session.text())
+        session.send('\x1b')
+        long_config.write_text('schema: [\n')
+        session.wait_for('Reason:',timeout=2)
+        session.settle()
+        self.assertIn('line 2',session.text())
+        self.assertIn('pod config edit',session.text())

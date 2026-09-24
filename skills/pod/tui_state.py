@@ -24,6 +24,7 @@ class State:
     expanded: bool = False
     help_open: bool = False
     help_scroll: int = 0
+    detail_scroll: int = 0
     notice: str = ""
     runtime: str = "Unknown"
     save_at: datetime | None = None
@@ -92,7 +93,7 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         if state.help_open:
             return replace(state, help_open=False), None
         if state.expanded:
-            return replace(state, expanded=False), None
+            return replace(state, expanded=False, detail_scroll=0), None
         if state.query:
             return replace(state, query="", notice=""), None
         return state, None
@@ -103,11 +104,15 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
             return replace(state, help_scroll=max(0, state.help_scroll - 1)), None
         if key in ("DOWN", "j"):
             return replace(state, help_scroll=min(40, state.help_scroll + 1)), None
+        if key in ("PAGE_DOWN", "PAGE_UP"):
+            return replace(state, help_scroll=max(0, state.help_scroll + (8 if key == "PAGE_DOWN" else -8))), None
         return state, None
     if key == "/":
         return replace(state, searching=True, query=""), None
     if key == "ENTER":
-        return replace(state, expanded=True), None
+        return replace(state, expanded=True, detail_scroll=0), None
+    if state.expanded and key in ("PAGE_DOWN", "PAGE_UP"):
+        return replace(state, detail_scroll=max(0, state.detail_scroll + (8 if key == "PAGE_DOWN" else -8))), None
     if key == "s":
         return replace(state, sort_index=(state.sort_index + 1) % len(SORTS)), None
     if key == "f":

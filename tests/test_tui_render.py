@@ -6,7 +6,7 @@ import unittest
 from pod.catalog import IDS, load as catalog
 from pod.config import load as preferences, write_defaults
 from pod.config import set_model
-from pod.term import Capabilities, capabilities, clean, display_width, safe_text
+from pod.term import Capabilities, capabilities, clean, display_width, safe_text, elide_middle
 from pod.tui_render import AA_CLARIFICATION, AA_URL, frame, summary
 from pod.tui_state import initial, reduce, refresh, visible_ids, with_runtime
 from tests.common import fixture
@@ -34,8 +34,8 @@ class TuiRenderTests(unittest.TestCase):
                 self.assertIn(model['name'],text)
                 self.assertIn('Pod example:',text)
                 self.assertIn(model_id,text)
-                self.assertIn(model['guidance'].split()[0],text)
-                self.assertIn('context native_default',text)
+                self.assertIn(model['guidance'], ' '.join(text.split()))
+                self.assertIn('context native default',text)
                 self.assertIn('AA ',text)
         first=self.picture(replace(self.state,focus_id=IDS[0])).plain
         second=self.picture(replace(self.state,focus_id=IDS[1])).plain
@@ -44,14 +44,14 @@ class TuiRenderTests(unittest.TestCase):
     def test_reference_metrics_rank_age_attribution_and_missing_value(self):
         text=self.picture().plain
         self.assertIn('1/6',text)
-        self.assertIn('2/6',text)
+        self.assertIn('2=/6',text)
         self.assertIn('6/6',text)
         self.assertIn('max with fallback',text)
         self.assertIn('$5.98/task',text)
         self.assertIn('—',text)
         self.assertIn('Benchmark reference',text)
         self.assertIn('2026-09-24',text)
-        self.assertIn('1 day old',text)
+        self.assertIn('1 day',text)
         self.assertIn(AA_CLARIFICATION.split('.')[0],' '.join(text.split()))
         self.assertIn(AA_URL,text)
         self.assertIn('Runs through your connected Codex / Claude Code sessions.',text)
@@ -106,15 +106,15 @@ class TuiRenderTests(unittest.TestCase):
     def test_layouts_short_narrow_tiny_and_expansion(self):
         normal=self.picture(size=(80,24))
         self.assertEqual(len(normal.lines),24)
-        self.assertIn('Runtime',normal.lines[3].text)
+        self.assertIn('Runtime',normal.lines[2].text)
         narrow=self.picture(size=(60,20))
         self.assertEqual(len(narrow.lines),20)
-        self.assertNotIn('Runtime',narrow.lines[3].text)
-        self.assertNotIn('First s',narrow.lines[3].text)
+        self.assertNotIn('Runtime',narrow.lines[2].text)
+        self.assertNotIn('1st chunk',narrow.lines[2].text)
         smallest=self.picture(size=(40,15))
         self.assertEqual(len(smallest.lines),15)
         self.assertIn('Details',smallest.plain)
-        self.assertNotIn('Rank',smallest.lines[3].text)
+        self.assertNotIn('Rank',smallest.lines[2].text)
         tiny=self.picture(size=(39,11))
         self.assertIn('Terminal too small',tiny.plain)
         expanded=self.picture(replace(self.state,expanded=True))
@@ -162,3 +162,66 @@ class TuiRenderTests(unittest.TestCase):
         sparse=refresh(self.state,preferences(personal=self.path))
         self.assertIn('Not set (not eligible)',self.picture(sparse).plain)
         self.assertEqual(reduce(sparse,'SPACE')[1].value,'available')
+
+    def test_drawable_width_alignment_and_complete_guidance(self):
+        for caps in (self.caps, capabilities({'LC_ALL':'C','TERM':'linux','NO_COLOR':'1'},has_colors=True)):
+            for size in ((80,24),(60,20),(40,15)):
+                picture=self.picture(size=size,caps=caps)
+                self.assertTrue(all(display_width(line.text) <= size[0]-1 for line in picture.lines))
+                header=picture.lines[2].text
+                row=picture.lines[3].text
+                self.assertEqual(header.index('State'),1)
+                self.assertIn(row[1],('✓','+'))
+                self.assertEqual(header.index('Model'),row.index('Claude'))
+            self.assertNotIn('…',self.picture(size=(60,20),caps=caps).lines[4].text)
+        for model_id in IDS:
+            model=next(row for row in self.state.catalog['models'] if row['id']==model_id)
+            picture=self.picture(replace(self.state,focus_id=model_id))
+            self.assertIn(model['guidance'],' '.join(picture.plain.split()))
+        compact=self.picture(size=(40,15)).plain
+        self.assertIn('Runtime',compact)
+        self.assertIn('Unknown',compact)
+        self.assertIn('Pod example:',compact)
+
+    def test_expanded_variants_sources_and_small_scroll(self):
+        for model_id in IDS:
+            state=replace(self.state,focus_id=model_id,expanded=True)
+            text=self.picture(state).plain
+            reference=state.catalog['reference_benchmark']['models'][model_id]
+            for variant in reference['variants']:
+                self.assertIn(variant['profile']+': score',text)
+            self.assertIn('Documented context:',text)
+            self.assertIn('AA score index;',text)
+            self.assertIn('Official source:',text)
+            self.assertIn('AA source:',text)
+        state=replace(self.state,expanded=True)
+        before=self.picture(state,size=(40,15)).plain
+        after,_=reduce(state,'PAGE_DOWN')
+        self.assertNotEqual(before,self.picture(after,size=(40,15)).plain)
+        restored,_=reduce(after,'ESC')
+        self.assertEqual(restored.focus_id,state.focus_id)
+        self.assertFalse(restored.expanded)
+
+    def test_long_path_help_missing_invalid_and_age(self):
+        long_path='/tmp/'+'very-long-component/'*16+'config.yaml'
+        state=refresh(self.state,{**self.state.preferences,'path':long_path})
+        help_state=replace(state,help_open=True)
+        pages=[self.picture(replace(help_state,help_scroll=index),size=(40,15)).plain
+               for index in range(0,22)]
+        self.assertTrue(any(AA_URL in page.replace('\n','') for page in pages))
+        self.assertTrue(any('AA metrics show' in page for page in pages))
+        self.assertTrue(any('Preferences:' in page and '…' in page for page in pages))
+        self.assertLessEqual(display_width(elide_middle(long_path,39)),39)
+        missing=refresh(state,{**state.preferences,'errors':[{'code':'config_missing','message':'Personal preferences are missing'}],
+                               'eligible':[]})
+        text=self.picture(missing).plain
+        self.assertIn('Personal preferences are missing',text)
+        self.assertIn('one-shot installer',text)
+        invalid=refresh(state,{**state.preferences,'errors':[{'code':'invalid_yaml','message':'Bad YAML at line 7'}],
+                               'eligible':[]})
+        text=self.picture(invalid).plain
+        self.assertIn('line 7',text)
+        self.assertIn('pod config edit',text)
+        self.assertIn('1 day',self.picture().plain)
+        self.assertIn('today',frame(self.state,80,24,self.caps,datetime(2026,9,24,tzinfo=timezone.utc)).plain)
+        self.assertIn('2 days',frame(self.state,80,24,self.caps,datetime(2026,9,26,tzinfo=timezone.utc)).plain)

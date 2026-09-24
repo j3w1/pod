@@ -80,6 +80,26 @@ def pad(value: object, columns: int, *, ascii_only: bool = False) -> str:
     return text + " " * max(0, columns - display_width(text))
 
 
+def elide_middle(value: object, columns: int, *, ascii_only: bool = False) -> str:
+    """Keep both ends of a path visible without consuming another screen row."""
+    source = clean(value)
+    if display_width(source) <= columns:
+        return source
+    mark = "..." if ascii_only else "…"
+    room = columns - display_width(mark)
+    if room <= 0:
+        return clip(mark, columns)
+    left = (room + 1) // 2
+    right = room - left
+    prefix = clip(source, left)
+    suffix = ""
+    for character in reversed(source):
+        if display_width(character + suffix) > right:
+            break
+        suffix = character + suffix
+    return prefix + mark + suffix
+
+
 def wrap(value: object, columns: int) -> list[str]:
     """Greedy word wrapping by cell width, including a safe long-word fallback."""
     if columns <= 0:

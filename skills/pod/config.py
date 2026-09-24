@@ -104,7 +104,9 @@ def _parse(data: bytes | None, *, project: bool = False) -> dict | None:
     except PodError:
         raise
     except (UnicodeError, yaml.YAMLError, RecursionError) as exc:
-        raise PodError("invalid_yaml", "Configuration cannot be safely decoded") from exc
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1}" if mark is not None else ""
+        raise PodError("invalid_yaml", f"Configuration cannot be safely decoded{where}") from exc
     _shape(value)
     return validate(value, project=project)
 
