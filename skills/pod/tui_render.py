@@ -183,6 +183,21 @@ def _details(state: State, width: int, budget: int, caps: Capabilities,
     examples = "Pod example: " + model["examples"][0]
     if state.preferences["saved"].get(model_id) is None:
         examples = "Not set (not eligible) | " + examples
+    if width < 50 and budget <= 7 and not state.expanded:
+        _, suited, purpose = model["guidance"].partition("Suited to ")
+        purpose = purpose if suited else model["guidance"]
+        context_runtime = f"context native default; Runtime {state.runtime}"
+        if display_width(context_runtime) > width:
+            context_runtime = f"ctx native default; Runtime {state.runtime}"
+        compact = [
+            "Purpose: " + purpose.split(".", 1)[0],
+            examples,
+            f"ID {model_id}; effort auto",
+            context_runtime,
+            f"AA {reference['reference_variant']} {metrics['intelligence']} "
+            f"{state.catalog['reference_benchmark']['captured']}",
+        ]
+        return [Line(_fit(item, width, caps)) for item in compact[:budget]]
     if state.expanded:
         context = model["documented_context_tokens"]
         guidance = [Line(row) for row in wrap(safe_text(model["guidance"], caps), width)]

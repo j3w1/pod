@@ -17,6 +17,7 @@ class State:
     catalog: dict
     preferences: dict
     focus_id: str
+    hidden_focus_id: str | None = None
     sort_index: int = 0
     filter_index: int = 0
     query: str = ""
@@ -72,20 +73,35 @@ def refresh(state: State, preferences: dict) -> State:
     return replace(state, preferences=preferences)
 
 
+def _visible_focus(previous: State, changed: State) -> State:
+    """Keep a visible focus while remembering the identity hidden by a view change."""
+    before, after = visible_ids(previous), visible_ids(changed)
+    remembered = previous.hidden_focus_id
+    if remembered in after:
+        return replace(changed, focus_id=remembered, hidden_focus_id=None)
+    if changed.focus_id in after:
+        return changed
+    if not after:
+        return replace(changed, hidden_focus_id=remembered or previous.focus_id)
+    index = before.index(previous.focus_id) if previous.focus_id in before else 0
+    return replace(changed, focus_id=after[min(index, len(after) - 1)],
+                   hidden_focus_id=remembered or previous.focus_id)
+
+
 def reduce(state: State, key: str) -> tuple[State, Effect | None]:
     if key == "CTRL_C":
         return state, Effect("quit")
     if state.searching:
         if key == "ESC":
-            return replace(state, searching=False, query="", notice=""), None
+            return _visible_focus(state, replace(state, searching=False, query="", notice="")), None
         if key == "ENTER":
             return state if not state.searching else replace(state, searching=False), None
         if key == "BACKSPACE":
-            return replace(state, query=state.query[:-1]), None
+            return _visible_focus(state, replace(state, query=state.query[:-1])), None
         if key == "SPACE" and len(state.query) < 80:
-            return replace(state, query=state.query + " "), None
+            return _visible_focus(state, replace(state, query=state.query + " ")), None
         if len(key) == 1 and key.isprintable() and len(state.query) < 80:
-            return replace(state, query=state.query + key), None
+            return _visible_focus(state, replace(state, query=state.query + key)), None
         return state, None
     if key == "q":
         return state, Effect("quit")
@@ -95,7 +111,7 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         if state.expanded:
             return replace(state, expanded=False, detail_scroll=0), None
         if state.query:
-            return replace(state, query="", notice=""), None
+            return _visible_focus(state, replace(state, query="", notice="")), None
         return state, None
     if key == "?":
         return replace(state, help_open=not state.help_open, help_scroll=0), None
@@ -116,7 +132,7 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
     if key == "s":
         return replace(state, sort_index=(state.sort_index + 1) % len(SORTS)), None
     if key == "f":
-        return replace(state, filter_index=(state.filter_index + 1) % len(FILTERS)), None
+        return _visible_focus(state, replace(state, filter_index=(state.filter_index + 1) % len(FILTERS))), None
     if key in ("UP", "DOWN", "j", "k"):
         visible = visible_ids(state)
         if not visible:
@@ -124,7 +140,7 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         direction = -1 if key in ("UP", "k") else 1
         index = visible.index(state.focus_id) if state.focus_id in visible else (-1 if direction > 0 else 0)
         index = (index + direction) % len(visible)
-        return replace(state, focus_id=visible[index]), None
+        return replace(state, focus_id=visible[index], hidden_focus_id=None), None
     if key in ("SPACE", "r"):
         if not visible_ids(state):
             return replace(state, notice="No models match — Esc clears; no change saved"), None
@@ -133,7 +149,9 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         if key == "r":
             target = "custom" if state.preferences["mode"] == "all" else "all"
             return state, Effect("set_mode", value=target)
-        focused = state.focus_id if state.focus_id in visible_ids(state) else visible_ids(state)[0]
+        if state.focus_id not in visible_ids(state):
+            return replace(state, notice="Choose a visible model; no change saved"), None
+        focused = state.focus_id
         current = state.preferences["saved"].get(focused)
         if current is None:
             return replace(state, focus_id=focused), Effect("set_model", model_id=focused,

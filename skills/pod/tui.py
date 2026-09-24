@@ -6,7 +6,6 @@ from dataclasses import replace
 from datetime import datetime, timezone
 import curses
 import hashlib
-import json
 import locale
 import os
 from pathlib import Path
@@ -18,7 +17,7 @@ import threading
 from .catalog import load as load_catalog
 from .config import _read_bytes, load as load_preferences, set_mode, set_model
 from .errors import PodError
-from .orca import executable
+from .orca import MAX_OUTPUT, _envelope, executable
 from .term import Capabilities, capabilities, pad
 from .tui_render import Frame, frame
 from .tui_state import State, initial, reduce, refresh, with_notice, with_runtime
@@ -66,12 +65,12 @@ def _probe_runtime(results: queue.SimpleQueue[str]) -> None:
             process.communicate()
             results.put("Offline")
             return
-        if process.returncode or len(output) > 2_000_000:
+        if process.returncode or len(output) > MAX_OUTPUT:
             results.put("Offline")
             return
-        payload = json.loads(output)
-        runtime = payload.get("result", {}).get("runtime") if isinstance(payload, dict) else None
-        if not payload.get("ok") or not isinstance(runtime, dict):
+        result = _envelope(output)["result"]
+        runtime = result.get("runtime")
+        if not isinstance(runtime, dict):
             results.put("Offline")
             return
         advertised = runtime.get("capabilities")
@@ -80,7 +79,7 @@ def _probe_runtime(results: queue.SimpleQueue[str]) -> None:
             return
         supported = "orchestration.worker-launch-preferences.v1" in advertised
         results.put("Not checked" if supported else "Unsupported")
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, PodError):
         results.put("Offline")
 
 
