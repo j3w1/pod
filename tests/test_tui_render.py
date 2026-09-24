@@ -8,7 +8,7 @@ from pod.config import load as preferences, write_defaults
 from pod.config import set_model
 from pod.term import Capabilities, capabilities, clean, display_width, safe_text, elide_middle
 from pod.tui_render import AA_CLARIFICATION, AA_URL, frame, summary
-from pod.tui_state import initial, reduce, refresh, visible_ids, with_runtime
+from pod.tui_state import initial, reduce, refresh, visible_ids, with_notice, with_runtime
 from tests.common import fixture
 
 NOW = datetime(2026, 9, 25, tzinfo=timezone.utc)
@@ -75,6 +75,68 @@ class TuiRenderTests(unittest.TestCase):
         state,_=reduce(held,'ESC')
         self.assertTrue(visible_ids(state))
         self.assertEqual(self.path.read_bytes(),before)
+
+    def test_hidden_focus_is_visible_before_details_or_state_action(self):
+        state=replace(self.state,focus_id='gpt-6-sol')
+        model_names={row['id']:row['name'] for row in state.catalog['models']}
+
+        def assert_focus_and_action(current):
+            self.assertIn(current.focus_id,visible_ids(current))
+            picture=self.picture(current)
+            focused=[line for line in picture.lines if line.role=='focus']
+            self.assertEqual(len(focused),1)
+            self.assertIn(model_names[current.focus_id],focused[0].text)
+            self.assertIn('Details  · '+model_names[current.focus_id],picture.plain)
+            _,effect=reduce(current,'SPACE')
+            self.assertEqual(effect.model_id,current.focus_id)
+
+        state,_=reduce(state,'f')
+        self.assertEqual(state.focus_id,visible_ids(state)[-1])
+        self.assertEqual(state.hidden_focus_id,'gpt-6-sol')
+        assert_focus_and_action(state)
+        state,_=reduce(state,'f')
+        self.assertEqual(state.focus_id,'gpt-6-sol')
+        self.assertIsNone(state.hidden_focus_id)
+        assert_focus_and_action(state)
+        state,_=reduce(state,'f')
+        assert_focus_and_action(state)
+
+        state,_=reduce(state,'/')
+        for key in 'Claude':
+            state,_=reduce(state,key)
+            if visible_ids(state):
+                assert_focus_and_action(replace(state,searching=False))
+        self.assertEqual(state.hidden_focus_id,'gpt-6-sol')
+        state,_=reduce(state,'ENTER')
+        assert_focus_and_action(state)
+        state,_=reduce(state,'/')
+        for key in 'zz':
+            state,_=reduce(state,key)
+        self.assertFalse(visible_ids(state))
+        state,_=reduce(state,'ENTER')
+        held,effect=reduce(state,'SPACE')
+        self.assertIsNone(effect)
+        self.assertIn('no change saved',held.notice)
+        state,_=reduce(held,'ESC')
+        self.assertEqual(state.focus_id,'gpt-6-sol')
+        assert_focus_and_action(state)
+        stale=replace(state,filter_index=1)
+        refused,effect=reduce(stale,'SPACE')
+        self.assertIsNone(effect)
+        self.assertIn('Choose a visible model',refused.notice)
+
+    def test_minimum_size_keeps_compact_guidance(self):
+        for model_id in IDS:
+            with self.subTest(model=model_id):
+                picture=self.picture(replace(self.state,focus_id=model_id),size=(40,12))
+                self.assertEqual(len(picture.lines),12)
+                self.assertIn('Purpose:',picture.plain)
+                self.assertIn('Pod example:',picture.plain)
+                self.assertIn('ID '+model_id,picture.plain)
+                self.assertIn('effort auto',picture.plain)
+                self.assertIn('native default',picture.plain)
+                self.assertIn('Runtime Unknown',picture.plain)
+                self.assertIn('2026-09-24',picture.plain)
 
     def test_sort_orders_ties_and_missing_latency_last(self):
         state=replace(self.state,sort_index=1)
@@ -187,6 +249,8 @@ class TuiRenderTests(unittest.TestCase):
         for model_id in IDS:
             state=replace(self.state,focus_id=model_id,expanded=True)
             text=self.picture(state).plain
+            model=next(row for row in state.catalog['models'] if row['id']==model_id)
+            self.assertIn(model['guidance'],' '.join(text.split()))
             reference=state.catalog['reference_benchmark']['models'][model_id]
             for variant in reference['variants']:
                 self.assertIn(variant['profile']+': score',text)
@@ -201,6 +265,23 @@ class TuiRenderTests(unittest.TestCase):
         restored,_=reduce(after,'ESC')
         self.assertEqual(restored.focus_id,state.focus_id)
         self.assertFalse(restored.expanded)
+
+    def test_keys_and_save_feedback_survive_layouts(self):
+        for size in ((80,24),(60,20),(40,12),(40,15),(40,20),(40,24),(60,24),(100,30)):
+            for mode in ('normal','expanded','help'):
+                state=replace(self.state,expanded=mode=='expanded',help_open=mode=='help')
+                with self.subTest(size=size,mode=mode):
+                    self.assertIn('Space / s f r Enter ? q',self.picture(state,size=size).plain)
+        saved=with_notice(self.state,'Saved just now')
+        title=self.picture(saved).lines[0].text
+        self.assertIn('My selection',title)
+        self.assertIn('6 eligible',title)
+        self.assertIn('Saved just now',title)
+        all_mode=with_notice(refresh(self.state,{**self.state.preferences,'mode':'all'}),'Saved just now')
+        all_title=self.picture(all_mode).lines[0].text
+        self.assertIn('All models',all_title)
+        self.assertIn('6 eligible',all_title)
+        self.assertIn('Saved just now',all_title)
 
     def test_long_path_help_missing_invalid_and_age(self):
         long_path='/tmp/'+'very-long-component/'*16+'config.yaml'
