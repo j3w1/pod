@@ -208,8 +208,6 @@ def validate(value: Any, *, project: bool = False) -> dict:
                 raise PodError("invalid_config", f"models.{model_id} is not a supported model id")
             if state not in STATES or not isinstance(state, str):
                 raise PodError("invalid_config", f"models.{model_id} must be preferred, available or disabled")
-        if doc["selection"] == "all" and set(models) != set(IDS):
-            raise PodError("invalid_config", "All models mode needs the complete saved model map")
         workers = exact(doc["workers"], {"max_active"}, {"max_active"}, name="workers")
         if type(workers["max_active"]) is not int or not 0 <= workers["max_active"] <= 8:
             raise PodError("invalid_config", "workers.max_active must be 0 through 8")

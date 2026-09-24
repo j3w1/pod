@@ -27,7 +27,7 @@ class PreferencesTests(unittest.TestCase):
         for body in ('schema: pod/v1\nmodels: {}\n',
                      'schema: pod/v1\nselection: custom\nmodels: {gpt-6-sol: invalid}\nworkers: {max_active: 2}\n',
                      'schema: pod/v1\nmodels: {sol: {approved: true}}\nselection: all\nworkers: {max_active: 2}\n',
-                     'schema: pod/v1\nmodels: {gpt-6-sol: available}\nselection: all\nworkers: {max_active: 2}\n',
+                     'schema: pod/v1\nmodels: {gpt-6-sol: available}\nselection: all\n',
                      'schema: pod/v1\nselection: custom\nmodels: [bad]\nworkers: {max_active: 2}\n'):
             with self.subTest(body=body):
                 self.path.write_text(body)
@@ -157,6 +157,29 @@ class PreferencesTests(unittest.TestCase):
         self.assertEqual(view['errors'],[])
         self.assertEqual(view['eligible'],['gpt-6-sol'])
         self.assertEqual(set(view['not_set']),set(IDS)-{'gpt-6-sol'})
+
+    def test_sparse_saved_map_survives_all_models_toggle_and_restart(self):
+        self.path.parent.mkdir()
+        original=('schema: pod/v1\nselection: custom # saved mode\n'
+                  'models:\n  gpt-6-sol: preferred # chosen\n'
+                  'workers: {max_active: 2}\n')
+        self.path.write_text(original)
+        custom=load(personal=self.path)
+        self.assertEqual(custom['saved']['gpt-6-sol'],'preferred')
+        self.assertEqual(custom['eligible'],['gpt-6-sol'])
+        self.assertEqual(len(custom['not_set']),5)
+        set_mode(self.path,'all',displayed=custom)
+        all_mode=load(personal=self.path)
+        self.assertEqual(all_mode['mode'],'all')
+        self.assertEqual(set(all_mode['eligible']),set(IDS))
+        self.assertEqual(all_mode['saved'],custom['saved'])
+        self.assertIn('gpt-6-sol: preferred # chosen',self.path.read_text())
+        self.assertEqual(self.path.read_text().count('gpt-6-sol:'),1)
+        set_mode(self.path,'custom',displayed=all_mode)
+        restored=load(personal=self.path)
+        self.assertEqual(restored['eligible'],['gpt-6-sol'])
+        self.assertEqual(restored['saved'],custom['saved'])
+        self.assertEqual(self.path.read_text(),original)
 
     def test_project_cannot_expand_governor_authority(self):
         project = self.root / 'project'
