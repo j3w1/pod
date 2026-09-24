@@ -67,6 +67,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         spec = (root / "docs" / "pod-spec.md").read_text()
         scenarios = set(re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M))
+        referenced = set()
         for requirement, refs in re.findall(r"^\| (R\d{2}) \| [^|]* \| .* \| ([^|]*) \|$", spec, flags=re.M):
             with self.subTest(requirement=requirement):
                 for ref in (item.strip() for item in refs.split(",") if item.strip()):
@@ -74,15 +75,35 @@ class InventoryIntegrityTests(unittest.TestCase):
                         first, last = ref.split("–")
                         self.assertIn(first, scenarios)
                         self.assertIn(last, scenarios)
+                        referenced.update(f"A{i:02}" for i in range(int(first[1:]), int(last[1:]) + 1))
                     else:
                         self.assertIn(ref, scenarios)
+                        referenced.add(ref)
+        self.assertEqual(referenced, scenarios)
 
     def test_evidence_kinds_are_exact(self):
         root = Path(__file__).resolve().parents[1]
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
         kinds = {kind for row in coverage["scenarios"] for kind in row["required_evidence"]}
-        self.assertEqual(kinds - {"offline_behavior", "live_native", "external_gate",
-                                  "hosted_ci_linux"}, set())
+        self.assertEqual(kinds - {"unit", "pty_subprocess", "installed_bundle",
+                                  "hosted_ci", "live_native", "independent_review"}, set())
+        self.assertEqual(kinds, {"unit", "pty_subprocess", "installed_bundle",
+                                 "hosted_ci", "live_native", "independent_review"})
+
+    def test_current_contract_names_the_new_boundaries(self):
+        root = Path(__file__).resolve().parents[1]
+        spec = (root / "docs" / "pod-spec.md").read_text()
+        validation = (root / "docs" / "validation.md").read_text()
+        for phrase in ("All models", "My selection", "preference_changed",
+                       "Pending same-UUID replay", "native_default", "pod-context/v4",
+                       "focus-driven Details", "one-shot installer"):
+            self.assertIn(phrase, spec)
+        for phrase in ("POD_REQUIRE_PTY=1", "pod.catalog --check", "SHA-pinned public install",
+                       "independent review", "live native"):
+            self.assertIn(phrase, validation)
+        for obsolete in ("config " + "approve", "pod setup", "quota_" + "fresh_seconds",
+                         "pod-context/" + "v3"):
+            self.assertNotIn(obsolete, spec + validation)
 
     def test_referenced_fixture_cases_exist(self):
         root = Path(__file__).resolve().parents[1]
@@ -159,13 +180,14 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
 
     def test_readme_covers_practical_workflows_and_current_limits(self):
         text = (self.root / "README.md").read_text()
-        for phrase in ("$pod https://github.com/owner/project/issues/123",
-                       "Draft a Pod Execution Spec", "Authoring in ChatGPT",
+        for phrase in ("curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh",
+                       "$pod https://github.com/owner/project/issues/123",
+                       "Pod Execution Spec reference", "Authoring in ChatGPT",
                        "Plan only", "Continue after interruption", "visible agent tab",
-                       "config approve sol", "256,000 tokens",
-                       "npx skills add j3w1/pod --skill pod -a codex -a claude-code -g",
-                       "npx skills update pod -g", "npx skills remove pod -g", "`VERSION`"):
+                       "pod config --json", "native_default", "gpt-6-luna", "`VERSION`",
+                       "pod update", "docs/installation.md"):
             self.assertIn(phrase, text)
+        self.assertLess(text.index("curl -fsSL"), text.index("## Contents"))
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
                       text)
 
@@ -183,9 +205,13 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                           "python -m build", "sha256sum", "upload-artifact", "twine"):
             self.assertNotIn(forbidden, text)
         for required in ("unittest discover -s tests", "pod.skill_validation skills/pod",
-                         "tools/source_audit.py", "npx --yes skills@", "--installed",
-                         "setup --global --json", "doctor --json"):
+                         "pod.catalog --check", "tools/source_audit.py", "--installed",
+                         "POD_REQUIRE_PTY", "git archive", "POD_INSTALL_SOURCE=\"file://",
+                         "raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh",
+                         "codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${GITHUB_SHA}",
+                         "doctor --json", "pod\" update"):
             self.assertIn(required, text)
+        self.assertNotIn("setup --global", text)
 
     def test_removed_publication_modules_are_not_referenced(self):
         tracked = subprocess.run(["git", "-C", str(self.root), "ls-files"], capture_output=True,

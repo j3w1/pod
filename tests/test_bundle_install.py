@@ -1,180 +1,161 @@
 import json
+import importlib.util
+from contextlib import redirect_stdout
+from io import StringIO
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
-from pod.bundle import bundle_root
-from tests.common import fixture
+from pod.bundle import BUNDLE_MODULES, bundle_root, version
+from tests.common import disposable_path, fixture
 
-BUNDLE = bundle_root()
-LAUNCHER = ("pod", "scripts", "pod.py")
+BUNDLE=bundle_root()
 
 
-def copied(target: Path) -> Path:
-    """Place the bundle the way an installer would: a plain copy, nothing linked."""
-    destination = target / "pod"
-    shutil.copytree(BUNDLE, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+def copy_bundle(target:Path)->Path:
+    destination=target/'pod'
+    shutil.copytree(BUNDLE,destination,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     return destination
 
 
-def environment(home: Path, **extra) -> dict:
-    """A clean environment: no PYTHONPATH, no developer checkout, isolated homes."""
-    base = {key: value for key, value in os.environ.items()
-            if key in ("PATH", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")}
-    base.update({"HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
-                 "XDG_STATE_HOME": str(home / "state"), "CODEX_HOME": str(home / "agents"),
-                 "CLAUDE_CONFIG_DIR": str(home / "claude")})
-    base.update(extra)
-    return base
+def run(skill:Path,args:list[str],*,home:Path,cwd:Path,
+        isolated:bool=True,env_extra:dict|None=None,
+        input_text:str|None=None)->subprocess.CompletedProcess:
+    env={key:value for key,value in os.environ.items() if key in ('LANG','LC_ALL','TMPDIR')}
+    env.update({'HOME':str(home),'XDG_CONFIG_HOME':str(home/'config'),
+                'XDG_DATA_HOME':str(home/'data'),'PATH':disposable_path(home),
+                'XDG_STATE_HOME':str(home/'state'),'CODEX_HOME':str(home/'agents'),
+                'CLAUDE_CONFIG_DIR':str(home/'claude')})
+    env.update(env_extra or {})
+    flags=['-I'] if isolated else ['-s','-P']
+    return subprocess.run([sys.executable,*flags,str(skill/'scripts'/'pod.py'),*args],
+                          input=input_text,capture_output=True,text=True,cwd=cwd,env=env,timeout=30)
 
 
-def launch(skill: Path, arguments, *, home: Path, cwd: Path, isolated=True, env_extra=None):
-    flags = ["-I"] if isolated else ["-s", "-P"]
-    return subprocess.run([sys.executable, *flags, str(skill / "scripts" / "pod.py"), *arguments],
-                          capture_output=True, text=True, cwd=str(cwd), timeout=120,
-                          env=environment(home, **(env_extra or {})))
-
-
-def pyyaml_visible() -> bool:
-    probe = subprocess.run([sys.executable, "-I", "-c", "import yaml"], capture_output=True)
-    return probe.returncode == 0
-
-
-class BundleInstallTests(unittest.TestCase):
-    def test_a_copied_bundle_runs_with_no_checkout_and_no_pythonpath(self):
-        if not pyyaml_visible():
-            self.skipTest("PyYAML is not importable under an isolated interpreter here")
+class CopiedBundleTests(unittest.TestCase):
+    def test_old_interpreter_fails_before_package_or_yaml_import(self):
         with fixture() as root:
-            skill = copied(root / "installed")
-            home = root / "home-a"
-            work = root / "elsewhere"
-            for path in (home, work):
-                path.mkdir(parents=True)
-            helped = launch(skill, ["--help"], home=home, cwd=work)
-            self.assertEqual(helped.returncode, 0, helped.stderr)
-            for family in ("setup", "config", "doctor", "status"):
-                self.assertIn(family, helped.stdout)
-            self.assertNotIn("internal", helped.stdout)
-            doctor = launch(skill, ["doctor", "--json"], home=home, cwd=work)
-            self.assertEqual(doctor.returncode, 0, doctor.stderr)
-            report = json.loads(doctor.stdout)
-            self.assertTrue(report["bundle"]["path"].startswith(str(skill)))
-            self.assertEqual(report["prerequisites"]["python"], "ok")
-            checked = launch(skill, ["config", "--check", "--json"], home=home, cwd=work)
-            self.assertEqual(checked.returncode, 0, checked.stderr)
+            skill=copy_bundle(root/'installed')
+            probe=subprocess.run([sys.executable,'-I','-c',
+                "import importlib.util,json,sys\n"
+                "spec=importlib.util.spec_from_file_location('launcher',sys.argv[1])\n"
+                "module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\n"
+                "failure=module.preflight(version_info=(3,12,0),bundle=sys.argv[2])\n"
+                "print(json.dumps({'failure':failure,'imported':'pod' in sys.modules}))\n",
+                str(skill/'scripts'/'pod.py'),str(skill)],capture_output=True,text=True,timeout=30)
+            self.assertEqual(probe.returncode,0,probe.stderr)
+            observed=json.loads(probe.stdout)
+            self.assertEqual(observed['failure']['code'],'python_too_old')
+            self.assertIn('3.12.0',observed['failure']['message'])
+            self.assertFalse(observed['imported'])
 
-    def test_private_operations_stay_reachable_only_through_the_bundle(self):
-        if not pyyaml_visible():
-            self.skipTest("PyYAML is not importable under an isolated interpreter here")
+    def test_missing_pyyaml_is_clean_json_and_points_to_one_shot_installer(self):
         with fixture() as root:
-            skill = copied(root / "installed")
-            home = root / "home-b"
-            work = root / "work"
-            for path in (home, work):
-                path.mkdir(parents=True)
-            request = work / "brief.json"
-            request.write_text(json.dumps({"criteria": ["works"],
-                                           "coverage": [{"criterion": "works",
-                                                         "check": "unit suite"}]}))
-            helper = launch(skill, ["internal", "brief", "--input", str(request)],
-                            home=home, cwd=work)
-            self.assertEqual(helper.returncode, 0, helper.stderr)
-            self.assertEqual(json.loads(helper.stdout)["schema"], "pod-helper/v2")
-            unknown = launch(skill, ["internal-preview"], home=home, cwd=work)
-            self.assertNotEqual(unknown.returncode, 0)
+            skill=copy_bundle(root/'installed');home=root/'home';work=root/'work'
+            home.mkdir();work.mkdir()
+            shadow=root/'shadow';(shadow/'yaml').mkdir(parents=True)
+            (shadow/'yaml'/'__init__.py').write_text("raise ImportError('simulated')\n")
+            blocked=run(skill,['doctor','--json'],home=home,cwd=work,
+                        isolated=False,env_extra={'PYTHONPATH':str(shadow)})
+            self.assertEqual(blocked.returncode,2,blocked.stdout+blocked.stderr)
+            report=json.loads(blocked.stdout)
+            self.assertEqual(report['error']['code'],'pyyaml_missing')
+            self.assertIn('/main/install.sh',report['error']['message'])
+            self.assertNotIn('Traceback',blocked.stderr)
 
-    def test_missing_pyyaml_names_the_one_bootstrap_step(self):
+    def test_every_missing_bundle_module_is_a_clean_incomplete_failure(self):
         with fixture() as root:
-            skill = copied(root / "installed")
-            home = root / "home-c"
-            work = root / "work"
-            shadow = root / "shadow"
-            (shadow / "yaml").mkdir(parents=True)
-            (shadow / "yaml" / "__init__.py").write_text("raise ImportError('simulated')\n")
-            for path in (home, work):
-                path.mkdir(parents=True)
-            blocked = launch(skill, ["doctor", "--json"], home=home, cwd=work, isolated=False,
-                             env_extra={"PYTHONPATH": str(shadow)})
-            self.assertEqual(blocked.returncode, 2, blocked.stdout + blocked.stderr)
-            report = json.loads(blocked.stdout)
-            self.assertEqual(report["status"], "blocked")
-            self.assertEqual(report["error"]["code"], "pyyaml_missing")
-            self.assertIn("pip install --user 'PyYAML", report["error"]["message"])
-            self.assertNotIn("Traceback", blocked.stderr)
+            home=root/'home';work=root/'work';home.mkdir();work.mkdir()
+            for name in BUNDLE_MODULES:
+                with self.subTest(name=name):
+                    skill=copy_bundle(root/name.replace('/','-').replace('.','-'))
+                    (skill/name).unlink()
+                    blocked=run(skill,['doctor','--json'],home=home,cwd=work)
+                    self.assertEqual(blocked.returncode,2,blocked.stdout+blocked.stderr)
+                    report=json.loads(blocked.stdout)
+                    self.assertEqual(report['error']['code'],'bundle_incomplete')
+                    self.assertIn('/main/install.sh',report['error']['message'])
+                    self.assertNotIn('Traceback',blocked.stderr)
 
-    def test_an_old_interpreter_is_reported_without_importing_the_package(self):
+    def test_version_is_available_before_pyyaml_and_no_checkout_is_needed(self):
         with fixture() as root:
-            skill = copied(root / "installed")
-            probe = subprocess.run(
-                [sys.executable, "-I", "-c",
-                 "import importlib.util,json,sys\n"
-                 "spec=importlib.util.spec_from_file_location('podlauncher', sys.argv[1])\n"
-                 "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\n"
-                 "failure=module.preflight(version_info=(3,12,0), bundle=sys.argv[2])\n"
-                 "print(json.dumps({'failure': failure, 'imported': 'pod' in sys.modules}))\n",
-                 str(skill / "scripts" / "pod.py"), str(skill)],
-                capture_output=True, text=True, timeout=60)
-            self.assertEqual(probe.returncode, 0, probe.stderr)
-            observed = json.loads(probe.stdout)
-            self.assertEqual(observed["failure"]["code"], "python_too_old")
-            self.assertIn("3.12.0", observed["failure"]["message"])
-            self.assertFalse(observed["imported"])
+            skill=copy_bundle(root/'installed'); home=root/'home'; work=root/'unrelated'
+            home.mkdir(); work.mkdir()
+            got=run(skill,['--version'],home=home,cwd=work)
+            self.assertEqual(got.returncode,0,got.stderr)
+            self.assertEqual(got.stdout.strip(),version())
+            help_output=run(skill,['--help'],home=home,cwd=work)
+            self.assertEqual(help_output.returncode,0,help_output.stderr)
+            for family in ('config','doctor','status','update'):
+                self.assertIn(family,help_output.stdout)
+            self.assertNotIn('setup',help_output.stdout)
+            self.assertNotIn('internal',help_output.stdout)
+            doctor=run(skill,['doctor','--json'],home=home,cwd=work)
+            self.assertEqual(doctor.returncode,0,doctor.stderr)
+            report=json.loads(doctor.stdout)
+            self.assertEqual(report['schema'],'pod-cli/v4')
+            self.assertTrue(report['bundle'].startswith(str(skill)))
+            self.assertEqual(report['installation'],'not installed by the one-shot installer')
+            config=run(skill,['config','--json'],home=home,cwd=work)
+            self.assertEqual(config.returncode,1)
+            self.assertEqual(json.loads(config.stdout)['eligible'],[])
 
-    def test_an_incomplete_bundle_says_how_to_reinstall(self):
+    def test_private_helper_runs_only_through_bundle(self):
         with fixture() as root:
-            skill = copied(root / "installed")
-            (skill / "cli.py").unlink()
-            home = root / "home-d"
-            work = root / "work"
-            for path in (home, work):
-                path.mkdir(parents=True)
-            broken = launch(skill, ["doctor", "--json"], home=home, cwd=work)
-            self.assertEqual(broken.returncode, 2)
-            report = json.loads(broken.stdout)
-            self.assertEqual(report["error"]["code"], "bundle_incomplete")
-            self.assertIn("skills add j3w1/pod", report["error"]["message"])
+            skill=copy_bundle(root/'installed'); home=root/'home'; work=root/'unrelated'
+            home.mkdir(); work.mkdir()
+            request=work/'brief.json'
+            request.write_text(json.dumps({'criteria':['works'],'coverage':[{'criterion':'works','check':'unit'}]}))
+            got=run(skill,['internal','brief','--input',str(request)],home=home,cwd=work)
+            self.assertEqual(got.returncode,0,got.stderr)
+            self.assertEqual(json.loads(got.stdout)['schema'],'pod-cli/v4')
+            self.assertNotIn('\x1b',got.stdout)
+            self.assertNotEqual(run(skill,['internal-preview'],home=home,cwd=work).returncode,0)
 
-    def test_the_bundle_wins_over_an_unrelated_installed_package(self):
-        if not pyyaml_visible():
-            self.skipTest("PyYAML is not importable under an isolated interpreter here")
+    def test_private_stdin_input_is_bounded_without_accepting_dev_stdin_path(self):
         with fixture() as root:
-            skill = copied(root / "installed")
-            home = root / "home-e"
-            work = root / "work"
-            decoy = root / "decoy"
-            (decoy / "pod").mkdir(parents=True)
-            (decoy / "pod" / "__init__.py").write_text("raise SystemExit('decoy package used')\n")
-            for path in (home, work):
-                path.mkdir(parents=True)
-            report = launch(skill, ["doctor", "--json"], home=home, cwd=work, isolated=False,
-                            env_extra={"PYTHONPATH": str(decoy)})
-            self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
-            self.assertTrue(json.loads(report.stdout)["bundle"]["path"].startswith(str(skill)))
+            skill=copy_bundle(root/'installed');home=root/'home';work=root/'unrelated'
+            home.mkdir();work.mkdir()
+            request=json.dumps({'project':str(work)})
+            accepted=run(skill,['internal','project-context','--input','-'],
+                         home=home,cwd=work,input_text=request)
+            self.assertEqual(accepted.returncode,0,accepted.stdout+accepted.stderr)
+            self.assertEqual(json.loads(accepted.stdout)['status'],'ok')
+            oversized=run(skill,['internal','project-context','--input','-'],
+                          home=home,cwd=work,input_text=' '* (128*1024+1))
+            self.assertEqual(oversized.returncode,1)
+            self.assertEqual(json.loads(oversized.stdout)['error']['code'],'record_too_large')
+            path_form=run(skill,['internal','project-context','--input','/dev/stdin'],
+                          home=home,cwd=work,input_text=request)
+            self.assertEqual(path_form.returncode,1)
+            self.assertEqual(json.loads(path_form.stdout)['error']['code'],'unsafe_record')
 
-
-class ReviewFindingRegressions(unittest.TestCase):
-    """A module missing deeper in the package must not surface as a traceback."""
-
-    def test_any_missing_module_reports_an_incomplete_bundle(self):
-        if not pyyaml_visible():
-            self.skipTest("PyYAML is not importable under an isolated interpreter here")
+    def test_missing_dependency_is_actionable_and_version_still_works(self):
         with fixture() as root:
-            home = root / "home"
-            work = root / "work"
-            for path in (home, work):
-                path.mkdir(parents=True)
-            # cli.py is one of the four names the launcher checks by hand; quota.py is not,
-            # and is imported only once the package is already loading.
-            for missing in ("cli.py", "quota.py", "util.py", "routing.py"):
-                with self.subTest(missing=missing):
-                    skill = copied(root / missing.replace(".", "-"))
-                    (skill / missing).unlink()
-                    blocked = launch(skill, ["doctor", "--json"], home=home, cwd=work)
-                    self.assertEqual(blocked.returncode, 2, blocked.stdout + blocked.stderr)
-                    report = json.loads(blocked.stdout)
-                    self.assertEqual(report["error"]["code"], "bundle_incomplete")
-                    self.assertIn("skills add j3w1/pod", report["error"]["message"])
-                    self.assertNotIn("Traceback", blocked.stderr)
+            skill=copy_bundle(root/'installed')
+            home=root/'home'; work=root/'unrelated'; home.mkdir(); work.mkdir()
+            script=skill/'scripts'/'pod.py'
+            spec=importlib.util.spec_from_file_location('copied_pod_launcher',script)
+            module=importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            output=StringIO()
+            with patch.object(module,'_yaml_importable',return_value=False) as yaml_probe, \
+                 redirect_stdout(output):
+                self.assertEqual(module.main(['--version']),0)
+            self.assertEqual(output.getvalue().strip(),version())
+            yaml_probe.assert_not_called()
+            self.assertIn('one-shot',module.preflight(find_spec=lambda:False)['message'])
+
+    def test_bundle_wins_over_an_unrelated_importable_package(self):
+        with fixture() as root:
+            skill=copy_bundle(root/'installed'); home=root/'home'; work=root/'unrelated'
+            home.mkdir(); work.mkdir()
+            imposter=work/'pod'; imposter.mkdir()
+            (imposter/'__init__.py').write_text('raise RuntimeError("wrong package")')
+            result=run(skill,['doctor','--json'],home=home,cwd=work)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue(json.loads(result.stdout)['bundle'].startswith(str(skill)))

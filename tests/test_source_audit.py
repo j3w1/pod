@@ -16,6 +16,15 @@ def tracked(root: Path, files: dict[str, bytes]) -> None:
 
 
 class TrackedSourceAuditTests(unittest.TestCase):
+    def test_removed_mechanisms_are_findings(self):
+        with fixture() as root:
+            blocked = (b"spending_grants\nexceptional_grants\nquota_fresh\n"
+                       b"pod-quota\nconfig approve\npod-context/v3\n")
+            tracked(root, {"notes.txt": blocked})
+            findings = audit_source(root)
+            self.assertEqual(len(findings), 1)
+            self.assertIn("unsupported mechanism", findings[0])
+
     def test_generic_source_hygiene_detects_private_residue(self):
         with fixture() as root:
             tracked(root, {"ok.txt": b"public"})
@@ -73,10 +82,10 @@ class TrackedSourceAuditTests(unittest.TestCase):
                               "tests/fixtures/state.txt"])
             self.assertFalse(any("legacy_hold" in row or "docs/history" in row for row in findings))
 
-    def test_publication_paths_are_findings_but_skill_setup_is_not(self):
+    def test_publication_paths_are_findings_including_a_skill_setup_module(self):
         with fixture() as root:
             tracked(root, {"skills/pod/setup.py": b"# project enrollment\n"})
-            self.assertEqual(audit_source(root), [])
+            self.assertTrue(any(row.startswith("skills/pod/setup.py") for row in audit_source(root)))
             for name in ("release/NOTES.md", "CHANGELOG.md", "pyproject.toml", "install.py",
                          "skills/pod/release.py"):
                 (root / name).parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +93,8 @@ class TrackedSourceAuditTests(unittest.TestCase):
                 subprocess.run(["git", "-C", str(root), "add", name], check=True)
             flagged = sorted(row.split(" :: ")[0] for row in audit_source(root))
             self.assertEqual(flagged, ["CHANGELOG.md", "install.py", "pyproject.toml",
-                                       "release/NOTES.md", "skills/pod/release.py"])
+                                       "release/NOTES.md", "skills/pod/release.py",
+                                       "skills/pod/setup.py"])
 
     def test_a_governed_project_release_remains_ordinary_vocabulary(self):
         """Pod governs a project's own release and deploy steps; that is not Pod publishing."""

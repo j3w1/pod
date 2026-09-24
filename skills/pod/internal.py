@@ -6,16 +6,15 @@ import argparse
 import json
 from pathlib import Path
 
-from .config import effective
 from .errors import PodError
 from .records import (acceptance, integration_observation, packet, report, source_identity,
                       verify_sources)
-from .routing import preview, replay
-from .util import bounded_json, exact
+from .util import bounded_json, bounded_stdin_json, exact
 from .context import execution_brief
 
 
-def _governor_projection(project: Path, objective: str, owner: str, *, mutating: bool) -> dict:
+def _governor_projection(project: Path, objective: str, owner: str, *, mutating: bool,
+                         version_exempt: bool = False) -> dict:
     """Join Governor work to stable current-Run authority and objective assignments."""
     from .ledger import binding_valid, logical_projection, read
     from .operations import OrcaPort
@@ -24,6 +23,9 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     if mutating and (state is None or state.get("owner") != owner):
         raise PodError("native_authority_unverified",
                        "Governor mutation does not own this Pod objective context")
+    if mutating and not version_exempt:
+        from .bundle import require_current_identity
+        require_current_identity(state.get("checkpoint"))
     authority_runs: set[str] = set()
     runtimes: set[object] = set()
     assignments = []
@@ -69,17 +71,6 @@ def run(operation: str, request: dict) -> dict:
     if operation == "brief":
         exact(request, {"criteria", "coverage"}, {"criteria", "coverage"}, name="request")
         return execution_brief(request["criteria"], request["coverage"])
-    if operation == "preview":
-        exact(request, {"project", "assessment", "capabilities", "quotas", "strict_pin",
-                        "safety_refusal", "objective", "task_policy"},
-              {"project", "assessment"}, name="request")
-        policy = effective(Path(request["project"]), task=request.get("task_policy"))
-        return preview(request["assessment"], policy, capabilities=request.get("capabilities"),
-                       quotas=request.get("quotas"),
-                       strict_pin=request.get("strict_pin"), safety_refusal=request.get("safety_refusal", False),
-                       objective=request.get("objective"))
-    if operation == "replay":
-        return replay(request)
     if operation == "packet":
         return packet(request)
     if operation == "report":
@@ -93,12 +84,30 @@ def run(operation: str, request: dict) -> dict:
         if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
                 or admission.get("packet_id") != request["packet"].get("packet_id")):
             raise PodError("report_attempt_unverified", "No exact native admission binding")
-        from .operations import OrcaPort, _binding_from_show
+        from .operations import OrcaPort, _binding_from_show, _effective_evidence
         binding = admission["native_binding"]
         shown = OrcaPort(Path(request["project"])).show_worker(binding["dispatchId"])
         fresh = _binding_from_show(shown, admission, binding["dispatchId"])
         if fresh != binding:
             raise PodError("report_attempt_unverified", "Fresh native identity differs from admission")
+        effective, mismatch = _effective_evidence({}, shown, admission)
+        if (mismatch or any(admission["route_decision"].get("effective", {}).get(key) not in
+                            (effective[key], "unknown") for key in ("agent", "model", "effort"))):
+            from .ledger import update_admission
+            update_admission(Path(request["project"]), request["objective"],
+                             owner=admission["owner"], admission_id=admission["admission_id"],
+                             update=lambda row: row["route_decision"].update(route_mismatch=True))
+            raise PodError("route_mismatch", "Native effective route changed after start")
+        if (admission["route_decision"].get("effective_unknown")
+                and all(effective[key] != "unknown" for key in ("agent", "model", "effort"))):
+            from .ledger import update_admission
+            def refresh(row: dict) -> None:
+                row["route_decision"]["effective"] = effective
+                row["route_decision"]["effective_unknown"] = False
+                row["effective_evidence"]["effective"] = effective
+            update_admission(Path(request["project"]), request["objective"],
+                             owner=admission["owner"], admission_id=admission["admission_id"],
+                             update=refresh)
         return report(request["report"], request["packet"],
                       {"runtime": admission["runtime"], **{key: binding[key] for key in
                        ("runId", "taskId", "dispatchId", "workerId")}})
@@ -159,6 +168,23 @@ def run(operation: str, request: dict) -> dict:
             raise PodError("orca_unavailable", "A checkpoint needs a current native runtime read")
         return checkpoint(Path(request["project"]), request["objective"], owner=request["owner"],
                           value=request["value"], native={"runtime": snapshot["runtime"]})
+    if operation == "constraint":
+        exact(request, {"project", "objective", "owner", "action", "value", "id"},
+              {"project", "objective", "owner", "action"}, name="request")
+        from .ledger import constraints_update
+        return constraints_update(Path(request["project"]), request["objective"],
+                                  owner=request["owner"], action=request["action"],
+                                  value=request.get("value"), constraint_id=request.get("id"))
+    if operation == "route-failure":
+        exact(request, {"project", "objective", "owner", "admission_id", "kind",
+                        "source", "retry_after", "clear", "cleared_by"},
+              {"project", "objective", "owner", "admission_id", "kind", "source"}, name="request")
+        from .ledger import route_failure
+        return route_failure(Path(request["project"]), request["objective"],
+                             owner=request["owner"], admission_id=request["admission_id"],
+                             kind=request["kind"], source=request["source"],
+                             retry_after=request.get("retry_after"), clear=request.get("clear", False),
+                             cleared_by=request.get("cleared_by"))
     if operation == "governor":
         exact(request, {"project", "objective", "owner", "action", "exception"},
               {"project", "objective", "owner", "action"}, name="request")
@@ -174,7 +200,8 @@ def run(operation: str, request: dict) -> dict:
               {"project", "objective", "owner", "record_id", "outcome"}, name="request")
         from .governor import record_outcome
         project = Path(request["project"])
-        _governor_projection(project, request["objective"], request["owner"], mutating=True)
+        _governor_projection(project, request["objective"], request["owner"],
+                             mutating=True, version_exempt=True)
         return record_outcome(project, request["objective"], owner=request["owner"],
                               record_id=request["record_id"], outcome=request["outcome"],
                               provider=request.get("provider"), evidence=request.get("evidence"),
@@ -238,7 +265,8 @@ def run(operation: str, request: dict) -> dict:
               {"project", "objective", "owner", "record_id"}, name="request")
         from .governor import reconcile
         project = Path(request["project"])
-        _governor_projection(project, request["objective"], request["owner"], mutating=True)
+        _governor_projection(project, request["objective"], request["owner"],
+                             mutating=True, version_exempt=True)
         return reconcile(project, request["objective"], owner=request["owner"],
                          record_id=request["record_id"])
     if operation == "governor-status":
@@ -250,33 +278,27 @@ def run(operation: str, request: dict) -> dict:
         return status(project, request["objective"], native_projection=projection)
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task",
-                        "assessment", "capabilities", "quotas", "plan_revision",
-                        "capacity", "capacity_reason", "exceptional_grant", "packet", "worktree",
-                        "task_policy"},
+                        "plan_revision", "packet", "worktree", "reuse_of"},
               {"project", "objective", "owner", "run", "task",
-               "assessment", "capabilities", "quotas", "plan_revision", "packet"}, name="request")
+               "plan_revision", "packet"}, name="request")
         from .operations import guarded_start
         # The production port verifies installed controls itself; request JSON
         # can supply assessment snapshots but cannot assert native assurance.
         return guarded_start(Path(request["project"]), request["objective"],
                              owner=request["owner"], run=request["run"], task=request["task"],
-                             assessment=request["assessment"], capabilities=request["capabilities"], quotas=request["quotas"],
                              plan_revision=request["plan_revision"],
-                             capacity=request.get("capacity", 2),
-                             capacity_reason=request.get("capacity_reason"),
-                             exceptional_grant=request.get("exceptional_grant"),
                              frozen_packet=request["packet"],
                              worktree=request.get("worktree", "current"),
-                             task_policy=request.get("task_policy"))
+                             reuse_of=request.get("reuse_of"))
     raise PodError("unknown_operation", "Unsupported private helper operation")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
-    parser.add_argument("operation", choices=("brief", "preview", "replay", "packet", "report", "source",
+    parser.add_argument("operation", choices=("brief", "packet", "report", "source",
                                                "verify-sources", "acceptance", "integration-observe",
                                                "issue-intake", "issue-recheck", "project-context",
-                                               "checkpoint", "admission",
+                                               "checkpoint", "admission", "constraint", "route-failure",
                                                "governor", "governor-outcome", "governor-prepare",
                                                "governor-preflight", "governor-classify",
                                                "governor-correct", "governor-execute",
@@ -284,12 +306,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        value = bounded_json(args.input)
+        value = bounded_stdin_json() if args.input == Path("-") else bounded_json(args.input)
         result = run(args.operation, value)
-        print(json.dumps({"schema": "pod-helper/v2", "status": "ok", "result": result}, sort_keys=True))
+        print(json.dumps({"schema": "pod-cli/v4", "status": "ok", "result": result}, sort_keys=True))
         return 0
     except PodError as exc:
-        print(json.dumps({"schema": "pod-helper/v2", "status": "blocked",
+        print(json.dumps({"schema": "pod-cli/v4", "status": "blocked",
                           "error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
         return 1
 

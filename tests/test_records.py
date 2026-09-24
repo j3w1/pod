@@ -15,10 +15,10 @@ from tests.common import fixture
 
 
 def packet_body():
-    return {"schema": "pod-packet/v1", "objective": "make change", "criteria": ["works"],
+    return {"schema": "pod-packet/v2", "objective": "make change", "criteria": ["works"],
             "responsibility": "writer", "scope": ["src/a.py"], "actions": ["edit"],
             "candidate": "abc", "context": [{"kind": "instruction", "path": "AGENTS.md", "sha256": "a" * 64}], "dependencies": [],
-            "route": {"agent": "codex"}, "policy_revision": "p", "plan_revision": "plan",
+            "route": {"agent": "codex", "model": "gpt-6-sol", "effort": "medium", "context": "native_default", "reason": "bounded work", "preference_revision": "p"}, "policy_revision": "p", "plan_revision": "plan",
             "report_contract": "report checks", "sources": []}
 
 

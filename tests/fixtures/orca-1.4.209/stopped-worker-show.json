@@ -1,0 +1,44 @@
+{
+  "ok": true,
+  "result": {
+    "dispatch": {
+      "id": "dispatch-1",
+      "runId": "run",
+      "taskId": "task",
+      "status": "failed",
+      "completedAt": "2026-09-24T00:00:00Z",
+      "lastFailure": "stopped"
+    },
+    "projection": {
+      "id": "worker-dispatch-1",
+      "dispatchId": "dispatch-1",
+      "runId": "run",
+      "taskId": "task",
+      "outcome": "failed",
+      "stage": {
+        "worker": "stopped",
+        "dispatch": "failed",
+        "detail": "process_stopped",
+        "activity": "unknown"
+      },
+      "liveness": {
+        "verdict": "exited",
+        "source": "resource_release"
+      },
+      "resource": {
+        "state": "released",
+        "releaseState": "released"
+      }
+    },
+    "worker": {
+      "dispatchId": "dispatch-1",
+      "state": "stopped",
+      "stage": "process_stopped",
+      "worktreeId": "current",
+      "agentTerminalHandle": "term-dispatch-1"
+    }
+  },
+  "_meta": {
+    "runtimeId": "runtime"
+  }
+}

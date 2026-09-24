@@ -1,410 +1,276 @@
-import os
-from contextlib import chdir
+from copy import deepcopy
 from pathlib import Path
+import os
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from pod.config import (CONTEXT_256K_TOKENS, DEFAULT, MODEL_CATALOG, effective,
-                        personal_path, read_yaml, route_identity)
+from pod.catalog import IDS
+from pod.config import DEFAULT, effective, load, personal_path, read_yaml, set_mode, set_model, write_defaults
 from pod.errors import PodError
-from pod.ledger import checkpoint, read, state_root
+from pod.ledger import state_root
 from pod.util import native_home
 from tests.common import fixture
 
-ACCOUNT_IDENTITY = "a" * 64
 
+class PreferencesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = fixture()
+        self.root = self.tmp.__enter__()
+        self.addCleanup(self.tmp.__exit__, None, None, None)
+        self.path = self.root / 'pod' / 'config.yaml'
 
-class ConfigTests(unittest.TestCase):
-    def test_unreadable_project_policy_is_never_treated_as_absent(self):
-        with fixture() as root:
-            project = root / "project"
-            policy_dir = project / ".pod"
-            policy_dir.mkdir(parents=True)
-            (policy_dir / "config.yaml").write_text(
-                "schema: pod/v1\npolicy: {max_workers: 1}\n")
-            self.assertEqual(effective(project)["policy"]["policy"]["max_workers"], 1)
-            policy_dir.chmod(0)
-            try:
-                with self.assertRaises(PodError) as unavailable:
-                    effective(project)
-                self.assertEqual(unavailable.exception.code, "unsafe_config")
-            finally:
-                policy_dir.chmod(0o700)
-
-    def test_active_catalog_and_context_defaults_are_exact(self):
-        self.assertEqual(CONTEXT_256K_TOKENS, 256_000)
-        self.assertEqual({alias: (row["agent"], row["model"])
-                          for alias, row in MODEL_CATALOG.items()}, {
-            "luna": ("codex", "gpt-6-luna"),
-            "sol": ("codex", "gpt-6-sol"),
-            "astra": ("codex", "gpt-6-astra"),
-            "sonnet": ("claude", "claude-sonnet-5"),
-            "opus": ("claude", "claude-opus-5-5"),
-            "fable": ("claude", "claude-fable-5-1"),
-        })
-        self.assertEqual(DEFAULT["routing"], {
-            "trivial": {"model": "luna", "effort": "low", "context": "256k"},
-            "simple": {"model": "sonnet", "effort": "medium", "context": "256k"},
-            "standard": {"model": "sol", "effort": "medium", "context": "256k"},
-            "complex": {"model": "opus", "effort": "high", "context": "max"},
-            "very_complex": {"model": "astra", "effort": "xhigh", "context": "max"},
-        })
-
-    def test_model_identities_outside_the_catalog_are_rejected(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            for body in (
-                "models: {nova: {agent: codex, model: gpt-9-nova}}",
-                "models: {sol: {agent: codex, model: gpt-6-sol-preview}}",
-                "models: {sonnet: {agent: claude, model: sonnet}}",
-                "models: {sol: {agent: claude, model: gpt-6-sol}}",
-            ):
-                personal.write_text("schema: pod/v1\n" + body + "\n")
-                with self.subTest(body=body), self.assertRaises(PodError) as caught:
-                    effective(root, personal=personal)
-                self.assertEqual(caught.exception.code, "invalid_config")
-
-    def test_project_and_task_context_may_narrow_but_not_expand(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            personal.write_text("schema: pod/v1\nrouting:\n  standard: {context: 256k}\n  complex: {context: max}\n")
-            (root / ".pod").mkdir()
-            local = root / ".pod" / "config.yaml"
-            local.write_text("schema: pod/v1\nrouting:\n  standard: {context: max}\n")
-            with self.assertRaises(PodError) as caught:
-                effective(root, personal=personal)
-            self.assertEqual(caught.exception.code, "authority_expansion")
-            local.write_text("schema: pod/v1\nrouting:\n  complex: {context: 256k}\n")
-            self.assertEqual(effective(root, personal=personal)["policy"]["routing"]["complex"]["context"],
-                             "256k")
-    def test_fixture_ignores_and_restores_inherited_pod_homes(self):
-        with tempfile.TemporaryDirectory(dir=os.environ.get("POD_TEST_ROOT")) as cache_name:
-            cache = Path(cache_name)
-            inherited = {"POD_CONFIG_HOME": str(cache / "inherited-config"),
-                         "POD_STATE_HOME": str(cache / "inherited-state")}
-            with patch.dict(os.environ, {**inherited, "POD_FIXTURE_PRESERVED": "yes"}):
-                with fixture() as root:
-                    self.assertIsNone(os.environ.get("POD_CONFIG_HOME"))
-                    self.assertIsNone(os.environ.get("POD_STATE_HOME"))
-                    self.assertEqual(os.environ["POD_FIXTURE_PRESERVED"], "yes")
-                    project = root / "project"
-                    project.mkdir()
-                    personal = personal_path()
-                    personal.parent.mkdir(parents=True)
-                    personal.write_text("schema: pod/v1\n")
-                    policy = effective(project)
-                    checkpoint(project, "fixture isolation", owner="owner",
-                               native={"runtime": "runtime"},
-                               value={"schema": "pod-checkpoint/v1", "criteria": ["isolated"],
-                                      "plan_revision": "plan", "candidate": "candidate",
-                                      "policy_revision": policy["revision"], "native_refs": [],
-                                      "assignments": [], "questions": [],
-                                      "verification_gaps": ["isolated"],
-                                      "next_safe_action": "verify"})
-                    self.assertTrue(personal.is_relative_to(root.parent))
-                    self.assertTrue(state_root().is_relative_to(root.parent))
-                    self.assertFalse(personal.is_relative_to(root))
-                    self.assertFalse(state_root().is_relative_to(root))
-                    self.assertFalse((cache / "inherited-config").exists())
-                    self.assertFalse((cache / "inherited-state").exists())
-                self.assertEqual({key: os.environ[key] for key in inherited}, inherited)
-                self.assertFalse((cache / "inherited-config").exists())
-                self.assertFalse((cache / "inherited-state").exists())
-
-    def test_pod_only_homes_isolate_personal_policy_and_state(self):
-        with fixture() as root:
-            project = root / "project"
-            project.mkdir()
-            config_home = root / "pod-config"
-            state_home = root / "pod-state"
-            config_home.mkdir()
-            (config_home / "config.yaml").write_text("schema: pod/v1\n")
-            native = {
-                      "CODEX_HOME": str(root / "native-codex"),
-                      "CLAUDE_CONFIG_DIR": str(root / "native-claude")}
-            overrides = {"POD_CONFIG_HOME": str(config_home), "POD_STATE_HOME": str(state_home)}
-            with patch.dict(os.environ, {**native, **overrides}):
-                policy = effective(project)
-                self.assertEqual(personal_path(), config_home / "config.yaml")
-                self.assertFalse(policy["policy"]["models"]["sol"]["approved"])
-                checkpoint(project, "objective", owner="owner", native={"runtime": "runtime"},
-                           value={"schema": "pod-checkpoint/v1", "criteria": ["works"],
-                                  "plan_revision": "plan", "candidate": "candidate",
-                                  "policy_revision": policy["revision"], "native_refs": [],
-                                  "assignments": [], "questions": [], "verification_gaps": ["works"],
-                                  "next_safe_action": "verify"})
-                self.assertEqual(state_root(), state_home)
-                self.assertIsNotNone(read(project, "objective"))
-                self.assertTrue(any(state_home.glob("*/context.json")))
-                self.assertEqual({key: os.environ[key] for key in native}, native)
-                self.assertFalse((root / "native-appdata").exists())
-                self.assertFalse((root / "native-localappdata").exists())
-
-                (project / ".pod").mkdir()
-                (project / ".pod" / "config.yaml").write_text(
-                    "schema: pod/v1\npolicy: {max_workers: 4}\n")
-                with self.assertRaises(PodError) as expanded:
-                    effective(project)
-                self.assertEqual(expanded.exception.code, "authority_expansion")
-
-    def test_pod_home_overrides_require_absolute_directories(self):
-        with fixture() as root:
-            for name, resolve in (("POD_CONFIG_HOME", personal_path),
-                                  ("POD_STATE_HOME", state_root)):
-                for value in ("", ".", "relative/path"):
-                    with self.subTest(name=name, value=value), patch.dict(os.environ, {name: value}):
-                        with self.assertRaises(PodError) as caught:
-                            resolve()
-                        self.assertEqual(caught.exception.code, "invalid_location_override")
-                existing_file = root / f"{name}.txt"
-                existing_file.write_text("not a directory")
-                with patch.dict(os.environ, {name: str(existing_file)}):
-                    with self.assertRaises(PodError) as caught:
-                        resolve()
-                    self.assertEqual(caught.exception.code, "invalid_location_override")
-
-    def test_no_file_is_pending_and_read_only(self):
-        with fixture() as root:
-            personal = root / "none.yaml"
-            value = effective(root, personal=personal)
-            self.assertFalse(value["policy"]["models"]["sol"]["approved"])
-            self.assertFalse(personal.exists())
-            self.assertFalse((root / ".pod").exists())
-
-    def test_personal_approval_and_project_restriction(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            binding = route_identity({"agent": "codex", "model": "gpt-6-sol",
-                                      "account": ACCOUNT_IDENTITY})
-            personal.write_text(f"""schema: pod/v1
-models:
-  sol:
-    agent: codex
-    model: gpt-6-sol
-    account: {ACCOUNT_IDENTITY}
-    approved: true
-    approval_ref: reviewed-grant
-    approval_route: {binding}
-    billing: included
-    efforts: [high, medium]
-policy:
-  max_workers: 3
-  allowed_agents: [codex, claude]
-""")
-            (root / ".pod").mkdir()
-            (root / ".pod" / "config.yaml").write_text("""schema: pod/v1
-models:
-  sol:
-    efforts: [high]
-policy:
-  max_workers: 2
-  allowed_agents: [codex]
-""")
-            value = effective(root, personal=personal)
-            self.assertEqual(value["policy"]["models"]["sol"]["efforts"], ["high"])
-            self.assertEqual(value["policy"]["policy"]["max_workers"], 2)
-            self.assertEqual(value["provenance"]["models.sol"], "project")
-            self.assertEqual(value["policy"]["routing"]["complex"]["model"], "opus")
-
-    def test_project_cannot_grant_approval_or_capacity(self):
-        with fixture() as root:
-            (root / ".pod").mkdir()
-            path = root / ".pod" / "config.yaml"
-            for content in (
-                "models: {sol: {approved: true, approval_ref: forged}}",
-                "policy: {max_workers: 4}",
-                "policy: {spending_grants: [{id: fake, action: paid_usage, account: a, valid_until: '2099-01-01T00:00:00Z'}]}",
-            ):
-                path.write_text("schema: pod/v1\n" + content + "\n")
+    def test_missing_invalid_and_partial_files_never_enable_delegation(self):
+        self.assertEqual(load(personal=self.path)['eligible'], [])
+        self.path.parent.mkdir()
+        for body in ('schema: pod/v1\nmodels: {}\n',
+                     'schema: pod/v1\nselection: custom\nmodels: {gpt-6-sol: invalid}\nworkers: {max_active: 2}\n',
+                     'schema: pod/v1\nmodels: {sol: {approved: true}}\nselection: all\nworkers: {max_active: 2}\n',
+                     'schema: pod/v1\nmodels: {gpt-6-sol: available}\nselection: all\n',
+                     'schema: pod/v1\nselection: custom\nmodels: [bad]\nworkers: {max_active: 2}\n'):
+            with self.subTest(body=body):
+                self.path.write_text(body)
+                result = load(personal=self.path)
+                self.assertEqual(result['eligible'], [])
+                self.assertTrue(result['errors'])
                 with self.assertRaises(PodError):
-                    effective(root, personal=root / "none")
+                    set_mode(self.path, 'all', displayed=result)
+        self.path.write_text('schema: pod/v1\nmodels: {sol: {approved: true}}\n'
+                             'routing: {complex: {model: sol}}\n')
+        self.assertIn('models.sol', load(personal=self.path)['errors'][0]['message'])
 
-    def test_project_cannot_extend_personal_quota_freshness(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            personal.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 60}\n")
-            (root / ".pod").mkdir()
-            local = root / ".pod" / "config.yaml"
-            local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 3600}\n")
-            with self.assertRaises(PodError) as caught:
-                effective(root, personal=personal)
-            self.assertEqual(caught.exception.code, "authority_expansion")
-            local.write_text("schema: pod/v1\npolicy: {quota_fresh_seconds: 30}\n")
-            self.assertEqual(effective(root, personal=personal)["policy"]["policy"]["quota_fresh_seconds"], 30)
+    def test_defaults_and_three_state_toggle_round_trip_across_restart(self):
+        write_defaults(self.path)
+        current = load(personal=self.path)
+        self.assertEqual(current['eligible'], list(IDS))
+        self.assertEqual(current['max_active'], 2)
+        self.assertEqual(oct(self.path.stat().st_mode & 0o777), '0o600')
+        set_model(self.path, 'gpt-6-sol', 'preferred', displayed=current)
+        set_model(self.path, 'gpt-6-luna', 'disabled', displayed=load(personal=self.path))
+        custom = load(personal=self.path)
+        self.assertEqual(len(custom['eligible']), 5)
+        set_mode(self.path, 'all', displayed=custom)
+        all_state = load(personal=self.path)
+        self.assertEqual(all_state['effective']['gpt-6-luna'], 'available')
+        self.assertEqual(all_state['saved']['gpt-6-sol'], 'preferred')
+        set_mode(self.path, 'custom', displayed=all_state)
+        restored = load(personal=self.path)
+        self.assertEqual(restored['saved'], custom['saved'])
+        self.assertEqual(restored['eligible'], custom['eligible'])
+        set_mode(self.path, 'all', displayed=restored)
+        notice = set_model(self.path, 'gpt-6-luna', 'preferred', displayed=load(personal=self.path))
+        self.assertEqual(notice['mode_notice'], 'Returned to My selection')
+        self.assertEqual(load(personal=self.path)['saved']['gpt-6-sol'], 'preferred')
 
-    def test_unknown_policy_keys_are_rejected(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            personal.write_text("schema: pod/v1\npolicy: {unknown_timer: 30}\n")
-            with self.assertRaises(PodError) as caught:
-                effective(root, personal=personal)
-            self.assertEqual(caught.exception.code, "invalid_config")
+    def test_external_edits_preserve_other_keys_and_comments(self):
+        write_defaults(self.path)
+        original = self.path.read_text().replace('  gpt-6-luna: available', '  gpt-6-luna: available # manual')
+        self.path.write_text(original)
+        displayed = load(personal=self.path)
+        changed = original.replace('  gpt-6-sol: available', '  gpt-6-sol: preferred')
+        self.path.write_text(changed)
+        saved = set_model(self.path, 'gpt-6-luna', 'disabled', displayed=displayed)
+        self.assertEqual(saved['notice'], '')
+        self.assertIn('  gpt-6-sol: preferred', self.path.read_text())
+        self.assertIn('  gpt-6-luna: disabled # manual', self.path.read_text())
+        with self.assertRaises(PodError) as caught:
+            set_model(self.path, 'gpt-6-sol', 'disabled', displayed=displayed)
+        self.assertEqual(caught.exception.code, 'config_changed_elsewhere')
 
-    def test_local_routing_can_tighten_but_not_weaken_or_replace_strict_pin(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            personal.write_text("schema: pod/v1\nrouting:\n  complex: {model: sol, effort: high, strict: true}\n")
-            (root / ".pod").mkdir()
-            local = root / ".pod" / "config.yaml"
-            for row in ("{strict: false}", "{model: luna}"):
-                local.write_text(f"schema: pod/v1\nrouting:\n  complex: {row}\n")
-                with self.assertRaises(PodError) as caught:
-                    effective(root, personal=personal)
-                self.assertEqual(caught.exception.code, "authority_expansion")
-            local.write_text("schema: pod/v1\nrouting:\n  complex: {effort: xhigh}\n")
-            row = effective(root, personal=personal)["policy"]["routing"]["complex"]
-            self.assertEqual(row, {"model": "sol", "effort": "xhigh",
-                                   "context": "max", "strict": True})
-            with self.assertRaises(PodError) as task_layer:
-                effective(root, personal=personal,
-                          task={"schema": "pod/v1", "routing": {"complex": {"strict": False}}})
-            self.assertEqual(task_layer.exception.code, "authority_expansion")
+    def test_save_failure_or_invalid_external_edit_preserves_bytes(self):
+        write_defaults(self.path)
+        shown = load(personal=self.path)
+        self.path.write_text('schema: pod/v1\nselection: custom\nmodels: {sol: available}\nworkers: {max_active: 2}\n')
+        before = self.path.read_bytes()
+        with self.assertRaises(PodError):
+            set_model(self.path, 'gpt-6-sol', 'preferred', displayed=shown)
+        self.assertEqual(self.path.read_bytes(), before)
+        write_path = self.root / 'file' / 'config.yaml'
+        (self.root / 'file').write_text('occupied')
+        with self.assertRaises(OSError):
+            write_defaults(write_path)
 
-            personal.write_text("schema: pod/v1\nrouting:\n  complex: {model: sol, effort: high}\n")
-            local.write_text("schema: pod/v1\nrouting:\n  complex: {model: luna, strict: true}\n")
-            row = effective(root, personal=personal)["policy"]["routing"]["complex"]
-            self.assertEqual(row["model"], "luna")
-            self.assertTrue(row["strict"])
-
-    def test_account_label_cannot_substitute_for_redacted_native_identity(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            personal.write_text("""schema: pod/v1
-models:
-  sol:
-    agent: codex
-    model: gpt-6-sol
-    account: friendly-label
-    approved: true
-    approval_ref: review
-    approval_route: does-not-matter
-""")
-            with self.assertRaises(PodError) as absent:
-                effective(root, personal=personal)
-            self.assertEqual(absent.exception.code, "invalid_config")
-            personal.write_text(personal.read_text().replace("friendly-label", "not-a-digest"))
-            with self.assertRaises(PodError) as invalid:
-                effective(root, personal=personal)
-            self.assertEqual(invalid.exception.code, "invalid_config")
-
-    def test_native_home_variables_reject_relative_or_malformed_values(self):
-        with fixture() as root:
-            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME",
-                         "CODEX_HOME", "CLAUDE_CONFIG_DIR"):
-                for value in ("", ".", "relative/path", "bad\x00path"):
-                    environment = {**os.environ, name: value}
-                    with self.subTest(name=name, value=repr(value)), patch.object(os, "environ", environment):
-                        with self.assertRaises(PodError) as caught:
-                            native_home(name, default=root / "safe-default")
-                        self.assertEqual(caught.exception.code, "invalid_native_home")
-                existing_file = root / f"{name}.txt"
-                existing_file.write_text("not a directory")
-                with patch.dict(os.environ, {name: str(existing_file)}):
-                    with self.assertRaises(PodError) as caught:
-                        native_home(name, default=root / "safe-default")
-                    self.assertEqual(caught.exception.code, "invalid_native_home")
-
-    def test_relative_xdg_homes_cannot_place_policy_or_state_in_project(self):
-        with fixture() as root:
-            project = root / "project"
-            project.mkdir()
-            config_home = "XDG_CONFIG_HOME"
-            state_home = "XDG_STATE_HOME"
-            previous = {name: os.environ[name] for name in (config_home, state_home)}
-            with patch.dict(os.environ, {config_home: "relative-config",
-                                         state_home: "relative-state"}):
-                with self.assertRaises(PodError):
-                    personal_path()
-                with self.assertRaises(PodError):
-                    state_root()
-                self.assertEqual(list(project.iterdir()), [])
-            self.assertEqual({name: os.environ[name] for name in previous}, previous)
-
-    def test_native_homes_reject_absolute_and_symlink_project_containment(self):
-        with fixture() as root:
-            project = root / "project"
-            project.mkdir()
-            contained = project / "native-home"
-            contained.mkdir()
-            redirected = root.parent / "redirected-native-home"
-            redirected.symlink_to(contained, target_is_directory=True)
-            original = dict(os.environ)
-            for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME",
-                         "CODEX_HOME", "CLAUDE_CONFIG_DIR"):
-                for value in (contained, redirected):
-                    with self.subTest(name=name, value=value), patch.dict(os.environ, {name: str(value)}):
-                        with self.assertRaises(PodError) as caught:
-                            native_home(name, project=project)
-                        self.assertEqual(caught.exception.code, "project_contained_native_home")
-            self.assertEqual(dict(os.environ), original)
-
-    def test_default_config_and_state_calls_reject_project_containment_but_pod_overrides_remain_explicit(self):
-        with fixture() as root:
-            project = root / "project"
-            project.mkdir()
-            contained_config = project / "config-home"
-            contained_state = project / "state-home"
-            config_home = "XDG_CONFIG_HOME"
-            state_home = "XDG_STATE_HOME"
-            overrides = {config_home: str(contained_config),
-                         state_home: str(contained_state)}
-            with chdir(project), patch.dict(os.environ, overrides):
-                with self.assertRaises(PodError):
-                    personal_path()
-                with self.assertRaises(PodError):
-                    effective(project)
-                with self.assertRaises(PodError):
-                    state_root()
-                with self.assertRaises(PodError):
-                    checkpoint(project, "blocked", owner="owner", native={"runtime": "runtime"},
-                               value={"schema": "pod-checkpoint/v1", "criteria": ["safe"],
-                                      "plan_revision": "plan", "candidate": "candidate",
-                                      "policy_revision": "policy", "native_refs": [],
-                                      "assignments": [], "questions": [],
-                                      "verification_gaps": ["safe"],
-                                      "next_safe_action": "choose external native homes"})
-                self.assertEqual(list(project.iterdir()), [])
-            pod_config = project / "explicit-pod-config"
-            pod_state = project / "explicit-pod-state"
-            with chdir(project), patch.dict(os.environ, {
-                    **overrides, "POD_CONFIG_HOME": str(pod_config),
-                    "POD_STATE_HOME": str(pod_state)}):
-                self.assertEqual(personal_path(), pod_config / "config.yaml")
-                self.assertEqual(state_root(), pod_state)
-
-    def test_changed_model_identity_invalidates_prior_approval_binding(self):
-        with fixture() as root:
-            personal = root / "personal.yaml"
-            binding = route_identity({"agent": "codex", "model": "original",
-                                      "account": ACCOUNT_IDENTITY})
-            personal.write_text(f"""schema: pod/v1
-models:
-  sol:
-    agent: codex
-    model: changed
-    account: {ACCOUNT_IDENTITY}
-    approved: true
-    approval_ref: original-review
-    approval_route: {binding}
-""")
-            with self.assertRaises(PodError) as caught:
-                effective(root, personal=personal)
-            self.assertEqual(caught.exception.code, "invalid_config")
-
-    def test_duplicate_alias_tag_include_size_and_type_fail(self):
-        with fixture() as root:
-            path = root / "p.yaml"
-            for value in (
-                "schema: pod/v1\nschema: pod/v1\n",
-                "schema: !!python/object/apply:os.system ['echo bad']\n",
-                "schema: pod/v1\nx: !include secret\n",
-                "schema: pod/v1\npolicy: [wrong]\n",
-                "schema: pod/v1\nmodels: {a: &x {agent: codex}, b: *x}\n",
-            ):
-                path.write_text(value)
-                with self.assertRaises(PodError):
-                    read_yaml(path)
-            path.write_text("a" * 65537)
+    def test_safe_yaml_and_project_scope_are_strict(self):
+        self.path.parent.mkdir()
+        for body in ('schema: pod/v1\nschema: pod/v1\n',
+                     'schema: !!python/object/apply:os.system [echo hi]\n',
+                     'schema: pod/v1\nselection: custom\nmodels: {gpt-6-sol: available}\nworkers: {max_active: true}\n',
+                     'schema: pod/v1\nselection: custom\nmodels: {gpt-6-sol: &a available, gpt-6-luna: *a}\nworkers: {max_active: 2}\n'):
+            self.path.write_text(body)
             with self.assertRaises(PodError):
-                read_yaml(path)
+                read_yaml(self.path)
+        project = self.root / 'project'
+        project.mkdir()
+        local = project / '.pod' / 'config.yaml'
+        local.parent.mkdir()
+        local.write_text('schema: pod/v1\nmodels: {gpt-6-sol: available}\n')
+        with self.assertRaises(PodError):
+            effective(project, personal=self.path)
+        local.write_text('schema: pod/v1\nwaste_governor:\n'
+                         '  triggers: {push: [{bad: type}]}\n')
+        with self.assertRaises(PodError):
+            effective(project, personal=self.path)
+
+    def test_governor_revision_is_independent_of_model_edits(self):
+        project = self.root / 'project'
+        project.mkdir()
+        write_defaults(self.path)
+        first = effective(project, personal=self.path)
+        set_model(self.path, 'gpt-6-sol', 'preferred', displayed=load(personal=self.path))
+        second = effective(project, personal=self.path)
+        self.assertEqual(first['revision'], second['revision'])
+        self.assertNotEqual(first['preference_revision'], second['preference_revision'])
+        local = project / '.pod' / 'config.yaml'
+        local.parent.mkdir()
+        local.write_text('schema: pod/v1\nwaste_governor:\n  preflight: [unit]\n')
+        third = effective(project, personal=self.path)
+        self.assertNotEqual(second['revision'], third['revision'])
+
+    def test_project_preflight_and_trigger_layers_cannot_remove_personal_rules(self):
+        project=self.root/'project'; project.mkdir()
+        write_defaults(self.path)
+        document=read_yaml(self.path)
+        document['waste_governor']={'preflight':['personal-check'],
+                                     'triggers':{'push':['workflow:personal.yml']}}
+        import yaml
+        self.path.write_text(yaml.safe_dump(document,sort_keys=False))
+        local=project/'.pod'/'config.yaml'; local.parent.mkdir()
+        local.write_text('schema: pod/v1\nwaste_governor:\n'
+                         '  preflight: [project-check]\n'
+                         '  triggers: {push: ["workflow:project.yml"]}\n')
+        governed=effective(project,personal=self.path)['policy']['waste_governor']
+        self.assertEqual(governed['preflight'],['personal-check','project-check'])
+        self.assertEqual(governed['triggers']['push'],
+                         ['workflow:personal.yml','workflow:project.yml'])
+        local.write_text('schema: pod/v1\nwaste_governor:\n'
+                         '  preflight: []\n  triggers: {push: []}\n')
+        guarded=effective(project,personal=self.path)['policy']['waste_governor']
+        self.assertEqual(guarded['preflight'],['personal-check'])
+        self.assertEqual(guarded['triggers']['push'],['workflow:personal.yml'])
+
+    def test_sparse_custom_map_is_valid_but_omissions_are_ineligible(self):
+        self.path.parent.mkdir()
+        self.path.write_text('schema: pod/v1\nselection: custom\n'
+                             'models: {gpt-6-sol: available}\nworkers: {max_active: 2}\n')
+        view=load(personal=self.path)
+        self.assertEqual(view['errors'],[])
+        self.assertEqual(view['eligible'],['gpt-6-sol'])
+        self.assertEqual(set(view['not_set']),set(IDS)-{'gpt-6-sol'})
+
+    def test_sparse_saved_map_survives_all_models_toggle_and_restart(self):
+        self.path.parent.mkdir()
+        original=('schema: pod/v1\nselection: custom # saved mode\n'
+                  'models:\n  gpt-6-sol: preferred # chosen\n'
+                  'workers: {max_active: 2}\n')
+        self.path.write_text(original)
+        custom=load(personal=self.path)
+        self.assertEqual(custom['saved']['gpt-6-sol'],'preferred')
+        self.assertEqual(custom['eligible'],['gpt-6-sol'])
+        self.assertEqual(len(custom['not_set']),5)
+        set_mode(self.path,'all',displayed=custom)
+        all_mode=load(personal=self.path)
+        self.assertEqual(all_mode['mode'],'all')
+        self.assertEqual(set(all_mode['eligible']),set(IDS))
+        self.assertEqual(all_mode['saved'],custom['saved'])
+        self.assertIn('gpt-6-sol: preferred # chosen',self.path.read_text())
+        self.assertEqual(self.path.read_text().count('gpt-6-sol:'),1)
+        set_mode(self.path,'custom',displayed=all_mode)
+        restored=load(personal=self.path)
+        self.assertEqual(restored['eligible'],['gpt-6-sol'])
+        self.assertEqual(restored['saved'],custom['saved'])
+        self.assertEqual(self.path.read_text(),original)
+
+    def test_project_cannot_expand_governor_authority(self):
+        project = self.root / 'project'
+        project.mkdir()
+        write_defaults(self.path)
+        local = project / '.pod' / 'config.yaml'
+        local.parent.mkdir()
+        for value in ('mode: observe', 'transient_retries: 3', 'host_control: claimed',
+                      'exceptions: [{id: fake}]'):
+            with self.subTest(value=value):
+                local.write_text('schema: pod/v1\nwaste_governor:\n  '+value+'\n')
+                with self.assertRaises(PodError):
+                    effective(project, personal=self.path)
+
+    def test_unreadable_project_policy_is_not_treated_as_absent(self):
+        project=self.root/'project';project.mkdir()
+        write_defaults(self.path)
+        folder=project/'.pod';folder.mkdir()
+        (folder/'config.yaml').write_text('schema: pod/v1\nwaste_governor:\n'
+                                          '  transient_retries: 0\n')
+        self.assertEqual(effective(project,personal=self.path)['policy']['waste_governor']['transient_retries'],0)
+        folder.chmod(0)
+        try:
+            with self.assertRaises(PodError) as unavailable:
+                effective(project,personal=self.path)
+            self.assertEqual(unavailable.exception.code,'unsafe_config')
+        finally:
+            folder.chmod(0o700)
+
+    def test_running_from_home_skips_cwd_containment_outside_git(self):
+        with patch.dict(os.environ, {'XDG_CONFIG_HOME': str(self.root / '.config')}):
+            with patch('pathlib.Path.cwd', return_value=self.root):
+                self.assertEqual(personal_path(), self.root / '.config' / 'pod' / 'config.yaml')
+
+    def test_invalid_pod_home_overrides_do_not_resolve_or_create_paths(self):
+        for name,resolve in (('POD_CONFIG_HOME',personal_path),('POD_STATE_HOME',state_root)):
+            for value in ('','.','relative/path'):
+                with self.subTest(name=name,value=value),patch.dict(os.environ,{name:value}), \
+                     self.assertRaises(PodError) as blocked:
+                    resolve()
+                self.assertEqual(blocked.exception.code,'invalid_location_override')
+            file=self.root/f'{name}.txt';file.write_text('not a directory')
+            with patch.dict(os.environ,{name:str(file)}),self.assertRaises(PodError):
+                resolve()
+
+    def test_native_homes_reject_relative_malformed_and_project_redirects(self):
+        project=self.root/'git-project';project.mkdir()
+        subprocess.run(['git','init','-q',str(project)],check=True)
+        contained=project/'native-home';contained.mkdir()
+        redirected=self.root/'redirected-native-home';redirected.symlink_to(contained,target_is_directory=True)
+        for name in ('XDG_CONFIG_HOME','XDG_STATE_HOME','CODEX_HOME','CLAUDE_CONFIG_DIR'):
+            for value in ('','.','relative/path','bad\x00path'):
+                with self.subTest(name=name,value=repr(value)),patch.object(os,'environ',{**os.environ,name:value}), \
+                     self.assertRaises(PodError) as blocked:
+                    native_home(name,default=self.root/'safe-default',project=project)
+                self.assertEqual(blocked.exception.code,'invalid_native_home')
+            file=self.root/f'{name}.txt';file.write_text('not a directory')
+            with patch.dict(os.environ,{name:str(file)}),self.assertRaises(PodError):
+                native_home(name,project=project)
+            for value in (contained,redirected):
+                with self.subTest(name=name,value=value),patch.dict(os.environ,{name:str(value)}), \
+                     self.assertRaises(PodError) as blocked:
+                    native_home(name,project=project)
+                self.assertEqual(blocked.exception.code,'project_contained_native_home')
+
+    def test_relative_xdg_homes_and_fixture_override_restoration(self):
+        with patch.dict(os.environ,{'XDG_CONFIG_HOME':'relative-config',
+                                    'XDG_STATE_HOME':'relative-state'}):
+            with self.assertRaises(PodError):personal_path()
+            with self.assertRaises(PodError):state_root()
+        with tempfile.TemporaryDirectory() as directory:
+            inherited={'POD_CONFIG_HOME':str(Path(directory)/'inherited-config'),
+                       'POD_STATE_HOME':str(Path(directory)/'inherited-state')}
+            with patch.dict(os.environ,inherited):
+                with fixture() as isolated:
+                    self.assertNotIn('POD_CONFIG_HOME',os.environ)
+                    self.assertNotIn('POD_STATE_HOME',os.environ)
+                    self.assertFalse(Path(inherited['POD_CONFIG_HOME']).exists())
+                    self.assertFalse(Path(inherited['POD_STATE_HOME']).exists())
+                self.assertEqual({key:os.environ[key] for key in inherited},inherited)
+
+    def test_yaml_include_size_depth_and_type_boundaries(self):
+        self.path.parent.mkdir(exist_ok=True)
+        variants=(
+            'schema: pod/v1\nmodels: {gpt-6-sol: &x available, gpt-6-luna: *x}\n',
+            'schema: pod/v1\nmodels: !include secret\n',
+            'schema: pod/v1\nworkers: [wrong]\n',
+            'a: '+('['*20)+'0'+(']'*20)+'\n',
+            'a'*65537,
+        )
+        for value in variants:
+            with self.subTest(value=value[:40]):
+                self.path.write_text(value)
+                with self.assertRaises(PodError):read_yaml(self.path)

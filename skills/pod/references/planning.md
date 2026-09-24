@@ -1,40 +1,42 @@
 # Planning and packets
 
-For issue-backed work, read [Pod Execution Spec](execution-spec.md) and bind its
-source/repository/worktree. Direct work skips source. Plan-only is read-only;
-authorized execution needs no second approval.
+For issue-backed work, read [Pod Execution Spec](execution-spec.md), verify the
+actual repository and bind source, body digest and worktree. Direct work skips
+issue intake. Plan-only is read-only; accepted execution continues in the same
+session under its actual authorization.
 
-Use a brief: preserve the original criteria, map
-each to a check or explicit dependency, and name assumptions that would change
-the approach. The `brief` helper validates this map. Decomposition may
-change as evidence arrives; acceptance criteria change only with authority.
+Use a brief that preserves every original criterion, maps it to a check or
+explicit dependency, and names consequential assumptions. The `brief` helper
+validates this map. Decomposition may change as evidence arrives; acceptance
+criteria change only with authority.
 
 Give each assignment one responsibility and an editing boundary. Serialize
 overlapping changes while contracts are unsettled. Preserve unrelated work and
 use the project's supported isolation mechanism.
 
-Freeze a `pod-packet/v1` before admission. It binds objective, criteria,
-responsibility, scope, permitted actions, candidate, dependencies, route,
-policy/plan revisions, issue/objective-worktree/placement identity when applicable, sources and reporting expectations. Native references
-join the admission after Orca issues them; they are not predicted packet fields.
+Freeze a `pod-packet/v2` before admission. It binds objective, criteria,
+responsibility, scope, permitted actions, candidate, dependencies, proposed
+route, preference and plan revisions, issue/worktree/placement identity when
+applicable, sources and reporting expectations. Native references join the
+admission after Orca issues them; they are not predicted packet fields.
 
 Context entries are bounded source, instruction or summary references with
 digests. Include only relevant material, excluding secrets and the full
 conversation. Unavailable sources need a fresh binding before admission.
-Definitively changed or absent sources reject that assignment; restoring bytes
-does not erase the rejection. This check does not promise an atomic snapshot
-against external writers.
+Sources are existing inputs the worker reads; files it will create belong in
+scope and permitted actions, never in source bindings.
+Definitively changed or absent sources reject that assignment; restored bytes
+do not erase the rejection. This is no atomic snapshot against external writers.
 
-The `report` helper joins a `pod-report/v1` to the frozen packet, admission and
-fresh native attempt evidence. Scope deviations require reconciliation, and a
-report cannot grant new permissions or establish acceptance.
+The `report` helper joins a bounded worker report to the frozen packet,
+admission and fresh native attempt evidence. Scope deviations require
+reconciliation. A report cannot grant permissions or establish acceptance.
 
-Correction history binds the Task and checkpoint criterion. Rewording a failure
-or restarting the session does not reset its count. A diagnosis must identify
-the obligation, failing example, hypothesis, last evidence and discriminating
-check. Its bounded source observation establishes provenance, not the truth of
-the hypothesis.
+Correction history binds Task and criterion. Rewording a failure or restarting
+the session does not reset its count. Diagnosis identifies the obligation,
+failing example, hypothesis, last evidence and discriminating check. Its
+bounded source observation establishes provenance, not truth of the hypothesis.
 
-When sources, instructions, candidate or plan change, invalidate affected packets
-and evidence. Preserve useful unaffected context only while its bindings remain
-valid. Orca's guide governs session reuse and runtime handoffs.
+Changed sources, instructions, candidate, plan or relevant preference revision
+invalidate affected packets and evidence. Preserve unaffected bound context.
+Orca's guide governs session reuse and runtime handoffs.

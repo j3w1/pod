@@ -2,11 +2,30 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 from unittest.mock import patch
 
 ORCA_VERSION = "1.4.209"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / f"orca-{ORCA_VERSION}"
+HOST_HOME = Path.home().resolve()
+HOST_POD_DATA = Path(os.environ.get("XDG_DATA_HOME", HOST_HOME / ".local/share")).resolve() / "pod"
+
+
+def disposable_path(home: Path) -> str:
+    """Expose only a disposable launcher directory and system executables."""
+    return os.pathsep.join((str(home / ".local/bin"), "/usr/local/bin", "/usr/bin", "/bin"))
+
+
+def modified_bundle(root: Path) -> Path:
+    """An independent bundle copy with changed code bytes and the same VERSION."""
+    from pod.bundle import bundle_root
+    destination = root / "modified-pod"
+    shutil.copytree(bundle_root(), destination,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    module = destination / "operations.py"
+    module.write_bytes(module.read_bytes() + b"\n# disposable changed-code proof\n")
+    return destination
 
 
 def receipt(name: str) -> dict:
@@ -31,29 +50,15 @@ def fixture():
         path.mkdir()
         homes = {"HOME": str(base / "home"),
                  "XDG_CONFIG_HOME": str(base / "config-home"),
+                 "XDG_DATA_HOME": str(base / "data-home"),
                  "XDG_STATE_HOME": str(base / "state-home"),
                  "CODEX_HOME": str(base / "codex-home"),
-                 "CLAUDE_CONFIG_DIR": str(base / "claude-home")}
+                 "CLAUDE_CONFIG_DIR": str(base / "claude-home"),
+                 "PATH": disposable_path(base / "home")}
+        if (Path(homes["XDG_DATA_HOME"]).resolve(strict=False) / "pod").is_relative_to(HOST_POD_DATA):
+            raise AssertionError("Disposable fixture resolved into the host Pod data directory")
         (base / "home").mkdir()
         with patch.dict(os.environ, homes, clear=False):
             os.environ.pop("POD_CONFIG_HOME", None)
             os.environ.pop("POD_STATE_HOME", None)
             yield path
-
-
-def establishment(route, *, runtime="runtime", billing="included", observed="subscription",
-                  hard_stops=(), bucket=...):
-    """A minimal route establishment record, as the production port would build one."""
-    return {"schema": "pod-route-establishment/v1", "runtime": runtime, "version": ORCA_VERSION,
-            "executable": "/fixture/orca", "hard_stops": list(hard_stops), "disclosures": [],
-            "route": {"agent": route.get("agent"), "model": route.get("model"),
-                      "account": route.get("account"),
-                      "bucket": route.get("bucket") if bucket is ... else bucket,
-                      "effort": route.get("effort"), "context": route.get("context"),
-                      "effective_context": route.get("effective_context")},
-            "controls": {"account_identity": {"tier": "runtime_observation", "matched": True},
-                         "context_window": {"tier": "enforceable_control",
-                                            "source": "explicit synthetic fixture"}},
-            "login": {"mode": "host_login", "auth": "oauth", "subscription": True,
-                      "managed_accounts": 0, "identity_digest": route.get("account")},
-            "billing": {"observed": observed, "approved": billing}}

@@ -13,7 +13,7 @@ from pod.github import (AMENDMENT_JQ, GhPort, ISSUE_FIELDS, PR_FIELDS, RUN_FIELD
                         gh_allowed, git_allowed,
                         issue_intake, issue_recheck, repository_context)
 from pod.ledger import checkpoint, objective_root, read, state_root
-from pod.setup import inspect
+from pod.placement import inspect
 from pod.util import digest
 from tests.common import fixture
 
@@ -246,7 +246,7 @@ class RepositoryAndIssueTests(unittest.TestCase):
             with patch.dict(os.environ, {"CODEX_HOME": str(inside_agents),
                                          "CLAUDE_CONFIG_DIR": str(root / "safe-claude")}), \
                  self.assertRaises(PodError) as setup_error:
-                inspect(worktree, global_scope=True)
+                inspect(worktree)
             self.assertEqual(setup_error.exception.code, "project_contained_native_home")
 
             with patch.dict(os.environ, {"POD_CONFIG_HOME": str(inside_config),
@@ -342,19 +342,21 @@ class RepositoryAndIssueTests(unittest.TestCase):
 
             (main / ".pod").mkdir()
             (main / ".pod" / "config.yaml").write_text(
-                "schema: pod/v1\npolicy: {max_workers: 2}\n")
+                "schema: pod/v1\nwaste_governor: {transient_retries: 1}\n")
             (worktree / ".pod").mkdir()
             (worktree / ".pod" / "config.yaml").write_text(
-                "schema: pod/v1\npolicy: {max_workers: 1}\n")
-            self.assertEqual(effective(worktree)["policy"]["policy"]["max_workers"], 1)
+                "schema: pod/v1\nwaste_governor: {transient_retries: 0}\n")
+            self.assertEqual(effective(worktree)["policy"]["waste_governor"]["transient_retries"], 0)
 
-            value = {"schema": "pod-checkpoint/v1", "criteria": ["works"],
+            value = {"schema": "pod-checkpoint/v2", "criteria": ["works"],
                      "plan_revision": "plan", "candidate": "candidate",
-                     "policy_revision": "policy", "native_refs": [], "assignments": [],
+                     "policy_revision": effective(main)["revision"], "native_refs": [], "assignments": [],
                      "questions": [], "verification_gaps": ["works"],
                      "next_safe_action": "continue"}
-            checkpoint(main, "issue-7", owner="owner", value=value,
-                       native={"runtime": "runtime"})
+            with patch('pod.ledger.require_authority', return_value={
+                    'runtime':'runtime','run_id':'run','references':{'run':'runtime'}}):
+                checkpoint(main, "issue-7", owner="owner", value=value,
+                           native={"runtime": "runtime"})
             self.assertEqual(read(worktree, "issue-7")["checkpoint"]["objective"], "issue-7")
 
             dirty = main / "owner-change.txt"

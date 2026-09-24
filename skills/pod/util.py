@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any
 
@@ -65,7 +66,7 @@ def native_home(name: str, *, default: Path | None = None,
     if not path.is_absolute() or (path.exists() and not path.is_dir()):
         raise PodError("invalid_native_home", f"{name} must be an absolute directory path")
     boundary = (project if project is not None else Path.cwd()).resolve()
-    boundaries = [boundary]
+    boundaries = []
     from .github import repository_context
     context = repository_context(boundary)
     if context.get("repo_key") is not None:
@@ -93,6 +94,20 @@ def bounded_json(path: Path, *, limit: int = MAX_RECORD) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as exc:
+        raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
+
+
+def bounded_stdin_json(*, limit: int = MAX_RECORD) -> Any:
+    """Read one private JSON request from a pipe without treating it as a path."""
+    try:
+        raw = sys.stdin.buffer.read(limit + 1)
+    except OSError as exc:
+        raise PodError("invalid_record", "Cannot read bounded JSON input") from exc
+    if len(raw) > limit:
+        raise PodError("record_too_large", "Record exceeds its size limit")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
         raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
 
 

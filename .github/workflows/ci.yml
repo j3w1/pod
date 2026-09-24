@@ -9,14 +9,13 @@ on:
 permissions:
   contents: read
 
-# One group per pull request or ref: a newer push replaces the pull-request run it
-# superseded, and a push to main is never canceled by anything.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHONDONTWRITEBYTECODE: "1"
+  POD_REQUIRE_PTY: "1"
   DISABLE_TELEMETRY: "1"
   DO_NOT_TRACK: "1"
 
@@ -32,10 +31,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Install PyYAML, the one runtime prerequisite
-        run: python -m pip install 'PyYAML>=6.0.2,<7'
+      - name: Install terminal and Python test prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y zsh
+          PIN="$(PYTHONPATH=skills python -c 'from pod.installer import PIN; print(PIN)')"
+          python -m pip install "$PIN" -r tests/requirements-pty.txt
 
-      - name: Unit and incident suite
+      - name: Unit, incident, and installer subprocess suite
         run: python -m unittest discover -s tests -v
         env:
           PYTHONPATH: skills
@@ -47,75 +50,88 @@ jobs:
         run: python -m compileall -q skills tests tools
       - name: Whitespace
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
-
-      - name: Validate the skill bundle and its budgets
+      - name: Validate the skill bundle
         run: python -m pod.skill_validation skills/pod
         env:
           PYTHONPATH: skills
-
+      - name: Validate the catalog
+        run: python -m pod.catalog --check
+        env:
+          PYTHONPATH: skills
       - name: Tracked source hygiene audit
         run: python tools/source_audit.py .
 
-      - name: The bundle runs as a plain copy, with no checkout
+      - name: Copied bundle works without the checkout
         run: |
-          COPY="$RUNNER_TEMP/copy"
+          COPY="$RUNNER_TEMP/copy/pod"
           mkdir -p "$COPY" "$RUNNER_TEMP/elsewhere" "$RUNNER_TEMP/copy-home"
-          cp -rL skills/pod "$COPY/pod"
+          cp -rL skills/pod/. "$COPY/"
           cd "$RUNNER_TEMP/elsewhere"
-          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" \
-            python -I "$COPY/pod/scripts/pod.py" doctor --json > report.json
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" python -I "$COPY/scripts/pod.py" --version > version.txt
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" python -I "$COPY/scripts/pod.py" config --json > config.json || test "$?" -eq 1
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" python -I "$COPY/scripts/pod.py" doctor --json > doctor.json
           python - "$GITHUB_WORKSPACE/VERSION" <<'PY'
-          import json, os, pathlib, sys
-          report = json.loads(pathlib.Path("report.json").read_text())
-          expected = os.path.join(os.environ["RUNNER_TEMP"], "copy", "pod")
-          assert report["bundle"]["path"].startswith(expected), report["bundle"]
-          assert report["bundle"]["version"] == pathlib.Path(sys.argv[1]).read_text().strip(), report["bundle"]
-          assert report["prerequisites"]["python"] == "ok", report["prerequisites"]
-          PY
-
-      - name: Install this commit with the skills CLI and run its helpers
-        run: |
-          # The skills CLI honours CODEX_HOME, CLAUDE_CONFIG_DIR and XDG_STATE_HOME, so a
-          # smoke that only overrides HOME writes into the real profile. Scrub them all.
-          SMOKE="$RUNNER_TEMP/skills-home"
-          mkdir -p "$SMOKE"
-          env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
-            HOME="$SMOKE" npx --yes skills@1.7.0 add "$GITHUB_WORKSPACE" \
-            --skill pod -a codex -a claude-code -g -y
-          # One canonical copy with every other agent linked at it.
-          test -f "$SMOKE/.agents/skills/pod/SKILL.md"
-          test -f "$SMOKE/.agents/skills/pod/VERSION" && ! test -L "$SMOKE/.agents/skills/pod/VERSION"
-          test -L "$SMOKE/.claude/skills/pod"
-          test "$(readlink -f "$SMOKE/.claude/skills/pod")" = "$(readlink -f "$SMOKE/.agents/skills/pod")"
-          PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
-          POD="$SMOKE/.agents/skills/pod/scripts/pod.py"
-          export HOME="$SMOKE" CODEX_HOME="$SMOKE/.agents" CLAUDE_CONFIG_DIR="$SMOKE/.claude" \
-            XDG_STATE_HOME="$SMOKE/.local/state" XDG_CONFIG_HOME="$SMOKE/.config"
-          for family in "" setup config doctor status; do
-            python "$POD" $family --help > /dev/null
-          done
-          PROJECT="$(mktemp -d)"
-          git -C "$PROJECT" init -q
-          (cd "$PROJECT" && python "$POD" setup --global --json > "$RUNNER_TEMP/setup.json")
-          (cd "$PROJECT" && python "$POD" config --check --json > /dev/null)
-          (cd "$PROJECT" && python "$POD" doctor --json > "$RUNNER_TEMP/doctor.json")
-          python - "$RUNNER_TEMP/setup.json" "$RUNNER_TEMP/doctor.json" "$GITHUB_WORKSPACE/VERSION" <<'PY'
           import json, pathlib, sys
-          setup = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          for host, value in setup["skills"].items():
-              assert value == "managed_by_skills_cli", (host, value)
-          doctor = json.loads(pathlib.Path(sys.argv[2]).read_text())
-          assert doctor["bundle"]["version"] == pathlib.Path(sys.argv[3]).read_text().strip(), doctor["bundle"]
+          assert pathlib.Path('version.txt').read_text().strip() == pathlib.Path(sys.argv[1]).read_text().strip()
+          assert json.loads(pathlib.Path('config.json').read_text())['eligible'] == []
+          assert json.loads(pathlib.Path('doctor.json').read_text())['installation'] == 'not installed by the one-shot installer'
           PY
 
-      - name: Install j3w1/pod itself the documented way
+      - name: Install this commit from an archive in a clean home
+        run: |
+          git archive --format=tar.gz --prefix=pod-source/ HEAD > "$RUNNER_TEMP/pod-source.tar.gz"
+          SMOKE="$RUNNER_TEMP/install-home"
+          mkdir -p "$SMOKE/home" "$SMOKE/claude" "$SMOKE/codex" "$SMOKE/work"
+          export POD_INSTALL_SOURCE="file://$RUNNER_TEMP/pod-source.tar.gz"
+          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
+            POD_INSTALL_SOURCE="$POD_INSTALL_SOURCE" sh install.sh
+          test ! -e "$SMOKE/codex/skills/pod"
+          test "$(readlink -f "$SMOKE/claude/skills/pod")" = "$(readlink -f "$SMOKE/home/.agents/skills/pod")"
+          PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/home/.agents/skills/pod"
+          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
+            "$SMOKE/home/.local/bin/pod" --version | diff - VERSION
+          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
+            "$SMOKE/home/.local/bin/pod" config --json > "$RUNNER_TEMP/installed-config.json"
+          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
+            "$SMOKE/home/.local/bin/pod" doctor --json > "$RUNNER_TEMP/installed-doctor.json"
+          python - "$RUNNER_TEMP/installed-doctor.json" "$RUNNER_TEMP/installed-config.json" "$SMOKE/home"/data/pod/install.json <<'PY'
+          import json, pathlib, sys
+          doctor = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          config = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          receipt = json.loads(pathlib.Path(sys.argv[3]).read_text())
+          assert receipt['status'] == 'installed'
+          assert len(config['eligible']) == 6
+          assert doctor['installation_checks']['healthy']
+          assert doctor['installation_checks']['digest_matches']
+          PY
+          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
+            POD_INSTALL_SOURCE="$POD_INSTALL_SOURCE" sh install.sh | grep 'Already current'
+          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
+            POD_INSTALL_SOURCE="$POD_INSTALL_SOURCE" "$SMOKE/home/.local/bin/pod" update | grep 'Already current'
+
+      - name: SHA-pinned public endpoints install this exact commit
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          SMOKE="$RUNNER_TEMP/remote-home"
-          mkdir -p "$SMOKE"
-          SOURCE="${GITHUB_REPOSITORY}"
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then SOURCE="${GITHUB_REPOSITORY}#${GITHUB_HEAD_REF}"; fi
-          env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u XDG_STATE_HOME -u XDG_CONFIG_HOME \
-            HOME="$SMOKE" npx --yes skills@1.7.0 add "$SOURCE" --skill pod -a codex -a claude-code -g -y
-          PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/.agents/skills/pod"
-          env -i PATH="$PATH" HOME="$SMOKE" python -I "$SMOKE/.agents/skills/pod/scripts/pod.py" doctor --json > /dev/null
+          SMOKE="$RUNNER_TEMP/public-home"
+          mkdir -p "$SMOKE/home" "$SMOKE/claude" "$SMOKE/codex"
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh" | \
+            env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+              XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+              CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
+              POD_INSTALL_SOURCE="https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${GITHUB_SHA}" sh
+          test "$(env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
+            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
+            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
+            "$SMOKE/home/.local/bin/pod" --version)" = "$(cat VERSION)"

@@ -2,7 +2,8 @@
 """Audit every tracked file for private residue and for material Pod no longer has.
 
 Findings name the file, the category and the line, never the matched text. Pod is
-distributed only as a skill from `main` through the skills CLI, so its own publication
+distributed through the one-shot installer from `main`, which uses the skills CLI
+and installs a user-local launcher; its own package or release publication
 machinery is a finding here. A governed project's release or deploy step is ordinary
 Pod functionality and is not.
 """
@@ -29,7 +30,8 @@ MECHANISM = (
     ("unsupported mechanism", re.compile(
         rb"\borchestrate\b|legacy_hold|state[-_]migrate|\bcapacity_full\b|pod-context/v[12]"
         rb"|pod-governor/v1|docs/history|backwards?[ -]compat|migration_required|pod-migration"
-        rb"|pod-progress|platform_audit")),
+        rb"|pod-progress|platform_audit|spending_grants|exceptional_grants"
+        rb"|quota_fresh|pod-quota|config approve|pod-context/v3")),
 )
 # Wording that describes an earlier Pod rather than this one. Orca's captures may use these
 # words for their own reasons, so sanitized fixtures are exempt from this table only.
@@ -63,7 +65,8 @@ AUTOMATION_STEP = (
 )
 # Tracked paths that would mean Pod is being packaged or published again.
 PUBLICATION_PATHS = ("release/", "CHANGELOG", "pyproject.toml", "setup.py", "setup.cfg",
-                     "MANIFEST.in", "install.py", "skills/pod/release.py", "dist/", "build/")
+                     "MANIFEST.in", "install.py", "skills/pod/setup.py",
+                     "skills/pod/release.py", "dist/", "build/")
 PACKAGE_SUFFIXES = (".whl", ".tar.gz", ".tgz", ".egg", ".zip")
 # The guard names its own patterns, so exactly these two files are exempt from every table
 # but FORBIDDEN.
@@ -94,8 +97,6 @@ def _scan(name: str, data: bytes) -> list[str]:
 
 
 def _publication_path(name: str) -> bool:
-    if name == "skills/pod/setup.py":
-        return False
     return (name.startswith(PUBLICATION_PATHS) or name.endswith(PACKAGE_SUFFIXES)
             or (name.startswith(".github/workflows/") and "release" in name.lower()))
 
@@ -142,8 +143,8 @@ def main(argv: list[str]) -> int:
         for finding in findings:
             print("  " + finding)
         return 1
-    print("Tracked source audited; no personal path, account, runtime identifier, credential, "
-          "unsupported mechanism or Pod publication material.")
+    print("Installer-based tracked source audited; no personal path, account, runtime identifier, "
+          "credential, unsupported mechanism or Pod publication material.")
     return 0
 
 

@@ -1,240 +1,93 @@
 # Pod
 
-Pod turns the Codex or Claude Code conversation already open in Orca into the
-coordinator for a software objective. Give it a GitHub issue containing a clear
-implementation contract, or simply describe a small task. Pod plans, chooses
-direct work or useful workers, preserves evidence, and reports the real outcome.
+Pod helps a Codex or Claude Code conversation coordinate a software objective. It can use direct work, tools, or Orca workers while keeping the current conversation in charge.
 
-## Table of contents
+## Install
+
+On Linux, with Python 3.13+ (including `venv`), Node/npx, curl or wget, and access to GitHub and PyPI:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh
+```
+
+This installs the Pod skill for Codex and Claude Code, a user-local `pod` command, and a small isolated Python dependency environment. It creates six Available model preferences if no personal file exists. Open a new shell if the installer adds `~/.local/bin` to your PATH. For a download, inspect, then run path and removal details, see [installation and security](docs/installation.md).
+
+## Contents
 
 - [How it works](#how-it-works)
-- [Installation](#installation)
 - [The basic workflow](#the-basic-workflow)
-- [Writing and publishing a spec](#writing-and-publishing-a-spec)
-- [Direct work, planning and continuation](#direct-work-planning-and-continuation)
-- [Worker routes](#worker-routes)
-- [When something goes wrong](#when-something-goes-wrong)
+- [Plan, direct work, and continuation](#plan-direct-work-and-continuation)
+- [Models and the terminal view](#models-and-the-terminal-view)
+- [Troubleshooting](#troubleshooting)
 - [What's inside](#whats-inside)
 - [Philosophy](#philosophy)
 - [Updating and removing](#updating-and-removing)
 - [Contributing](#contributing)
-- [License](#license)
 
 ## How it works
 
-Invoke `$pod` in Codex or `/pod` in Claude Code. Your current conversation keeps
-its context, model and effort and remains the coordinator.
+Your existing authenticated session remains the coordinator, with its current model and effort. Orca owns Runs, Tasks, Dispatches, worker tabs, messages, request recovery, worktrees, and lifecycle. Pod makes assignment choices, checks them at admission, and binds evidence to the objective. Your project decides what counts as accepted.
 
-| Owner | Responsibility |
-| --- | --- |
-| **Pod** | Understand the objective, apply policy, choose assignments and routes, and bind evidence. |
-| **Orca** | Runs, Tasks, Dispatches, worktrees, worker tabs, messages, actual capacity and lifecycle. |
-| **Your project** | Source rules, checks, review, acceptance, merge and release. |
-
-For an issue URL, Pod reads the complete current body through authorized GitHub
-access, verifies that its target matches the actual checkout, and maps its
-criteria to checks or explicit dependencies. The issue supplies scope, not extra
-permissions. Relevant content changes are reconciled on continuation; labels or
-timestamps alone do not invalidate good work.
-
-Implementation belongs in an isolated Orca worktree, normally on an
-`orca/<task-slug>` branch. The branch, Orca display label and filesystem path are
-separate identities. Pod reuses an existing worktree only for the same objective
-and repository, preserves owner dirtiness, and never resets a collision.
-
-When workers help, Orca starts each normal worker in its own visible agent tab.
-The coordinator validates a worker's report, preserves the useful result, then
-follows Orca's Delivery acknowledgment and release ordering promptly. Pod does
-not keep another worker database or use raw terminal closure as a lifecycle API.
-
-## Installation
-
-**Prerequisites:** Linux, Python 3.13+ as `python3`, PyYAML 6.x, Node for the
-skills CLI, and Orca with its version-matched orchestration guide.
-
-**Install** the current skill from `main` for both supported agents:
-
-```bash
-npx skills add j3w1/pod --skill pod -a codex -a claude-code -g
-```
-
-That is the one way to install Pod. The skill carries its own Python helpers;
-loading it installs nothing and changes no provider setting. If PyYAML is
-missing, the first helper run prints the one user-space step that installs it.
-
-**Start:** open the target project in Orca and start an authenticated Codex or
-Claude Code conversation there. Invoke `$pod` in Codex or `/pod` in Claude Code.
-Direct work is always valid; approve a worker route only if delegation would
-actually help.
-
-The copy your agent loaded stays as installed until you update it. `doctor`
-shows its path and the version from the repository's `VERSION` file.
+Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. A direct objective follows the same process without an issue.
 
 ## The basic workflow
 
-1. **Open the correct project in Orca.** Start an authenticated agent there.
-2. **Invoke the issue.** Use `$pod https://github.com/owner/project/issues/123`
-   or `/pod https://github.com/owner/project/issues/123`.
-3. **Review the brief.** Pod reads the complete issue, applicable instructions
-   and existing evidence, then maps each Proof of Done item to a check.
-4. **Use the objective worktree.** Read-only planning need not create one;
-   implementation selects or creates the exact isolated worktree first.
-5. **Approve only when useful.** If a worker would help and its route is not
-   approved, Pod shows one concise model/account/effort/context/billing proposal
-   and asks for explicit confirmation in the host conversation. You never copy
-   account or route hashes. Approval does not grant paid usage or extra fan-out.
-6. **Coordinate useful workers.** Worker tabs receive bounded assignments rather
-   than the whole issue or conversation. Finished tabs are released after their
-   results are safely consumed, not held until final delivery.
-7. **Verify the project.** Local checks, independent review, hosted CI, live
-   provider evidence and project acceptance remain distinct facts.
-8. **Receive the outcome.** The final report names what passed, blockers,
-   uncertainty, the candidate, remaining gates and any retained resource.
+1. Open the project in Orca and start a Codex or Claude Code conversation.
+2. In Codex, say `$pod https://github.com/owner/project/issues/123`; in Claude Code, use `/pod <issue-url>`. You can also give either skill a direct objective.
+3. Review the objective and criterion-to-check map when the task warrants one. Plan Mode remains read-only until you accept the plan.
+4. Let the coordinator do simple work directly and delegate bounded independent assignments only when useful. A worker opens in its own visible agent tab.
+5. Review the local checks, independent review, hosted CI, and project acceptance as separate evidence. Pod reports remaining gates and uncertain native work instead of assuming success.
 
-An unavailable worker route blocks only delegation. Pod can continue safe direct
-work in the current conversation.
+For persistent issue-backed work, the [Pod Execution Spec reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md) gives a readable format with numbered Proof of Done items. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
 
-## Writing and publishing a spec
+## Plan, direct work, and continuation
 
-The canonical [Pod Execution Spec reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md)
-contains the ordinary Markdown skeleton and interpretation rules.
-
-- Ask: `Draft a Pod Execution Spec for owner/project: <outcome>.` Drafting returns
-  a document; it does not publish anything.
-- To publish through authorized GitHub access, ask: `Create a Pod Execution Spec
-  issue in owner/project for <outcome>, using j3w1/pod:skills/pod/references/execution-spec.md.`
-- Then execute the resulting issue URL with `$pod` or `/pod`.
-
-Authoring in ChatGPT and executing in Orca are separate steps. Installing this
-skill in an agent does not install a ChatGPT integration or grant GitHub access.
-Private issues require already-authorized access; Pod never asks you to make one
-public or place credentials in it.
-
-## Direct work, planning and continuation
-
-- Direct task: `/pod update the README to explain the latest changes`.
+- Direct task: `/pod update the README to explain this feature`.
 - Plan only: `/pod <issue-url> — plan only; do not change files`.
-- Plan then execute: Pod reads and reconciles the source first, then continues
-  automatically within authorization. A host's real Plan Mode still controls
-  whether edits may begin.
-- Continue after interruption: invoke the same objective. Pod resolves the same
-  repository/worktree state, rechecks source content, reads native work, and
-  preserves uncertain requests instead of creating replacements.
+- Plan then execute: accept the host plan and continue in the same conversation.
+- Continue after interruption: invoke the same objective; Pod reads the native state and reconciles unresolved requests before another start.
 
-Small direct tasks need no issue, spec file, worker, worktree ceremony or route
-approval. Users normally do not create worker tabs, choose every model, manage
-release commands, or paste the entire issue into each worker.
+A small task can finish with zero workers. Missing Orca delegation support blocks delegation while safe direct work and diagnosis continue. Pod does not configure Orca or sign in to your agent applications.
 
-## Worker routes
+## Models and the terminal view
 
-Pod's active catalog is exact:
+`pod` opens an optional model TUI in a terminal; without a TTY it prints a short summary. The TUI shows the six supported base models, focus-driven Details, native capability information, and a dated Artificial Analysis reference. Space cycles Available, Preferred, and Disabled; `r` switches My selection and All models while retaining saved choices. Search, sort, and provider filters affect display only.
 
-| Complexity | Alias | Agent / model | Effort | Context profile |
-| --- | --- | --- | --- | --- |
-| Trivial | Luna | Codex / `gpt-6-luna` | low | `256k` |
-| Simple | Sonnet | Claude / `claude-sonnet-5` | medium | `256k` |
-| Standard | Sol | Codex / `gpt-6-sol` | medium | `256k` |
-| Complex | Opus | Claude / `claude-opus-5-5` | high | `max` |
-| Very complex | Astra | Codex / `gpt-6-astra` | xhigh | `max` |
+The personal YAML at `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` is the single model preference authority. `pod config --json` shows the effective pool and path; `pod config edit` opens that file in your editor. A custom map can leave a model unset, which means not eligible. The six exact model ids are `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`.
 
-Claude Fable (`claude-fable-5-1`) is an alternative for demanding long-horizon
-work. `256k` means a conservative upper bound of **256,000 tokens**; a proven
-lower native clamp stays visible. `max` means the largest limit the exact
-model, agent and installed runtime can prove, bounded by the provider ceiling
-(up to 1.05M for these Codex models and 1M for these Claude models). A ceiling
-is not live capability proof.
+The coordinator chooses a suitable eligible model and supported effort for each assignment. Preferred is only a modest tie-breaker. Orca has per-worker model and effort preferences but no scoped context flag, so Pod omits a context flag and records `native_default`. Catalog benchmarks are reference data, not a promise of native availability, billing, or the model Pod will choose.
 
-Pod is developed against Orca 1.4.209 and discovers capabilities from the
-installed runtime. That Orca exposes per-worker model and effort, but no safe
-per-worker context control or strict noninteractive startup flag, so Pod reports
-context-dependent worker routes unavailable before any effect. It does not invent
-a flag, launch an unsupervised terminal, wrap a provider, or change shared
-settings. Bootstrap workers do not count as production-adapter proof.
+## Troubleshooting
 
-Guided approval is inside the existing `config` family:
+`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, catalog age, and available Orca capability without starting a worker. `pod status --json` shows objective scope, constraints, native references, route decisions, blockers, and the next safe action. A missing or invalid preference file leaves no eligible models; use `pod config edit` to correct it.
 
-```text
-python3 ~/.agents/skills/pod/scripts/pod.py config approve sol
-python3 "${CLAUDE_SKILL_DIR}/scripts/pod.py" config revoke sol
-```
-
-Interactive use asks for confirmation. In a host conversation, Pod uses the
-read-only JSON proposal and confirmation operation internally after you say yes.
-Advanced users may edit personal YAML; project/task YAML can only narrow it.
-
-## When something goes wrong
-
-Run helpers from the skill copy your agent actually loaded:
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/pod.py" doctor       # Claude Code
-python3 ~/.agents/skills/pod/scripts/pod.py doctor       # Codex, global
-python3 .agents/skills/pod/scripts/pod.py status --json  # Codex, project
-```
-
-`doctor` gives concise direct-work and worker-route readiness. `config` shows
-effective policy. `status` shows the objective/source, selected worktree,
-relevant native work, blocker, next action and remaining gates. Add `--json` for
-detailed diagnostics. These reads do not dispatch, repair or convert anything.
-
-An inaccessible issue is an access blocker, a wrong target is a repository
-mismatch, and a changed body needs reconciliation. A closed issue needs intent
-and recorded-outcome review before repeated implementation.
-
-Lost worker-start responses retain their logical reservation and recover the
-same Orca request. Orca's effect-free refusals (`task_not_found`,
-`task_not_startable`, `inject_rejected`) are deferred without blind retry; a
-`runtime_error` or unknown response stays unresolved until native readback
-settles it. Silence is not completion. State in an unsupported schema is reported
-by `doctor` and blocks only that objective; it is never converted.
+Lost worker-start replies retain the same Orca request for reconciliation. A known effect-free refusal is deferred; an uncertain response remains unresolved until exact native readback. A provider safety refusal never triggers a same-Task model switch. See [installation troubleshooting](docs/installation.md) for PATH, duplicate skills, and interrupted installs.
 
 ## What's inside
 
-- One installed skill and conditional references, including the Execution Spec.
-- Four public helper families: `setup`, `config`, `doctor` and `status`.
-- One personal YAML authority with restrictive project/task layers.
-- Bounded issue/source, packet, checkpoint, admission and verification evidence.
-- Objective-local logical fan-out and exact Orca request recovery.
-- Candidate-bound Governor decisions: `ALLOW`, `REUSE` or `DEFER`.
-- One `skills/pod` tree serving as both the Python package and the skill.
+- One `skills/pod` tree serves as the skill and importable Python package.
+- One personal YAML file stores model states and the logical worker ceiling.
+- One bundled catalog holds official model guidance and a dated benchmark snapshot.
+- A bounded admission/checkpoint record joins Pod decisions to Orca references.
+- The Governor keeps candidate-bound `ALLOW`, `REUSE`, and `DEFER` decisions.
 
-Pod has no scheduler, issue database, polling service, provider launcher,
-worktree manager, dashboard or duplicate Orca lifecycle state.
+Pod has no scheduler, provider launcher, model account manager, billing system, dashboard, or parallel Orca lifecycle database.
 
 ## Philosophy
 
-- Use direct work when it is enough; a pod exists for distinct useful work.
-- Source is scope, never authority. Personal, host and project controls still win.
-- Preserve owner changes and uncertain effects before optimizing cleanup.
-- Verify outcomes rather than promoting worker claims or offline mocks.
-- Keep implemented, reviewed, hosted, accepted, merged and released separate.
+- Choose direct work and tools before deciding to delegate.
+- Let the user control eligibility while the coordinator judges suitability.
+- Preserve user edits and uncertain native effects.
+- Verify outcomes against the project's criteria.
+- Name local, reviewed, hosted, live, accepted, and merged results separately.
 
 ## Updating and removing
 
-The skills CLI manages the installed copy:
-
-```bash
-npx skills update pod -g
-npx skills remove pod -g -a codex -a claude-code
-```
-
-An update installs whatever `main` holds now. `setup` never overwrites or removes
-a copy the skills CLI manages, and it preserves copies you edited.
+Run `pod update` to fetch the current `main` bundle through the same staged installer. It preserves valid preferences and changed skill copies, and tells active coordinators to reload before new starts; running workers are untouched. The installer owns only identified user-local paths. See [the removal map](docs/installation.md#removal) before deleting anything. There are no release packages or tags.
 
 ## Contributing
 
-Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md), and the
-[validation gates](docs/validation.md). Start with:
-
-```bash
-PYTHONPATH=skills python -m unittest discover -s tests -v
-PYTHONPATH=skills python -m pod.skill_validation skills/pod
-python tools/source_audit.py .
-```
-
-`VERSION` at the repository root is the one authored version; the bundle's
-`skills/pod/VERSION` links to it, and every installed copy carries it. Changing it
-only changes what `doctor` reports.
+Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md), and the [validation gates](docs/validation.md). The root `VERSION` is the only authored product version. Run the full offline and PTY gates before proposing a change.
 
 ## License
 

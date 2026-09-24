@@ -73,8 +73,8 @@ A journal in another schema is refused, never upgraded.
 
 ## Authority and reporting
 
-An efficiency exception must rejoin a scoped personal grant and identify who
-applied it and why. It cannot lift authorization, correctness or spending holds.
+An efficiency exception is scoped to the candidate and records who applied it
+and why. It cannot lift authorization or correctness holds.
 Observe mode converts only efficiency deferrals into warnings. Project policy
 may narrow these controls.
 
@@ -83,7 +83,7 @@ remains owner configuration. `internal governor-status` reports candidates,
 preflight, decisions, pending validation and counters. Workflow trigger proposals
 are suggestions until explicitly configured.
 
-Unknown authority, candidate or effects defer; unknown cost warns. Verification
+Unknown authority, candidate or effects defer; unobserved cost stays unknown. Verification
 gaps block merge, release or deployment. Local checks do not replace independently
 required hosted proof. Follow the project's required-check and merge-queue
 contract; distinct validation contexts need their own evidence.

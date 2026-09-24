@@ -7,14 +7,13 @@ imported until the prerequisites hold.
 """
 
 import importlib.util
+import ast
 import json
 import os
 import sys
 
 MIN_PYTHON = (3, 13)
-REQUIRED = ("__init__.py", "cli.py", "internal.py", "SKILL.md", "VERSION")
-PYYAML_STEP = "python3 -m pip install --user 'PyYAML>=6.0.2,<7'"
-REINSTALL = "npx skills add j3w1/pod --skill pod -a codex -a claude-code -g"
+REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
 
 
 def bundle_dir(script=None):
@@ -31,6 +30,28 @@ def _yaml_importable():
     return True
 
 
+def _inventory(root):
+    """Read the one authored bundle inventory without importing Pod or PyYAML."""
+    path = os.path.join(root, "bundle.py")
+    with open(path, encoding="utf-8") as stream:
+        source = stream.read(64 * 1024 + 1)
+    if len(source) > 64 * 1024:
+        raise ValueError("bundle inventory is oversized")
+    entries = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if name in ("BUNDLE_TEXT", "BUNDLE_MODULES"):
+                entries[name] = ast.literal_eval(node.value)
+    if set(entries) != {"BUNDLE_TEXT", "BUNDLE_MODULES"}:
+        raise ValueError("bundle inventory is incomplete")
+    names = tuple(entries["BUNDLE_TEXT"]) + tuple(entries["BUNDLE_MODULES"])
+    if (not names or any(not isinstance(name, str) or not name or name.startswith("/")
+                         or ".." in name.split("/") for name in names) or len(set(names)) != len(names)):
+        raise ValueError("bundle inventory has unsafe names")
+    return names
+
+
 def preflight(version_info=None, find_spec=None, bundle=None):
     """Return None when the helper can run, else one actionable failure record.
 
@@ -45,7 +66,13 @@ def preflight(version_info=None, find_spec=None, bundle=None):
                             "newer interpreter, for example: python3.13 %s"
                             % (MIN_PYTHON[0], MIN_PYTHON[1], running, sys.executable, os.path.realpath(__file__)))}
     root = bundle_dir() if bundle is None else bundle
-    missing = [name for name in REQUIRED if not os.path.isfile(os.path.join(root, name))]
+    try:
+        names = _inventory(root)
+    except (OSError, UnicodeError, SyntaxError, ValueError, TypeError) as exc:
+        return {"code": "bundle_incomplete",
+                "message": ("Pod bundle inventory is unavailable (%s). Rerun the one-shot installer: %s"
+                            % (type(exc).__name__, REINSTALL))}
+    missing = [name for name in names if not os.path.isfile(os.path.join(root, *name.split("/")))]
     if missing:
         return {"code": "bundle_incomplete",
                 "message": ("Pod bundle at %s is incomplete (missing %s). Reinstall it: %s"
@@ -53,9 +80,8 @@ def preflight(version_info=None, find_spec=None, bundle=None):
     probe = _yaml_importable if find_spec is None else find_spec
     if not probe():
         return {"code": "pyyaml_missing",
-                "message": ("PyYAML is not importable by %s. One user-space step installs it: %s "
-                            "(or install your distribution's python-yaml package). Pod installs nothing itself."
-                            % (sys.executable, PYYAML_STEP))}
+                "message": ("PyYAML is not available in this Pod environment; rerun the one-shot "
+                            "installer: %s" % REINSTALL)}
     return None
 
 
@@ -73,14 +99,65 @@ def load_pod(bundle):
     return module
 
 
+def _installer(bundle):
+    """Load the stdlib installer before any package or PyYAML import."""
+    path = os.path.join(bundle, "installer.py")
+    spec = importlib.util.spec_from_file_location("pod_installer", path)
+    if spec is None or spec.loader is None:
+        raise OSError("installer is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _integrity_failure(bundle):
+    if not os.path.isfile(os.path.join(bundle, "installer.py")):
+        return None  # The ordinary inventory check reports a missing module.
+    try:
+        installer = _installer(bundle)
+        receipt = installer.read_receipt(installer.receipt_path())
+        if receipt is None or receipt.get("status") != "installing":
+            return None
+        actual = installer.optional_digest(__import__("pathlib").Path(bundle))
+        allowed = {item.get("digest") for item in (receipt.get("previous"), receipt.get("target"))
+                   if isinstance(item, dict)}
+        if actual in allowed and actual is not None:
+            return None
+    except Exception:
+        return {"code": "install_incomplete", "message": "Installation receipt or bundle is incomplete; rerun: " + REINSTALL}
+    return {"code": "install_incomplete", "message": "Installation stopped during skill copy; rerun: " + REINSTALL}
+
+
 def main(argv=None):
     sys.dont_write_bytecode = True
     arguments = list(sys.argv[1:] if argv is None else argv)
     root = bundle_dir()
+    if arguments[:1] == ["__install"]:
+        try:
+            return _installer(root).main(arguments[1:])
+        except (OSError, ValueError):
+            print("pod-install: installer bundle is incomplete", file=sys.stderr)
+            return 2
+    integrity = _integrity_failure(root)
+    if integrity is not None:
+        if "--json" in arguments:
+            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": integrity}, sort_keys=True))
+        else:
+            print("pod: " + integrity["message"], file=sys.stderr)
+        return 2
+    if arguments == ["--version"]:
+        try:
+            with open(os.path.join(root, "VERSION"), encoding="ascii") as stream:
+                value = stream.read().strip()
+        except (OSError, UnicodeError):
+            print("pod: bundle VERSION is unavailable", file=sys.stderr)
+            return 2
+        print(value)
+        return 0
     failure = preflight(bundle=root)
     if failure is not None:
         if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v2", "status": "blocked", "error": failure},
+            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": failure},
                              indent=2, sort_keys=True))
         else:
             print("pod: " + failure["message"], file=sys.stderr)
@@ -103,7 +180,7 @@ def main(argv=None):
                    "message": ("Pod bundle at %s is incomplete (%s). Reinstall it: %s"
                                % (root, exc, REINSTALL))}
         if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v2", "status": "blocked", "error": failure},
+            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": failure},
                              indent=2, sort_keys=True))
         else:
             print("pod: " + failure["message"], file=sys.stderr)
