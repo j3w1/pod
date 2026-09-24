@@ -39,7 +39,9 @@ class OptionalCatalogPtyTests(unittest.TestCase):
             with PtySession(home=home,cwd=work,launcher=launcher) as screen:
                 screen.wait_for('Details',timeout=4)
                 screen.send('/Luna\n')
-                screen.wait_for('Details  · GPT-6 Luna')
+                screen.wait_for(lambda session: 'Details  · GPT-6 Luna' in session.text()
+                                and 'AA Unknown' in session.text(),timeout=2)
+                screen.settle()
                 self.assertIn('AA Unknown',screen.text())
                 self.assertIn('—',screen.text())
                 screen.send('\n')
