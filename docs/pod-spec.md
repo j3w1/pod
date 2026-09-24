@@ -24,7 +24,8 @@ policy, explicit user authorization and project governance retain their own auth
 Pod decides desired fan-out, not physical occupancy: one logical reservation per Pod
 assignment, freed by exact native assignment settlement regardless of retained terminals.
 Settlement requires the exact Run/Task/Dispatch join, a settled projection outcome,
-and a terminal Dispatch status. A failed stopped attempt qualifies even when its
+and the Dispatch's own terminal status; a projected stage status, if present,
+must agree. A failed stopped attempt qualifies even when its
 stage detail is `process_stopped`; an active, unverifiable or undocumented
 abandoned attempt does not. Resource release alone proves nothing.
 Independent objectives do not census each other, and Pod never queries, infers or claims

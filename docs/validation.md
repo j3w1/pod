@@ -105,8 +105,9 @@ absent sources reject that assignment; unavailable reads hold it until bytes
 can be bound. The check does not promise an atomic snapshot against external
 writers. `pod-context/v4` stores compact policy/evidence admissions: `reserved`,
 `bound`, `unresolved`, `closed`, `deferred`. Exact native settlement requires
-matching Run/Task/Dispatch identities, a settled projection outcome and a
-terminal Dispatch status. A failed stopped attempt frees its logical slot even
+matching Run/Task/Dispatch identities, a settled projection outcome and the
+Dispatch's own terminal status. A projected stage status may be absent but,
+when present, must agree. A failed stopped attempt frees its logical slot even
 when its stage detail is `process_stopped`; retained or released resources do
 not decide settlement. Active, unverifiable and undocumented abandoned
 attempts remain outstanding. Orca owns worker/resource occupancy and all

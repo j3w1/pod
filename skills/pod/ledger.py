@@ -415,12 +415,10 @@ def _native_assignment_settled(shown: dict) -> bool:
     if not isinstance(stage, dict):
         return False
     outcome = projection.get("outcome")
-    raw_statuses = (stage.get("dispatch"), dispatch.get("status"))
-    statuses = [value for value in raw_statuses if value is not None]
+    status = dispatch.get("status")
     return (isinstance(outcome, str) and outcome in _SETTLED_OUTCOME_STATUSES
-            and bool(statuses) and all(isinstance(value, str) for value in statuses)
-            and len(set(statuses)) == 1
-            and statuses[0] in _SETTLED_OUTCOME_STATUSES[outcome]
+            and isinstance(status, str) and status in _SETTLED_OUTCOME_STATUSES[outcome]
+            and ("dispatch" not in stage or stage["dispatch"] == status)
             and isinstance(dispatch.get("id"), str)
             and projection.get("dispatchId") == dispatch["id"]
             and isinstance(dispatch.get("runId"), str)

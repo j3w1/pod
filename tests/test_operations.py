@@ -259,6 +259,9 @@ class AdmissionTests(unittest.TestCase):
             return {'runtime':'runtime','result':deepcopy(stopped['result'])} if dispatch==first['native_binding']['dispatchId'] else original(dispatch)
         with patch.object(self.port,'show_worker',side_effect=show):
             stopped['result']['dispatch'].pop('status')
+            with self.assertRaises(PodError) as stage_only:
+                self.start('replacement-task',frozen=self.frozen(route=ROUTE))
+            self.assertEqual(stage_only.exception.code,'logical_capacity_full')
             stopped['result']['projection']['stage'].pop('dispatch')
             with self.assertRaises(PodError) as unknown:
                 self.start('replacement-task',frozen=self.frozen(route=ROUTE))
@@ -294,6 +297,13 @@ class AdmissionTests(unittest.TestCase):
         def show(dispatch):
             return {'runtime':'runtime','result':deepcopy(stopped['result'])} if dispatch==first['native_binding']['dispatchId'] else original(dispatch)
         with patch.object(self.port,'show_worker',side_effect=show):
+            stopped['result']['dispatch'].pop('status')
+            with self.assertRaises(PodError) as unverified:
+                guarded_start(self.project,'objective',owner='owner',run='another-run',
+                              task='shared-task',plan_revision='plan',
+                              frozen_packet=self.frozen(),worktree='current',port=self.port)
+            self.assertEqual(unverified.exception.code,'unresolved_prior_attempt')
+            stopped['result']['dispatch']['status']='failed'
             replacement=guarded_start(self.project,'objective',owner='owner',run='another-run',
                                       task='shared-task',plan_revision='plan',
                                       frozen_packet=self.frozen(),worktree='current',port=self.port)
@@ -539,6 +549,43 @@ class AdmissionTests(unittest.TestCase):
         second=self.start('task2',reuse_of=identity)['admission']
         self.assertEqual(self.port.starts[-1]['terminal'],first['native_binding']['terminalHandle'])
         self.assertEqual(second['reuse_of'],identity)
+
+    def test_reuse_requires_dispatch_status_even_when_stage_is_terminal(self):
+        first=self.start()['admission']; identity=first['admission_id']
+        self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        original=self.port.show_worker
+        def show_without_status(dispatch):
+            shown=original(dispatch)
+            shown['result']['dispatch'].pop('status')
+            return shown
+        with patch.object(self.port,'show_worker',side_effect=show_without_status):
+            with self.assertRaises(PodError) as blocked:
+                self.start('task2',reuse_of=identity)
+            self.assertEqual(blocked.exception.code,'reuse_unavailable')
+        self.assertEqual(len(self.port.starts),1)
+        def show_without_stage_status(dispatch):
+            shown=original(dispatch)
+            shown['result']['projection']['stage'].pop('dispatch')
+            return shown
+        with patch.object(self.port,'show_worker',side_effect=show_without_stage_status):
+            reused=self.start('task2',reuse_of=identity)['admission']
+        self.assertEqual(reused['reuse_of'],identity)
+
+    def test_route_failure_requires_dispatch_status_even_when_stage_is_terminal(self):
+        first=self.start()['admission']
+        self.port.workers[first['native_binding']['dispatchId']]['outcome']='failed'
+        original=self.port.show_worker
+        def show_without_status(dispatch):
+            shown=original(dispatch)
+            shown['result']['dispatch'].pop('status')
+            return shown
+        with patch.object(self.port,'show_worker',side_effect=show_without_status):
+            with self.assertRaises(PodError) as blocked:
+                self.record_failure(first,kind='unavailable')
+            self.assertEqual(blocked.exception.code,'failure_attempt_unsettled')
+        self.assertEqual(read(self.project,'objective')['admissions'][first['admission_id']]['failures'],[])
+        self.record_failure(first,kind='unavailable')
+        self.assertEqual(len(read(self.project,'objective')['admissions'][first['admission_id']]['failures']),1)
 
     def test_constraints_and_failures_are_objective_local(self):
         constraints_update(self.project,'objective',owner='owner',action='add',

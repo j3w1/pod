@@ -18,6 +18,9 @@ class NativeSettlementTests(unittest.TestCase):
         retained=deepcopy(self.shown)
         retained['result']['projection'].pop('resource')
         self.assertTrue(_native_assignment_settled(retained))
+        without_stage_status=deepcopy(self.shown)
+        without_stage_status['result']['projection']['stage'].pop('dispatch')
+        self.assertTrue(_native_assignment_settled(without_stage_status))
 
     def test_success_terminal_path_is_still_settled(self):
         completed=deepcopy(self.shown)
@@ -35,6 +38,9 @@ class NativeSettlementTests(unittest.TestCase):
                                                r['dispatch'].update(status='running'))),
             ('missing_status',lambda r:(r['projection']['stage'].pop('dispatch'),
                                         r['dispatch'].pop('status'))),
+            ('missing_authoritative_status',lambda r:r['dispatch'].pop('status')),
+            ('unknown_authoritative_status',lambda r:r['dispatch'].update(status='unknown')),
+            ('missing_stage_status_value',lambda r:r['projection']['stage'].update(dispatch=None)),
             ('contradictory_status',lambda r:r['dispatch'].update(status='completed')),
             ('contradictory_outcome',lambda r:r['projection'].update(outcome='succeeded')),
             ('malformed_status',lambda r:r['dispatch'].update(status={'bad':'status'})),
