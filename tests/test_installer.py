@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -126,11 +127,20 @@ class InstallerTests(unittest.TestCase):
         self.installed()
         for file in (self.home / ".bashrc", self.home / ".profile"):
             self.assertEqual(file.read_text().count("# >>> pod path >>>"), 1)
-        # The host's /etc/profile forcibly resets HOME to the real account. Keep
-        # login-shell execution isolated, and source the disposable login block.
-        shells = ((["bash", "-ic", "command -v pod"], None),
-                  (["bash", "--noprofile", "-lc", "command -v pod"], self.home / ".profile"),
-                  (["sh", "-c", '. "$HOME/.profile"; command -v pod'], None))
+        # Some managed hosts force HOME to their real account in /etc/profile.
+        # On those hosts use an isolated login-equivalent so the test cannot
+        # read the real profile; hosted Linux without that override runs -lc.
+        profile_paths = [Path("/etc/profile"), *Path("/etc/profile.d").glob("*.sh")]
+        redirects = any(re.search(r"(?m)^\s*(?:export\s+)?(?:HOME|XDG_[A-Z_]+)\s*=", path.read_text(errors="replace"))
+                        for path in profile_paths if path.is_file())
+        if redirects:
+            shells = ((["bash", "-ic", "command -v pod"], None),
+                      (["bash", "--noprofile", "-lc", "command -v pod"], self.home / ".profile"),
+                      (["sh", "-c", '. "$HOME/.profile"; command -v pod'], None))
+        else:
+            shells = ((["bash", "-ic", "command -v pod"], None),
+                      (["bash", "-lc", "command -v pod"], None),
+                      (["sh", "-lc", "command -v pod"], None))
         for command, bash_env in shells:
             env = {**self.env, **({"BASH_ENV": str(bash_env)} if bash_env else {})}
             result = subprocess.run(command, env=env, cwd=self.root / "work",
