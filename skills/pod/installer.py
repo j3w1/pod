@@ -142,7 +142,9 @@ def _field(label: str, value: str) -> None:
 
 
 def _path_label(path_status: str, notes: list[str]) -> str:
-    if any("shadows" in note or "symlink" in note or "manually" in note or "malformed" in note
+    if "manual PATH step" in path_status or any(
+           "shadows" in note or "symlink" in note or "manually" in note or "malformed" in note
+           or "not regular" in note or "not UTF-8" in note
            for note in notes):
         return "manual step"
     return "ready" if "already on PATH" in path_status else "open a new shell"
@@ -621,6 +623,9 @@ def _path(paths: dict[str, Path]) -> tuple[str, list[str]]:
     command = shutil.which("pod")
     if command is not None and Path(command).resolve(strict=False) != paths["launcher"].resolve(strict=False):
         notes.append(f"A different pod command shadows this launcher: {command}")
+    if any("symlink" in note or "not regular" in note or "not UTF-8" in note
+           or "malformed" in note or "manually" in note or "shadows" in note for note in notes):
+        outcome = "manual PATH step required; inspect the reported path or command"
     return outcome, notes
 
 
@@ -684,12 +689,12 @@ def install(stage: Path) -> int:
                 raise InstallError(1, (prefs[1] or "Preferences could not be prepared") + "; rerun the installer")
             _stage("Preferences", state="warn" if prefs[0] == "invalid" else "ok",
                    detail="needs attention" if prefs[0] == "invalid" else prefs[0])
-            path_status = ("already on PATH" if paths["launcher"].parent in
-                           map(Path, os.environ.get("PATH", "").split(os.pathsep)) else
-                           "existing shell may need a PATH refresh")
-            _stage("PATH", state="ok" if "already on PATH" in path_status else "warn",
-                   detail=_path_label(path_status, []))
-            _print_summary(paths, prefs, path_status, _duplicates(paths), None)
+            path_status, notes = _path(paths)
+            _stage("PATH", state="ok" if _path_label(path_status, notes) == "ready" else "warn",
+                   detail=_path_label(path_status, notes), plain="PATH: " + path_status)
+            for note in notes:
+                _say(note)
+            _print_summary(paths, prefs, path_status, _duplicates(paths), None, notes)
             return 0
         previous = ({"version": _version(canonical), "digest": current}
                     if current and (canonical / "VERSION").is_file() else

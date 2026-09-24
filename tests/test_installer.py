@@ -286,6 +286,35 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse((Path(env["HOME"]) / ".bashrc").exists())
 
+    def test_already_current_repairs_missing_path_block_or_names_manual_step(self):
+        present={**self.env,"PATH":str(self.launcher.parent)+":"+self.env["PATH"]}
+        first=run_install(present)
+        self.assertEqual(first.returncode,0,first.stdout+first.stderr)
+        self.assertFalse((self.home/'.bashrc').exists())
+        self.assertFalse((self.home/'.profile').exists())
+        receipt=self.receipt.read_bytes()
+        repaired=run_install(self.env)
+        self.assertEqual(repaired.returncode,0,repaired.stdout+repaired.stderr)
+        self.assertIn('Already current',repaired.stdout)
+        self.assertIn('PATH: open a new shell',repaired.stdout)
+        for file in (self.home/'.bashrc',self.home/'.profile'):
+            self.assertEqual(file.read_text().count('# >>> pod path >>>'),1)
+        self.assertEqual(self.receipt.read_bytes(),receipt)
+        self.assertEqual(run_install(self.env).returncode,0)
+        self.assertEqual((self.home/'.bashrc').read_text().count('# >>> pod path >>>'),1)
+        with tempfile.TemporaryDirectory() as directory:
+            env,_=sandbox(Path(directory))
+            home=Path(env['HOME']);launcher=home/'.local/bin/pod'
+            ready={**env,'PATH':str(launcher.parent)+':'+env['PATH']}
+            self.assertEqual(run_install(ready).returncode,0)
+            target=Path(directory)/'foreign-rc';target.write_bytes(b'keep me\n')
+            (home/'.bashrc').symlink_to(target)
+            held=run_install(env)
+            self.assertEqual(held.returncode,0,held.stdout+held.stderr)
+            self.assertIn('manual PATH step required',held.stdout)
+            self.assertIn('symlink and was not edited',held.stdout)
+            self.assertEqual(target.read_bytes(),b'keep me\n')
+
     def test_shadowing_duplicate_and_drift_are_reported(self):
         foreign = self.root / "bin/pod"
         foreign.write_text("#!/bin/sh\nexit 0\n"); foreign.chmod(0o755)
