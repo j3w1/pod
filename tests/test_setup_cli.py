@@ -573,7 +573,7 @@ class SkillOwnershipTests(unittest.TestCase):
     def older_bundle(self):
         """The bytes a previous release would have placed."""
         source = dict(canonical())
-        source["references/routing.md"] = b"# Routing and quota\n\nAn older release.\n"
+        source["references/models.md"] = b"# Routing and quota\n\nAn older release.\n"
         return source
 
     def test_a_version_change_upgrades_only_an_untouched_owned_copy(self):
@@ -584,11 +584,11 @@ class SkillOwnershipTests(unittest.TestCase):
                 self.assertEqual(setup(project)["skills"]["codex"], "installed")
             manifest_path = project / ".pod" / "skills.json"
             self.assertEqual(json.loads(manifest_path.read_text())["version"], version())
-            placed = project / ".agents" / "skills" / "pod" / "references" / "routing.md"
-            self.assertEqual(placed.read_bytes(), self.older_bundle()["references/routing.md"])
+            placed = project / ".agents" / "skills" / "pod" / "references" / "models.md"
+            self.assertEqual(placed.read_bytes(), self.older_bundle()["references/models.md"])
             upgraded = setup(project)
             self.assertEqual(upgraded["skills"]["codex"], "upgraded")
-            self.assertEqual(placed.read_bytes(), canonical()["references/routing.md"])
+            self.assertEqual(placed.read_bytes(), canonical()["references/models.md"])
             self.assertIn("codex", json.loads(manifest_path.read_text())["owned_hosts"])
             self.assertEqual(setup(project)["skills"]["codex"], "reused")
 
@@ -598,7 +598,7 @@ class SkillOwnershipTests(unittest.TestCase):
             project.mkdir()
             with patch("pod.setup.canonical", return_value=self.older_bundle()):
                 setup(project)
-            edited = project / ".agents" / "skills" / "pod" / "references" / "routing.md"
+            edited = project / ".agents" / "skills" / "pod" / "references" / "models.md"
             edited.write_text("# my own notes\n")
             self.assertEqual(setup(project)["skills"]["codex"], "preserved_modified")
             self.assertEqual(edited.read_text(), "# my own notes\n")

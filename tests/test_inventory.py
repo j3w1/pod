@@ -67,6 +67,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         spec = (root / "docs" / "pod-spec.md").read_text()
         scenarios = set(re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M))
+        referenced = set()
         for requirement, refs in re.findall(r"^\| (R\d{2}) \| [^|]* \| .* \| ([^|]*) \|$", spec, flags=re.M):
             with self.subTest(requirement=requirement):
                 for ref in (item.strip() for item in refs.split(",") if item.strip()):
@@ -74,15 +75,34 @@ class InventoryIntegrityTests(unittest.TestCase):
                         first, last = ref.split("–")
                         self.assertIn(first, scenarios)
                         self.assertIn(last, scenarios)
+                        referenced.update(f"A{i:02}" for i in range(int(first[1:]), int(last[1:]) + 1))
                     else:
                         self.assertIn(ref, scenarios)
+                        referenced.add(ref)
+        self.assertEqual(referenced, scenarios)
 
     def test_evidence_kinds_are_exact(self):
         root = Path(__file__).resolve().parents[1]
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
         kinds = {kind for row in coverage["scenarios"] for kind in row["required_evidence"]}
-        self.assertEqual(kinds - {"offline_behavior", "live_native", "external_gate",
-                                  "hosted_ci_linux"}, set())
+        self.assertEqual(kinds - {"unit", "pty_subprocess", "installed_bundle",
+                                  "hosted_ci", "live_native", "independent_review"}, set())
+        self.assertEqual(kinds, {"unit", "pty_subprocess", "installed_bundle",
+                                 "hosted_ci", "live_native", "independent_review"})
+
+    def test_current_contract_names_the_new_boundaries(self):
+        root = Path(__file__).resolve().parents[1]
+        spec = (root / "docs" / "pod-spec.md").read_text()
+        validation = (root / "docs" / "validation.md").read_text()
+        for phrase in ("All models", "My selection", "preference_changed",
+                       "Pending same-UUID replay", "native_default", "pod-context/v4",
+                       "focus-driven Details", "one-shot installer"):
+            self.assertIn(phrase, spec)
+        for phrase in ("POD_REQUIRE_PTY=1", "pod.catalog --check", "SHA-pinned public install",
+                       "independent review", "live native"):
+            self.assertIn(phrase, validation)
+        for obsolete in ("config approve", "pod setup", "quota_fresh_seconds", "pod-context/v3"):
+            self.assertNotIn(obsolete, spec + validation)
 
     def test_referenced_fixture_cases_exist(self):
         root = Path(__file__).resolve().parents[1]

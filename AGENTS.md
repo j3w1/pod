@@ -12,8 +12,9 @@ maintaining it there.
 
 Use Python 3.13+ and standard-library facilities where practical. `skills/pod` is one
 directory serving two roles at once: the importable `pod` package and the agent skill that
-`npx skills add j3w1/pod --skill pod` installs from `main`. That is Pod's only distribution;
-there are no packages, releases or tags. There is exactly one authoring source for each
+the one-shot installer from `main` places through the skills CLI. The installer also places
+a user-local global `pod` launcher. This is Pod's only distribution; there are no packages,
+releases or tags. There is exactly one authoring source for each
 implementation and each policy, including the version: the root `VERSION`, which
 `skills/pod/VERSION` links to. If you find yourself copying a file so two places can stay in
 step, the layout is wrong. `python -m pod.skill_validation` checks the bundle and any placed

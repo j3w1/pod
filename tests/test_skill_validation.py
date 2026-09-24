@@ -84,11 +84,12 @@ class SkillValidationTests(unittest.TestCase):
         self.assertEqual(os.readlink(link), "../../VERSION")
         self.assertEqual(validate_skill(repository / "skills" / "pod")["status"], "valid")
 
-    def test_bare_helper_command_forms_are_rejected(self):
+    def test_obsolete_helper_and_install_forms_are_rejected(self):
         with fixture() as root:
-            for bad in ("Read preferences with `pod config`.",
+            for bad in ("Run python3 ~/.agents/skills/pod/scripts/pod.py doctor.",
                         "Run python -m pod.internal preview for the route.",
-                        "See `pod.internal` for details."):
+                        "See `pod.internal` for details.",
+                        "Run npx skills add j3w1/pod --skill pod."):
                 with self.subTest(bad=bad):
                     skill = copied(root / str(abs(hash(bad))))
                     text = (skill / "SKILL.md").read_text(encoding="utf-8")
@@ -96,6 +97,17 @@ class SkillValidationTests(unittest.TestCase):
                     with self.assertRaises(PodError) as caught:
                         validate_skill(skill)
                     self.assertEqual(caught.exception.code, "invalid_skill")
+
+    def test_missing_launcher_forms_are_rejected(self):
+        with fixture() as root:
+            for required in ("pod config --json", "pod internal <op> --input FILE",
+                             "~/.local/bin/pod"):
+                with self.subTest(required=required):
+                    skill = copied(root / str(abs(hash(required))))
+                    text = (skill / "SKILL.md").read_text(encoding="utf-8")
+                    (skill / "SKILL.md").write_text(text.replace(required, "omitted"), encoding="utf-8")
+                    with self.assertRaises(PodError):
+                        validate_skill(skill)
 
     def test_launcher_must_not_import_the_package_before_its_check(self):
         with fixture() as root:
@@ -115,7 +127,7 @@ class SkillValidationTests(unittest.TestCase):
                 validate_skill(extra)
             self.assertIn("unexpected", str(with_extra.exception))
             missing = copied(root / "missing")
-            (missing / "references" / "routing.md").unlink()
+            (missing / "references" / "models.md").unlink()
             with self.assertRaises(PodError) as without:
                 validate_skill(missing)
             self.assertIn("missing", str(without.exception))

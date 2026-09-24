@@ -2,7 +2,8 @@
 """Audit every tracked file for private residue and for material Pod no longer has.
 
 Findings name the file, the category and the line, never the matched text. Pod is
-distributed only as a skill from `main` through the skills CLI, so its own publication
+distributed through the one-shot installer from `main`, which uses the skills CLI
+and installs a user-local launcher; its own package or release publication
 machinery is a finding here. A governed project's release or deploy step is ordinary
 Pod functionality and is not.
 """
@@ -142,8 +143,8 @@ def main(argv: list[str]) -> int:
         for finding in findings:
             print("  " + finding)
         return 1
-    print("Tracked source audited; no personal path, account, runtime identifier, credential, "
-          "unsupported mechanism or Pod publication material.")
+    print("Installer-based tracked source audited; no personal path, account, runtime identifier, "
+          "credential, unsupported mechanism or Pod publication material.")
     return 0
 
 

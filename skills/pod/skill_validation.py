@@ -18,11 +18,14 @@ FORBIDDEN_FRONTMATTER = ("context", "model", "effort", "agent", "allowed-tools",
                          "disable-model-invocation", "user-invocable")
 REFERENCES = tuple(name for name in BUNDLE_FILES if name.startswith("references/"))
 FORBIDDEN_FORMS = (
-    (re.compile(r"`pod\s+(setup|config|doctor|status)"), "a bare `pod` command"),
+    (re.compile(r"python3?\s+[^\n`]*scripts/pod\.py"), "a long Python skill-helper command"),
     (re.compile(r"python3?\s+-m\s+pod\b"), "a `python -m pod` invocation"),
     (re.compile(r"`pod\.internal"), "a bare `pod.internal` reference"),
+    (re.compile(r"npx\s+(?:--yes\s+)?skills(?:@[^\s]+)?\s+add\b"),
+     "a manual skills-CLI installation command"),
 )
-REQUIRED_FORMS = ("scripts/pod.py", "${CLAUDE_SKILL_DIR}")
+REQUIRED_FORMS = ("pod config --json", "pod internal <op> --input FILE", "~/.local/bin/pod",
+                  "https://raw.githubusercontent.com/j3w1/pod/main/install.sh")
 MAX_SKILL_LINES = 500
 MAX_SKILL_WORDS = 750
 MAX_REFERENCE_WORDS = 700
