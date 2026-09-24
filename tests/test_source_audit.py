@@ -25,6 +25,23 @@ class TrackedSourceAuditTests(unittest.TestCase):
             self.assertEqual(len(findings), 1)
             self.assertIn("unsupported mechanism", findings[0])
 
+    def test_count_centred_guidance_is_rejected_but_negative_test_fixtures_are_kept(self):
+        wording = (b"The default maximum is two active logical assignments.\n",
+                   b"Admit the next useful Task after exact settlement.\n",
+                   b"Two is the ordinary starting concurrency.\n",
+                   b"Fill every free slot with a worker.\n")
+        for text in wording:
+            with self.subTest(text=text), fixture() as root:
+                tracked(root, {"docs/pod-spec.md": text, "skills/pod/SKILL.md": b"clean\n",
+                               "tests/fixtures/negative.md": text, "tests/test_kernel.py": text})
+                findings = audit_source(root)
+                self.assertEqual(len(findings), 1, findings)
+                self.assertTrue(findings[0].startswith("docs/pod-spec.md") and "count-centred" in findings[0])
+        with fixture() as root:
+            tracked(root, {"docs/pod-spec.md": b"`workers.max_active` is a ceiling, never a target; "
+                                               b"slot filling is refused and a free reservation admits nothing.\n"})
+            self.assertEqual(audit_source(root), [])
+
     def test_generic_source_hygiene_detects_private_residue(self):
         with fixture() as root:
             tracked(root, {"ok.txt": b"public"})

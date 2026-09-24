@@ -1,0 +1,53 @@
+{
+  "ok": true,
+  "result": {
+    "dispatch": {
+      "id": "dispatch-2",
+      "runId": "run",
+      "taskId": "task2",
+      "status": "dispatched"
+    },
+    "worker": {
+      "dispatchId": "dispatch-2",
+      "state": "ready",
+      "stage": "input_accepted",
+      "worktreeId": "current",
+      "agentTerminalHandle": "term-dispatch-1",
+      "startOptions": {
+        "terminal": "term-dispatch-1",
+        "agent": null,
+        "launch": {
+          "requested": {
+            "agent": null,
+            "model": null,
+            "effort": null
+          },
+          "effective": {
+            "agent": null,
+            "model": null,
+            "effort": null
+          }
+        }
+      }
+    },
+    "projection": {
+      "id": "worker-dispatch-2",
+      "dispatchId": "dispatch-2",
+      "taskId": "task2",
+      "runId": "run",
+      "provider": {
+        "id": "claude",
+        "model": null
+      },
+      "stage": {
+        "worker": "ready",
+        "dispatch": "dispatched",
+        "detail": "input_accepted"
+      },
+      "outcome": "in_progress"
+    }
+  },
+  "_meta": {
+    "runtimeId": "runtime"
+  }
+}

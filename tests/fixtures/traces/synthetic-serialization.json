@@ -1,0 +1,297 @@
+{
+ "label": "synthetic",
+ "observations": {
+  "source": "synthetic 0.6 kernel fixture",
+  "wall_time_s": "unknown"
+ },
+ "records": [
+  {
+   "kind": "write",
+   "map": {
+    "closure": null,
+    "coordinator_slot": "O1",
+    "governance": {
+     "base": null,
+     "base_ref": null,
+     "exclude": []
+    },
+    "governance_sources": [],
+    "obligations": [
+     {
+      "boundary": {
+       "paths": [],
+       "surfaces": []
+      },
+      "check": "O1 check",
+      "executor": "coordinator",
+      "id": "O1",
+      "introduced_seq": 1,
+      "kind": "criterion",
+      "provenance": "objective",
+      "source": {
+       "ref": "PoD#1"
+      },
+      "state": "active"
+     },
+     {
+      "boundary": {
+       "paths": [
+        "src/a"
+       ],
+       "surfaces": []
+      },
+      "check": "S check",
+      "id": "S",
+      "introduced_seq": 1,
+      "kind": "subgoal",
+      "parent": "O1",
+      "provenance": "coordinator",
+      "state": "waiting",
+      "wait": {
+       "class": "sequenced",
+       "referent": "O1"
+      }
+     },
+     {
+      "boundary": {
+       "paths": [
+        "docs"
+       ],
+       "surfaces": []
+      },
+      "check": "T check",
+      "id": "T",
+      "introduced_seq": 1,
+      "kind": "subgoal",
+      "parent": "O1",
+      "provenance": "coordinator",
+      "state": "waiting",
+      "wait": {
+       "class": "sequenced",
+       "referent": "O1"
+      }
+     }
+    ],
+    "observations": {
+     "ceiling": 2,
+     "churn": [],
+     "delegation": "available",
+     "governance_current": null,
+     "governance_stale": false,
+     "inputs": "1e3f2a6f255ade041e8a98a00876a233c22a09ba4545d9857424033bb7718dde",
+     "outstanding": [],
+     "policy_gone": [],
+     "serialization": []
+    },
+    "proposals": [],
+    "quiescence": null,
+    "reopened": [],
+    "revision": 1,
+    "seq": 1
+   }
+  },
+  {
+   "kind": "write",
+   "map": {
+    "closure": null,
+    "coordinator_slot": "O1",
+    "governance": {
+     "base": null,
+     "base_ref": null,
+     "exclude": []
+    },
+    "governance_sources": [],
+    "obligations": [
+     {
+      "boundary": {
+       "paths": [],
+       "surfaces": []
+      },
+      "check": "O1 check",
+      "executor": "coordinator",
+      "id": "O1",
+      "introduced_seq": 1,
+      "kind": "criterion",
+      "provenance": "objective",
+      "source": {
+       "ref": "PoD#1"
+      },
+      "state": "active"
+     },
+     {
+      "boundary": {
+       "paths": [
+        "src/a"
+       ],
+       "surfaces": []
+      },
+      "check": "S check",
+      "id": "S",
+      "introduced_seq": 1,
+      "kind": "subgoal",
+      "parent": "O1",
+      "provenance": "coordinator",
+      "state": "waiting",
+      "wait": {
+       "class": "sequenced",
+       "referent": "O1"
+      }
+     },
+     {
+      "boundary": {
+       "paths": [
+        "docs"
+       ],
+       "surfaces": []
+      },
+      "check": "T check",
+      "id": "T",
+      "introduced_seq": 1,
+      "kind": "subgoal",
+      "parent": "O1",
+      "provenance": "coordinator",
+      "state": "waiting",
+      "wait": {
+       "class": "sequenced",
+       "referent": "O1"
+      }
+     }
+    ],
+    "observations": {
+     "ceiling": 2,
+     "churn": [],
+     "delegation": "available",
+     "governance_current": null,
+     "governance_stale": false,
+     "inputs": "1e3f2a6f255ade041e8a98a00876a233c22a09ba4545d9857424033bb7718dde",
+     "outstanding": [],
+     "policy_gone": [],
+     "serialization": [
+      {
+       "holder": "O1",
+       "obligation": "S",
+       "since_seq": 1
+      },
+      {
+       "holder": "O1",
+       "obligation": "T",
+       "since_seq": 1
+      }
+     ]
+    },
+    "proposals": [],
+    "quiescence": null,
+    "reopened": [],
+    "revision": 1,
+    "seq": 2
+   }
+  },
+  {
+   "accepted": true,
+   "kind": "admission",
+   "role": "implement",
+   "serves": [
+    "S"
+   ]
+  },
+  {
+   "kind": "write",
+   "map": {
+    "closure": null,
+    "coordinator_slot": "O1",
+    "governance": {
+     "base": null,
+     "base_ref": null,
+     "exclude": []
+    },
+    "governance_sources": [],
+    "obligations": [
+     {
+      "boundary": {
+       "paths": [],
+       "surfaces": []
+      },
+      "check": "O1 check",
+      "executor": "coordinator",
+      "id": "O1",
+      "introduced_seq": 1,
+      "kind": "criterion",
+      "provenance": "objective",
+      "source": {
+       "ref": "PoD#1"
+      },
+      "state": "active"
+     },
+     {
+      "boundary": {
+       "paths": [
+        "src/a"
+       ],
+       "surfaces": []
+      },
+      "check": "S check",
+      "executor": "adm-1",
+      "id": "S",
+      "introduced_seq": 1,
+      "kind": "subgoal",
+      "parent": "O1",
+      "provenance": "coordinator",
+      "state": "active"
+     },
+     {
+      "boundary": {
+       "paths": [
+        "docs"
+       ],
+       "surfaces": []
+      },
+      "check": "T check",
+      "id": "T",
+      "introduced_seq": 1,
+      "kind": "subgoal",
+      "parent": "O1",
+      "provenance": "coordinator",
+      "state": "waiting",
+      "wait": {
+       "class": "sequenced",
+       "referent": "O1"
+      }
+     }
+    ],
+    "observations": {
+     "ceiling": 2,
+     "churn": [],
+     "delegation": "available",
+     "governance_current": null,
+     "governance_stale": false,
+     "inputs": "1e3f2a6f255ade041e8a98a00876a233c22a09ba4545d9857424033bb7718dde",
+     "outstanding": [
+      {
+       "admission": "adm-1",
+       "boundary": {
+        "paths": [
+         "src/a"
+        ],
+        "surfaces": []
+       }
+      }
+     ],
+     "policy_gone": [],
+     "serialization": [
+      {
+       "holder": "O1",
+       "obligation": "T",
+       "since_seq": 2
+      }
+     ]
+    },
+    "proposals": [],
+    "quiescence": null,
+    "reopened": [],
+    "revision": 1,
+    "seq": 3
+   }
+  }
+ ],
+ "schema": "pod-trace/v1"
+}

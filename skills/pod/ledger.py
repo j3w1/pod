@@ -7,13 +7,20 @@ from datetime import datetime, timezone
 import fcntl
 import os
 from pathlib import Path
+import re
+import subprocess
 from typing import Callable, Iterator
 
 from .errors import PodError
-from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
+from .installer import STATE_SCHEMAS, superseded_objectives, superseded_schemas
+from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
 ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred")
-CONTEXT_SCHEMA = "pod-context/v4"
+CONTEXT_SCHEMA = STATE_SCHEMAS["context"]
+CHECKPOINT_SCHEMA = STATE_SCHEMAS["checkpoint"]
+ADMISSION_SCHEMA = STATE_SCHEMAS["admission"]
+# An obligation map lives in the checkpoint; the context record keeps its own bound.
+CONTEXT_LIMIT = 4 * MAX_RECORD
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
                    "interventions", "source_rejections", "constraints"}
@@ -89,14 +96,27 @@ def binding_valid(binding: object) -> bool:
     return terminal is None or isinstance(terminal, str) and bool(terminal)
 
 
+_ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "request",
+                     "route_decision", "effective_evidence", "runtime", "request_uuid",
+                     "run_id", "task_id", "plan_revision", "packet_id", "worktree", "reuse_of",
+                     "native_binding", "recovery", "error", "failures", "created_at", "updated_at",
+                     "serves", "role", "boundary", "map_revision", "candidate", "result",
+                     "changed_paths", "boundary_exceeded", "disposition", "report", "binding"}
+
+
 def _validate_admission(key: str, row: object) -> None:
-    required = {"schema", "state", "admission_id", "objective", "owner", "request",
-                "route_decision", "effective_evidence", "runtime", "request_uuid",
-                "run_id", "task_id", "plan_revision", "packet_id", "worktree", "reuse_of",
-                "native_binding", "recovery", "error", "failures", "created_at", "updated_at"}
-    value = exact(row, required, required, name="admission")
-    if value["schema"] != "pod-admission/v3" or value["admission_id"] != key:
+    if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
+        raise PodError("state_unsupported",
+                       f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
+    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS, name="admission")
+    if value["admission_id"] != key:
         raise PodError("state_unsupported", "Admission identity or schema is unsupported")
+    from .obligations import ROLES
+    if (not isinstance(value["serves"], list) or not value["serves"] or value["role"] not in ROLES
+            or not isinstance(value["boundary"], dict) or type(value["map_revision"]) is not int):
+        raise PodError("state_unsupported", "Admission obligation binding is malformed")
+    if value["changed_paths"] is not None and not isinstance(value["changed_paths"], list):
+        raise PodError("state_unsupported", "Admission result is malformed")
     if value["state"] not in ADMISSION_STATES:
         raise PodError("state_unsupported", "Admission state is unsupported")
     for field in ("objective", "owner", "run_id", "task_id", "plan_revision", "packet_id", "worktree", "runtime"):
@@ -117,8 +137,11 @@ def _validate_admission(key: str, row: object) -> None:
 
 
 def _validate_context(value: object) -> dict:
-    if not isinstance(value, dict) or value.get("schema") != CONTEXT_SCHEMA:
-        raise PodError("state_unsupported", f"State record is not {CONTEXT_SCHEMA}; preserve it and use a new objective")
+    superseded = superseded_schemas(value)
+    if superseded:
+        raise PodError("state_unsupported",
+                       f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
+                       "blocked and never converted. Settle its workers through Orca and start a new objective")
     state = exact(value, _CONTEXT_FIELDS, _CONTEXT_FIELDS, name="context")
     if type(state["revision"]) is not int or state["revision"] < 0:
         raise PodError("state_unsupported", "State revision is malformed")
@@ -142,7 +165,7 @@ def _validate_context(value: object) -> dict:
 def _read(path: Path) -> dict:
     if not _record_exists(path):
         return _empty()
-    return _validate_context(bounded_json(path))
+    return _validate_context(bounded_json(path, limit=CONTEXT_LIMIT))
 
 
 def read(project: Path, objective: str) -> dict | None:
@@ -153,7 +176,7 @@ def read(project: Path, objective: str) -> dict | None:
 def _write(path: Path, value: dict) -> None:
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value)
+    atomic_json(path, value, limit=CONTEXT_LIMIT)
 
 
 def _run_references(state: dict) -> dict[str, str]:
@@ -289,18 +312,333 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
     return {"status": "current", "assignment": assignment}
 
 
+# --------------------------------------------------------------------------- kernel facts
+
+_BASE_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
+_OBJECT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+
+
+def _git(root: Path, argv: list[str], *, binary: bool = False) -> subprocess.CompletedProcess | None:
+    """One bounded Git read; optional locks are off so a read never refreshes the index."""
+    try:
+        return subprocess.run(["git", "--no-optional-locks", "-C", str(root), *argv], capture_output=True,
+                              text=not binary, timeout=30, check=False, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _resolve_commit(root: Path, ref: str) -> str | None:
+    if not isinstance(ref, str) or not _BASE_REF.fullmatch(ref) or ".." in ref:
+        return None
+    completed = _git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}"])
+    value = completed.stdout.strip() if completed is not None and completed.returncode == 0 else ""
+    return value if _OBJECT.fullmatch(value) else None
+
+
+def governance_observation(project: Path, base_ref: str | None, *, at: str | None = None) -> dict:
+    """Read the declared governance sources from Git at a base commit, never the worktree."""
+    from .github import repository_context
+    from .obligations import GOVERNANCE_PATHS, MAX_GOVERNANCE_TEXT
+    try:
+        context = repository_context(project)
+    except PodError:
+        return {"status": "unavailable", "reason": "repository_unreadable"}
+    if context["repo_key"] is None:
+        return {"status": "no_repository"}
+    if base_ref is None:
+        return {"status": "unavailable", "reason": "base_ref_missing"}
+    current = _resolve_commit(project, base_ref)
+    commit = at if at is not None else current
+    if commit is None or not _OBJECT.fullmatch(commit):
+        return {"status": "unavailable", "reason": "base_ref_unresolved", "current": current}
+    texts: dict[str, str | None] = {}
+    for path in GOVERNANCE_PATHS:
+        listed = _git(project, ["ls-tree", "-z", commit, "--", path])
+        if listed is None or listed.returncode != 0:
+            return {"status": "unavailable", "reason": "tree_unreadable", "current": current}
+        entry = listed.stdout.split("\0")[0]
+        if not entry:
+            texts[path] = None
+            continue
+        meta, _, _name = entry.partition("\t")
+        parts = meta.split()
+        if len(parts) != 3 or parts[1] != "blob":
+            return {"status": "unavailable", "reason": "source_not_blob", "current": current}
+        size = _git(project, ["cat-file", "-s", parts[2]])
+        if size is None or size.returncode != 0 or not size.stdout.strip().isdigit() \
+                or int(size.stdout.strip()) > MAX_GOVERNANCE_TEXT:
+            return {"status": "unavailable", "reason": "source_oversized", "current": current}
+        blob = _git(project, ["cat-file", "blob", parts[2]], binary=True)
+        if blob is None or blob.returncode != 0:
+            return {"status": "unavailable", "reason": "source_unreadable", "current": current}
+        try:
+            texts[path] = blob.stdout.decode("utf-8")
+        except UnicodeError:
+            return {"status": "unavailable", "reason": "source_not_text", "current": current}
+    return {"status": "observed", "commit": commit, "current": current, "texts": texts}
+
+
+def require_governance_current(project: Path, map_state: dict | None) -> None:
+    """Before new admission or a governed effect: the bound base is still the target's base."""
+    if not isinstance(map_state, dict) or map_state.get("obligations") is None:
+        return
+    from .obligations import refuse
+    governance = map_state["governance"]
+    if governance.get("base_ref") is None:
+        return
+    current = _resolve_commit(project, governance["base_ref"])
+    if current is None:
+        raise refuse("governance_unavailable", "governance_unavailable",
+                     "the governance base cannot be resolved; new work holds", base_ref=governance["base_ref"])
+    if current != governance["base"]:
+        raise refuse("governance_changed", "governance_changed",
+                     "the target branch moved since governance was bound", bound=governance["base"][:12],
+                     current=current[:12])
+
+
+def git_result(worktree: str | None, base: str | None, commit: str | None = None) -> dict:
+    """Changed paths of a worker result read from Git: commits since base, renames, dirt."""
+    if not isinstance(worktree, str) or not Path(worktree).is_absolute() or base is None:
+        return {"status": "unavailable", "reason": "no_git_base"}
+    root = Path(worktree)
+    head = _resolve_commit(root, commit or "HEAD")
+    if head is None:
+        return {"status": "unavailable", "reason": "result_unresolved"}
+    diff = _git(root, ["diff", "--name-status", "-z", "-M", "--no-ext-diff", base, head])
+    status = _git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    if diff is None or diff.returncode != 0 or status is None or status.returncode != 0:
+        return {"status": "unavailable", "reason": "git_unreadable"}
+    changed: set[str] = set()
+    fields = diff.stdout.split("\0")
+    index = 0
+    while index < len(fields) and fields[index]:
+        code = fields[index]
+        width = 2 if code[:1] in ("R", "C") else 1
+        changed.update(item for item in fields[index + 1:index + 1 + width] if item)
+        index += 1 + width
+    entries = status.stdout.split("\0")
+    index = 0
+    while index < len(entries) and entries[index]:
+        entry = entries[index]
+        changed.add(entry[3:])
+        if entry[:1] in ("R", "C") or entry[1:2] in ("R", "C"):
+            index += 1
+            if index < len(entries) and entries[index]:
+                changed.add(entries[index])
+        index += 1
+    return {"status": "observed", "base": base, "head": head,
+            "changed_paths": sorted(path.rstrip("/") for path in changed if path)[:1024]}
+
+
+def git_head(worktree: str | None) -> str | None:
+    if not isinstance(worktree, str) or not Path(worktree).is_absolute():
+        return None
+    return _resolve_commit(Path(worktree), "HEAD")
+
+
+def git_is_ancestor(project: Path, commit: str, candidate: str) -> bool | None:
+    if not _OBJECT.fullmatch(commit or "") or not isinstance(candidate, str):
+        return None
+    target = _resolve_commit(project, candidate)
+    if target is None:
+        return None
+    completed = _git(project, ["merge-base", "--is-ancestor", commit, target])
+    if completed is None or completed.returncode not in (0, 1):
+        return None
+    return completed.returncode == 0
+
+
+def git_delta(project: Path, source: str, target: str) -> list[str] | None:
+    """Paths changed between two candidate commits; None when Git cannot prove it."""
+    first, second = _resolve_commit(project, source), _resolve_commit(project, target)
+    if first is None or second is None or not _OBJECT.fullmatch(source) or not _OBJECT.fullmatch(target):
+        return None
+    completed = _git(project, ["diff", "--name-status", "-z", "-M", "--no-ext-diff", first, second])
+    if completed is None or completed.returncode != 0:
+        return None
+    fields = completed.stdout.split("\0")
+    changed, index = set(), 0
+    while index < len(fields) and fields[index]:
+        width = 2 if fields[index][:1] in ("R", "C") else 1
+        changed.update(item for item in fields[index + 1:index + 1 + width] if item)
+        index += 1 + width
+    return sorted(changed)
+
+
+def map_of(state: dict | None) -> dict | None:
+    checkpoint_value = state.get("checkpoint") if isinstance(state, dict) else None
+    if isinstance(checkpoint_value, dict) and checkpoint_value.get("obligations") is not None:
+        return checkpoint_value
+    return None
+
+
+def _outstanding_ids(state: dict, native: dict | None) -> list[str]:
+    """Objective-local outstanding admissions; without native evidence nothing is settled."""
+    evidence: dict[str, list[dict]] = {}
+    for row in (native or {}).get("assignments", []) if isinstance(native, dict) else []:
+        if isinstance(row, dict) and isinstance(row.get("admission_id"), str):
+            evidence.setdefault(row["admission_id"], []).append(row)
+    outstanding = []
+    for key, admission in state.get("admissions", {}).items():
+        if admission["state"] in ("closed", "deferred"):
+            continue
+        binding = admission.get("native_binding")
+        matches = evidence.get(key, [])
+        settled = bool(admission["state"] == "bound" and binding_valid(binding) and len(matches) == 1
+                       and isinstance(native, dict)
+                       and matches[0].get("settled") is True
+                       and matches[0].get("runtime") == admission["runtime"] == native.get("runtime")
+                       and matches[0].get("run_id") == binding["runId"]
+                       and matches[0].get("task_id") == binding["taskId"]
+                       and matches[0].get("dispatch_id") == binding["dispatchId"]
+                       and matches[0].get("worker_id") == binding["workerId"])
+        if not settled:
+            outstanding.append(key)
+    return outstanding
+
+
+def _governor_pending(project: Path, objective: str) -> bool:
+    from .governor import _read_journal, _record_path
+    try:
+        journal = _read_journal(_record_path(project, objective))
+    except PodError:
+        return True
+    return any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")
+               for row in journal["actions"])
+
+
+def _authorization_granted(project: Path, objective: str):
+    def granted(scope: str, candidate: str) -> bool:
+        from .governor import _read_journal, _record_path
+        try:
+            journal = _read_journal(_record_path(project, objective))
+        except PodError:
+            return False
+        return any(row["decision"] == "ALLOW" and row["action"]["kind"] == scope
+                   and candidate in (row["action"]["candidate"], row.get("commit"), row.get("candidate_id"))
+                   for row in journal["actions"])
+    return granted
+
+
+def validate_verification(value: object) -> dict:
+    """The checkpoint's current verification context: dependencies and environment (R41)."""
+    record = exact(value, {"dependencies", "environment"}, {"dependencies", "environment"},
+                   name="verification")
+    if (not isinstance(record["dependencies"], list) or len(record["dependencies"]) > 64
+            or len(set(map(str, record["dependencies"]))) != len(record["dependencies"])):
+        raise PodError("invalid_checkpoint", "Verification dependencies are a bounded unique list")
+    for item in record["dependencies"]:
+        bounded_text(item, name="dependency", limit=512)
+    bounded_text(record["environment"], name="environment", limit=512)
+    return {"dependencies": list(record["dependencies"]), "environment": record["environment"]}
+
+
+def kernel_context(project: Path, objective: str, state: dict, native: dict | None, *,
+                   candidate: str | None = None, criteria: list | None = None,
+                   governance: dict | None = None, delegation: str | None = None,
+                   verification: dict | None = None) -> dict:
+    """Objective-local facts the obligation kernel judges; read under the caller's lock."""
+    from .config import effective, load
+    from .records import source_identity
+    from .selection import worker_ceiling
+    checkpoint_value = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
+    snapshot = load(project)
+    ceiling = worker_ceiling(snapshot, state.get("constraints", [])) if not snapshot["errors"] else 0
+    if ceiling == 0 or not snapshot["eligible"]:
+        delegation = "unavailable"
+    elif delegation not in ("available", "unavailable"):
+        delegation = "unknown"
+
+    def source_state(path: str) -> str:
+        try:
+            return source_identity(project, path)["state"]
+        except PodError:
+            return "rejected"
+
+    def source_current(entry: dict) -> bool:
+        """A bound evidence source still has exactly its recorded identity."""
+        try:
+            return entry.get("state") == "present" and source_identity(project, entry["path"]) == entry
+        except (PodError, KeyError, TypeError):
+            return False
+
+    map_state = map_of(state)
+    base_ref = (map_state or {}).get("governance", {}).get("base_ref")
+    return {"admissions": state.get("admissions", {}),
+            "outstanding": _outstanding_ids(state, native),
+            "ceiling": ceiling, "delegation": delegation,
+            "constraints": state.get("constraints", []),
+            "criteria": list(criteria if criteria is not None else checkpoint_value.get("criteria", [])),
+            "candidate": candidate if candidate is not None else checkpoint_value.get("candidate"),
+            "governance": governance,
+            "governance_current": (governance or {}).get("current") if governance is not None
+            else (_resolve_commit(project, base_ref) if base_ref else None),
+            "source_state": source_state,
+            "source_current": source_current,
+            "policy_revision": effective(project)["revision"],
+            "verification": verification if verification is not None else checkpoint_value.get("verification"),
+            "authorization_granted": _authorization_granted(project, objective),
+            "governor_pending": _governor_pending(project, objective),
+            "git_delta": lambda source, target: git_delta(project, source, target),
+            "is_ancestor": lambda commit, target: git_is_ancestor(project, commit, target)}
+
+
+def kernel_view(project: Path, objective: str, *, native: dict | None = None,
+                candidate: str | None = None, state: dict | None = None) -> dict:
+    """Read-only map, facts and derived projections for status, acceptance and reports."""
+    from .obligations import label_qualification, report_projection, status_projection
+    state = read(project, objective) if state is None else state
+    if state is None:
+        return {"state": None, "map": None, "ctx": None, "status": status_projection(None, {}),
+                "label": label_qualification(None, {}, candidate), "report": None, "settlement": "none"}
+    settlement = "observed"
+    if native is None:
+        from .operations import OrcaPort
+        bound = tuple(row for row in state["admissions"].values()
+                      if row["state"] == "bound" and binding_valid(row.get("native_binding")))
+        try:
+            native = OrcaPort(project).read_native(state.get("owner") or "", assignments=bound) if bound else None
+        except PodError:
+            native, settlement = None, "unverified"
+    ctx = kernel_context(project, objective, state, native)
+    map_state = map_of(state)
+    view = {"state": state, "map": map_state, "ctx": ctx, "settlement": settlement,
+            "status": status_projection(map_state, ctx),
+            "label": label_qualification(map_state, ctx, candidate if candidate is not None else ctx["candidate"])}
+    view["report"] = report_projection(map_state, ctx) if map_state is not None else None
+    return view
+
+
+def _require_open(state: dict) -> None:
+    map_state = map_of(state)
+    if map_state is not None and map_state.get("closure"):
+        from .obligations import refuse
+        raise refuse("objective_closed", "objective_closed", "the objective is closed",
+                     closure_revision=map_state["closure"]["revision"])
+
+
 def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
+    """Persist one validated checkpoint; while a map exists, every write is a map transition."""
     from .bundle import running_identity
     from .config import effective
+    from .obligations import MAP_INPUT, accept_write, disposition, refuse, report_projection
+    from .obligations import MAP_STORED
     bounded_text(owner, name="owner")
+    # A coordinator may round-trip the stored map; Pod recomputes every stamped field.
+    value = {key: item for key, item in value.items() if key not in MAP_STORED - MAP_INPUT}
     allowed = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
                "assignments", "questions", "verification_gaps", "next_safe_action",
-               "route_decisions", "objective", "objective_source", "worktree", "blocker", "remaining_gates"}
+               "route_decisions", "objective", "objective_source", "worktree", "blocker",
+               "remaining_gates", "verification"} | MAP_INPUT
     required = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
                 "assignments", "questions", "verification_gaps", "next_safe_action"}
     exact(value, allowed, required, name="checkpoint")
-    if value["schema"] != "pod-checkpoint/v2" or not isinstance(native.get("runtime"), str):
-        raise PodError("invalid_checkpoint", "Checkpoint needs current native runtime readback")
+    if value["schema"] != CHECKPOINT_SCHEMA or not isinstance(native.get("runtime"), str):
+        raise PodError("invalid_checkpoint", f"Checkpoint needs {CHECKPOINT_SCHEMA} and current native runtime readback")
+    if (not isinstance(value["criteria"], list) or len(value["criteria"]) > 64
+            or any(not isinstance(item, str) or not item for item in value["criteria"])
+            or not isinstance(value["candidate"], str) or not value["candidate"]):
+        raise PodError("invalid_checkpoint", "Checkpoint criteria and candidate are bounded text")
     value = {**value, "policy_revision": effective(project)["revision"]}
     if "objective" in value and value["objective"] != objective:
         raise PodError("invalid_checkpoint", "Checkpoint objective differs from its state key")
@@ -308,14 +646,15 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         from .github import validate_issue_binding
         validate_issue_binding(value["objective_source"])
     if "worktree" in value:
-        from .records import packet
-        probe = {"schema": "pod-packet/v2", "objective": objective, "criteria": [],
-                 "responsibility": "checkpoint validation", "scope": [], "actions": [],
-                 "candidate": value["candidate"], "context": [], "dependencies": [],
-                 "route": {"agent": "direct"}, "policy_revision": value["policy_revision"],
-                 "plan_revision": value["plan_revision"], "report_contract": "checkpoint",
-                 "sources": [], "worktree": value["worktree"]}
-        packet(probe)
+        from .records import worktree_binding
+        worktree_binding(value["worktree"])
+    if "verification" in value:
+        value = {**value, "verification": validate_verification(value["verification"])}
+    proposed = {key: value[key] for key in MAP_INPUT if key in value}
+    core = {key: item for key, item in value.items() if key not in MAP_INPUT}
+    dispositions = proposed.pop("dispositions", [])
+    if not isinstance(dispositions, list) or len(dispositions) > 16:
+        raise refuse("obligation_unaccounted", "disposition_invalid", "dispositions are a bounded list")
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -324,7 +663,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         authority = require_authority(project, objective, owner=owner, state=state)
         if native["runtime"] != authority["runtime"]:
             raise PodError("native_authority_unverified", "Checkpoint runtime differs from current Run")
-        supplied = value["native_refs"]
+        supplied = core["native_refs"]
         if (not isinstance(supplied, list) or len(supplied) > 32
                 or any(not isinstance(row, dict) or not isinstance(row.get("runId"), str)
                        or not isinstance(row.get("runtime"), str) for row in supplied)):
@@ -332,17 +671,57 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if supplied and {(row["runId"], row["runtime"]) for row in supplied} != {
                 (run, runtime) for run, runtime in authority["references"].items()}:
             raise PodError("native_authority_unverified", "Checkpoint cannot invent or drop Run references")
-        value = {**value, "native_refs": [{"runId": run, "runtime": runtime}
-                                           for run, runtime in sorted(authority["references"].items())]}
+        core = {**core, "native_refs": [{"runId": run, "runtime": runtime}
+                                         for run, runtime in sorted(authority["references"].items())]}
+        previous = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
+        if "verification" not in core and "verification" in previous:
+            # Like the map, the verification context carries forward until it is restated.
+            core["verification"] = previous["verification"]
+        prior_map = map_of(state)
+        map_state: dict = {}
+        ctx = None
+        if proposed or prior_map is not None:
+            refresh = proposed.get("governance_refresh") is True
+            if prior_map is None:
+                declared = proposed.get("governance")
+                base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
+                observed = governance_observation(project, base_ref)
+            else:
+                base_ref = prior_map["governance"]["base_ref"]
+                at = None if refresh else prior_map["governance"]["base"]
+                observed = (governance_observation(project, base_ref, at=at) if base_ref is not None
+                            else governance_observation(project, None))
+            ctx = kernel_context(project, objective, state, authority.get("native"),
+                                 candidate=core["candidate"], criteria=core["criteria"],
+                                 governance=observed, delegation=native.get("delegation"),
+                                 verification=core.get("verification"))
+            if dispositions:
+                if prior_map is None:
+                    raise refuse("obligation_unaccounted", "disposition_invalid",
+                                 "dispositions follow admissions under a map")
+                if prior_map.get("closure"):
+                    raise refuse("objective_closed", "objective_closed", "the objective is closed",
+                                 closure_revision=prior_map["closure"]["revision"])
+                for request in dispositions:
+                    key = request.get("admission") if isinstance(request, dict) else None
+                    row = state["admissions"].get(key) if isinstance(key, str) else None
+                    if row is None:
+                        raise refuse("obligation_unaccounted", "disposition_invalid",
+                                     "a disposition names a recorded admission")
+                    row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
+            map_state = accept_write(prior_map, proposed, ctx)
         state["owner"] = owner
         identity = running_identity()
         if identity["bundle_digest"] is None:
             raise PodError("installed_version_changed", "Running bundle is incomplete; reload the skill and write a fresh checkpoint")
-        state["checkpoint"] = {**value, "objective": objective,
+        state["checkpoint"] = {**core, **map_state, "objective": objective,
                                "pod_version": identity["version"],
                                "bundle_digest": identity["bundle_digest"]}
         _write(path, state)
-        return state
+        result = dict(state)
+        if map_state:
+            result["report"] = report_projection(state["checkpoint"], ctx)
+        return result
 
 
 def admission_identity(*, objective: str, run_id: str, task_id: str,
@@ -360,27 +739,10 @@ def logical_projection(project: Path, native: dict, *, objective: str,
         raise PodError("native_assignment_unverified", "Objective assignment evidence is incomplete")
     state = read(project, objective)
     admissions = state.get("admissions", {}) if isinstance(state, dict) else {}
-    evidence_by_admission: dict[str, list[dict]] = {}
-    for row in native["assignments"]:
-        if isinstance(row, dict) and isinstance(row.get("admission_id"), str):
-            evidence_by_admission.setdefault(row["admission_id"], []).append(row)
     outstanding = []
-    for admission_id, admission in admissions.items():
-        if admission["state"] in ("closed", "deferred"):
-            continue
+    for admission_id in (_outstanding_ids(state, native) if isinstance(state, dict) else []):
+        admission = admissions[admission_id]
         binding = admission.get("native_binding")
-        settled = False
-        matches = evidence_by_admission.get(admission_id, [])
-        if admission["state"] == "bound" and binding_valid(binding) and len(matches) == 1:
-            observed = matches[0]
-            settled = (observed.get("settled") is True
-                       and observed.get("runtime") == admission["runtime"] == native["runtime"]
-                       and observed.get("run_id") == binding["runId"]
-                       and observed.get("task_id") == binding["taskId"]
-                       and observed.get("dispatch_id") == binding["dispatchId"]
-                       and observed.get("worker_id") == binding["workerId"])
-        if settled:
-            continue
         task = binding.get("taskId") if isinstance(binding, dict) else admission["task_id"]
         if tasks is not None and task not in tasks:
             continue
@@ -431,9 +793,13 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             requested: dict, native_reader: Callable[[dict], dict], run_id: str,
             task_id: str, plan_revision: str, packet_id: str, worktree: str,
             frozen_packet: dict, expected_runtime: str, placement_binding: dict,
-            reuse_of: str | None = None,
+            reuse_of: str | None = None, accompanying: dict | None = None,
             now: datetime | None = None) -> dict:
-    """Final serialized admission: preference read is last, before writing the row."""
+    """Final serialized admission: preference read is last, before writing the row.
+
+    The served obligations become active in the same locked write that persists the
+    admission row, so a map can never name an admission that was not recorded.
+    """
     from . import __version__
     from .config import load
     from .selection import validate_choice, worker_ceiling
@@ -456,6 +822,11 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         if any(row["task_id"] == task_id and row["state"] in ("reserved", "unresolved")
                for row in state["admissions"].values()):
             raise PodError("unresolved_prior_attempt", "An unsettled Task cannot be replaced")
+        _require_open(state)
+        map_state = map_of(state)
+        if map_state is None:
+            from .obligations import refuse
+            raise refuse("unbound_assignment", "no_map", "delegation needs an obligation map first")
         from .bundle import require_current_identity
         require_current_identity(state.get("checkpoint"))
         native = native_reader(state)
@@ -504,6 +875,12 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                        if item.get("admission_id") == prior["admission_id"]]
             if len(matches) != 1 or matches[0].get("settled") is not True:
                 raise PodError("failed_attempt_unsettled", "Settle the failed attempt before an alternative route")
+        from .obligations import admission_binding, admission_refusal, admit, packet_binding as packet_boundary
+        # The caller verified launch-preference capability for this runtime before reserving.
+        ctx = kernel_context(project, objective, state, native, candidate=checkpoint_value.get("candidate"),
+                             delegation="available")
+        admission_refusal(map_state, body, ctx, admission_id=admission_id)
+        require_governance_current(project, map_state)
         # The personal file is read after every other check under the objective lock.
         snapshot = load(project)
         if snapshot["policy_revision"] != checkpoint_value.get("policy_revision"):
@@ -551,7 +928,12 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                     "pod_version": __version__, "effective": {"agent": "unknown", "model": "unknown",
                     "effort": "unknown", "context": "unknown"},
                     "route_mismatch": False, "effective_unknown": True}
-        row = {"schema": "pod-admission/v3", "state": "reserved", "admission_id": admission_id,
+        new_map = admit(map_state, body, ctx, admission_id=admission_id, accompanying=accompanying)
+        served = {key: body[key] for key in ("serves", "role", "map_revision")}
+        worktree_path = placement_binding.get("path") if isinstance(placement_binding, dict) else None
+        result = ({"base": git_head(worktree_path), "head": None, "worktree": worktree_path}
+                  if body["role"] == "implement" else None)
+        row = {"schema": ADMISSION_SCHEMA, "state": "reserved", "admission_id": admission_id,
                "objective": objective, "owner": owner, "request": requested,
                "route_decision": decision, "effective_evidence": {}, "runtime": native["runtime"],
                "request_uuid": None, "run_id": run_id, "task_id": task_id,
@@ -561,20 +943,27 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                                                  ("candidate", "criteria", "plan_revision", "policy_revision",
                                                   "objective_source", "worktree")},
                             "placement_binding": placement_binding},
-               "error": None, "failures": [], "created_at": stamp, "updated_at": stamp}
+               "error": None, "failures": [], "created_at": stamp, "updated_at": stamp,
+               **served, "boundary": packet_boundary(body)["boundary"],
+               "candidate": checkpoint_value.get("candidate"), "result": result,
+               "changed_paths": None, "boundary_exceeded": [], "disposition": None, "report": None,
+               "binding": admission_binding(body, ctx)}
         state["owner"] = owner
         state["admissions"][admission_id] = row
+        state["checkpoint"] = {**checkpoint_value, **new_map}
         _write(path, state)
         return {**row, "existing": False}
 
 
 def update_admission(project: Path, objective: str, *, owner: str, admission_id: str,
-                     update: Callable[[dict], None]) -> dict:
+                     update: Callable[[dict], None], open_required: bool = False) -> dict:
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
         if state["owner"] != owner or admission_id not in state["admissions"]:
             raise PodError("unknown_admission", "No owned admission identity")
+        if open_required:
+            _require_open(state)
         require_authority(project, objective, owner=owner, state=state,
                           run_id=state["admissions"][admission_id]["run_id"])
         row = state["admissions"][admission_id]
@@ -584,22 +973,102 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
         return row
 
 
+def consume_report(project: Path, objective: str, *, owner: str, admission_id: str,
+                   observation: dict, accompanying: dict | None = None, findings: list | None = None,
+                   proposals: list | None = None, result_commit: str | None = None) -> dict:
+    """Report consumption is a map write: Git result ingestion, triage and proposals, atomically.
+
+    The worker report is an observation. Changed paths come from Git, never from the
+    report; findings and discoveries become corrections or proposals by the coordinator's
+    triage; nothing in the report changes a criterion, gate or authorization.
+    """
+    from .obligations import accept_write, exceeded, refuse, report_projection, triage
+    path = _path(project, objective)
+    with _lock(path):
+        state = _read(path)
+        row = state["admissions"].get(admission_id)
+        if state["owner"] != owner or row is None:
+            raise PodError("unknown_admission", "No owned admission identity")
+        authority = require_authority(project, objective, owner=owner, state=state, run_id=row["run_id"])
+        map_state = map_of(state)
+        if map_state is None:
+            raise refuse("unbound_assignment", "no_map", "a report joins an obligation map")
+        _require_open(state)
+        ctx = kernel_context(project, objective, state, authority.get("native"))
+        settled = admission_id not in ctx["outstanding"]
+        ingestion = {"status": "not_applicable"}
+        if row["role"] == "implement":
+            if not settled:
+                ingestion = {"status": "pending_settlement"}
+            elif row["changed_paths"] is not None:
+                ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
+                             "boundary_exceeded": row["boundary_exceeded"]}
+            else:
+                base = (row.get("result") or {}).get("base")
+                observed = git_result((row.get("result") or {}).get("worktree"), base, result_commit)
+                if observed["status"] == "observed":
+                    row["result"] = {**row["result"], "head": observed["head"]}
+                    row["changed_paths"] = observed["changed_paths"]
+                    row["boundary_exceeded"] = exceeded(observed["changed_paths"], row["boundary"])
+                    ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
+                                 "boundary_exceeded": row["boundary_exceeded"], "head": observed["head"],
+                                 "committed": observed["head"] != base}
+                else:
+                    ingestion = observed
+        report_value = observation.get("observation", {})
+        row["report"] = {"outcome": report_value.get("outcome"), "status": observation.get("status"),
+                         "attempt": report_value.get("attempt"),
+                         "consumed_at": datetime.now(timezone.utc).isoformat()}
+        row["updated_at"] = row["report"]["consumed_at"]
+        value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
+                                admission_id=admission_id)
+        new_map = accept_write(map_state, value, ctx, triaged=triaged)
+        state["checkpoint"] = {**state["checkpoint"], **new_map}
+        _write(path, state)
+        return {"ingestion": ingestion, "settled": settled,
+                "map": {"seq": new_map["seq"], "revision": new_map["revision"],
+                        "quiescence": new_map["quiescence"]},
+                "report": report_projection(state["checkpoint"], ctx)}
+
+
 def state_inventory(project: Path) -> dict:
     """Read-only state inventory for doctor/status; it never rewrites a record."""
     root = state_root(project)
-    result = {"current": 0, "unsupported": 0, "unreadable": 0, "blocked": False}
+    result = {"current": 0, "unsupported": 0, "unreadable": 0, "blocked": False, "superseded": []}
     if not root.exists():
         return result
     for path in root.glob("*/context.json"):
         try:
-            _validate_context(bounded_json(path))
+            _validate_context(bounded_json(path, limit=CONTEXT_LIMIT))
             result["current"] += 1
         except PodError as exc:
             result["unsupported" if exc.code == "state_unsupported" else "unreadable"] += 1
         except OSError:
             result["unreadable"] += 1
+    result["superseded"] = [{**row, "blocked": True, "converted": False}
+                            for row in superseded_objectives(root)]
     result["blocked"] = bool(result["unsupported"] or result["unreadable"])
     return result
+
+
+def superseded_for_run(run_id: str) -> list[dict]:
+    """Superseded objective records that name this Run; read-only, for status."""
+    import json
+    root = state_root()
+    rows = []
+    for row in superseded_objectives(root):
+        try:
+            value = json.loads((root / row["record"] / "context.json").read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            continue
+        checkpoint_value = value.get("checkpoint") if isinstance(value, dict) else None
+        refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
+        admissions = value.get("admissions", {}) if isinstance(value, dict) else {}
+        if (any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs if isinstance(refs, list))
+                or isinstance(admissions, dict) and any(isinstance(item, dict) and item.get("run_id") == run_id
+                                                        for item in admissions.values())):
+            rows.append({**row, "blocked": True, "converted": False})
+    return rows
 
 
 def intervention(project: Path, objective: str, *, owner: str, correction: dict,
@@ -610,6 +1079,7 @@ def intervention(project: Path, objective: str, *, owner: str, correction: dict,
         state = _read(path)
         if state["owner"] != owner:
             raise PodError("coordinator_conflict", "Correction belongs to another coordinator")
+        _require_open(state)
         require_authority(project, objective, owner=owner, state=state)
         result = _intervention_locked(project, objective, state, task=task, unit=unit,
                                       correction=correction, diagnosis=diagnosis)
@@ -684,6 +1154,7 @@ def constraints_update(project: Path, objective: str, *, owner: str,
         state = _read(path)
         if state["owner"] != owner:
             raise PodError("coordinator_conflict", "Constraint belongs to another coordinator")
+        _require_open(state)
         require_authority(project, objective, owner=owner, state=state)
         if action == "add":
             snapshot = load(project)
@@ -757,4 +1228,5 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
                                     "model": row["request"]["model"], "task": row["task_id"],
                                     "recorded_at": datetime.now(timezone.utc).isoformat(),
                                     "cleared_at": None, "cleared_by": None})
-    return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
+    return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply,
+                            open_required=True)

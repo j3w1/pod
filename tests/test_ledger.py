@@ -25,7 +25,7 @@ class LedgerTests(unittest.TestCase):
         write_defaults(self.root/'config'/'pod'/'config.yaml')
 
     def checkpoint(self, objective='objective'):
-        value={'schema':'pod-checkpoint/v2','criteria':['works'],'plan_revision':'plan',
+        value={'schema':'pod-checkpoint/v3','criteria':['works'],'plan_revision':'plan',
                'candidate':'candidate','policy_revision':effective(self.project)['revision'],
                'native_refs':[],'assignments':[],'questions':[],
                'verification_gaps':[],'next_safe_action':'inspect'}
@@ -88,7 +88,10 @@ class LedgerTests(unittest.TestCase):
         path=_path(self.project,'objective')
         with _lock(path):
             state=_read(path)
-            row={'schema':'pod-admission/v3','state':'bound','admission_id':'a','objective':'objective',
+            row={'schema':'pod-admission/v4','state':'bound','admission_id':'a','objective':'objective',
+                 'serves':['t-task'],'role':'implement','boundary':{'paths':[],'surfaces':[]},
+                 'map_revision':1,'candidate':'candidate','result':None,'changed_paths':None,
+                 'boundary_exceeded':[],'disposition':None,'report':None,'binding':None,
                  'owner':'owner','request':{'agent':'codex','model':'gpt-6-sol','effort':'medium',
                                           'context':'native_default','reason':'test'},
                  'route_decision':{},'effective_evidence':{},'runtime':'runtime','request_uuid':None,

@@ -348,7 +348,7 @@ class RepositoryAndIssueTests(unittest.TestCase):
                 "schema: pod/v1\nwaste_governor: {transient_retries: 0}\n")
             self.assertEqual(effective(worktree)["policy"]["waste_governor"]["transient_retries"], 0)
 
-            value = {"schema": "pod-checkpoint/v2", "criteria": ["works"],
+            value = {"schema": "pod-checkpoint/v3", "criteria": ["works"],
                      "plan_revision": "plan", "candidate": "candidate",
                      "policy_revision": effective(main)["revision"], "native_refs": [], "assignments": [],
                      "questions": [], "verification_gaps": ["works"],

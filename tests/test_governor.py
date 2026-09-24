@@ -68,7 +68,7 @@ def diagnostic(candidate=COMMIT, check="permission probe", **extra):
 
 
 def body(candidate=COMMIT, gaps=()):
-    return {"schema": "pod-checkpoint/v2", "criteria": ["works"], "plan_revision": "p",
+    return {"schema": "pod-checkpoint/v3", "criteria": ["works"], "plan_revision": "p",
             "candidate": candidate, "policy_revision": "r", "native_refs": [], "assignments": [],
             "questions": [], "verification_gaps": list(gaps), "next_safe_action": "inspect"}
 

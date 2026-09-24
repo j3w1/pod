@@ -15,8 +15,8 @@ BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "agents/openai.yaml", "scr
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md")
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "bundle.py", "catalog.py", "cli.py", "config.py", "context.py",
-                  "errors.py", "github.py", "governor.py", "installer.py", "internal.py", "ledger.py", "operations.py",
-                  "orca.py", "placement.py", "records.py", "selection.py",
+                  "errors.py", "github.py", "governor.py", "installer.py", "internal.py", "ledger.py",
+                  "obligations.py", "operations.py", "orca.py", "placement.py", "records.py", "selection.py",
                   "skill_validation.py", "term.py", "tui.py", "tui_render.py",
                   "tui_state.py", "util.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))

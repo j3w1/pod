@@ -262,6 +262,10 @@ def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
     return binding
 
 
+def _observed_value(value: object) -> str:
+    return value if isinstance(value, str) and value.strip() and len(value) <= 256 else "unknown"
+
+
 def _effective_evidence(receipt: dict, shown: dict, admission: dict) -> tuple[dict, bool]:
     result = shown["result"]
     worker = result["worker"]
@@ -278,7 +282,9 @@ def _effective_evidence(receipt: dict, shown: dict, admission: dict) -> tuple[di
         mismatch = True
     else:
         mismatch = False
-    effective = {key: observed.get(key, "unknown") if isinstance(observed, dict) else "unknown"
+    # Orca reports null launch fields for a reused terminal, which sends no model or effort
+    # flag. Absent, null or malformed effective values are unknown, never observed settings.
+    effective = {key: _observed_value(observed.get(key)) if isinstance(observed, dict) else "unknown"
                  for key in ("agent", "model", "effort")}
     effective["context"] = "native_default"
     requested = admission["request"]
@@ -674,7 +680,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
 def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
                   plan_revision: str, frozen_packet: dict, worktree: str = "current",
                   reuse_of: str | None = None, port: NativePort | None = None,
-                  issue_port=None) -> dict:
+                  issue_port=None, accompanying: dict | None = None) -> dict:
     """Packet, recovery, issue, placement, serialized boundary, then one native start."""
     from .records import packet
     bounded_text(owner, name="owner")
@@ -723,7 +729,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                         run_id=run, task_id=task, plan_revision=plan_revision,
                         packet_id=validated["packet_id"], worktree=worktree,
                         frozen_packet=validated, expected_runtime=capability["runtime"],
-                        placement_binding=placement_binding, reuse_of=reuse_of)
+                        placement_binding=placement_binding, reuse_of=reuse_of,
+                        accompanying=accompanying)
     if admission["existing"]:
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
                                       worktree=worktree, port=native_port, issue_port=issue_port)

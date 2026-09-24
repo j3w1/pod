@@ -23,6 +23,9 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     if mutating and (state is None or state.get("owner") != owner):
         raise PodError("native_authority_unverified",
                        "Governor mutation does not own this Pod objective context")
+    if mutating:
+        from .ledger import _require_open
+        _require_open(state)
     if mutating and not version_exempt:
         from .bundle import require_current_identity
         require_current_identity(state.get("checkpoint"))
@@ -69,12 +72,27 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
 
 def run(operation: str, request: dict) -> dict:
     if operation == "brief":
-        exact(request, {"criteria", "coverage"}, {"criteria", "coverage"}, name="request")
-        return execution_brief(request["criteria"], request["coverage"])
+        exact(request, {"criteria", "coverage", "map", "project"}, {"criteria", "coverage"}, name="request")
+        brief = execution_brief(request["criteria"], request["coverage"])
+        # An execution brief engages the kernel: it always carries a validated draft map.
+        # Validation is read-only (Git reads at the declared base), so Plan Mode can use it.
+        from .obligations import brief_map
+        declared = request.get("map", {}).get("governance") if isinstance(request.get("map"), dict) else None
+        base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
+        if "project" in request:
+            from .ledger import governance_observation
+            observed = governance_observation(Path(request["project"]), base_ref)
+        else:
+            observed = {"status": "no_repository"} if base_ref is None else {"status": "unavailable"}
+        brief["map"] = brief_map(request["criteria"], request.get("map"),
+                                 {"governance": observed, "admissions": {}, "outstanding": [],
+                                  "ceiling": 0, "delegation": "unknown", "constraints": []})
+        return brief
     if operation == "packet":
         return packet(request)
     if operation == "report":
-        exact(request, {"report", "packet", "project", "objective", "admission_id"},
+        exact(request, {"report", "packet", "project", "objective", "admission_id", "map", "triage",
+                        "proposals", "result_commit"},
               {"report", "packet", "project", "objective", "admission_id"}, name="request")
         if not isinstance(request["packet"], dict):
             raise PodError("invalid_packet", "Report needs a frozen packet")
@@ -108,9 +126,18 @@ def run(operation: str, request: dict) -> dict:
             update_admission(Path(request["project"]), request["objective"],
                              owner=admission["owner"], admission_id=admission["admission_id"],
                              update=refresh)
-        return report(request["report"], request["packet"],
-                      {"runtime": admission["runtime"], **{key: binding[key] for key in
-                       ("runId", "taskId", "dispatchId", "workerId")}})
+        validated = report(request["report"], request["packet"],
+                           {"runtime": admission["runtime"], **{key: binding[key] for key in
+                            ("runId", "taskId", "dispatchId", "workerId")}})
+        # Report consumption is a map write: Git reads the result, triage and proposals land
+        # atomically, and nothing in the report itself changes an obligation.
+        from .ledger import consume_report
+        consumed = consume_report(Path(request["project"]), request["objective"], owner=admission["owner"],
+                                  admission_id=admission["admission_id"], observation=validated,
+                                  accompanying=request.get("map"), findings=request.get("triage"),
+                                  proposals=request.get("proposals"),
+                                  result_commit=request.get("result_commit"))
+        return {**validated, **consumed}
     if operation == "source":
         exact(request, {"project", "path"}, {"project", "path"}, name="request")
         return source_identity(Path(request["project"]), request["path"])
@@ -134,11 +161,19 @@ def run(operation: str, request: dict) -> dict:
     if operation == "acceptance":
         exact(request, {"criteria", "evidence_rows", "candidate", "policy_revision",
                         "sources", "dependencies", "environment", "review_required",
-                        "hosted_required", "owner_acceptance", "project", "objective_source"},
+                        "hosted_required", "owner_acceptance", "project", "objective_source",
+                        "objective"},
               {"criteria", "evidence_rows", "candidate", "policy_revision",
                "sources", "dependencies", "environment", "review_required",
                "hosted_required"}, name="request")
-        arguments = {key: value for key, value in request.items() if key != "project"}
+        arguments = {key: value for key, value in request.items() if key not in ("project", "objective")}
+        view = None
+        if "objective" in request:
+            if "project" not in request:
+                raise PodError("invalid_request", "Objective-bound acceptance requires the checkout")
+            from .ledger import kernel_view
+            view = kernel_view(Path(request["project"]), request["objective"], candidate=request["candidate"])
+            arguments["label"] = view["label"]
         objective_source = arguments.pop("objective_source", None)
         if objective_source is not None:
             if "project" not in request:
@@ -153,7 +188,11 @@ def run(operation: str, request: dict) -> dict:
         if "project" in request:
             arguments["integration"] = integration_observation(Path(request["project"]),
                                                                request["candidate"])
-        return acceptance(**arguments)
+        result = acceptance(**arguments)
+        if view is not None:
+            result["report"] = view["report"]
+            result["native_settlement"] = view["settlement"]
+        return result
     if operation == "integration-observe":
         exact(request, {"project", "candidate", "base_ref"}, {"project", "candidate"}, name="request")
         return integration_observation(Path(request["project"]), request["candidate"],
@@ -166,8 +205,11 @@ def run(operation: str, request: dict) -> dict:
         snapshot = contract()
         if snapshot.get("status") != "observed":
             raise PodError("orca_unavailable", "A checkpoint needs a current native runtime read")
+        delegation = ("available" if snapshot.get("capabilities", {}).get("launch_preferences_v1") is True
+                      else "unavailable")
         return checkpoint(Path(request["project"]), request["objective"], owner=request["owner"],
-                          value=request["value"], native={"runtime": snapshot["runtime"]})
+                          value=request["value"], native={"runtime": snapshot["runtime"],
+                                                          "delegation": delegation})
     if operation == "constraint":
         exact(request, {"project", "objective", "owner", "action", "value", "id"},
               {"project", "objective", "owner", "action"}, name="request")
@@ -278,7 +320,7 @@ def run(operation: str, request: dict) -> dict:
         return status(project, request["objective"], native_projection=projection)
     if operation == "admission":
         exact(request, {"project", "objective", "owner", "run", "task",
-                        "plan_revision", "packet", "worktree", "reuse_of"},
+                        "plan_revision", "packet", "worktree", "reuse_of", "map"},
               {"project", "objective", "owner", "run", "task",
                "plan_revision", "packet"}, name="request")
         from .operations import guarded_start
@@ -289,7 +331,7 @@ def run(operation: str, request: dict) -> dict:
                              plan_revision=request["plan_revision"],
                              frozen_packet=request["packet"],
                              worktree=request.get("worktree", "current"),
-                             reuse_of=request.get("reuse_of"))
+                             reuse_of=request.get("reuse_of"), accompanying=request.get("map"))
     raise PodError("unknown_operation", "Unsupported private helper operation")
 
 
@@ -311,8 +353,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"schema": "pod-cli/v4", "status": "ok", "result": result}, sort_keys=True))
         return 0
     except PodError as exc:
-        print(json.dumps({"schema": "pod-cli/v4", "status": "blocked",
-                          "error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
+        error = {"code": exc.code, "message": str(exc)}
+        if getattr(exc, "detail", None):
+            error["detail"] = exc.detail
+        print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": error},
+                         sort_keys=True, default=str))
         return 1
 
 

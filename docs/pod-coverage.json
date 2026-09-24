@@ -153,7 +153,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_stopped_native_fixture_frees_one_slot_for_replacement_task",
+      "offline_test": "tests.test_kernel_boundaries.CapacityAndReviewTests.test_capacity_wait_is_valid_only_at_the_ceiling_and_proposals_are_never_admitted",
       "status": "NOT_RUN"
     },
     {
@@ -239,7 +239,7 @@
         "unit",
         "independent_review"
       ],
-      "offline_test": "tests.test_records.RecordTests.test_failed_required_check_blocks_even_with_pass_and_review_is_contextual",
+      "offline_test": "tests.test_kernel_boundaries.CapacityAndReviewTests.test_review_triage_and_the_derived_label",
       "status": "NOT_RUN"
     },
     {
@@ -360,7 +360,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_obligations.ProvenanceTests.test_the_brief_map_covers_every_original_criterion_with_a_check_or_dependency",
       "status": "NOT_RUN"
     },
     {
@@ -1205,6 +1205,180 @@
         "live_native"
       ],
       "offline_test": "tests.test_installer.InstallerTests.test_update_a_to_b_preserves_edit_and_fast_path",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A143",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": "tests.test_kernel_boundaries.CapacityAndReviewTests.test_capacity_wait_is_valid_only_at_the_ceiling_and_proposals_are_never_admitted",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A144",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.AdmissionTests.test_each_unbound_assignment_detail",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A145",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.ProvenanceTests.test_proposals_change_nothing_until_adopted_by_user_or_governance",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A146",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.ProvenanceTests.test_kind_and_provenance_authority_matrix",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A147",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_kernel_boundaries.GovernanceTests.test_policy_cites_governance_at_the_base_never_the_candidate",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A148",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.AccountingTests.test_state_accounting_refusals",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A149",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.WaitTests.test_each_wait_class_validates_its_referent",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A150",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": "tests.test_obligations.ObservationTests.test_serialization_flag_needs_free_capacity_and_positive_delegation",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A151",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.AccountingTests.test_one_coordinator_slot_and_its_boundary",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A152",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.AdmissionTests.test_ownership_and_consolidated_corrections",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A153",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_kernel_boundaries.ResultTests.test_changed_paths_come_from_git_and_integration_is_validated_by_ancestry",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A154",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.ResultTests.test_rejected_result_is_discarded_and_its_replacement_admits",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A155",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.AssuranceTests.test_review_packets_serve_one_assurance_and_repeat_review_is_refused",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A156",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.AssuranceTests.test_correction_changing_reviewed_scope_reopens_for_delta_review_and_reuses_unaffected",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A157",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.AssuranceTests.test_label_needs_bound_non_withdrawn_assurance",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A158",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": "tests.test_kernel_boundaries.LifecycleTests.test_quiescent_objective_stays_open_and_continues_without_reopen",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A159",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": "tests.test_kernel_boundaries.LifecycleTests.test_closure_refuses_admission_and_every_governor_mutation_until_user_reopen",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A160",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_obligations.LifecycleTests.test_withdrawal_authority",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A161",
+      "required_evidence": [
+        "unit",
+        "installed_bundle",
+        "live_native"
+      ],
+      "offline_test": "tests.test_installer.InstallerTests.test_update_from_the_previous_release_line_notices_superseded_objectives",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A162",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_trace_checks.TraceCheckTests.test_scripted_checks_cover_triangle_churn_and_scope_inflation",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A163",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_kernel_boundaries.LifecycleTests.test_trivial_work_stays_map_free_and_the_first_delegation_needs_a_map",
       "status": "NOT_RUN"
     }
   ]

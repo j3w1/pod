@@ -38,6 +38,18 @@ MECHANISM = (
 WORDING = (
     ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|baseline commit)\b", re.I)),
 )
+# Count-centred concurrency guidance that 0.6 replaced with obligation-centred records: a
+# worker count is a ceiling, never a target, and a free reservation admits nothing. Normative
+# Markdown may not reintroduce it; tests keep negative examples of it on purpose.
+COUNT_CENTRED = (
+    ("count-centred guidance", re.compile(
+        rb"(?i:default maximum is two"
+        rb"|next useful task"
+        rb"|(?:ordinary|default|normal) starting concurrency"
+        rb"|\b(?:fill|use) (?:every|each|any|all|the) (?:free |idle |spare |open )?(?:slot|reservation)s?\b"
+        rb"|keep (?:both|two|all|every) (?:workers?|slots?) busy"
+        rb"|admit (?:the )?next (?:ready )?task after)")),
+)
 # Pod publishing itself, in any file: Pod's own release schemas, operations and files, a
 # pinned or packaged Pod source, and the few prose forms that can only mean Pod is the
 # thing released, tagged or published. A governed project's release vocabulary, its release
@@ -84,6 +96,8 @@ def _scan(name: str, data: bytes) -> list[str]:
         tables += [MECHANISM, PUBLICATION]
         if not name.startswith(FIXTURES):
             tables.append(WORDING)
+        if name.endswith(".md") and not name.startswith("tests/"):
+            tables.append(COUNT_CENTRED)
         if name.startswith(".github/") or (not name.startswith(("tests/", FIXTURES))
                                            and name.endswith(AUTOMATION_CODE)):
             tables.append(AUTOMATION_STEP)
@@ -144,7 +158,7 @@ def main(argv: list[str]) -> int:
             print("  " + finding)
         return 1
     print("Installer-based tracked source audited; no personal path, account, runtime identifier, "
-          "credential, unsupported mechanism or Pod publication material.")
+          "credential, unsupported mechanism, count-centred guidance or Pod publication material.")
     return 0
 
 

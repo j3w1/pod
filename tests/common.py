@@ -62,3 +62,110 @@ def fixture():
             os.environ.pop("POD_CONFIG_HOME", None)
             os.environ.pop("POD_STATE_HOME", None)
             yield path
+
+
+# Canonical 0.6 fixture contracts. A delegated objective always carries an obligation map;
+# these helpers build the smallest honest one for a disposable project outside Git.
+KERNEL_TASKS = ("task", "task1", "task2", "task3", "task-0", "task-1", "task-2", "task-3", "task-4",
+                "task-5", "task-6", "task-7", "task-8", "replacement-task", "shared-task", "disabled-now",
+                "other-edit", "bad-effort", "other", "new-task", "first", "second", "third", "t",
+                "source-changed", "source-absent", "instruction-changed", "instruction-absent",
+                "unavailable", "future-output")
+
+
+def task_obligation(task: str) -> str:
+    return "t-" + task
+
+
+def kernel_map(criteria=("works",), tasks=KERNEL_TASKS, base_ref=None) -> dict:
+    """Intake map: the first criterion is coordinator-held; everything else is sequenced."""
+    sequenced = {"class": "sequenced", "referent": "O0"}
+    obligations = [{"id": "O0", "kind": "criterion", "provenance": "objective",
+                    "source": {"ref": criteria[0]}, "check": f"{criteria[0]} passes",
+                    "state": "active", "executor": "coordinator"}]
+    obligations += [{"id": f"O{index}", "kind": "criterion", "provenance": "objective",
+                     "source": {"ref": criterion}, "check": f"{criterion} passes",
+                     "state": "waiting", "wait": dict(sequenced)}
+                    for index, criterion in enumerate(criteria[1:], start=1)]
+    obligations += [{"id": task_obligation(task), "kind": "subgoal", "provenance": "coordinator",
+                     "parent": "O0", "check": f"{task} is delivered", "state": "waiting",
+                     "wait": dict(sequenced)} for task in tasks]
+    return {"governance": {"base_ref": base_ref}, "obligations": obligations}
+
+
+def kernel_binding(task: str = "task", *, revision: int = 1, role: str = "implement",
+                   boundary: dict | None = None) -> dict:
+    return {"serves": [task_obligation(task)], "role": role,
+            "boundary": boundary or {"paths": [], "surfaces": []}, "map_revision": revision}
+
+
+def stored_map(state: dict) -> dict:
+    """Round-trip the accepted map fields a coordinator writes back."""
+    checkpoint = state["checkpoint"]
+    return {"obligations": checkpoint["obligations"], "proposals": checkpoint.get("proposals", [])}
+
+
+def restated_map(project, objective, port, *, owner="owner", run="run") -> dict | None:
+    """Restate obligations whose worker settled as sequenced behind the coordinator-held one."""
+    from pod.ledger import _outstanding_ids, binding_valid, read
+    state = read(project, objective)
+    if not state or not state.get("checkpoint") or state["checkpoint"].get("obligations") is None:
+        return None
+    outstanding = set(_outstanding_ids(state, fake_native(port, state, owner=owner, run=run)))
+    holder = state["checkpoint"].get("coordinator_slot")
+    changed = False
+    obligations = []
+    for row in state["checkpoint"]["obligations"]:
+        row = dict(row)
+        if row["state"] == "active" and row["executor"] != "coordinator" and row["executor"] not in outstanding:
+            row.pop("executor")
+            row["state"] = "waiting"
+            row["wait"] = {"class": "sequenced", "referent": holder}
+            changed = True
+        obligations.append(row)
+    return {"obligations": obligations} if changed else None
+
+
+def fake_native(port, state, *, owner="owner", run="run") -> dict:
+    """Exact assignment evidence from a fake port without consuming its test callbacks."""
+    from pod.errors import PodError
+    from pod.ledger import binding_valid
+    from pod.operations import _assignment_evidence
+    evidence = []
+    for row in (state or {}).get("admissions", {}).values():
+        binding = row.get("native_binding")
+        if row["state"] != "bound" or not binding_valid(binding):
+            continue
+        if hasattr(port, "workers") and binding["dispatchId"] not in port.workers:
+            continue
+        try:
+            evidence.append(_assignment_evidence(port.show_worker(binding["dispatchId"]), row))
+        except (PodError, KeyError):
+            continue
+    return {"runtime": getattr(port, "runtime", "runtime"), "owner": owner, "authoritative": True,
+            "scope": "objective_assignments", "complete": True, "assignments": evidence,
+            "physical_capacity": "unavailable"}
+
+
+def fake_authority(port):
+    """A require_authority stand-in that still carries exact assignment evidence."""
+    def authority(project, objective, *, owner, state=None, run_id=None, native_port=None):
+        from pod.ledger import read
+        current = state if state is not None else read(project, objective)
+        refs = {row["runId"]: row["runtime"]
+                for row in ((current or {}).get("checkpoint") or {}).get("native_refs", [])}
+        return {"runtime": "runtime", "run_id": run_id or "run", "references": refs or {"run": "runtime"},
+                "native": fake_native(port, current, owner=owner)}
+    return authority
+
+
+VERIFICATION = {"dependencies": ["pyyaml==6.0.3"], "environment": "fixture"}
+
+
+def proof(obligation: str, candidate: str = "c1", *, status: str = "PASS", policy_revision: str = "p",
+          environment: str = "fixture", dependencies=("pyyaml==6.0.3",), sources=(), check: str = "unit") -> dict:
+    """A detailed pod-evidence/v1 record joined to one obligation by its id (R41)."""
+    return {"schema": "pod-evidence/v1", "criterion": obligation, "candidate": candidate,
+            "sources": list(sources), "policy_revision": policy_revision, "dependencies": list(dependencies),
+            "environment": environment, "check": check, "command": "python -m unittest", "result": "observed",
+            "timestamp": "2026-09-24T00:00:00Z", "status": status, "reference": "log"}

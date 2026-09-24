@@ -1,6 +1,6 @@
 # Pod validation
 
-This is the 0.5.0 verification contract. Every result names the exact commit,
+This is the 0.6.0 verification contract. Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
 PTY/subprocess behavior, installed-bundle proof, hosted CI, live native proof,
 visual review and independent review are separate labels. A check not exercised
@@ -16,16 +16,51 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, root VERSION link, frontmatter, launcher forms and word budgets. |
 | Catalog check | `PYTHONPATH=skills python -m pod.catalog --check` | Six exact identities, efforts, attributed guidance and coherent dated reference metrics. |
 | Source hygiene | `python tools/source_audit.py .` | Tracked-source privacy and removed-mechanism guard; no Pod package, tag or release path. |
+| Recorded trace checks | `python tools/trace_check.py tests/fixtures/traces/*.json` | Deterministic record checks and observation-only counts; a trace without maps remains `NOT_EVALUABLE`, not kernel proof. |
 | PTY and subprocess | `POD_REQUIRE_PTY=1 PYTHONPATH=skills python -m unittest tests.test_tui_pty -v`; `PYTHONPATH=skills python -m unittest tests.test_installer -v` | Actual terminal and shell entrypoints, immediate persistence, responsive focus, install interruption and safe recovery. |
 | Copied bundle | Run installed `pod --version`, `pod config --json` and `pod doctor --json` from an unrelated directory with no checkout or `PYTHONPATH` | One placed bundle works independently. |
 | Disposable installer | `POD_INSTALL_SOURCE=file://… sh install.sh` in a scrubbed temporary home, then `--installed` parity and launcher checks | Real install, dependencies, both skills, receipt, preferences, PATH and update. |
 | SHA-pinned public install | Download `install.sh` from `raw.githubusercontent.com` at the commit SHA and set `POD_INSTALL_SOURCE` to the matching `codeload.github.com` SHA tarball in hosted CI | Public endpoints serve the reviewed commit. |
 | Hosted Linux | The applicable checks above in the single `linux` job on each PR and push to `main` | Hosted result for the exact commit. |
-| Independent audit | Fresh candidate-bound reviewer with reproducible evidence | Findings only; corrections need re-review. |
+| Independent audit | Fresh candidate-bound reviewer under the installed mechanism preceding the change, with reproducible evidence | Findings only. Corrections affecting reviewed scope, assumptions, dependencies or governance, or with unknown impact, receive affected-scope delta review. Bind unaffected evidence to the candidate through explicit REUSE with the Git delta; honor stricter project rules. |
 | Live core matrix | Codex and Claude Code, each on Linux with disposable objective | Separate native install/discovery, in-session coordination, authorized worker start/effective route, supervision, request recovery, verification and interruption/adoption. |
 | Orca delegation | Real worker through each advertised adapter | Request construction, launch identity/effective values, messaging, settlement, Delivery and release. |
 | Project acceptance | Owner decision, merge and `main` checks | External acceptance and merged truth. |
 | Post-merge public command | Literally run `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh \| sh` in a clean disposable home and on the intended host | `main` distribution, installed version and receipt match the merged commit. |
+
+The 0.6 kernel has focused boundary tests for R81–R91 and A143–A163:
+provenance and base-revision governance refresh; all obligation states and
+wait referents; one coordinator slot and boundary ownership; Git-derived
+result paths, ancestry or noncommit attestation, discard then replacement;
+assurance triage, affected-scope delta review and explicit REUSE; quiescence,
+closure and direct-user reopen; and hard cutover of older objectives. Seeded
+stdlib generative tests check P1–P6 after every accepted transition and print
+counterexamples on failure. P1 checks structural obligation accounting, not
+eventual progress. P5 checks binding integrity, not review truth. Scripted
+record checks run the slot-filling, serialization, amplification, churn and
+scope-inflation cases on sanitized traces; counts and durations are
+observations, not gates. A150 requires two accepted writes, positive delegation
+availability, free capacity, and no bounded current-input rationale/revisit
+binding; capacity below the ceiling is invalid. Zero ceiling or unknown or
+unavailable delegation suppresses that flag.
+
+Live Codex and Claude trials additionally exercise A143, A150, A158 and A159
+in disposable objectives. A missing live case remains `NOT_RUN`. Stage-1
+review is the fresh final independent audit under the mechanism installed
+before 0.6. After merge and installation, a separate 0.6 disposable objective
+records an assurance obligation, review attempt, triage and label decision as
+self-hosting evidence; it cannot promote stage-1 evidence.
+
+If stage 2 fails, preserve the failing exact evidence and keep the objective
+incomplete. Classify product defects separately from environment or trial
+faults and do not retry blindly. A product defect creates a linked corrective
+delivery unit and follow-up PR from current `main`; the first post-merge patch
+is 0.6.1. Review the correction independently under the mechanism installed
+before it, run full milestone gates plus affected regressions, obtain fresh
+candidate authorization and hosted CI, reinstall corrected public `main`,
+then repeat failed and affected live and self-hosting cases. If the defective
+mechanism cannot support a required gate, use safe diagnosis and owner
+recovery. Keep earlier stage-1 evidence distinct.
 
 The PTY suite runs with pinned test-only `pyte` and `wcwidth`; it may skip in a
 local dev environment without them, but `POD_REQUIRE_PTY=1` makes missing

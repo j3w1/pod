@@ -355,6 +355,37 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(any(b"my edit" in path.read_bytes() for path in preserved))
         self.assertEqual((self.canonical / "SKILL.md").read_bytes(), changed)
 
+    def test_update_from_the_previous_release_line_notices_superseded_objectives(self):
+        """The installed 0.5 updater runs the staged 0.6 installer, which lists and blocks old records."""
+        prior = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--verify", "--quiet",
+                                   "c77546d^{commit}"], capture_output=True, text=True)
+        if prior.returncode:
+            self.skipTest("the 0.5 commit is not in this checkout")
+        old = self.root / "prior.tar.gz"
+        subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar.gz", "--prefix=pod-source/",
+                        "-o", str(old), prior.stdout.strip()], check=True)
+        first = run_install({**self.env, "POD_INSTALL_SOURCE": old.as_uri()})
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        record = self.home / "state/pod/old-objective/context.json"
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({"schema": "pod-context/v4", "revision": 3, "owner": "owner",
+                                      "checkpoint": {"schema": "pod-checkpoint/v2", "objective": "prior-objective"},
+                                      "admissions": {"a": {"schema": "pod-admission/v3", "run_id": "r"}},
+                                      "interventions": {}, "source_rejections": {}, "constraints": []}))
+        before = record.read_bytes()
+        updated = run_pod(self.env, "update")
+        self.assertEqual(updated.returncode, 0, updated.stdout + updated.stderr)
+        self.assertIn("superseded state schemas and are blocked; nothing was converted", updated.stdout)
+        self.assertIn("prior-objective: pod-admission/v3, pod-checkpoint/v2", updated.stdout)
+        self.assertEqual(record.read_bytes(), before)
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT / "VERSION").read_text().strip())
+        doctor = json.loads(run_pod(self.env, "doctor", "--json").stdout)
+        self.assertEqual(doctor["state"]["superseded"],
+                         [{"record": "old-objective", "objective": "prior-objective",
+                           "schemas": ["pod-admission/v3", "pod-checkpoint/v2"],
+                           "blocked": True, "converted": False}])
+        self.assertEqual(record.read_bytes(), before)
+
     def test_missing_wheel_keeps_previous_bundle_and_half_copy_recovers(self):
         self.installed()
         before = self.receipt.read_bytes()
