@@ -51,7 +51,7 @@ def _table_line(state: State, model_id: str, caps: Capabilities,
     model = by_id(state.catalog)[model_id]
     metrics = reference_rows(state.catalog)[model_id]
     saved = state.preferences["effective"].get(model_id)
-    label = saved.capitalize() if saved in ("preferred", "available", "disabled") else "Unknown"
+    label = saved.capitalize() if saved in ("preferred", "available", "disabled") else "Not set"
     symbol = glyph(caps, saved) if saved in ("preferred", "available", "disabled") else "?"
     rank = ranks(state.catalog)[model_id]
     values = {"state": f"{symbol} {label}", "model": model["name"],
@@ -116,6 +116,8 @@ def _details(state: State, width: int, budget: int, caps: Capabilities,
           f"{join}{_metric(metrics['first_chunk_s'], suffix='s', caps=caps)}"
           f"{join}{state.catalog['reference_benchmark']['captured']}")
     examples = "Pod example: " + model["examples"][0]
+    if state.preferences["saved"].get(model_id) is None and not state.preferences["errors"]:
+        examples = "Not set (not eligible) | Space makes this model Available. " + examples
     if state.expanded and len(model["examples"]) > 1:
         examples += "; " + model["examples"][1]
     # Keep one guidance line and all identity/reference facts even on short terminals.

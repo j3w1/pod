@@ -70,6 +70,11 @@ work scheduled in a later milestone or evidence that requires another kind of
 check. All rows stay `NOT_RUN` until actual evidence is recorded. A requirement
 change updates its scenario and coverage row in the same commit.
 
+A valid sparse custom preference map remains usable for its explicitly eligible
+models and reports omitted ids as “Not set (not eligible)”. A missing file or
+invalid YAML/required structure has no eligible pool. These are distinct test
+cases; neither permits an accidental All models selection.
+
 Instruction budgets are whitespace-delimited: SKILL at most 750 words, each
 conditional reference at most 700, all references together at most 2200.
 The Execution Spec reference loads only for issue/spec work.

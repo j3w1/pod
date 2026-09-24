@@ -39,21 +39,3 @@ def fixture():
             os.environ.pop("POD_CONFIG_HOME", None)
             os.environ.pop("POD_STATE_HOME", None)
             yield path
-
-
-def establishment(route, *, runtime="runtime", billing="included", observed="subscription",
-                  hard_stops=(), bucket=...):
-    """A minimal route establishment record, as the production port would build one."""
-    return {"schema": "pod-route-establishment/v1", "runtime": runtime, "version": ORCA_VERSION,
-            "executable": "/fixture/orca", "hard_stops": list(hard_stops), "disclosures": [],
-            "route": {"agent": route.get("agent"), "model": route.get("model"),
-                      "account": route.get("account"),
-                      "bucket": route.get("bucket") if bucket is ... else bucket,
-                      "effort": route.get("effort"), "context": route.get("context"),
-                      "effective_context": route.get("effective_context")},
-            "controls": {"account_identity": {"tier": "runtime_observation", "matched": True},
-                         "context_window": {"tier": "enforceable_control",
-                                            "source": "explicit synthetic fixture"}},
-            "login": {"mode": "host_login", "auth": "oauth", "subscription": True,
-                      "managed_accounts": 0, "identity_digest": route.get("account")},
-            "billing": {"observed": observed, "approved": billing}}

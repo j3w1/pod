@@ -179,7 +179,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_concurrent_admissions_serialize_the_objective_ceiling",
+      "offline_test": "tests.test_native_authority.NativeAuthorityTests.test_foreign_run_admission_refuses_before_native_call_or_write",
       "status": "NOT_RUN"
     },
     {
@@ -188,7 +188,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_lost_start_response_without_uuid_holds_instead_of_restarting",
+      "offline_test": "tests.test_operations.AdmissionTests.test_live_bound_task_on_another_run_blocks_replacement_until_settled",
       "status": "NOT_RUN"
     },
     {
@@ -392,7 +392,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_config.PreferencesTests.test_safe_yaml_and_project_scope_are_strict",
+      "offline_test": "tests.test_config.PreferencesTests.test_yaml_include_size_depth_and_type_boundaries",
       "status": "NOT_RUN"
     },
     {
@@ -408,7 +408,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_config.PreferencesTests.test_missing_invalid_and_partial_files_never_enable_delegation",
+      "offline_test": "tests.test_config.PreferencesTests.test_sparse_custom_map_is_valid_but_omissions_are_ineligible",
       "status": "NOT_RUN"
     },
     {
@@ -500,7 +500,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_native_authority.NativeAuthorityTests.test_checkpoint_rewrite_without_binding_or_with_changed_generation_is_refused",
       "status": "NOT_RUN"
     },
     {
@@ -573,7 +573,7 @@
       "required_evidence": [
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_ledger.LedgerTests.test_malformed_and_unreadable_records_are_counted_without_rewrite",
       "status": "NOT_RUN"
     },
     {
@@ -651,7 +651,7 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_bundle_install.CopiedBundleTests.test_every_missing_bundle_module_is_a_clean_incomplete_failure",
       "status": "NOT_RUN"
     },
     {
@@ -768,7 +768,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_governor.DecisionTests.test_a_project_file_cannot_widen_governor_authority",
+      "offline_test": "tests.test_governor.CandidateTests.test_project_cannot_remove_personal_preflight_from_governor_decision",
       "status": "NOT_RUN"
     },
     {
@@ -795,7 +795,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_completed_and_absent_recovery_do_not_launch_replacement",
+      "offline_test": "tests.test_operations.AdmissionTests.test_completed_conflict_survives_incomplete_and_absent_until_coherent_receipt",
       "status": "NOT_RUN"
     },
     {
@@ -804,7 +804,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_documented_refusal_defers_but_uncertain_failure_holds",
+      "offline_test": "tests.test_operations.AdmissionTests.test_refusal_classifier_rejects_runtime_envelope_and_effect_contradictions",
       "status": "NOT_RUN"
     },
     {
@@ -860,7 +860,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_operations.AdmissionTests.test_issue_change_holds_pending_replay_but_completed_read_is_observational",
       "status": "NOT_RUN"
     },
     {
@@ -876,7 +876,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_linked_worktree_reuses_state_and_restricts_private_main_policy",
+      "offline_test": "tests.test_operations.AdmissionTests.test_same_selector_resolving_elsewhere_blocks_start_and_pending_replay",
       "status": "NOT_RUN"
     },
     {
@@ -960,7 +960,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_operations.AdmissionTests.test_status_joins_checkpoint_and_exact_native_references_without_write",
       "status": "NOT_RUN"
     },
     {
@@ -1115,7 +1115,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_status_exposes_route_mismatch_and_version_drift",
+      "offline_test": "tests.test_cli.CliTests.test_doctor_is_passive_and_reports_unsupported_state_objective_scoped",
       "status": "NOT_RUN"
     },
     {

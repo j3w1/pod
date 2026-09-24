@@ -262,7 +262,7 @@ def contract() -> dict:
         version = read_command(["--version"])
     except PodError as exc:
         return {"status": "unavailable", "reason": exc.code}
-    snapshot = {"status": "observed", "version": version["version"],
+    snapshot = {"status": "unavailable", "version": version["version"],
                 "executable": version["executable"], "runtime": None, "capabilities": {}}
     try:
         status = read_command(["status", "--json"])
@@ -274,6 +274,7 @@ def contract() -> dict:
     advertised = runtime.get("capabilities")
     advertised = advertised if isinstance(advertised, list) else []
     snapshot["runtime"] = status["runtime"]
+    snapshot["status"] = "observed"
     snapshot["capabilities"] = {key: value in advertised for key, value in CAPABILITY_KEYS.items()}
     snapshot["runtime_state"] = runtime.get("state")
     return snapshot
@@ -297,6 +298,10 @@ def worker_rows(run: str) -> dict:
         rows = result.get("workers")
         if not isinstance(rows, list) or not isinstance(page, dict):
             raise PodError("orca_contract", "Run worker page is malformed")
+        page_scope = result.get("scope")
+        if (not isinstance(page_scope, dict) or page_scope.get("run") != run
+                or page_scope.get("source") not in ("flag", "run")):
+            raise PodError("orca_scope_changed", "Run worker page does not prove exact requested Run scope")
         if runtime is not None and response["runtime"] != runtime:
             raise PodError("orca_runtime_changed", "Runtime changed during Run worker read")
         if runtime is not None and result.get("scope") != scope:

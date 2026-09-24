@@ -187,6 +187,11 @@ class GovernorCase(unittest.TestCase):
                                            "XDG_CONFIG_HOME": str(self.root / "config")})
         self.env.__enter__()
         self.addCleanup(self.env.__exit__, None, None, None)
+        authority = patch('pod.ledger.require_authority', return_value={
+            'runtime':'runtime','run_id':'run','references':{'run':'runtime'}})
+        authority.start(); self.addCleanup(authority.stop)
+        kernel_authority = patch('pod.governor._assert_authority', return_value=None)
+        kernel_authority.start(); self.addCleanup(kernel_authority.stop)
         self.addCleanup(self.stack.__exit__, None, None, None)
         self.project = self.root / "project"
         self.project.mkdir(exist_ok=True)
@@ -224,6 +229,17 @@ class GovernorCase(unittest.TestCase):
 
 
 class CandidateTests(GovernorCase):
+    def test_project_cannot_remove_personal_preflight_from_governor_decision(self):
+        candidate = self.prepared(
+            project_yaml="schema: pod/v1\nwaste_governor:\n  preflight: []\n",
+            personal_yaml="schema: pod/v1\nwaste_governor:\n  preflight: [personal-check]\n")["candidate"]
+        held = self.decide(action(candidate=candidate["id"], effects=["workflow:ci.yml"]))
+        self.assertIn("local_preflight_missing", self.codes(held))
+        record_preflight(self.project, "objective", owner="owner", unit="release",
+                         candidate=candidate["id"], check="personal-check", status="PASS", now=NOW)
+        ready = self.decide(action(candidate=candidate["id"], effects=["workflow:ci.yml"]))
+        self.assertEqual(ready["decision"], "ALLOW")
+
     def test_model_edit_preserves_candidate_but_preflight_edit_opens_generation(self):
         from pod.config import load as load_config, set_model, write_defaults
         personal = self.root / "config" / "pod" / "config.yaml"

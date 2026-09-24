@@ -18,6 +18,9 @@ class LedgerTests(unittest.TestCase):
         self.env=patch.dict(os.environ,{'XDG_STATE_HOME':str(self.root/'state'),
                                      'XDG_CONFIG_HOME':str(self.root/'config')})
         self.env.__enter__(); self.addCleanup(self.env.__exit__,None,None,None)
+        authority=patch('pod.ledger.require_authority',return_value={
+            'runtime':'runtime','run_id':'run','references':{'run':'runtime'}})
+        authority.start(); self.addCleanup(authority.stop)
         self.project=self.root/'project'; self.project.mkdir()
         write_defaults(self.root/'config'/'pod'/'config.yaml')
 
@@ -46,6 +49,21 @@ class LedgerTests(unittest.TestCase):
         self.checkpoint('objective')
         self.assertEqual(state_inventory(self.project)['unsupported'],1)
         self.assertIsNone(context_root_for_run('unrelated-run'))
+
+    def test_malformed_and_unreadable_records_are_counted_without_rewrite(self):
+        from pod.ledger import _path
+        path=_path(self.project,'broken');path.parent.mkdir(parents=True)
+        malformed=b'{not-json\n';path.write_bytes(malformed)
+        self.assertEqual(state_inventory(self.project)['unreadable'],1)
+        self.assertEqual(path.read_bytes(),malformed)
+        with self.assertRaises(PodError): read(self.project,'broken')
+        path.write_text('{"schema":"pod-context/v4"}\n')
+        path.chmod(0)
+        try:
+            self.assertEqual(state_inventory(self.project)['unreadable'],1)
+        finally:
+            path.chmod(0o600)
+        self.assertEqual(path.read_text(),'{"schema":"pod-context/v4"}\n')
 
     def test_source_rejection_is_durable(self):
         self.checkpoint()

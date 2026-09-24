@@ -257,6 +257,17 @@ def _governor_policy(project: Path | None, personal: dict | None) -> tuple[dict,
                     raise PodError("authority_expansion", "Project cannot add Governor authority")
                 if key == "exceptions":
                     continue
+                if key == "preflight":
+                    policy[key] = list(dict.fromkeys([*previous, *val]))
+                    provenance[f"waste_governor.{key}"] = "personal+project"
+                    continue
+                if key == "triggers":
+                    combined = deepcopy(previous)
+                    for kind, effects in val.items():
+                        combined[kind] = list(dict.fromkeys([*combined.get(kind, []), *effects]))
+                    policy[key] = combined
+                    provenance[f"waste_governor.{key}"] = "personal+project"
+                    continue
             policy[key] = deepcopy(val)
             provenance[f"waste_governor.{key}"] = scope
     return policy, provenance
@@ -285,6 +296,7 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
     if data is None:
         errors.append({"code": "config_missing", "message": "Personal preferences are missing"})
     saved = {model_id: document["models"].get(model_id) if document else None for model_id in IDS}
+    not_set = [model_id for model_id, state in saved.items() if state is None]
     mode = document["selection"] if document else None
     effective_states = {model_id: ("available" if mode == "all" else saved[model_id])
                         for model_id in IDS}
@@ -294,6 +306,7 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
     return {"path": str(path.resolve(strict=False)), "revision": revision, "mode": mode,
             "file_stamp": file_stamp,
             "saved": saved, "effective": effective_states, "eligible": eligible,
+            "not_set": not_set,
             "max_active": document["workers"]["max_active"] if document else 0,
             "errors": errors, "policy_revision": policy_revision,
             "waste_governor": governor, "provenance": provenance}

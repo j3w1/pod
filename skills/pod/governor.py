@@ -412,6 +412,11 @@ def _require_version(state: dict) -> None:
         raise PodError("installed_version_changed", "Reload Pod and write a fresh checkpoint")
 
 
+def _assert_authority(project: Path, objective: str, owner: str, state: dict) -> None:
+    from .ledger import require_authority
+    require_authority(project, objective, owner=owner, state=state)
+
+
 def _checkpoint(state: dict) -> dict:
     value = state.get("checkpoint")
     return value if isinstance(value, dict) else {}
@@ -431,7 +436,7 @@ def _inputs(state: dict) -> str:
 def _phase(state: dict, actions: list[dict], unit: dict | None, candidate: str | None,
            native_projection: dict | None = None) -> str:
     checkpoint = _checkpoint(state)
-    if native_projection is None and (state.get("admissions") or checkpoint.get("native_refs")):
+    if native_projection is None and state.get("admissions"):
         raise PodError("native_assignment_unverified",
                        "Governor needs exact objective assignment evidence for native-bound work")
     tasks = _unit_tasks(unit)
@@ -749,6 +754,7 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        _assert_authority(project, objective, owner, state)
         journal = _read_journal(record_path)
         verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
                             native_projection=native_projection)
@@ -939,6 +945,7 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
         state = _read(context_path)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        _assert_authority(project, objective, owner, state)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if row["decision"] != "ALLOW":
@@ -982,6 +989,7 @@ def classify_failure(project: Path, objective: str, *, owner: str, record_id: st
         _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        _assert_authority(project, objective, owner, state)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if row["outcome"] != "FAILED":
@@ -1024,6 +1032,7 @@ def record_correction(project: Path, objective: str, *, owner: str, unit: str, c
         _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        _assert_authority(project, objective, owner, state)
         result = _intervention_locked(project, objective, state, task=None, unit=unit,
                                       correction=correction, diagnosis=diagnosis)
         _write(context_path, state)
@@ -1184,6 +1193,7 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
         _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        _assert_authority(project, objective, owner, state)
         journal = _read_journal(record_path)
         existing = journal["units"].get(unit)
         if existing is None:
@@ -1247,6 +1257,7 @@ def record_preflight(project: Path, objective: str, *, owner: str, unit: str, ca
         _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        _assert_authority(project, objective, owner, state)
         journal = _read_journal(record_path)
         record = journal["units"].get(unit)
         binding = record.get("candidate") if record else None
@@ -1436,6 +1447,10 @@ def _record_execution(project: Path, objective: str, *, owner: str, record_id: s
     record_path = _record_path(project, objective)
     moment = now.isoformat()
     with _lock(context_path):
+        state = _read(context_path)
+        if state["owner"] not in (None, owner):
+            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        _assert_authority(project, objective, owner, state)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if outcome == "pending":
@@ -1542,6 +1557,7 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
     state = _read(context_path)
     if state["owner"] not in (None, owner):
         raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+    _assert_authority(project, objective, owner, state)
     journal = _read_journal(record_path)
     row = _find_row(journal, record_id)
     if row["outcome"] not in ("UNKNOWN", "pending"):

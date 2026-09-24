@@ -94,7 +94,8 @@ an eligible model and supported effort separately for each assignment.
 
 `pod config --json` reads the effective pool. `pod config edit` opens the
 personal file in your editor and validates afterward, retaining invalid edits
-for correction. Running `pod` in an interactive terminal opens the model TUI;
+for correction. A valid custom map may omit a model; Pod shows it as “Not set
+(not eligible)” until you set it explicitly. Running `pod` in an interactive terminal opens the model TUI;
 without a TTY it prints a plain summary. Space cycles model state and `r`
 switches All models and My selection without discarding saved choices. The bundled catalog has
 official guidance and a dated Artificial Analysis reference snapshot; those

@@ -678,6 +678,11 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         raise PodError("packet_mismatch", "Packet objective differs from admission")
     admission_id = admission_identity(objective=objective, run_id=run, task_id=task)
     existing_state = read(project, objective)
+    from .ledger import _run_references
+    if not isinstance(existing_state, dict) or existing_state.get("owner") != owner:
+        raise PodError("native_authority_unverified", "Objective has no owned checkpoint")
+    if run not in _run_references(existing_state):
+        raise PodError("native_authority_unverified", "Admission Run is not an exact objective reference")
     if isinstance(existing_state, dict) and admission_id in existing_state["admissions"]:
         existing = existing_state["admissions"][admission_id]
         if (existing["packet_id"] != validated["packet_id"]

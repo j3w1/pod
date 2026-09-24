@@ -81,6 +81,52 @@ class CliTests(unittest.TestCase):
         self.assertEqual(report['installation'],'not installed by the one-shot installer')
         native.assert_not_called()
 
+    def test_doctor_is_passive_and_reports_unsupported_state_objective_scoped(self):
+        from pod.ledger import _path
+        preferences=self.root/'config'/'pod'/'config.yaml';write_defaults(preferences)
+        unsupported=_path(self.project,'other');unsupported.parent.mkdir(parents=True)
+        data=b'{"schema":"other"}\n';unsupported.write_bytes(data)
+        original=preferences.read_bytes()
+        with patch('pod.cli.contract',return_value={'status':'unavailable','reason':'offline'}), \
+             patch('pod.orca.mutate_command',side_effect=AssertionError('no native mutation')):
+            doctor=execute(parser().parse_args(['doctor','--json']),self.project)
+        self.assertEqual(doctor['state']['unsupported'],1)
+        self.assertEqual(doctor['state']['scope'],'affected_objectives_only')
+        self.assertFalse(doctor['state']['blocks_unrelated_objectives'])
+        self.assertEqual(preferences.read_bytes(),original)
+        self.assertEqual(unsupported.read_bytes(),data)
+
+    def test_version_only_orca_status_is_unavailable_in_json_and_human_doctor(self):
+        from pod.errors import PodError
+        version={'version':'1.4.209','executable':'/fixture/orca'}
+        with patch('pod.orca.read_command',side_effect=[version,PodError('orca_read_failed','offline')]):
+            observed=execute(parser().parse_args(['doctor','--json']),self.project)
+        self.assertEqual(observed['orca']['status'],'unavailable')
+        self.assertEqual(observed['orca']['reason'],'orca_read_failed')
+        output=StringIO()
+        with patch('pathlib.Path.cwd',return_value=self.project), \
+             patch('pod.orca.read_command',side_effect=[version,PodError('orca_read_failed','offline')]), \
+             redirect_stdout(output):
+            self.assertEqual(main(['doctor']),0)
+        self.assertIn('Orca: unavailable',output.getvalue())
+
+    def test_sparse_custom_map_is_reported_explicitly_in_reads(self):
+        path=self.root/'config'/'pod'/'config.yaml';path.parent.mkdir(parents=True)
+        path.write_text('schema: pod/v1\nselection: custom\n'
+                        'models: {gpt-6-sol: available}\nworkers: {max_active: 2}\n')
+        config=execute(parser().parse_args(['config','--json']),self.project)
+        self.assertEqual(config['eligible'],['gpt-6-sol'])
+        self.assertIn('claude-opus-5-5',config['not_set'])
+        self.assertEqual(config['not_set_meaning'],'not set (not eligible)')
+        with patch('pod.cli.contract',return_value={'status':'unavailable'}):
+            doctor=execute(parser().parse_args(['doctor','--json']),self.project)
+        self.assertIn('claude-opus-5-5',doctor['preferences']['not_set'])
+        with patch('pod.cli.worker_rows',return_value={'workers':[],'scope':{'source':'flag','run':'run'},
+                                                      'complete':True}), \
+             patch('pod.cli.context_root_for_run',return_value=None):
+            status=execute(parser().parse_args(['status','--run','run','--json']),self.project)
+        self.assertIn('claude-opus-5-5',status['preferences']['not_set'])
+
     def test_placement_reports_canonical_and_missing_claude_link_precisely(self):
         canonical=self.root/'.agents'/'skills'/'pod'; canonical.mkdir(parents=True)
         report=inspect(self.project)

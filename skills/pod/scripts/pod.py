@@ -7,13 +7,12 @@ imported until the prerequisites hold.
 """
 
 import importlib.util
+import ast
 import json
 import os
 import sys
 
 MIN_PYTHON = (3, 13)
-REQUIRED = ("__init__.py", "cli.py", "internal.py", "catalog.json", "catalog.py",
-            "term.py", "tui.py", "tui_state.py", "tui_render.py", "SKILL.md", "VERSION")
 REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
 
 
@@ -31,6 +30,28 @@ def _yaml_importable():
     return True
 
 
+def _inventory(root):
+    """Read the one authored bundle inventory without importing Pod or PyYAML."""
+    path = os.path.join(root, "bundle.py")
+    with open(path, encoding="utf-8") as stream:
+        source = stream.read(64 * 1024 + 1)
+    if len(source) > 64 * 1024:
+        raise ValueError("bundle inventory is oversized")
+    entries = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if name in ("BUNDLE_TEXT", "BUNDLE_MODULES"):
+                entries[name] = ast.literal_eval(node.value)
+    if set(entries) != {"BUNDLE_TEXT", "BUNDLE_MODULES"}:
+        raise ValueError("bundle inventory is incomplete")
+    names = tuple(entries["BUNDLE_TEXT"]) + tuple(entries["BUNDLE_MODULES"])
+    if (not names or any(not isinstance(name, str) or not name or name.startswith("/")
+                         or ".." in name.split("/") for name in names) or len(set(names)) != len(names)):
+        raise ValueError("bundle inventory has unsafe names")
+    return names
+
+
 def preflight(version_info=None, find_spec=None, bundle=None):
     """Return None when the helper can run, else one actionable failure record.
 
@@ -45,7 +66,13 @@ def preflight(version_info=None, find_spec=None, bundle=None):
                             "newer interpreter, for example: python3.13 %s"
                             % (MIN_PYTHON[0], MIN_PYTHON[1], running, sys.executable, os.path.realpath(__file__)))}
     root = bundle_dir() if bundle is None else bundle
-    missing = [name for name in REQUIRED if not os.path.isfile(os.path.join(root, name))]
+    try:
+        names = _inventory(root)
+    except (OSError, UnicodeError, SyntaxError, ValueError, TypeError) as exc:
+        return {"code": "bundle_incomplete",
+                "message": ("Pod bundle inventory is unavailable (%s). Rerun the one-shot installer: %s"
+                            % (type(exc).__name__, REINSTALL))}
+    missing = [name for name in names if not os.path.isfile(os.path.join(root, *name.split("/")))]
     if missing:
         return {"code": "bundle_incomplete",
                 "message": ("Pod bundle at %s is incomplete (missing %s). Reinstall it: %s"

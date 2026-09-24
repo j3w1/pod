@@ -32,13 +32,17 @@ waste_governor:
 
 class RepeatedPullRequestCycle(unittest.TestCase):
     def test_a_converging_unit_crosses_the_boundary_once_per_ready_candidate(self):
+        authority = patch('pod.governor._assert_authority', return_value=None)
+        authority.start(); self.addCleanup(authority.stop)
         with fixture() as root, patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state"),
                                                         "XDG_CONFIG_HOME": str(root / "config")}):
             project = root / "project"
             project.mkdir()
             (project / ".pod").mkdir()
             (project / ".pod" / "config.yaml").write_text(CONFIG)
-            checkpoint(project, "objective", owner="owner", value=body("0" * 40), native={"runtime": "runtime"})
+            with patch('pod.ledger.require_authority', return_value={
+                    'runtime':'runtime','run_id':'run','references':{'run':'runtime'}}):
+                checkpoint(project, "objective", owner="owner", value=body("0" * 40), native={"runtime": "runtime"})
             # The repository runs ci.yml on every push, exactly as in the incident.
             port = FakePort(auto_ci=("ci.yml",))
 

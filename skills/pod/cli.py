@@ -69,7 +69,9 @@ def _config(project: Path, *, edit: bool) -> dict:
     result.update({"schema": "pod-cli/v4", "path": snapshot["path"],
                    "revision": snapshot["revision"], "mode": snapshot["mode"],
                    "saved": snapshot["saved"], "effective": snapshot["effective"],
-                   "eligible": snapshot["eligible"], "max_active": snapshot["max_active"],
+                   "eligible": snapshot["eligible"], "not_set": snapshot["not_set"],
+                   "not_set_meaning": "not set (not eligible)",
+                   "max_active": snapshot["max_active"],
                    "policy_revision": snapshot["policy_revision"], "errors": snapshot["errors"],
                    "catalog": [{"id": row["id"], "name": row["name"], "agent": row["agent"],
                                 "efforts": [effort for effort in row["efforts"] if effort != "ultra"],
@@ -86,6 +88,7 @@ def _doctor(project: Path) -> dict:
         state = state_inventory(project)
     except PodError as exc:
         state = {"blocked": True, "reason": exc.code}
+    state = {**state, "scope": "affected_objectives_only", "blocks_unrelated_objectives": False}
     receipt = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "pod" / "install.json"
     launcher = Path.home() / ".local" / "bin" / "pod"
     installed = "not installed by the one-shot installer" if not receipt.is_file() else "receipt_present"
@@ -96,7 +99,7 @@ def _doctor(project: Path) -> dict:
             "bundle": str(bundle_root()), "installation": installed,
             "launcher": {"path": str(launcher), "exists": launcher.is_file(), "shadowed": shadowed},
             "placements": inspect_placements(project), "skills_cli": skills_cli_entry(),
-            "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible",
+            "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
                                                            "max_active", "errors", "policy_revision")},
             "catalog": {"models": list(by_id()), "ranks_of_six": ranks(),
                         "benchmark_age_days": age()},
@@ -109,7 +112,7 @@ def _doctor(project: Path) -> dict:
 def _status(project: Path, run: str | None) -> dict:
     preferences = load_config(project)
     result = {"schema": "pod-cli/v4", "status": "selection_required", "run": run,
-              "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible",
+              "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
                                                                "max_active", "errors")},
               "constraints": [], "route_decisions": [], "route_mismatch": False,
               "active_constraints": [],
@@ -126,11 +129,12 @@ def _status(project: Path, run: str | None) -> dict:
         if run is None:
             return result
     result["run"] = run
+    native_error = None
     try:
         workers = worker_rows(run)
     except PodError as exc:
-        result.update({"status": "unavailable", "blocker": exc.code})
-        return result
+        native_error = exc.code
+        workers = {"workers": [], "scope": None, "complete": False}
     from .ledger import _read
     try:
         context_root = context_root_for_run(run)
@@ -141,12 +145,32 @@ def _status(project: Path, run: str | None) -> dict:
         return result
     checkpoint = state.get("checkpoint") if state else None
     admissions = list(state["admissions"].values()) if state else []
-    result.update({"status": "observed", "objective": checkpoint.get("objective") if checkpoint else None,
+    checkpoint_refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else None
+    checkpoint_assignments = checkpoint.get("assignments") if isinstance(checkpoint, dict) else None
+    checkpoint_refs = checkpoint_refs if isinstance(checkpoint_refs, list) else []
+    checkpoint_assignments = checkpoint_assignments if isinstance(checkpoint_assignments, list) else []
+    native_references = []
+    for row in admissions[:64]:
+        binding = row.get("native_binding") if isinstance(row.get("native_binding"), dict) else {}
+        native_references.append({"admission_id": row["admission_id"], "run": row["run_id"],
+                                  "task": row["task_id"], "dispatch": binding.get("dispatchId"),
+                                  "worker": binding.get("workerId"),
+                                  "terminal": binding.get("terminalHandle"),
+                                  "state": row["state"], "runtime": row["runtime"]})
+    result.update({"status": "unavailable" if native_error else "observed",
+                   "objective": checkpoint.get("objective") if checkpoint else None,
                    "source": checkpoint.get("objective_source", "direct_objective") if checkpoint else None,
                    "selected_worktree": checkpoint.get("worktree") if checkpoint else None,
                    "constraints": state["constraints"] if state else [],
                    "active_constraints": active_constraints(state["constraints"], preferences) if state else [],
-                   "route_decisions": [row["route_decision"] for row in admissions],
+                   "route_decisions": [row["route_decision"] for row in admissions[:64]],
+                   "native_references": native_references,
+                   "native_references_truncated": len(admissions) > 64,
+                   "checkpoint_join": {"native_refs": checkpoint_refs[:64],
+                                       "assignments": checkpoint_assignments[:64],
+                                       "plan_revision": checkpoint.get("plan_revision"),
+                                       "candidate": checkpoint.get("candidate")}
+                                      if checkpoint else None,
                    "route_mismatch": any(row["route_decision"].get("route_mismatch") for row in admissions),
                    "effective_unknown": any(row["route_decision"].get("effective_unknown") for row in admissions),
                    "installed_version_drift": bool(checkpoint and checkpoint.get("pod_version") != version()),
@@ -157,7 +181,7 @@ def _status(project: Path, run: str | None) -> dict:
                    "remaining_gates": checkpoint.get("remaining_gates", []) if checkpoint else [],
                    "blocker": "route_mismatch" if any(row["route_decision"].get("route_mismatch") for row in admissions)
                               else "effective_unknown" if any(row["route_decision"].get("effective_unknown") for row in admissions)
-                              else checkpoint.get("blocker") if checkpoint else None,
+                              else native_error or checkpoint.get("blocker") if checkpoint else native_error,
                    "next_safe_action": checkpoint.get("next_safe_action", "inspect native Run")
                                        if checkpoint else "inspect native Run"})
     if result["installed_version_drift"]:
@@ -214,14 +238,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Pod {version()}: {len(result['eligible'])} eligible models, "
                   f"{result['mode']} selection, maximum {result['max_active']} workers")
             print(f"Preferences: {result['path']}")
+            if result["not_set"]:
+                print("Not set (not eligible): " + ", ".join(result["not_set"]))
     elif result["status"] == "blocked":
         print(f"pod: {result['error']['code']}: {result['error']['message']}")
     elif args.command == "doctor":
         print(f"Pod {version()}: {result['installation']}")
         print(f"Preferences: {'valid' if not result['preferences']['errors'] else 'invalid'}")
+        if result["preferences"]["not_set"]:
+            print("Not set (not eligible): " + ", ".join(result["preferences"]["not_set"]))
         print(f"Orca: {result['orca']['status']}")
     elif args.command == "status":
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
+        for ref in result.get("native_references", []):
+            print(f"  Task {ref['task']} | Dispatch {ref['dispatch'] or 'pending'} | "
+                  f"worker {ref['worker'] or 'unknown'} | terminal {ref['terminal'] or 'none'} | {ref['state']}")
         print(f"Blocker: {result.get('blocker') or 'none'}; next: {result['next_safe_action']}")
     else:
         print(f"pod: {result['status']}")

@@ -156,6 +156,65 @@ def _write(path: Path, value: dict) -> None:
     atomic_json(path, value)
 
 
+def _run_references(state: dict) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    checkpoint_value = state.get("checkpoint")
+    native_refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
+    if not isinstance(native_refs, list) or len(native_refs) > 32:
+        raise PodError("native_authority_unverified", "Objective Run references are malformed")
+    for ref in native_refs:
+        if (not isinstance(ref, dict) or not isinstance(ref.get("runId"), str)
+                or not isinstance(ref.get("runtime"), str) or not ref["runId"] or not ref["runtime"]):
+            raise PodError("native_authority_unverified", "Objective Run reference is incomplete")
+        if ref["runId"] in refs and refs[ref["runId"]] != ref["runtime"]:
+            raise PodError("native_authority_unverified", "Objective Run runtime is contradictory")
+        refs[ref["runId"]] = ref["runtime"]
+    for row in state.get("admissions", {}).values():
+        run_id, runtime = row.get("run_id"), row.get("runtime")
+        if not isinstance(run_id, str) or not isinstance(runtime, str) or not run_id or not runtime:
+            raise PodError("native_authority_unverified", "Admission Run reference is incomplete")
+        if run_id not in refs or refs[run_id] != runtime:
+            raise PodError("native_authority_unverified", "Admission Run is outside checkpoint references")
+    return refs
+
+
+def require_authority(project: Path, objective: str, *, owner: str,
+                      state: dict | None = None, run_id: str | None = None,
+                      native_port=None) -> dict:
+    """Join a stable native current Run to this objective's persisted owner and refs."""
+    from .operations import OrcaPort
+    from .orca import current_run
+    state = _read(_path(project, objective)) if state is None else state
+    if state["owner"] not in (None, owner):
+        raise PodError("native_authority_unverified", "Objective belongs to another coordinator")
+    refs = _run_references(state)
+    if len(set(refs.values())) > 1:
+        raise PodError("native_authority_unverified", "Objective Run references span runtimes")
+    if run_id is not None and run_id not in refs:
+        raise PodError("native_authority_unverified", "Run is not an exact objective reference")
+    port = native_port or OrcaPort(project)
+    if not refs:
+        if state.get("checkpoint") is not None or state.get("admissions"):
+            raise PodError("native_authority_unverified", "Existing objective lacks a Run binding")
+        first = current_run()
+        current = first.get("run")
+        if not isinstance(current, dict) or not isinstance(current.get("id"), str):
+            raise PodError("native_authority_unverified", "Current coordinator Run is unavailable")
+        refs = {current["id"]: first["runtime"]}
+    selected = (run_id,) if run_id is not None else tuple(sorted(refs))
+    assignments = tuple(row for row in state.get("admissions", {}).values()
+                        if row.get("state") == "bound" and binding_valid(row.get("native_binding")))
+    native = port.read_native(owner, authority_runs=selected, assignments=assignments)
+    if (native.get("authoritative") is not True or native.get("owner") != owner
+            or native.get("scope") != "objective_assignments" or native.get("complete") is not True
+            or native.get("runtime") not in set(refs.values())):
+        raise PodError("native_authority_unverified", "Current native Run does not own this objective")
+    if any(refs[key] != native["runtime"] for key in selected):
+        raise PodError("native_authority_unverified", "Objective Run runtime changed")
+    return {"runtime": native["runtime"], "run_id": run_id or next(iter(refs)),
+            "native": native, "references": refs}
+
+
 def context_root_for_run(run_id: str) -> Path | None:
     root = state_root()
     if not root.exists():
@@ -193,6 +252,7 @@ def check_bound_sources(project: Path, objective: str, *, owner: str,
         state = _read(path)
         if state["owner"] != owner:
             raise PodError("coordinator_conflict", "Source check belongs to another coordinator")
+        require_authority(project, objective, owner=owner, state=state)
         return _check_bound_sources_locked(project, path, state, assignment, sources)
 
 
@@ -254,6 +314,19 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         state = _read(path)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        authority = require_authority(project, objective, owner=owner, state=state)
+        if native["runtime"] != authority["runtime"]:
+            raise PodError("native_authority_unverified", "Checkpoint runtime differs from current Run")
+        supplied = value["native_refs"]
+        if (not isinstance(supplied, list) or len(supplied) > 32
+                or any(not isinstance(row, dict) or not isinstance(row.get("runId"), str)
+                       or not isinstance(row.get("runtime"), str) for row in supplied)):
+            raise PodError("native_authority_unverified", "Checkpoint Run references are malformed")
+        if supplied and {(row["runId"], row["runtime"]) for row in supplied} != {
+                (run, runtime) for run, runtime in authority["references"].items()}:
+            raise PodError("native_authority_unverified", "Checkpoint cannot invent or drop Run references")
+        value = {**value, "native_refs": [{"runId": run, "runtime": runtime}
+                                           for run, runtime in sorted(authority["references"].items())]}
         state["owner"] = owner
         state["checkpoint"] = {**value, "objective": objective, "pod_version": __version__}
         _write(path, state)
@@ -344,6 +417,9 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         state = _read(path)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+        refs = _run_references(state)
+        if run_id not in refs:
+            raise PodError("native_authority_unverified", "Admission Run is not an exact objective reference")
         existing = state["admissions"].get(admission_id)
         if existing is not None:
             if (existing["objective"] != objective or existing["run_id"] != run_id
@@ -363,6 +439,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             raise PodError("native_authority_unverified", "Admission lacks stable native Run authority")
         if native["runtime"] != expected_runtime:
             raise PodError("orca_runtime_changed", "Launch capability and native authority changed runtime")
+        if native["runtime"] != refs[run_id]:
+            raise PodError("native_authority_unverified", "Admission Run runtime differs from objective")
         checkpoint_value = state.get("checkpoint")
         body = frozen_packet.get("body") if isinstance(frozen_packet, dict) else None
         if (not isinstance(body, dict) or frozen_packet.get("packet_id") != packet_id
@@ -377,6 +455,13 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                          if ref["kind"] in ("source", "instruction"))]
         _check_bound_sources_locked(project, path, state, packet_id, bound_sources)
         projection = logical_projection(project, native, objective=objective)
+        for prior in state["admissions"].values():
+            if prior["task_id"] != task_id or prior["state"] != "bound":
+                continue
+            matches = [item for item in native["assignments"]
+                       if item.get("admission_id") == prior["admission_id"]]
+            if len(matches) != 1 or matches[0].get("settled") is not True:
+                raise PodError("unresolved_prior_attempt", "A live bound Task cannot be replaced")
         failures = [failure for prior in state["admissions"].values() for failure in prior["failures"]]
         if any(f.get("kind") == "safety_refusal" and f.get("task") == task_id and not f.get("cleared_at")
                for f in failures):
@@ -458,6 +543,8 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
         state = _read(path)
         if state["owner"] != owner or admission_id not in state["admissions"]:
             raise PodError("unknown_admission", "No owned admission identity")
+        require_authority(project, objective, owner=owner, state=state,
+                          run_id=state["admissions"][admission_id]["run_id"])
         row = state["admissions"][admission_id]
         update(row)
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -491,6 +578,7 @@ def intervention(project: Path, objective: str, *, owner: str, correction: dict,
         state = _read(path)
         if state["owner"] != owner:
             raise PodError("coordinator_conflict", "Correction belongs to another coordinator")
+        require_authority(project, objective, owner=owner, state=state)
         result = _intervention_locked(project, objective, state, task=task, unit=unit,
                                       correction=correction, diagnosis=diagnosis)
         _write(path, state)
@@ -564,6 +652,7 @@ def constraints_update(project: Path, objective: str, *, owner: str,
         state = _read(path)
         if state["owner"] != owner:
             raise PodError("coordinator_conflict", "Constraint belongs to another coordinator")
+        require_authority(project, objective, owner=owner, state=state)
         if action == "add":
             snapshot = load(project)
             row = validate_constraint(value, snapshot)

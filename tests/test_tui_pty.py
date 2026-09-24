@@ -226,3 +226,14 @@ class TuiPtyTests(unittest.TestCase):
                                capture_output=True,text=True,timeout=10)
         self.assertEqual(invalid.returncode,1)
         self.assertIn('need attention',invalid.stdout)
+
+    def test_sparse_custom_map_stays_eligible_only_for_set_model(self):
+        self.config.write_text('schema: pod/v1\nselection: custom\n'
+                               'models: {gpt-6-sol: available}\nworkers: {max_active: 2}\n')
+        session=self.open()
+        self.assertIn('Not set (not eligible)',session.text())
+        self.assertEqual(self.load(personal=self.config)['eligible'],['gpt-6-sol'])
+        session.send(' ')
+        session.wait_for(lambda _s:self.load(personal=self.config)['saved']['claude-opus-5-5']=='available')
+        self.assertEqual(set(self.load(personal=self.config)['eligible']),
+                         {'gpt-6-sol','claude-opus-5-5'})

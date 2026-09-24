@@ -130,8 +130,11 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
             return state, Effect("set_mode", value=target)
         focused = state.focus_id if state.focus_id in visible_ids(state) else visible_ids(state)[0]
         current = state.preferences["saved"].get(focused)
+        if current is None:
+            return replace(state, focus_id=focused), Effect("set_model", model_id=focused,
+                                                            value="available")
         if current not in NEXT_STATE:
-            return replace(state, notice="Model state is missing — read-only; no change saved"), None
+            return replace(state, notice="Model state is invalid — read-only; no change saved"), None
         return replace(state, focus_id=focused), Effect("set_model", model_id=focused,
                                                         value=NEXT_STATE[current])
     return state, None

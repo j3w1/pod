@@ -353,8 +353,10 @@ class RepositoryAndIssueTests(unittest.TestCase):
                      "policy_revision": effective(main)["revision"], "native_refs": [], "assignments": [],
                      "questions": [], "verification_gaps": ["works"],
                      "next_safe_action": "continue"}
-            checkpoint(main, "issue-7", owner="owner", value=value,
-                       native={"runtime": "runtime"})
+            with patch('pod.ledger.require_authority', return_value={
+                    'runtime':'runtime','run_id':'run','references':{'run':'runtime'}}):
+                checkpoint(main, "issue-7", owner="owner", value=value,
+                           native={"runtime": "runtime"})
             self.assertEqual(read(worktree, "issue-7")["checkpoint"]["objective"], "issue-7")
 
             dirty = main / "owner-change.txt"

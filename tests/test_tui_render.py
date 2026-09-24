@@ -155,3 +155,10 @@ class TuiRenderTests(unittest.TestCase):
         self.assertIn('Delegation disabled — coordinator work remains available',
                       self.picture(empty).plain)
         self.assertEqual(reduce(empty,'SPACE')[1].value,'available')
+
+    def test_sparse_custom_map_has_explicit_not_set_state(self):
+        self.path.write_text('schema: pod/v1\nselection: custom\n'
+                             'models: {gpt-6-sol: available}\nworkers: {max_active: 2}\n')
+        sparse=refresh(self.state,preferences(personal=self.path))
+        self.assertIn('Not set (not eligible)',self.picture(sparse).plain)
+        self.assertEqual(reduce(sparse,'SPACE')[1].value,'available')

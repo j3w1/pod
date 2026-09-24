@@ -65,9 +65,9 @@ class OrcaAdapterTests(unittest.TestCase):
             runner.assert_not_called()
 
     def test_exact_run_worker_pages_and_authority_shape(self):
-        pages=[{'runtime':'r','result':{'scope':{'source':'run'},'workers':[{'dispatchId':'a'}],
+        pages=[{'runtime':'r','result':{'scope':{'source':'flag','run':'run'},'workers':[{'dispatchId':'a'}],
                                        'page':{'hasMore':True,'nextCursor':'next'}}},
-               {'runtime':'r','result':{'scope':{'source':'run'},'workers':[{'dispatchId':'b'}],
+               {'runtime':'r','result':{'scope':{'source':'flag','run':'run'},'workers':[{'dispatchId':'b'}],
                                        'page':{'hasMore':False}}}]
         with patch('pod.orca.read_command',side_effect=pages):
             self.assertEqual([row['dispatchId'] for row in worker_rows('run')['workers']],['a','b'])
@@ -100,6 +100,19 @@ class OrcaAdapterTests(unittest.TestCase):
             self.assertIn('--terminal',argv)
             self.assertNotIn('--model',argv)
             self.assertNotIn('--agent',argv)
+
+    def test_pending_retry_uses_the_original_uuid_in_orca_argv(self):
+        request='11111111-1111-4111-8111-111111111111'
+        route={'agent':'codex','model':'gpt-6-sol','effort':'high',
+               'context':'native_default','reason':'same admitted start'}
+        with patch('pod.operations.mutate_command',return_value={
+                'runtime':'runtime','exit':0,'request_uuid':request,
+                'result':{'runId':'run','taskId':'task','dispatchId':'dispatch'}}) as native:
+            result=OrcaPort().start_worker(run='run',task='task',owner='owner',
+                                           route=route,worktree='current',retry_request=request)
+        self.assertEqual(result['request_uuid'],request)
+        self.assertEqual(native.call_args.args[0][-3:],['--retry-request',request,'--json'])
+        self.assertEqual(native.call_args.args[0].count('--retry-request'),1)
 
     def test_mutation_allowlist_blocks_every_other_native_effect(self):
         with patch('pod.orca.subprocess.run') as runner:
@@ -135,6 +148,15 @@ class OrcaAdapterTests(unittest.TestCase):
         decoded=_mutation_envelope(json.dumps(value))
         self.assertTrue(decoded['result']['_request_conflict'])
 
+    def test_refusal_envelope_preserves_conflicting_partial_effects(self):
+        payload={'ok':False,'error':{'code':'inject_rejected','message':'refused'},
+                 'result':{'dispatchId':'one'},'dispatchId':'two','workerId':'three',
+                 '_meta':{'runtimeId':'runtime'}}
+        decoded=_mutation_envelope(json.dumps(payload))
+        self.assertEqual(decoded['result']['dispatchId'],'one')
+        self.assertEqual(decoded['result']['workerId'],'three')
+        self.assertEqual(decoded['result']['_envelope_conflicts']['dispatchId'],'two')
+
     def test_worktree_selector_and_identity_refuse_creation_or_contradiction(self):
         for value in ('current','active','path:/fixture/repo','id:abc','name:task'):
             self.assertEqual(worktree_selector(value),value)
@@ -155,3 +177,25 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(found['status'],'observed')
         self.assertTrue(found['capabilities']['launch_preferences_v1'])
         self.assertEqual(reader.call_count,2)
+
+    def test_worker_page_scope_must_bind_exact_run_and_stay_stable(self):
+        valid={'runtime':'runtime','result':{'scope':{'source':'flag','run':'run'},
+                'workers':[{'dispatchId':'one'}], 'page':{'hasMore':True,'nextCursor':'next'}}}
+        for scope in (None, {'source':'fleet'}, {'source':'flag','run':'other'},
+                      {'source':'bound','run':'run'}):
+            with self.subTest(scope=scope), patch('pod.orca.read_command',return_value={
+                    **valid,'result':{**valid['result'],'scope':scope}}), self.assertRaises(PodError):
+                worker_rows('run')
+        later={**valid,'result':{**valid['result'],'scope':{'source':'flag','run':'other'},
+                                'page':{'hasMore':False}}}
+        with patch('pod.orca.read_command',side_effect=[valid,later]), self.assertRaises(PodError):
+            worker_rows('run')
+
+    def test_contract_needs_runtime_status_not_version_only(self):
+        with patch('pod.orca.read_command',side_effect=[
+                {'version':ORCA_VERSION,'executable':'/fixture/orca'},
+                PodError('orca_read_failed','status offline')]):
+            report=contract()
+        self.assertEqual(report['status'],'unavailable')
+        self.assertIsNone(report['runtime'])
+        self.assertEqual(report['reason'],'orca_read_failed')

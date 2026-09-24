@@ -171,9 +171,11 @@ is eligible and a modest suitability tie-breaker; Available is eligible; Disable
 is ineligible for new starts. `selection: all` makes all six available while
 preserving the saved map. Returning to `custom` restores it. A state edit in All
 models applies to the saved map and changes the mode to My selection in one write.
-An empty custom pool is valid and disables delegation only. Missing model entries
-in custom mode are ineligible. Missing, invalid or partial YAML never defaults to
-All models; no internal operation writes preferences. The installer creates the
+An empty custom pool is valid and disables delegation only. A syntactically valid
+sparse custom map keeps its explicit choices; omitted ids are shown as
+“Not set (not eligible)”. Missing files and invalid or incomplete YAML structure
+have no eligible pool and never default to All models; no internal operation writes
+preferences. The installer creates the
 initial file with all six Available and `max_active: 2`; `pod config edit` may
 create that default if the file is missing. The accepted range is 0–8.
 
@@ -328,7 +330,7 @@ scenarios. Behavioral/live claims cannot be certified by checking document text.
 | A46 | One personal YAML stores model states and worker ceiling; project YAML can only narrow Governor policy, while objective constraints stay local. |
 | A47 | Duplicate/type/unknown-field/executable-tag/include and oversized/recursive YAML fails safely without execution. |
 | A48 | Catalog identities, documented efforts and runtime capability remain separate; unsupported selection is refused. |
-| A49 | Invalid, partial or missing preferences disable new delegation but permit read-only diagnosis and native recovery. |
+| A49 | A valid sparse custom map makes only explicit eligible states available and labels omissions “Not set (not eligible)”; invalid structure or a missing file disables new delegation while preserving read-only diagnosis and native recovery. |
 | A50 | Captured choices validate against a supplied preference snapshot without a ranking formula or model call. |
 | A51 | Missing native metadata remains unknown and causes no credential or undocumented-endpoint scraping. |
 | A52 | Current preferences are read at selection and final admission without a daemon or effect on productive workers. |

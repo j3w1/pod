@@ -11,7 +11,8 @@ from pod.errors import PodError
 from pod.internal import run as internal_run
 from pod.ledger import (admission_identity, checkpoint, constraints_update, read,
                         route_failure, update_admission)
-from pod.operations import (_assignment_evidence, guarded_start, recover_admission, OrcaPort)
+from pod.operations import (_assignment_evidence, _preflight_refusal_classification,
+                            guarded_start, recover_admission, OrcaPort)
 from pod.records import packet, source_identity
 from tests.common import fixture
 
@@ -108,6 +109,9 @@ class AdmissionTests(unittest.TestCase):
         self.env=patch.dict(os.environ,{'XDG_STATE_HOME':str(self.root/'state'),
                                      'XDG_CONFIG_HOME':str(self.root/'config')})
         self.env.__enter__(); self.addCleanup(self.env.__exit__,None,None,None)
+        authority=patch('pod.ledger.require_authority',return_value={
+            'runtime':'runtime','run_id':'run','references':{'run':'runtime'}})
+        authority.start(); self.addCleanup(authority.stop)
         self.project=self.root/'project'; self.project.mkdir()
         self.personal=self.root/'config'/'pod'/'config.yaml'; write_defaults(self.personal)
         self.port=FakePort()
@@ -136,6 +140,17 @@ class AdmissionTests(unittest.TestCase):
         return guarded_start(self.project,'objective',owner='owner',run='run',task=task,
                              plan_revision='plan',frozen_packet=frozen or self.frozen(),
                              worktree='current',port=self.port,reuse_of=reuse_of)
+
+    def recovery_case(self):
+        first=self.start()['admission']
+        update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
+                         update=lambda row:row.update(state='unresolved',native_binding=None))
+        self.port.starts.clear()
+        return first
+
+    def recover(self, admission):
+        return recover_admission(self.project,'objective',owner='owner',
+                                 admission_id=admission['admission_id'],worktree='current',port=self.port)
 
     def test_exact_start_binds_decision_and_native_effect(self):
         result=self.start()
@@ -241,6 +256,86 @@ class AdmissionTests(unittest.TestCase):
                          admission_id=first['admission_id'],worktree='current',port=self.port)['status'],'bound')
         self.assertEqual(len(self.port.starts),1)
 
+    def test_completed_conflict_survives_incomplete_and_absent_until_coherent_receipt(self):
+        prior=self.recovery_case()
+        coherent={'runId':'run','taskId':'task','dispatchId':prior['native_binding']['dispatchId'],
+                  'state':'ready'}
+        self.port.request_receipt={**coherent,'mutation':{'requestId':OTHER}}
+        conflict=self.recover(prior)
+        self.assertEqual(conflict['admission']['error']['code'],'native_request_conflict')
+        self.assertEqual(conflict['admission']['request_uuid'],REQUEST)
+        self.port.request_receipt='malformed'
+        incomplete=self.recover(prior)
+        self.assertEqual(incomplete['admission']['error']['code'],'native_receipt_missing')
+        self.assertEqual(incomplete['admission']['recovery']['request_conflict'],'unresolved')
+        self.port.state='absent'
+        absent=self.recover(prior)
+        self.assertEqual((absent['status'],absent['action']),('unresolved','hold'))
+        self.assertEqual(self.port.starts,[])
+        self.port.state='completed';self.port.request_receipt=coherent
+        settled=self.recover(prior)
+        self.assertEqual(settled['status'],'bound')
+        self.assertNotIn('request_conflict',settled['admission']['recovery'])
+        self.assertEqual(self.port.starts,[])
+
+    def test_pending_conflict_never_replays_again_then_completed_reconciles(self):
+        prior=self.recovery_case()
+        self.port.state='pending'
+        self.port.receipt={'runtime':'runtime','exit':0,'request_uuid':REQUEST,
+                           'mutation':{'requestId':OTHER},'runId':'run','taskId':'task',
+                           'dispatchId':prior['native_binding']['dispatchId'],'state':'ready'}
+        first=self.recover(prior)
+        self.assertEqual(first['admission']['error']['code'],'native_request_conflict')
+        self.assertEqual(self.recover(prior)['action'],'hold')
+        self.assertEqual(len(self.port.starts),1)
+        self.port.state='absent'
+        self.assertEqual(self.recover(prior)['action'],'hold')
+        self.port.state='completed'
+        self.port.request_receipt={'runId':'run','taskId':'task',
+                                   'dispatchId':prior['native_binding']['dispatchId'],'state':'ready'}
+        self.assertEqual(self.recover(prior)['status'],'bound')
+        self.assertEqual(len(self.port.starts),1)
+
+    def test_completed_raw_receipt_rejects_each_conflicting_request_reference(self):
+        prior=self.recovery_case()
+        base={'runId':'run','taskId':'task','dispatchId':prior['native_binding']['dispatchId'],
+              'state':'ready'}
+        for receipt in ({**base,'request_uuid':OTHER},
+                        {**base,'mutation':{'requestId':OTHER}},
+                        {**base,'mutation':'malformed'}):
+            with self.subTest(receipt=receipt):
+                self.port.request_receipt=receipt
+                conflicted=self.recover(prior)
+                self.assertEqual(conflicted['status'],'unresolved')
+                self.assertEqual(conflicted['admission']['error']['code'],'native_request_conflict')
+                self.assertEqual(conflicted['admission']['request_uuid'],REQUEST)
+        self.assertEqual(self.port.starts,[])
+
+    def test_refusal_request_conflict_survives_absent_adoption(self):
+        prior=self.recovery_case()
+        self.port.request_receipt={'exit':1,'request_uuid':REQUEST,'_request_conflict':True,
+                                   'error':{'code':'task_not_startable','message':'refused'}}
+        first=self.recover(prior)
+        self.assertEqual((first['status'],first['admission']['error']['code']),
+                         ('unresolved','native_refusal_unverified'))
+        self.assertEqual(first['admission']['recovery']['request_conflict'],'unresolved')
+        self.port.state='absent'
+        absent=self.recover(prior)
+        self.assertEqual((absent['status'],absent['action']),('unresolved','hold'))
+        self.assertIsNone(absent['admission']['native_binding'])
+        self.assertEqual(self.port.starts,[])
+
+    def test_malformed_refusal_request_identity_stays_unresolved(self):
+        prior=self.recovery_case()
+        self.port.request_receipt={'exit':1,'request_uuid':'not-a-uuid',
+                                   'error':{'code':'task_not_startable','message':'refused'}}
+        first=self.recover(prior)
+        self.assertEqual(first['admission']['error']['code'],'native_refusal_unverified')
+        self.assertEqual(first['admission']['request_uuid'],REQUEST)
+        self.port.state='absent'
+        self.assertEqual(self.recover(prior)['action'],'hold')
+        self.assertEqual(self.port.starts,[])
+
     def test_invalid_uuid_and_ambiguous_attempt_hold(self):
         first=self.start()['admission']
         update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
@@ -279,6 +374,32 @@ class AdmissionTests(unittest.TestCase):
                                                        'workers':[],'complete':True}):
             drift=execute(parser().parse_args(['status','--json']),self.project)
         self.assertEqual(drift['blocker'],'installed_version_changed')
+
+    def test_status_joins_checkpoint_and_exact_native_references_without_write(self):
+        from pod.cli import execute,parser
+        from pod.ledger import _path
+        started=self.start()['admission']
+        path=_path(self.project,'objective');before=path.read_bytes()
+        with patch('pod.cli.current_run',return_value={'runtime':'runtime','run':{'id':'run'}}), \
+             patch('pod.cli.worker_rows',return_value={'runtime':'runtime',
+                 'scope':{'source':'flag','run':'run'},'workers':[], 'complete':True}):
+            status=execute(parser().parse_args(['status','--json']),self.project)
+        self.assertEqual(status['objective'],'objective')
+        self.assertEqual(status['checkpoint_join']['plan_revision'],'plan')
+        self.assertEqual(status['checkpoint_join']['candidate'],'candidate')
+        self.assertEqual(status['checkpoint_join']['native_refs'],[{'runId':'run','runtime':'runtime'}])
+        ref=status['native_references'][0]
+        self.assertEqual((ref['task'],ref['dispatch'],ref['worker'],ref['terminal']),
+                         ('task',started['native_binding']['dispatchId'],
+                          started['native_binding']['workerId'],
+                          started['native_binding']['terminalHandle']))
+        self.assertEqual(path.read_bytes(),before)
+        with patch('pod.cli.current_run',return_value={'runtime':'runtime','run':{'id':'run'}}), \
+             patch('pod.cli.worker_rows',side_effect=PodError('orca_read_failed','offline')):
+            offline=execute(parser().parse_args(['status','--json']),self.project)
+        self.assertEqual(offline['status'],'unavailable')
+        self.assertEqual(offline['native_references'][0]['task'],'task')
+        self.assertEqual(path.read_bytes(),before)
 
     def test_reuse_requires_settlement_and_exact_effective_model(self):
         first=self.start()['admission']; identity=first['admission_id']
@@ -342,6 +463,118 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(held['state'],'unresolved')
         self.assertEqual(held['request_uuid'],REQUEST)
 
+    def test_refusal_classifier_rejects_runtime_envelope_and_effect_contradictions(self):
+        admission={'runtime':'runtime'}
+        base={'runtime':'runtime','exit':1,'request_uuid':REQUEST,
+              'error':{'code':'task_not_startable','message':'refused'}}
+        self.assertEqual(_preflight_refusal_classification(base,admission),'authoritative')
+        self.assertEqual(_preflight_refusal_classification({**base,'request_uuid':None,
+            'error':{**base['error'],'data':{'orchestrationRequestId':REQUEST}}},admission),'authoritative')
+        documented={**base,'error':{**base['error'],'data':{
+            'taskId':'task','runId':'run','status':'blocked','unmetDependencies':['other'],
+            'retryOf':None,'terminal':'term-1','reason':'no agent','nextSteps':'wait'}}}
+        self.assertEqual(_preflight_refusal_classification(documented,admission),'authoritative')
+        variants={
+            'wrong_runtime':{**base,'runtime':'other'},
+            'missing_runtime':{k:v for k,v in base.items() if k!='runtime'},
+            'zero_exit':{**base,'exit':0},
+            'nested_dispatch':{**base,'error':{**base['error'],'data':{'dispatchId':'partial'}}},
+            'nested_residual':{**base,'error':{**base['error'],'data':{'residualResources':[{'kind':'terminal'}]}}},
+            'malformed_effects':{**base,'error':{**base['error'],'data':{'effects':None}}},
+            'top_dispatch':{**base,'dispatchId':'partial'},
+            'result_error':{**base,'_result_error':{'code':'other'}},
+            'envelope':{**base,'_envelope_conflicts':{'workerId':'partial'}},
+            'request_conflict':{**base,'_request_conflict':True},
+            'malformed_data':{**base,'error':{**base['error'],'data':'unknown'}},
+            'foreign_runtime_data':{**base,'error':{**base['error'],'data':{'runtimeId':'other'}}},
+        }
+        for name,receipt in variants.items():
+            with self.subTest(name=name):
+                self.assertEqual(_preflight_refusal_classification(receipt,admission),'unverified')
+
+    def test_effect_bearing_refusal_stays_unresolved_and_error_data_uuid_is_kept(self):
+        self.port.receipt={'runtime':'runtime','exit':1,'request_uuid':REQUEST,
+                           'dispatchId':'partial-dispatch',
+                           'error':{'code':'inject_rejected','message':'refused'}}
+        partial=self.start('task1')['admission']
+        self.assertEqual((partial['state'],partial['error']['code']),
+                         ('unresolved','native_refusal_unverified'))
+        self.assertIsNone(partial['native_binding'])
+        self.port.receipt={'runtime':'runtime','exit':1,'request_uuid':None,
+                           'error':{'code':'task_not_startable','message':'refused',
+                                    'data':{'orchestrationRequestId':OTHER}}}
+        deferred=self.start('task2')['admission']
+        self.assertEqual(deferred['state'],'deferred')
+        self.assertEqual(deferred['request_uuid'],OTHER)
+
+    def test_completed_and_pending_refusals_do_not_start_twice(self):
+        prior=self.recovery_case()
+        self.port.request_receipt={'exit':1,
+                                   'error':{'code':'task_not_found','message':'refused'}}
+        first=self.recover(prior)
+        self.assertEqual((first['status'],self.recover(prior)['status']),('deferred','deferred'))
+        self.assertEqual(self.port.starts,[])
+
+    def test_pending_effect_free_refusal_defers_after_one_exact_replay(self):
+        prior=self.recovery_case()
+        self.port.state='pending'
+        self.port.receipt={'runtime':'runtime','exit':1,'request_uuid':REQUEST,
+                           'error':{'code':'inject_rejected','message':'refused'}}
+        first=self.recover(prior)
+        self.assertEqual((first['status'],self.recover(prior)['status']),('deferred','deferred'))
+        self.assertEqual(len(self.port.starts),1)
+        self.assertEqual(self.port.starts[0]['retry_request'],REQUEST)
+
+    def test_unverified_recovered_refusal_holds_without_replay_loop(self):
+        prior=self.recovery_case()
+        self.port.state='pending'
+        self.port.receipt={'runtime':'other','exit':1,'request_uuid':REQUEST,
+                           'error':{'code':'task_not_startable','message':'refused'}}
+        first=self.recover(prior)
+        self.assertEqual(first['admission']['error']['code'],'native_refusal_unverified')
+        self.assertEqual(self.recover(prior)['status'],'unresolved')
+        self.assertEqual(len(self.port.starts),1)
+
+    def test_completed_effect_bearing_refusal_holds_without_native_retry(self):
+        prior=self.recovery_case()
+        self.port.request_receipt={'exit':1,
+            'error':{'code':'task_not_startable','message':'refused',
+                     'data':{'dispatchId':'partial'}}}
+        first=self.recover(prior)
+        self.assertEqual(first['admission']['error']['code'],'native_refusal_unverified')
+        self.assertEqual(self.recover(prior)['status'],'unresolved')
+        self.assertEqual(self.port.starts,[])
+
+    def test_runtime_error_readback_never_infers_no_effect_or_restarts(self):
+        self.port.receipt={'runtime':'runtime','exit':1,'request_uuid':REQUEST,
+                           'error':{'code':'runtime_error','message':'target busy'}}
+        held=self.start()['admission']
+        self.assertEqual((held['state'],held['error']['code']),('unresolved','native_runtime_error'))
+        self.port.request_receipt={'exit':1,'error':{'code':'runtime_error','message':'again'}}
+        repeated=self.recover(held)
+        self.assertEqual((repeated['status'],repeated['admission']['request_uuid']),('unresolved',REQUEST))
+        self.port.state='absent'
+        absent=self.recover(held)
+        self.assertEqual((absent['status'],absent['admission']['error']['code']),
+                         ('unresolved','native_attempt_absent'))
+        self.assertEqual(len(self.port.starts),1)
+        self.port.workers['dispatch-1']={'run':'run','task':'task','route':ROUTE.copy(),
+                                          'worktree':'current','state':'ready',
+                                          'outcome':'in_progress','terminal':'term-dispatch-1'}
+        self.port.state='completed';self.port.request_receipt=None
+        self.assertEqual(self.recover(held)['status'],'bound')
+        self.assertEqual(len(self.port.starts),1)
+
+    def test_runtime_error_can_settle_as_completed_effect_free_refusal(self):
+        self.port.receipt={'runtime':'runtime','exit':1,'request_uuid':REQUEST,
+                           'error':{'code':'runtime_error','message':'uncertain'}}
+        held=self.start()['admission']
+        self.port.request_receipt={'exit':1,
+                                   'error':{'code':'task_not_startable','message':'not ready'}}
+        result=self.recover(held)
+        self.assertEqual((result['status'],result['action']),('deferred','recorded_receipt'))
+        self.assertEqual(len(self.port.starts),1)
+
     def test_request_contradiction_holds_without_uuid_substitution(self):
         self.port.receipt={'runtime':'runtime','exit':0,'request_uuid':REQUEST,
                            'mutation':{'requestId':OTHER},'runId':'run','taskId':'task',
@@ -376,12 +609,39 @@ class AdmissionTests(unittest.TestCase):
         first=self.start()['admission']
         route_failure(self.project,'objective',owner='owner',admission_id=first['admission_id'],
                       kind='safety_refusal',source='native')
+        from pod.ledger import _lock, _path, _read, _write
+        state_path=_path(self.project,'objective')
+        with _lock(state_path):
+            state=_read(state_path)
+            state['checkpoint']['native_refs'].append({'runId':'run2','runtime':'runtime'})
+            _write(state_path,state)
+        self.port.workers[first['native_binding']['dispatchId']]['outcome']='failed'
         alternate={**ROUTE,'model':'gpt-6-luna'}
         with self.assertRaises(PodError) as caught:
             guarded_start(self.project,'objective',owner='owner',run='run2',task='task',
                           plan_revision='plan',frozen_packet=self.frozen(route=alternate),
                           worktree='current',port=self.port)
         self.assertEqual(caught.exception.code,'safety_refusal')
+
+    def test_live_bound_task_on_another_run_blocks_replacement_until_settled(self):
+        first=self.start('shared-task')['admission']
+        from pod.ledger import _lock, _path, _read, _write
+        state_path=_path(self.project,'objective')
+        with _lock(state_path):
+            state=_read(state_path)
+            state['checkpoint']['native_refs'].append({'runId':'another-run','runtime':'runtime'})
+            _write(state_path,state)
+        def replacement():
+            return guarded_start(self.project,'objective',owner='owner',run='another-run',
+                                 task='shared-task',plan_revision='plan',
+                                 frozen_packet=self.frozen(),worktree='current',port=self.port)
+        with self.assertRaises(PodError) as blocked:
+            replacement()
+        self.assertEqual(blocked.exception.code,'unresolved_prior_attempt')
+        self.assertEqual(len(self.port.starts),1)
+        self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.assertEqual(replacement()['status'],'bound')
+        self.assertEqual(len(self.port.starts),2)
 
     def test_pending_replay_rechecks_governor_policy_and_checkpoint_core(self):
         first=self.start()['admission']
@@ -514,3 +774,88 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught: self.start('task2',frozen=self.frozen(route=alternative))
         self.assertEqual(caught.exception.code,'preference_changed')
         self.assertEqual(len(self.port.starts),1)
+
+    def test_issue_change_holds_pending_replay_but_completed_read_is_observational(self):
+        source={'schema':'pod-issue-source/v1','repository':'acme/widgets','number':7,
+                'locator':'https://github.com/acme/widgets/issues/7','body_sha256':'a'*64,
+                'amendments':[]}
+        checkpoint_value=read(self.project,'objective')['checkpoint']
+        checkpoint(self.project,'objective',owner='owner',
+                   value={key:value for key,value in {**checkpoint_value,'objective_source':source}.items()
+                          if key!='pod_version'},native={'runtime':'runtime'})
+        frozen=packet({**self.frozen()['body'],'objective_source':source})
+        with patch('pod.github.issue_recheck',return_value={'status':'current'}):
+            first=self.start(frozen=frozen)['admission']
+        update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
+                         update=lambda row:row.update(state='unresolved',native_binding=None))
+        self.port.starts.clear();self.port.state='pending'
+        with patch('pod.github.issue_recheck',return_value={'status':'reconciliation_required'}), \
+             self.assertRaises(PodError) as changed:
+            self.recover(first)
+        self.assertEqual(changed.exception.code,'issue_reconciliation_required')
+        self.assertEqual(self.port.starts,[])
+        revised={**source,'body_sha256':'b'*64}
+        revised_packet=packet({**frozen['body'],'objective_source':revised})
+        with self.assertRaises(PodError) as duplicate:
+            self.start(frozen=revised_packet)
+        self.assertEqual(duplicate.exception.code,'unresolved_prior_attempt')
+        self.port.state='completed'
+        with patch('pod.github.issue_recheck',side_effect=AssertionError('completed is observational')):
+            self.assertEqual(self.recover(first)['status'],'bound')
+
+    def test_same_selector_resolving_elsewhere_blocks_start_and_pending_replay(self):
+        placement={'repository':None,'repo_key':'a'*64,
+                   'path':str(self.root/'assignment'),'branch':'orca/check'}
+        frozen=packet({**self.frozen()['body'],'placement':placement})
+        self.port.placement={**placement,'runtime':'runtime','path':str(self.root/'wrong')}
+        with self.assertRaises(PodError) as wrong:
+            guarded_start(self.project,'objective',owner='owner',run='run',task='task',
+                          plan_revision='plan',frozen_packet=frozen,
+                          worktree='name:isolation',port=self.port)
+        self.assertEqual(wrong.exception.code,'worktree_binding_changed')
+        self.assertEqual(self.port.starts,[])
+        self.port.placement={**placement,'runtime':'runtime'}
+        started=guarded_start(self.project,'objective',owner='owner',run='run',task='task',
+                              plan_revision='plan',frozen_packet=frozen,
+                              worktree='name:isolation',port=self.port)['admission']
+        update_admission(self.project,'objective',owner='owner',admission_id=started['admission_id'],
+                         update=lambda row:row.update(state='unresolved',native_binding=None))
+        self.port.starts.clear();self.port.state='pending'
+        self.port.placement={**placement,'runtime':'runtime','repository':'other/repository'}
+        with self.assertRaises(PodError) as moved:
+            recover_admission(self.project,'objective',owner='owner',admission_id=started['admission_id'],
+                              worktree='name:isolation',port=self.port)
+        self.assertEqual(moved.exception.code,'worktree_binding_changed')
+        self.assertEqual(self.port.starts,[])
+
+    def test_source_and_instruction_context_state_matrix_before_worker_start(self):
+        for kind in ('source','instruction'):
+            for change,code in (('changed','source_changed'),('absent','source_absent')):
+                with self.subTest(kind=kind,change=change):
+                    path=self.project/f'{kind}-{change}.txt';path.write_text('one')
+                    bound=source_identity(self.project,path.name)
+                    frozen=self.frozen(context=[{'kind':kind,'path':path.name,'sha256':bound['sha256']}])
+                    path.write_text('two') if change=='changed' else path.unlink()
+                    with self.assertRaises(PodError) as blocked:
+                        self.start(task=f'{kind}-{change}',frozen=frozen)
+                    self.assertEqual(blocked.exception.code,code)
+        self.assertEqual(self.port.starts,[])
+        unavailable=self.frozen(sources=[{'path':'unavailable.txt','state':'unavailable'}])
+        with self.assertRaises(PodError) as blocked:
+            self.start(task='unavailable',frozen=unavailable)
+        self.assertEqual(blocked.exception.code,'source_unbound')
+        self.assertEqual(self.port.starts,[])
+
+    def test_two_objectives_have_independent_logical_slots(self):
+        checkpoint_value={key:value for key,value in read(self.project,'objective')['checkpoint'].items()
+                          if key not in ('pod_version','objective')}
+        checkpoint(self.project,'second',owner='owner',value=checkpoint_value,native={'runtime':'runtime'})
+        for task in ('first','second'):
+            self.assertEqual(self.start(task)['status'],'bound')
+        with self.assertRaises(PodError) as full:
+            self.start('third')
+        self.assertEqual(full.exception.code,'logical_capacity_full')
+        second_packet=packet({**self.frozen()['body'],'objective':'second'})
+        other=guarded_start(self.project,'second',owner='owner',run='run',task='other',
+                            plan_revision='plan',frozen_packet=second_packet,port=self.port)
+        self.assertEqual(other['status'],'bound')
