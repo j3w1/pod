@@ -1,0 +1,420 @@
+{
+  "schema": "pod-catalog/v1",
+  "models": [
+    {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "agent": "claude",
+      "provider": "Anthropic",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "native_default": "medium",
+      "documented_context_tokens": 1000000,
+      "guidance": "Anthropic positions Claude Opus 5.5 for long-running agentic coding and knowledge work, noting strength on long, sprawling jobs such as codebase-wide migrations and audits. Suited to broad software engineering: cross-cutting changes, careful code review, and performance investigations where sustained context and judgment matter more than speed.",
+      "examples": [
+        "Review a cross-cutting CI redesign",
+        "Coordinate a multi-module refactor"
+      ],
+      "sources": [
+        {
+          "url": "https://www.anthropic.com/claude-opus-5-5",
+          "checked": "2026-09-24"
+        },
+        {
+          "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+          "checked": "2026-09-24"
+        },
+        {
+          "url": "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "checked": "2026-09-24"
+        }
+      ]
+    },
+    {
+      "id": "claude-fable-5-1",
+      "name": "Claude Fable 5.1",
+      "agent": "claude",
+      "provider": "Anthropic",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "native_default": "high",
+      "documented_context_tokens": 1000000,
+      "guidance": "Anthropic describes Claude Fable 5.1 as built for ambitious, long-running projects and demanding reasoning: work that spans many applications, codebase-wide features, code review and performance work, and multi-stage knowledge work with minimal oversight. Suited to hard investigations and design assessments where depth matters more than latency.",
+      "examples": [
+        "Investigate a difficult intermittent failure",
+        "Assess a repository-wide design"
+      ],
+      "sources": [
+        {
+          "url": "https://www.anthropic.com/claude/fable",
+          "checked": "2026-09-24"
+        },
+        {
+          "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+          "checked": "2026-09-24"
+        },
+        {
+          "url": "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "checked": "2026-09-24"
+        }
+      ]
+    },
+    {
+      "id": "claude-sonnet-5",
+      "name": "Claude Sonnet 5",
+      "agent": "claude",
+      "provider": "Anthropic",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "native_default": "high",
+      "documented_context_tokens": 1000000,
+      "guidance": "Anthropic presents Claude Sonnet 5 as its most agentic Sonnet yet: it makes plans, uses tools such as browsers and terminals, and checks its own output, reporting performance close to Opus 4.8 at lower prices. Suited to bounded feature work, debugging and tool-heavy tasks.",
+      "examples": [
+        "Implement a bounded feature with its regression tests"
+      ],
+      "sources": [
+        {
+          "url": "https://www.anthropic.com/news/claude-sonnet-5",
+          "checked": "2026-09-24"
+        },
+        {
+          "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+          "checked": "2026-09-24"
+        },
+        {
+          "url": "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "checked": "2026-09-24"
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "agent": "codex",
+      "provider": "OpenAI",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ],
+      "native_default": "medium",
+      "documented_context_tokens": null,
+      "guidance": "OpenAI calls GPT-6 Astra its most capable model for complex work across code, apps and research, combining advanced reasoning, computer use and stronger judgment. Suited to demanding software engineering: resolving conflicting constraints, subtle correctness questions and multi-step tool work where the extra reasoning time is justified.",
+      "examples": [
+        "Resolve conflicting architectural constraints",
+        "Review subtle selector correctness"
+      ],
+      "sources": [
+        {
+          "url": "https://learn.chatgpt.com/docs/models",
+          "checked": "2026-09-24"
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "agent": "codex",
+      "provider": "OpenAI",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ],
+      "native_default": "medium",
+      "documented_context_tokens": null,
+      "guidance": "OpenAI describes GPT-6 Sol as built for complex coding and agentic workflows, with stronger factual reliability and clearer communication than its predecessor. Suited to everyday implementation and difficult-but-bounded work: implementing an agreed design, investigating a failing test, or improving a component with a good balance of capability and efficiency.",
+      "examples": [
+        "Implement an agreed selector",
+        "Investigate a test failure"
+      ],
+      "sources": [
+        {
+          "url": "https://learn.chatgpt.com/docs/models",
+          "checked": "2026-09-24"
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "agent": "codex",
+      "provider": "OpenAI",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "native_default": "medium",
+      "documented_context_tokens": null,
+      "guidance": "OpenAI calls GPT-6 Luna its most efficient model for focused, high-volume tasks, including summarization, extraction and focused coding. Suited to fast, economical assignments with clear boundaries: inventories, small mechanical changes, focused test updates and first-pass checks that a stronger model or reviewer can confirm when stakes are higher.",
+      "examples": [
+        "Perform a bounded inventory",
+        "Make a small mechanical change or focused test update"
+      ],
+      "sources": [
+        {
+          "url": "https://learn.chatgpt.com/docs/models",
+          "checked": "2026-09-24"
+        }
+      ]
+    }
+  ],
+  "reference_benchmark": {
+    "url": "https://artificialanalysis.ai/leaderboards/models",
+    "captured": "2026-09-24",
+    "models": {
+      "claude-opus-5-5": {
+        "reference_variant": "max with fallback",
+        "variants": [
+          {
+            "profile": "max with fallback",
+            "intelligence": 58,
+            "usd_per_task": 5.98,
+            "first_chunk_s": null
+          },
+          {
+            "profile": "xhigh with fallback",
+            "intelligence": 56,
+            "usd_per_task": 3.46,
+            "first_chunk_s": 147.28
+          },
+          {
+            "profile": "high with fallback",
+            "intelligence": 54,
+            "usd_per_task": 1.82,
+            "first_chunk_s": 31.91
+          },
+          {
+            "profile": "medium with fallback",
+            "intelligence": 51,
+            "usd_per_task": 1.34,
+            "first_chunk_s": 21.62
+          },
+          {
+            "profile": "low with fallback",
+            "intelligence": 42,
+            "usd_per_task": 0.55,
+            "first_chunk_s": 4.98
+          }
+        ]
+      },
+      "claude-fable-5-1": {
+        "reference_variant": "max with fallback",
+        "variants": [
+          {
+            "profile": "max with fallback",
+            "intelligence": 53,
+            "usd_per_task": 7.63,
+            "first_chunk_s": 274.43
+          },
+          {
+            "profile": "xhigh with fallback",
+            "intelligence": 53,
+            "usd_per_task": 5.98,
+            "first_chunk_s": 119.28
+          },
+          {
+            "profile": "high with fallback",
+            "intelligence": 51,
+            "usd_per_task": 3.91,
+            "first_chunk_s": 22.54
+          },
+          {
+            "profile": "medium with fallback",
+            "intelligence": 49,
+            "usd_per_task": 2.98,
+            "first_chunk_s": 10.21
+          },
+          {
+            "profile": "low with fallback",
+            "intelligence": 47,
+            "usd_per_task": 2.37,
+            "first_chunk_s": 6.29
+          }
+        ]
+      },
+      "claude-sonnet-5": {
+        "reference_variant": "max",
+        "variants": [
+          {
+            "profile": "max",
+            "intelligence": 38,
+            "usd_per_task": 5.09,
+            "first_chunk_s": 150.02
+          },
+          {
+            "profile": "xhigh",
+            "intelligence": 34,
+            "usd_per_task": 2.87,
+            "first_chunk_s": 18.45
+          },
+          {
+            "profile": "high",
+            "intelligence": 32,
+            "usd_per_task": 1.79,
+            "first_chunk_s": 8.49
+          },
+          {
+            "profile": "medium",
+            "intelligence": 28,
+            "usd_per_task": 1.0,
+            "first_chunk_s": 2.53
+          },
+          {
+            "profile": "low",
+            "intelligence": 24,
+            "usd_per_task": 0.51,
+            "first_chunk_s": 1.82
+          },
+          {
+            "profile": "Non-reasoning",
+            "intelligence": 23,
+            "usd_per_task": null,
+            "first_chunk_s": 1.19
+          }
+        ]
+      },
+      "gpt-6-astra": {
+        "reference_variant": "max",
+        "variants": [
+          {
+            "profile": "max",
+            "intelligence": 53,
+            "usd_per_task": 3.26,
+            "first_chunk_s": 352.15
+          },
+          {
+            "profile": "xhigh",
+            "intelligence": 52,
+            "usd_per_task": 2.31,
+            "first_chunk_s": 206.2
+          },
+          {
+            "profile": "high",
+            "intelligence": 51,
+            "usd_per_task": 1.73,
+            "first_chunk_s": 73.16
+          },
+          {
+            "profile": "medium",
+            "intelligence": 50,
+            "usd_per_task": 1.54,
+            "first_chunk_s": 6.08
+          },
+          {
+            "profile": "low",
+            "intelligence": 46,
+            "usd_per_task": 0.82,
+            "first_chunk_s": 3.07
+          }
+        ]
+      },
+      "gpt-6-sol": {
+        "reference_variant": "max",
+        "variants": [
+          {
+            "profile": "max",
+            "intelligence": 48,
+            "usd_per_task": 1.06,
+            "first_chunk_s": 136.12
+          },
+          {
+            "profile": "xhigh",
+            "intelligence": 44,
+            "usd_per_task": 0.53,
+            "first_chunk_s": 46.52
+          },
+          {
+            "profile": "high",
+            "intelligence": 43,
+            "usd_per_task": 0.37,
+            "first_chunk_s": 8.89
+          },
+          {
+            "profile": "medium",
+            "intelligence": 40,
+            "usd_per_task": 0.25,
+            "first_chunk_s": 1.96
+          },
+          {
+            "profile": "low",
+            "intelligence": 34,
+            "usd_per_task": 0.13,
+            "first_chunk_s": 1.65
+          },
+          {
+            "profile": "Non-reasoning",
+            "intelligence": 28,
+            "usd_per_task": 0.33,
+            "first_chunk_s": 1.03
+          }
+        ]
+      },
+      "gpt-6-luna": {
+        "reference_variant": "max",
+        "variants": [
+          {
+            "profile": "max",
+            "intelligence": 37,
+            "usd_per_task": 0.07,
+            "first_chunk_s": 106.86
+          },
+          {
+            "profile": "xhigh",
+            "intelligence": 34,
+            "usd_per_task": 0.04,
+            "first_chunk_s": 17.83
+          },
+          {
+            "profile": "high",
+            "intelligence": 32,
+            "usd_per_task": 0.03,
+            "first_chunk_s": 8.04
+          },
+          {
+            "profile": "medium",
+            "intelligence": 29,
+            "usd_per_task": 0.02,
+            "first_chunk_s": 5.28
+          },
+          {
+            "profile": "low",
+            "intelligence": 21,
+            "usd_per_task": 0.0045,
+            "first_chunk_s": 2.11
+          },
+          {
+            "profile": "Non-reasoning",
+            "intelligence": 18,
+            "usd_per_task": 0.01,
+            "first_chunk_s": 0.87
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "ok": true,
+  "result": {
+    "requestId": "00000000-0000-4000-8000-000000000001",
+    "state": "completed",
+    "method": "orchestration.workerStart",
+    "receipt": {
+      "runId": "run-example",
+      "taskId": "task-example",
+      "dispatchId": "dispatch-example",
+      "state": "ready",
+      "launch": {
+        "requested": {
+          "agent": "codex",
+          "model": "gpt-6-sol",
+          "effort": "high"
+        },
+        "effective": {
+          "agent": "codex",
+          "model": "gpt-6-sol",
+          "effort": "high"
+        }
+      },
+      "mutation": {
+        "requestId": "00000000-0000-4000-8000-000000000001",
+        "replayed": false
+      }
+    }
+  },
+  "_meta": {
+    "runtimeId": "runtime-example"
+  }
+}

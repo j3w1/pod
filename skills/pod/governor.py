@@ -67,6 +67,8 @@ NEXT_ACTIONS = {
     "effects_unknown": "declare the action's downstream effects, or map waste_governor.triggers in project policy",
     "effect_unresolved": "reconcile the unresolved submission with the governor-reconcile helper before submitting again",
     "integration_unsettled": "settle the unit's native work and corrections first",
+    "route_mismatch": "inspect the exact worker launch with Orca and resolve the route mismatch",
+    "effective_unknown": "obtain exact effective worker launch evidence before delivery",
     "diagnosis_required": "record a discriminating diagnosis for the unit's repeated failure",
     "local_preflight_missing": "run the configured local preflight and record each result for this candidate",
     "blocking_findings": "fix the failing local check, then prepare a new candidate",
@@ -402,6 +404,14 @@ def _pending_interventions(state: dict, unit: str | None = None,
     return sorted(pending)
 
 
+
+def _require_version(state: dict) -> None:
+    from . import __version__
+    checkpoint = state.get("checkpoint")
+    if not isinstance(checkpoint, dict) or checkpoint.get("pod_version") != __version__:
+        raise PodError("installed_version_changed", "Reload Pod and write a fresh checkpoint")
+
+
 def _checkpoint(state: dict) -> dict:
     value = state.get("checkpoint")
     return value if isinstance(value, dict) else {}
@@ -473,6 +483,12 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         _reason(reasons, "correctness", "unit_unbound",
                 "managed execution needs the unit's prepared candidate and its remote, branch and base")
     checkpoint = _checkpoint(state)
+    if any(row.get("route_decision", {}).get("route_mismatch")
+           for row in state.get("admissions", {}).values()):
+        _reason(reasons, "correctness", "route_mismatch", "a bound worker used a different route")
+    elif any(row.get("route_decision", {}).get("effective_unknown")
+             for row in state.get("admissions", {}).values() if row.get("state") in ("bound", "closed")):
+        _reason(reasons, "correctness", "effective_unknown", "worker launch readback lacks effective values")
     effects, source = _effects(action, governor_policy)
     validates = kind in VALIDATION_KINDS or bool(effects and any(e.startswith("workflow:") for e in effects))
     deploys = kind == "deploy" or bool(effects and any(e.startswith("deploy:") for e in effects))
@@ -662,7 +678,7 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
                         f"{budget} transient retry(ies) were already spent on this candidate")
         else:
             _reason(reasons, "correctness", "external_blocker",
-                    "the previous attempt was blocked by quota, authorization or an unavailable dependency")
+                    "the previous attempt was blocked by authorization or an unavailable dependency")
     elif latest is not None and latest["outcome"] == "FAILED" and kind == "remote_diagnostic" and reuse is None and not superseded:
         pass
     elif kind == "remote_diagnostic" and latest is None:
@@ -730,6 +746,7 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
     moment = now.isoformat()
     with _lock(context_path):
         state = _read(context_path)
+        _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         journal = _read_journal(record_path)
@@ -962,6 +979,7 @@ def classify_failure(project: Path, objective: str, *, owner: str, record_id: st
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
         state = _read(context_path)
+        _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         journal = _read_journal(record_path)
@@ -1003,6 +1021,7 @@ def record_correction(project: Path, objective: str, *, owner: str, unit: str, c
     context_path = _path(project, objective)
     with _lock(context_path):
         state = _read(context_path)
+        _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         result = _intervention_locked(project, objective, state, task=None, unit=unit,
@@ -1162,6 +1181,7 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
         state = _read(context_path)
+        _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         journal = _read_journal(record_path)
@@ -1224,6 +1244,7 @@ def record_preflight(project: Path, objective: str, *, owner: str, unit: str, ca
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
         state = _read(context_path)
+        _require_version(state)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         journal = _read_journal(record_path)

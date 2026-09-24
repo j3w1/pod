@@ -101,7 +101,8 @@ class InventoryIntegrityTests(unittest.TestCase):
         for phrase in ("POD_REQUIRE_PTY=1", "pod.catalog --check", "SHA-pinned public install",
                        "independent review", "live native"):
             self.assertIn(phrase, validation)
-        for obsolete in ("config approve", "pod setup", "quota_fresh_seconds", "pod-context/v3"):
+        for obsolete in ("config " + "approve", "pod setup", "quota_" + "fresh_seconds",
+                         "pod-context/" + "v3"):
             self.assertNotIn(obsolete, spec + validation)
 
     def test_referenced_fixture_cases_exist(self):
@@ -180,11 +181,9 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
     def test_readme_covers_practical_workflows_and_current_limits(self):
         text = (self.root / "README.md").read_text()
         for phrase in ("$pod https://github.com/owner/project/issues/123",
-                       "Draft a Pod Execution Spec", "Authoring in ChatGPT",
+                       "Pod Execution Spec reference", "Authoring in ChatGPT",
                        "Plan only", "Continue after interruption", "visible agent tab",
-                       "config approve sol", "256,000 tokens",
-                       "npx skills add j3w1/pod --skill pod -a codex -a claude-code -g",
-                       "npx skills update pod -g", "npx skills remove pod -g", "`VERSION`"):
+                       "pod config --json", "native_default", "gpt-6-luna", "`VERSION`"):
             self.assertIn(phrase, text)
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
                       text)

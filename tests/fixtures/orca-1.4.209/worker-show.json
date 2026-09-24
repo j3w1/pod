@@ -1,0 +1,43 @@
+{
+  "ok": true,
+  "result": {
+    "dispatch": {
+      "id": "dispatch-example",
+      "runId": "run-example",
+      "taskId": "task-example"
+    },
+    "worker": {
+      "dispatchId": "dispatch-example",
+      "state": "ready",
+      "worktreeId": "worktree-example",
+      "agentTerminalHandle": "terminal-example",
+      "startOptions": {
+        "launch": {
+          "requested": {
+            "agent": "codex",
+            "model": "gpt-6-sol",
+            "effort": "high"
+          },
+          "effective": {
+            "agent": "codex",
+            "model": "gpt-6-sol",
+            "effort": "high"
+          }
+        }
+      }
+    },
+    "projection": {
+      "id": "worker-example",
+      "dispatchId": "dispatch-example",
+      "runId": "run-example",
+      "taskId": "task-example",
+      "outcome": "in_progress",
+      "stage": {
+        "detail": "input_accepted"
+      }
+    }
+  },
+  "_meta": {
+    "runtimeId": "runtime-example"
+  }
+}

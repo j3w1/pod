@@ -1,83 +1,41 @@
-"""Bounded YAML preferences and restrictive effective-policy merge."""
+"""One personal YAML preference authority and restrictive Governor project policy."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 import fcntl
-from pathlib import Path
+import hashlib
 import os
+from pathlib import Path
 import re
 import stat
 import tempfile
-from typing import Any
+import time
+from typing import Any, Iterator
 
 import yaml
 
+from .catalog import IDS
 from .errors import PodError
 from .util import digest, exact, explicit_home, native_home
 
 SCHEMA = "pod/v1"
+STATES = ("available", "preferred", "disabled")
+MODES = ("custom", "all")
 DEFAULT_WORKER_CAPACITY = 2
-COMPLEXITIES = ("trivial", "simple", "standard", "complex", "very_complex")
-EFFORTS = {"low", "medium", "high", "xhigh", "max"}
-MODEL_FIELDS = {"agent", "model", "account", "approved", "approval_ref", "approval_route",
-                "billing", "efforts", "capabilities", "locations"}
-POLICY_FIELDS = {"max_workers", "ordinary_max", "allowed_agents", "allowed_accounts", "allowed_locations", "quota_low", "quota_critical", "quota_fresh_seconds", "child_delegation", "review", "spending_grants", "reset_grants", "exceptional_grants"}
-CONTEXT_PROFILES = ("256k", "max")
-CONTEXT_256K_TOKENS = 256_000
-ROUTE_FIELDS = {"model", "effort", "context", "strict"}
-# The waste governor's operator surface. Verification and trigger mappings are project
-# knowledge; the mode, cancellation authority, retry budget, host declaration and exception
-# grants are personal authority that a project file may narrow but never widen.
-WASTE_GOVERNOR_FIELDS = {"mode", "consolidate_related_changes", "cancel_superseded_validation",
-                         "preflight", "triggers", "transient_retries", "host_control", "exceptions"}
-GOVERNOR_MODES = ("enforce", "observe")
 GOVERNED_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "remote_diagnostic",
                   "merge", "release", "deploy", "cancel_validation")
 TRIGGER_KINDS = ("push", "pr_update")
 EFFECT_PREFIXES = ("workflow:", "deploy:", "release:")
-MODEL_CATALOG = {
-    "luna": {"agent": "codex", "model": "gpt-6-luna", "provider_ceiling": 1_050_000},
-    "sol": {"agent": "codex", "model": "gpt-6-sol", "provider_ceiling": 1_050_000},
-    "astra": {"agent": "codex", "model": "gpt-6-astra", "provider_ceiling": 1_050_000},
-    "sonnet": {"agent": "claude", "model": "claude-sonnet-5", "provider_ceiling": 1_000_000},
-    "opus": {"agent": "claude", "model": "claude-opus-5-5", "provider_ceiling": 1_000_000},
-    "fable": {"agent": "claude", "model": "claude-fable-5-1", "provider_ceiling": 1_000_000},
-}
-STARTER = {
-    alias: {"agent": row["agent"], "model": row["model"],
-            "approved": False, "billing": "unknown"}
-    for alias, row in MODEL_CATALOG.items()
-}
-DEFAULT = {
-    "schema": SCHEMA,
-    "models": STARTER,
-    "routing": {
-        "trivial": {"model": "luna", "effort": "low", "context": "256k"},
-        "simple": {"model": "sonnet", "effort": "medium", "context": "256k"},
-        "standard": {"model": "sol", "effort": "medium", "context": "256k"},
-        "complex": {"model": "opus", "effort": "high", "context": "max"},
-        "very_complex": {"model": "astra", "effort": "xhigh", "context": "max"},
-    },
-    "policy": {
-        # The normal starting capacity is DEFAULT_WORKER_CAPACITY. These are
-        # hard ordinary ceilings; a scoped personal grant is needed above 3.
-        "max_workers": 3, "ordinary_max": 3, "quota_low": 20,
-        "quota_critical": 5, "quota_fresh_seconds": 60, "child_delegation": False,
-        "review": "independent",
-        "spending_grants": [], "reset_grants": [], "exceptional_grants": [],
-    },
-    "waste_governor": {
-        "mode": "enforce", "consolidate_related_changes": True,
-        "cancel_superseded_validation": True, "preflight": [], "triggers": {},
-        "transient_retries": 1, "exceptions": [],
-    },
-}
-
-
-def route_identity(model: dict) -> str:
-    return digest({key: model.get(key) for key in ("agent", "model", "account")})
+WASTE_GOVERNOR_FIELDS = {"mode", "cancel_superseded_validation", "preflight", "triggers",
+                         "transient_retries", "host_control", "exceptions"}
+DEFAULT_GOVERNOR = {"mode": "enforce", "cancel_superseded_validation": True,
+                    "preflight": [], "triggers": {}, "transient_retries": 1, "exceptions": []}
+DEFAULT = {"schema": SCHEMA, "selection": "custom",
+           "models": {model_id: "available" for model_id in IDS},
+           "workers": {"max_active": DEFAULT_WORKER_CAPACITY}}
 
 
 class _StrictLoader(yaml.SafeLoader):
@@ -105,20 +63,20 @@ def _shape(value: Any, depth: int = 0, counter: list[int] | None = None) -> None
     if counter[0] > 2048 or depth > 12:
         raise PodError("yaml_resource_limit", "Configuration structure exceeds limits")
     if isinstance(value, dict):
-        for k, v in value.items():
-            if not isinstance(k, str) or len(k) > 128:
+        for key, item in value.items():
+            if not isinstance(key, str) or len(key) > 128:
                 raise PodError("yaml_invalid_key", "Configuration key is invalid")
-            _shape(v, depth + 1, counter)
+            _shape(item, depth + 1, counter)
     elif isinstance(value, list):
-        for v in value:
-            _shape(v, depth + 1, counter)
+        for item in value:
+            _shape(item, depth + 1, counter)
     elif value is not None and not isinstance(value, (str, bool, int, float)):
         raise PodError("yaml_invalid_type", "Configuration contains an unsupported value")
     elif isinstance(value, str) and len(value) > 4096:
         raise PodError("yaml_resource_limit", "Configuration scalar exceeds limit")
 
 
-def read_yaml(path: Path) -> dict | None:
+def _read_bytes(path: Path) -> bytes | None:
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = os.open(path, flags)
@@ -131,14 +89,16 @@ def read_yaml(path: Path) -> dict | None:
         if not stat.S_ISREG(info.st_mode) or info.st_size > 64 * 1024:
             raise PodError("unsafe_config", "Configuration must be a bounded regular file")
         data = os.read(fd, 64 * 1024 + 1)
-        if len(data) > 64 * 1024:
-            raise PodError("yaml_resource_limit", "Configuration exceeds its size limit")
         if len(data) != info.st_size:
             raise PodError("unsafe_config", "Configuration changed while it was read")
-    except OSError as exc:
-        raise PodError("unsafe_config", "Configuration could not be read safely") from exc
+        return data
     finally:
         os.close(fd)
+
+
+def _parse(data: bytes | None, *, project: bool = False) -> dict | None:
+    if data is None:
+        return None
     try:
         value = yaml.load(data.decode("utf-8"), Loader=_StrictLoader)
     except PodError:
@@ -146,33 +106,39 @@ def read_yaml(path: Path) -> dict | None:
     except (UnicodeError, yaml.YAMLError, RecursionError) as exc:
         raise PodError("invalid_yaml", "Configuration cannot be safely decoded") from exc
     _shape(value)
-    return validate(value)
+    return validate(value, project=project)
+
+
+def read_yaml(path: Path, *, project: bool = False) -> dict | None:
+    return _parse(_read_bytes(path), project=project)
 
 
 def _strings(value: Any, name: str) -> list[str]:
-    if not isinstance(value, list) or any(not isinstance(v, str) or not v or len(v) > 128 for v in value) or len(value) > 64 or len(set(value)) != len(value):
+    if (not isinstance(value, list) or len(value) > 64
+            or any(not isinstance(item, str) or not item or len(item) > 128 for item in value)
+            or len(set(value)) != len(value)):
         raise PodError("invalid_config", f"{name} must be a bounded unique string list")
     return value
 
 
 def validate_effects(value: Any, *, name: str = "effects") -> list[str]:
-    """A declared list of downstream effects: what an action actually triggers."""
-    if not isinstance(value, list) or len(value) > 16 or len(set(value)) != len(value):
+    if (not isinstance(value, list) or len(value) > 16
+            or any(not isinstance(item, str) for item in value)
+            or len(set(value)) != len(value)):
         raise PodError("invalid_" + name, f"{name} must be a bounded unique list")
     for item in value:
         if (not isinstance(item, str) or not item.startswith(EFFECT_PREFIXES)
-                or len(item) > 256 or len(item) == len(item.split(":", 1)[0]) + 1):
-            raise PodError("invalid_" + name, f"{name} entries name a workflow, deploy or release target")
+                or len(item) > 256 or not item.split(":", 1)[1]):
+            raise PodError("invalid_" + name, f"{name} entries name a downstream effect")
     return value
 
 
 def _validate_waste_governor(value: Any) -> dict:
     wg = exact(value, WASTE_GOVERNOR_FIELDS, name="waste_governor")
-    if "mode" in wg and wg["mode"] not in GOVERNOR_MODES:
+    if "mode" in wg and wg["mode"] not in ("enforce", "observe"):
         raise PodError("invalid_config", "waste_governor.mode must be enforce or observe")
-    for field in ("consolidate_related_changes", "cancel_superseded_validation"):
-        if field in wg and not isinstance(wg[field], bool):
-            raise PodError("invalid_config", f"waste_governor.{field} must be boolean")
+    if "cancel_superseded_validation" in wg and not isinstance(wg["cancel_superseded_validation"], bool):
+        raise PodError("invalid_config", "waste_governor.cancel_superseded_validation must be boolean")
     if "preflight" in wg:
         _strings(wg["preflight"], "preflight")
     if "triggers" in wg:
@@ -185,142 +151,69 @@ def _validate_waste_governor(value: Any) -> dict:
         raise PodError("invalid_config", "waste_governor.transient_retries must be 0 through 3")
     if "host_control" in wg and (not isinstance(wg["host_control"], str)
                                  or not wg["host_control"].strip() or len(wg["host_control"]) > 512):
-        raise PodError("invalid_config", "waste_governor.host_control must name a host policy reference")
+        raise PodError("invalid_config", "waste_governor.host_control needs a host policy reference")
     if "exceptions" in wg:
         if not isinstance(wg["exceptions"], list) or len(wg["exceptions"]) > 32:
-            raise PodError("invalid_config", "waste_governor.exceptions must be a bounded list")
-        ids = [grant.get("id") for grant in wg["exceptions"] if isinstance(grant, dict)]
-        if len(ids) != len(set(ids)):
-            raise PodError("invalid_config", "waste_governor.exceptions grant ids must be unique")
-        for grant in wg["exceptions"]:
-            exact(grant, {"id", "action", "objective", "unit", "kinds", "candidate", "reason", "valid_until"},
-                  {"id", "action", "objective", "kinds", "reason", "valid_until"}, name="exception_grant")
+            raise PodError("invalid_config", "waste_governor.exceptions must be bounded")
+        ids = []
+        for exception in wg["exceptions"]:
+            row = exact(exception, {"id", "action", "objective", "unit", "kinds", "candidate",
+                                    "reason", "valid_until"},
+                        {"id", "action", "objective", "kinds", "reason", "valid_until"},
+                        name="efficiency_exception")
             for field in ("id", "objective", "reason", "valid_until"):
-                if not isinstance(grant[field], str) or not grant[field].strip() or len(grant[field]) > 512:
-                    raise PodError("invalid_config", "Exception grant identity, objective, reason and validity must be text")
+                if not isinstance(row[field], str) or not row[field] or len(row[field]) > 512:
+                    raise PodError("invalid_config", "Efficiency exception has invalid text")
             for field in ("unit", "candidate"):
-                if field in grant and (not isinstance(grant[field], str) or not grant[field]
-                                       or len(grant[field]) > 256):
-                    raise PodError("invalid_config", f"Exception grant {field} must be text")
-            if grant["action"] != "efficiency_exception":
-                raise PodError("invalid_config", "Exception grant action must be efficiency_exception")
-            if (not isinstance(grant["kinds"], list) or not grant["kinds"] or len(grant["kinds"]) > 8
-                    or any(kind not in GOVERNED_KINDS for kind in grant["kinds"])):
-                raise PodError("invalid_config", "Exception grant kinds must name governed action kinds")
+                if field in row and (not isinstance(row[field], str) or not row[field]
+                                     or len(row[field]) > 256):
+                    raise PodError("invalid_config", "Efficiency exception binding is invalid")
+            if row["action"] != "efficiency_exception":
+                raise PodError("invalid_config", "Unsupported efficiency exception action")
+            if (not isinstance(row["kinds"], list) or not row["kinds"]
+                    or len(row["kinds"]) > 8 or any(kind not in GOVERNED_KINDS for kind in row["kinds"])):
+                raise PodError("invalid_config", "Efficiency exception kinds are invalid")
             try:
-                expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
+                expiry = datetime.fromisoformat(row["valid_until"].replace("Z", "+00:00"))
             except ValueError as exc:
-                raise PodError("invalid_config", "Exception grant validity is not an ISO timestamp") from exc
+                raise PodError("invalid_config", "Efficiency exception validity is invalid") from exc
             if expiry.tzinfo is None:
-                raise PodError("invalid_config", "Exception grant validity needs a timezone")
+                raise PodError("invalid_config", "Efficiency exception validity needs a timezone")
+            ids.append(row["id"])
+        if len(ids) != len(set(ids)):
+            raise PodError("invalid_config", "Efficiency exception ids must be unique")
     return wg
 
 
-def validate(value: Any) -> dict:
-    obj = exact(value, {"schema", "models", "routing", "policy", "context", "waste_governor"}, {"schema"},
-                name="config")
-    if obj["schema"] != SCHEMA:
+def validate(value: Any, *, project: bool = False) -> dict:
+    if not project and isinstance(value, dict) and isinstance(value.get("models"), dict):
+        for model_id in value["models"]:
+            if model_id not in IDS:
+                raise PodError("invalid_config", f"models.{model_id} is not a supported model id")
+    allowed = {"schema", "waste_governor"} if project else {"schema", "selection", "models", "workers", "waste_governor"}
+    required = {"schema"} if project else {"schema", "selection", "models", "workers"}
+    doc = exact(value, allowed, required, name="config")
+    if doc["schema"] != SCHEMA:
         raise PodError("invalid_config", "Unsupported configuration schema")
-    models = obj.get("models", {})
-    if not isinstance(models, dict) or len(models) > 64:
-        raise PodError("invalid_config", "models must be a bounded mapping")
-    for alias, raw in models.items():
-        if alias not in MODEL_CATALOG:
-            raise PodError("invalid_config", "Model alias is outside the active Pod catalog")
-        m = exact(raw, MODEL_FIELDS, name="model")
-        catalog = MODEL_CATALOG[alias]
-        if "agent" in m and m["agent"] != catalog["agent"]:
-            raise PodError("invalid_config", "Model agent differs from the active Pod catalog")
-        if "model" in m and m["model"] != catalog["model"]:
-            raise PodError("invalid_config", "Model identity differs from the active Pod catalog")
-        for field in ("model", "approval_ref", "approval_route"):
-            if field in m and (not isinstance(m[field], str) or not m[field] or len(m[field]) > 256):
-                raise PodError("invalid_config", f"Invalid {field}")
-        if "account" in m and (not isinstance(m["account"], str)
-                                or not re.fullmatch(r"[0-9a-f]{64}", m["account"])):
-            raise PodError("invalid_config", "account must be a redacted native identity digest")
-        if "approved" in m and not isinstance(m["approved"], bool):
-            raise PodError("invalid_config", "approved must be a boolean")
-        if m.get("approved") and (not m.get("approval_ref") or not all(m.get(key) for key in
-                                                                       ("agent", "model", "account"))
-                                   or m.get("approval_route") != route_identity(m)):
-            raise PodError("invalid_config", "Approval must bind the exact model and redacted account identity")
-        if "billing" in m and m["billing"] not in ("included", "paid", "unknown"):
-            raise PodError("invalid_config", "Invalid billing class")
-        for field in ("efforts", "capabilities", "locations"):
-            if field in m:
-                _strings(m[field], field)
-        if "efforts" in m and not set(m["efforts"]) <= EFFORTS:
-            raise PodError("invalid_config", "Unsupported effort")
-    routing = obj.get("routing", {})
-    if not isinstance(routing, dict) or set(routing) - set(COMPLEXITIES):
-        raise PodError("invalid_config", "Invalid routing rows")
-    for row in routing.values():
-        r = exact(row, ROUTE_FIELDS, name="route")
-        if "model" in r and (not isinstance(r["model"], str) or not r["model"]):
-            raise PodError("invalid_config", "Invalid routing model")
-        if "effort" in r and r["effort"] not in EFFORTS:
-            raise PodError("invalid_config", "Invalid routing effort")
-        if "context" in r and r["context"] not in CONTEXT_PROFILES:
-            raise PodError("invalid_config", "Invalid routing context profile")
-        if "strict" in r and not isinstance(r["strict"], bool):
-            raise PodError("invalid_config", "strict must be boolean")
-    policy = obj.get("policy", {})
-    if not isinstance(policy, dict) or set(policy) - POLICY_FIELDS:
-        raise PodError("invalid_config", "Invalid policy fields")
-    for field in ("max_workers", "ordinary_max", "quota_low", "quota_critical", "quota_fresh_seconds"):
-        if field in policy and (type(policy[field]) is not int or policy[field] < 0 or policy[field] > 3600):
-            raise PodError("invalid_config", f"Invalid {field}")
-    if "max_workers" in policy and not 0 <= policy["max_workers"] <= 8:
-        raise PodError("invalid_config", "max_workers exceeds eight")
-    if "ordinary_max" in policy and policy["ordinary_max"] > 3:
-        raise PodError("invalid_config", "ordinary_max exceeds three")
-    for field in ("allowed_agents", "allowed_accounts", "allowed_locations"):
-        if field in policy:
-            _strings(policy[field], field)
-    if "allowed_accounts" in policy and any(not re.fullmatch(r"[0-9a-f]{64}", value)
-                                             for value in policy["allowed_accounts"]):
-        raise PodError("invalid_config", "allowed_accounts must use redacted native identities")
-    if "child_delegation" in policy and not isinstance(policy["child_delegation"], bool):
-        raise PodError("invalid_config", "child_delegation must be boolean")
-    if "review" in policy and policy["review"] not in ("independent", "project_stricter"):
-        raise PodError("invalid_config", "Invalid review policy")
-    for field in ("spending_grants", "reset_grants", "exceptional_grants"):
-        if field in policy:
-            if not isinstance(policy[field], list) or len(policy[field]) > 32:
-                raise PodError("invalid_config", f"Invalid {field}")
-            grant_ids = [grant.get("id") for grant in policy[field] if isinstance(grant, dict)]
-            if len(grant_ids) != len(set(grant_ids)):
-                raise PodError("invalid_config", f"{field} grant ids must be unique")
-            for grant in policy[field]:
-                exact(grant, {"id", "action", "account", "bucket", "model", "objective", "run", "plan_revision", "limit", "reason", "valid_until", "max_units"}, {"id", "action", "account", "valid_until"}, name="grant")
-                for required_string in ("id", "action", "account", "valid_until"):
-                    if not isinstance(grant[required_string], str) or not grant[required_string]:
-                        raise PodError("invalid_config", "Grant identity and validity must be strings")
-                if not re.fullmatch(r"[0-9a-f]{64}", grant["account"]):
-                    raise PodError("invalid_config", "Grant account must be a redacted native identity")
-                try:
-                    expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
-                except ValueError as exc:
-                    raise PodError("invalid_config", "Grant validity is not an ISO timestamp") from exc
-                if expiry.tzinfo is None:
-                    raise PodError("invalid_config", "Grant validity needs a timezone")
-                if field == "spending_grants":
-                    if grant["action"] not in ("paid_usage", "premium_mode") or not isinstance(grant.get("objective"), str) or not isinstance(grant.get("model"), str) or type(grant.get("max_units")) is not int or grant["max_units"] <= 0:
-                        raise PodError("invalid_config", "Spending grant needs exact action, objective and bound")
-                elif field == "reset_grants":
-                    if grant["action"] != "reset_credit" or not isinstance(grant.get("bucket"), str) or type(grant.get("max_units")) is not int or grant["max_units"] != 1:
-                        raise PodError("invalid_config", "Reset grant needs exact bucket and one credit")
-                else:
-                    if grant["action"] != "exceptional_capacity" or any(not isinstance(grant.get(key), str) or not grant[key].strip() for key in ("objective", "run", "plan_revision", "reason")) or type(grant.get("limit")) is not int or not 4 <= grant["limit"] <= 8:
-                        raise PodError("invalid_config", "Exceptional grant needs objective, Run, plan and limit")
-    if "context" in obj:
-        exact(obj["context"], {"references", "checks"}, name="context")
-        for field in obj["context"]:
-            _strings(obj["context"][field], field)
-    if "waste_governor" in obj:
-        _validate_waste_governor(obj["waste_governor"])
-    return obj
+    if not project:
+        if doc["selection"] not in MODES:
+            raise PodError("invalid_config", "selection must be custom or all")
+        models = doc["models"]
+        if not isinstance(models, dict) or len(models) > len(IDS):
+            raise PodError("invalid_config", "models must map supported model ids to states")
+        for model_id, state in models.items():
+            if model_id not in IDS:
+                raise PodError("invalid_config", f"models.{model_id} is not a supported model id")
+            if state not in STATES or not isinstance(state, str):
+                raise PodError("invalid_config", f"models.{model_id} must be preferred, available or disabled")
+        if doc["selection"] == "all" and set(models) != set(IDS):
+            raise PodError("invalid_config", "All models mode needs the complete saved model map")
+        workers = exact(doc["workers"], {"max_active"}, {"max_active"}, name="workers")
+        if type(workers["max_active"]) is not int or not 0 <= workers["max_active"] <= 8:
+            raise PodError("invalid_config", "workers.max_active must be 0 through 8")
+    if "waste_governor" in doc:
+        _validate_waste_governor(doc["waste_governor"])
+    return doc
 
 
 def personal_path(project: Path | None = None) -> Path:
@@ -331,174 +224,205 @@ def personal_path(project: Path | None = None) -> Path:
                        project=project) / "pod" / "config.yaml"
 
 
-def _merge(base: dict, layer: dict, scope: str, provenance: dict) -> None:
-    for alias, model in layer.get("models", {}).items():
-        if scope != "personal":
-            old = base["models"].get(alias)
-            if old is None or any(key in model and model[key] != old.get(key) for key in
-                                  ("agent", "model", "account", "approved",
-                                   "approval_ref", "approval_route", "billing")):
-                raise PodError("authority_expansion", "Project/task model identity or approval cannot expand personal authority")
-            for key in ("efforts", "capabilities", "locations"):
-                if key in model and key in old and not set(model[key]) <= set(old[key]):
-                    raise PodError("authority_expansion", f"{key} cannot broaden personal restrictions")
-            base["models"][alias].update(model)
-        else:
-            base["models"][alias] = {**base["models"].get(alias, {}), **model}
-        provenance[f"models.{alias}"] = scope
-    for complexity, row in layer.get("routing", {}).items():
-        prior_row = base["routing"][complexity]
-        if (scope != "personal" and prior_row.get("strict") is True
-                and (row.get("strict") is False
-                     or ("model" in row and row["model"] != prior_row.get("model")))):
-            raise PodError("authority_expansion", "Project/task routing cannot weaken or replace a strict pin")
-        if (scope != "personal" and row.get("context") == "max"
-                and prior_row.get("context") == "256k"):
-            raise PodError("authority_expansion",
-                           "Project/task context cannot expand personal authority")
-        base["routing"][complexity].update(row)
-        provenance[f"routing.{complexity}"] = scope
-    for key, val in layer.get("policy", {}).items():
-        prior = base["policy"].get(key)
-        if scope != "personal":
-            if key in ("spending_grants", "reset_grants", "exceptional_grants") and val:
-                raise PodError("authority_expansion", "Local grants cannot create authority")
-            if key in ("max_workers", "ordinary_max") and val > prior:
-                raise PodError("authority_expansion", "Local capacity cannot exceed personal ceiling")
-            if key in ("allowed_agents", "allowed_accounts", "allowed_locations") and prior is not None and not set(val) <= set(prior):
-                raise PodError("authority_expansion", "Local list cannot broaden personal restriction")
-            if key == "child_delegation" and val and not prior:
-                raise PodError("authority_expansion", "Local policy cannot grant delegation")
-            if key in ("quota_low", "quota_critical") and val < prior:
-                raise PodError("authority_expansion", "Local quota threshold cannot weaken personal policy")
-            if key == "quota_fresh_seconds" and val > prior:
-                raise PodError("authority_expansion", "Local quota freshness cannot exceed personal policy")
-            if key == "review" and prior == "project_stricter" and val != prior:
-                raise PodError("authority_expansion", "Local review cannot weaken personal policy")
-            if key in ("spending_grants", "reset_grants", "exceptional_grants"):
-                val = [g for g in prior if g in val]
-        base["policy"][key] = val
-        provenance[f"policy.{key}"] = scope
-    if "context" in layer:
-        base["context"] = layer["context"]
-        provenance["context"] = scope
-    for key, val in layer.get("waste_governor", {}).items():
-        prior = base["waste_governor"].get(key)
-        if scope != "personal":
-            if key == "mode" and val == "observe" and prior == "enforce":
-                raise PodError("authority_expansion", "Local policy cannot relax governor enforcement")
-            if key == "consolidate_related_changes" and prior and not val:
-                raise PodError("authority_expansion", "Local policy cannot disable consolidation")
-            if key == "cancel_superseded_validation" and val and not prior:
-                raise PodError("authority_expansion", "Local policy cannot authorize remote cancellation")
-            if key == "transient_retries" and val > prior:
-                raise PodError("authority_expansion", "Local policy cannot widen the retry budget")
-            if key == "host_control":
-                raise PodError("authority_expansion", "Only personal policy can declare a host control")
-            if key == "exceptions":
-                if val:
-                    raise PodError("authority_expansion", "Local grants cannot create authority")
-                # An empty local list grants nothing and revokes nothing.
-                continue
-        base["waste_governor"][key] = val
-        provenance[f"waste_governor.{key}"] = scope
-
-
-def effective(project: Path, *, personal: Path | None = None, task: dict | None = None) -> dict:
-    base = deepcopy(DEFAULT)
-    provenance = {"defaults": "pending recommendations"}
-    from .github import repository_context
-    context = repository_context(project)
-    roots = [Path(context["main_worktree"]), Path(context["worktree"])]
-    project_layers: list[tuple[str, dict | None]] = []
-    seen: set[Path] = set()
-    for root in roots:
-        policy_path = root / ".pod" / "config.yaml"
-        if policy_path in seen:
-            continue
-        seen.add(policy_path)
-        project_layers.append(("project", read_yaml(policy_path)))
-    for scope, layer in [
-        ("personal", read_yaml(personal or personal_path(project))),
-        *project_layers,
-        ("task", validate(task) if task is not None else None),
-    ]:
-        if layer is not None:
-            _merge(base, layer, scope, provenance)
-    for row in base["routing"].values():
-        if row["model"] not in base["models"]:
-            raise PodError("invalid_route", "Routing references an unknown model alias")
-    return {"schema": SCHEMA, "policy": base, "provenance": provenance, "revision": digest(base)}
-
-
-def personal_document(path: Path) -> dict:
-    """Return the canonical personal YAML document without creating it."""
-    return read_yaml(path) or {"schema": SCHEMA}
-
-
-def personal_revision(path: Path) -> str:
-    return digest(personal_document(path))
-
-
 def _safe_config_parent(path: Path) -> None:
-    # The native profile root may itself be a platform-managed symlink. Pod owns
-    # the directory beneath it, which must remain an ordinary directory.
-    if path.parent.is_symlink():
-        raise PodError("unsafe_config", "Pod's configuration directory is redirected")
-
-
-def guided_personal_update(path: Path, *, expected_revision: str, alias: str,
-                           approval: dict | None) -> dict:
-    """Atomically approve or revoke one catalog route in the sole YAML authority."""
-    if alias not in MODEL_CATALOG:
-        raise PodError("unknown_model_alias", "Alias is outside the active Pod catalog")
-    _safe_config_parent(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.parent.is_symlink() or path.is_symlink():
         raise PodError("unsafe_config", "Configuration path is redirected")
-    lock_fd = os.open(path.parent / ".config.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+
+
+def _project_layers(project: Path) -> list[Path]:
+    from .github import repository_context
+    context = repository_context(project)
+    if context.get("repo_key") is None:
+        return [project / ".pod" / "config.yaml"]
+    return list(dict.fromkeys([Path(context["main_worktree"]) / ".pod" / "config.yaml",
+                               Path(context["worktree"]) / ".pod" / "config.yaml"]))
+
+
+def _governor_policy(project: Path | None, personal: dict | None) -> tuple[dict, dict]:
+    policy = deepcopy(DEFAULT_GOVERNOR)
+    provenance = {key: "default" for key in policy}
+    for scope, layer in [("personal", personal or {})] + (
+            [("project", read_yaml(path, project=True) or {}) for path in _project_layers(project)]
+            if project is not None else []):
+        for key, val in layer.get("waste_governor", {}).items():
+            previous = policy.get(key)
+            if scope == "project":
+                if key == "mode" and val == "observe" and previous == "enforce":
+                    raise PodError("authority_expansion", "Project cannot relax Governor mode")
+                if key == "cancel_superseded_validation" and val and not previous:
+                    raise PodError("authority_expansion", "Project cannot enable remote cancellation")
+                if key == "transient_retries" and val > previous:
+                    raise PodError("authority_expansion", "Project cannot widen retry budget")
+                if key in ("host_control", "exceptions") and (key == "host_control" or val):
+                    raise PodError("authority_expansion", "Project cannot add Governor authority")
+                if key == "exceptions":
+                    continue
+            policy[key] = deepcopy(val)
+            provenance[f"waste_governor.{key}"] = scope
+    return policy, provenance
+
+
+def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
+    path = personal or personal_path(project)
+    data = _read_bytes(path)
+    revision = hashlib.sha256(data).hexdigest() if data is not None else None
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        document = personal_document(path)
-        if digest(document) != expected_revision:
-            raise PodError("approval_evidence_changed",
-                           "Personal configuration changed after the proposal")
-        models = document.setdefault("models", {})
-        current = dict(models.get(alias, {}))
-        catalog = MODEL_CATALOG[alias]
-        current.update({"agent": catalog["agent"], "model": catalog["model"]})
-        if approval is None:
-            current.update({"approved": False, "billing": "unknown"})
-            for field in ("account", "approval_ref", "approval_route"):
-                current.pop(field, None)
-        else:
-            account = approval.get("account")
-            billing = approval.get("billing")
-            reference = approval.get("approval_ref")
-            if (not isinstance(account, str) or not re.fullmatch(r"[0-9a-f]{64}", account)
-                    or billing not in ("included", "paid", "unknown")
-                    or not isinstance(reference, str) or not reference):
-                raise PodError("invalid_approval", "Guided approval evidence is malformed")
-            current.update({"account": account, "approved": True,
-                            "approval_ref": reference, "billing": billing})
-            current["approval_route"] = route_identity(current)
-        models[alias] = current
-        validate(document)
-        encoded = yaml.safe_dump(document, sort_keys=False).encode("utf-8")
-        if len(encoded) > 64 * 1024:
-            raise PodError("yaml_resource_limit", "Configuration exceeds its size limit")
-        fd, temporary = tempfile.mkstemp(prefix=".pod-config-", dir=path.parent)
+        metadata = path.stat(follow_symlinks=False) if data is not None else None
+    except OSError:
+        metadata = None
+    file_stamp = (f"{metadata.st_dev}:{metadata.st_ino}:{metadata.st_ctime_ns}"
+                  if metadata is not None else None)
+    errors = []
+    if data is not None and (metadata is None or not stat.S_ISREG(metadata.st_mode)):
+        document = None
+        errors.append({"code": "unsafe_config", "message": "Configuration metadata is unavailable"})
+    else:
         try:
-            os.chmod(temporary, 0o600)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(encoded)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            document = _parse(data)
+        except PodError as exc:
+            document = None
+            errors.append({"code": exc.code, "message": str(exc)})
+    if data is None:
+        errors.append({"code": "config_missing", "message": "Personal preferences are missing"})
+    saved = {model_id: document["models"].get(model_id) if document else None for model_id in IDS}
+    mode = document["selection"] if document else None
+    effective_states = {model_id: ("available" if mode == "all" else saved[model_id])
+                        for model_id in IDS}
+    eligible = [model_id for model_id in IDS if effective_states[model_id] in ("preferred", "available")]
+    governor, provenance = _governor_policy(project, document)
+    policy_revision = digest(governor)
+    return {"path": str(path.resolve(strict=False)), "revision": revision, "mode": mode,
+            "file_stamp": file_stamp,
+            "saved": saved, "effective": effective_states, "eligible": eligible,
+            "max_active": document["workers"]["max_active"] if document else 0,
+            "errors": errors, "policy_revision": policy_revision,
+            "waste_governor": governor, "provenance": provenance}
+
+
+def effective(project: Path, *, personal: Path | None = None) -> dict:
+    snapshot = load(project, personal=personal)
+    return {"schema": SCHEMA, "policy": {"waste_governor": snapshot["waste_governor"]},
+            "revision": snapshot["policy_revision"], "preference_revision": snapshot["revision"],
+            "preferences": snapshot, "provenance": snapshot["provenance"]}
+
+
+def _encode(document: dict) -> bytes:
+    data = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode("utf-8")
+    if len(data) > 64 * 1024:
+        raise PodError("yaml_resource_limit", "Configuration exceeds its size limit")
+    return data
+
+
+def _replace(path: Path, data: bytes) -> None:
+    _safe_config_parent(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, name = tempfile.mkstemp(prefix=".pod-config-", dir=path.parent)
+    try:
+        os.chmod(name, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent_fd)
         finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        return document
+            os.close(parent_fd)
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+@contextmanager
+def _edit_lock(path: Path) -> Iterator[None]:
+    _safe_config_parent(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path.parent / ".config.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        deadline = time.monotonic() + .5
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise PodError("config_busy", "Another Pod window is saving")
+                time.sleep(.02)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def write_defaults(path: Path) -> dict:
+    """Explicit installer or config-edit action only; never an internal helper side effect."""
+    with _edit_lock(path):
+        if _read_bytes(path) is not None:
+            raise PodError("config_exists", "Personal preferences already exist")
+        document = deepcopy(DEFAULT)
+        _replace(path, _encode(document))
+        return document
+
+
+def _surgical(raw: bytes, document: dict, *, model_id: str | None, state: str | None,
+              mode: str | None) -> tuple[bytes, bool]:
+    text = raw.decode("utf-8")
+    changed = text
+    if mode is not None:
+        changed, count = re.subn(r"(?m)^([ \t]*selection:[ \t]*)(?:custom|all)([ \t]*(?:#.*)?)$",
+                                 lambda match: match[1] + mode + match[2], changed, count=1)
+        if count != 1:
+            return _encode(document), False
+    if model_id is not None:
+        changed, count = re.subn(rf"(?m)^([ \t]{{2}}{re.escape(model_id)}:[ \t]*)(?:preferred|available|disabled)([ \t]*(?:#.*)?)$",
+                                 lambda match: match[1] + state + match[2], changed, count=1)
+        if count != 1:
+            return _encode(document), False
+    encoded = changed.encode("utf-8")
+    try:
+        if _parse(encoded) == document:
+            return encoded, True
+    except PodError:
+        pass
+    return _encode(document), False
+
+
+def _save(path: Path, *, model_id: str | None = None, state: str | None = None,
+          mode: str | None = None, displayed: dict) -> dict:
+    with _edit_lock(path):
+        raw = _read_bytes(path)
+        if raw is None:
+            raise PodError("config_missing", "Personal preferences are missing")
+        document = _parse(raw)
+        if model_id is not None:
+            if document["models"].get(model_id) != displayed["saved"].get(model_id):
+                raise PodError("config_changed_elsewhere", "Changed elsewhere — press again")
+        elif document["selection"] != displayed["mode"]:
+            raise PodError("config_changed_elsewhere", "Changed elsewhere — press again")
+        next_mode = mode
+        if model_id is not None and document["selection"] == "all":
+            next_mode = "custom"
+        if next_mode is not None:
+            document["selection"] = next_mode
+        if model_id is not None:
+            document["models"][model_id] = state
+        validate(document)
+        encoded, preserved = _surgical(raw, document, model_id=model_id, state=state, mode=next_mode)
+        _replace(path, encoded)
+    return {"path": str(path.resolve(strict=False)), "revision": hashlib.sha256(encoded).hexdigest(),
+            "mode": document["selection"], "saved": document["models"].copy(),
+            "notice": "" if preserved else "comments not preserved",
+            "mode_notice": "Returned to My selection" if model_id is not None and next_mode == "custom" and displayed["mode"] == "all" else ""}
+
+
+def set_model(path: Path, model_id: str, state: str, *, displayed: dict) -> dict:
+    if model_id not in IDS or state not in STATES:
+        raise PodError("invalid_config_edit", "Model id or state is unsupported")
+    return _save(path, model_id=model_id, state=state, displayed=displayed)
+
+
+def set_mode(path: Path, mode: str, *, displayed: dict) -> dict:
+    if mode not in MODES:
+        raise PodError("invalid_config_edit", "Selection mode is unsupported")
+    return _save(path, mode=mode, displayed=displayed)

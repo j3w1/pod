@@ -12,9 +12,8 @@ import os
 import sys
 
 MIN_PYTHON = (3, 13)
-REQUIRED = ("__init__.py", "cli.py", "internal.py", "SKILL.md", "VERSION")
-PYYAML_STEP = "python3 -m pip install --user 'PyYAML>=6.0.2,<7'"
-REINSTALL = "npx skills add j3w1/pod --skill pod -a codex -a claude-code -g"
+REQUIRED = ("__init__.py", "cli.py", "internal.py", "catalog.json", "catalog.py", "SKILL.md", "VERSION")
+REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
 
 
 def bundle_dir(script=None):
@@ -53,9 +52,8 @@ def preflight(version_info=None, find_spec=None, bundle=None):
     probe = _yaml_importable if find_spec is None else find_spec
     if not probe():
         return {"code": "pyyaml_missing",
-                "message": ("PyYAML is not importable by %s. One user-space step installs it: %s "
-                            "(or install your distribution's python-yaml package). Pod installs nothing itself."
-                            % (sys.executable, PYYAML_STEP))}
+                "message": ("PyYAML is not available in this Pod environment; rerun the one-shot "
+                            "installer: %s" % REINSTALL)}
     return None
 
 
@@ -77,10 +75,19 @@ def main(argv=None):
     sys.dont_write_bytecode = True
     arguments = list(sys.argv[1:] if argv is None else argv)
     root = bundle_dir()
+    if arguments == ["--version"]:
+        try:
+            with open(os.path.join(root, "VERSION"), encoding="ascii") as stream:
+                value = stream.read().strip()
+        except (OSError, UnicodeError):
+            print("pod: bundle VERSION is unavailable", file=sys.stderr)
+            return 2
+        print(value)
+        return 0
     failure = preflight(bundle=root)
     if failure is not None:
         if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v2", "status": "blocked", "error": failure},
+            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": failure},
                              indent=2, sort_keys=True))
         else:
             print("pod: " + failure["message"], file=sys.stderr)
@@ -103,7 +110,7 @@ def main(argv=None):
                    "message": ("Pod bundle at %s is incomplete (%s). Reinstall it: %s"
                                % (root, exc, REINSTALL))}
         if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v2", "status": "blocked", "error": failure},
+            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": failure},
                              indent=2, sort_keys=True))
         else:
             print("pod: " + failure["message"], file=sys.stderr)

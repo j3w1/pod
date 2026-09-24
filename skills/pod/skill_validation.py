@@ -177,6 +177,8 @@ def validate_skill(root: Path) -> dict:
     _check_body(root, parsed["body"])
     _check_launcher(root)
     _check_interface(root)
+    from .catalog import load as load_catalog
+    load_catalog(root / "catalog.json")
     return {"status": "valid", "name": "pod", "version": version(), "files": sorted(actual)}
 
 

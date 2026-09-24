@@ -6,646 +6,152 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.orca import (account_metadata, account_metadata_raw, agent_login_mode, contract,
-                      current_run, effective_launch, executable, hosts,
-                      mutate_command, read_command,
-                      require_route_establishment, route_establishment, worker_rows,
-                      worktree_identity, worktree_selector)
-from tests.common import ORCA_VERSION, envelope, receipt
+from pod.orca import (contract, current_run, executable, mutate_command, read_command,
+                      worker_rows, worktree_identity, worktree_selector, _mutation_envelope)
+from pod.operations import OrcaPort
+from tests.common import envelope, ORCA_VERSION
+
+START=['orchestration','worker-start','--task','task','--run','run','--worktree','current',
+       '--agent','codex','--model','gpt-6-sol','--effort','high','--json']
 
 
 class OrcaAdapterTests(unittest.TestCase):
-    def test_desktop_linux_uses_orca_ide_discovery_without_bare_orca_fallback(self):
-        with patch.dict(os.environ, {}, clear=False):
-            for key in ("ORCA_CLI_COMMAND", "ORCA_DEV_REPO_ROOT", "ORCA_TERMINAL_HANDLE"):
-                os.environ.pop(key, None)
-            with patch("pod.orca.shutil.which", return_value="/fixture/orca-ide") as which, \
-                 patch("pod.orca.Path.is_file", return_value=True):
-                self.assertEqual(executable(), Path("/fixture/orca-ide"))
-            which.assert_called_once_with("orca-ide")
-            with patch("pod.orca.shutil.which", return_value=None) as missing:
-                with self.assertRaises(PodError) as caught:
-                    executable()
-            self.assertEqual(caught.exception.code, "orca_unavailable")
-            missing.assert_called_once_with("orca-ide")
+    def test_real_capture_shapes_parse_after_sanitization(self):
+        root=Path(__file__).parent/'fixtures'/'orca-1.4.209'
+        start=json.loads((root/'worker-start.json').read_text())
+        shown=json.loads((root/'worker-show.json').read_text())
+        request=json.loads((root/'request-show.json').read_text())
+        decoded=_mutation_envelope(json.dumps(start))
+        self.assertEqual(decoded['result']['launch']['effective']['model'],'gpt-6-sol')
+        self.assertEqual(shown['result']['worker']['startOptions']['launch']['effective']['effort'],'high')
+        self.assertEqual(request['result']['method'],'orchestration.workerStart')
+        self.assertEqual(request['result']['receipt']['dispatchId'],shown['result']['dispatch']['id'])
 
-    def test_pod_location_overrides_do_not_replace_native_subprocess_profile(self):
-        native = {
-                  "CODEX_HOME": "native-codex", "CLAUDE_CONFIG_DIR": "native-claude"}
-        overrides = {"POD_CONFIG_HOME": "/isolated/pod-config", "POD_STATE_HOME": "/isolated/pod-state"}
+    def test_current_run_binding_is_stable_and_exact_for_authority(self):
+        from pod.operations import OrcaPort
+        row={'runtime':'runtime','run':{'id':'run','coordinator_handle':'owner','consumer_generation':4}}
+        with patch.dict(os.environ,{'ORCA_TERMINAL_HANDLE':'owner'}), \
+             patch('pod.operations.current_run',side_effect=[row,row]):
+            self.assertTrue(OrcaPort().read_native('owner',authority_runs=('run',))['authoritative'])
+        changed={**row,'run':{**row['run'],'consumer_generation':5}}
+        with patch.dict(os.environ,{'ORCA_TERMINAL_HANDLE':'owner'}), \
+             patch('pod.operations.current_run',side_effect=[row,changed]):
+            self.assertFalse(OrcaPort().read_native('owner',authority_runs=('run',))['authoritative'])
+        with patch.dict(os.environ,{'ORCA_TERMINAL_HANDLE':'other'}), \
+             patch('pod.operations.current_run',side_effect=[row,row]):
+            self.assertFalse(OrcaPort().read_native('owner',authority_runs=('run',))['authoritative'])
 
-        def completed(*args, **kwargs):
-            self.assertNotIn("env", kwargs)
-            self.assertEqual({key: os.environ[key] for key in native}, native)
-            return subprocess.CompletedProcess(args[0], 0, "orca 1.0\n", "")
+    def test_discovery_and_native_profile_are_unchanged(self):
+        with patch.dict(os.environ,{},clear=False):
+            for key in ('ORCA_CLI_COMMAND','ORCA_DEV_REPO_ROOT','ORCA_TERMINAL_HANDLE'):
+                os.environ.pop(key,None)
+            with patch('pod.orca.shutil.which',return_value='/fixture/orca-ide') as which, \
+                 patch('pod.orca.Path.is_file',return_value=True):
+                self.assertEqual(executable(),Path('/fixture/orca-ide'))
+            which.assert_called_once_with('orca-ide')
+        native={'CODEX_HOME':'native-codex','CLAUDE_CONFIG_DIR':'native-claude'}
+        with patch.dict(os.environ,{**native,'POD_CONFIG_HOME':'/isolated/config'}), \
+             patch('pod.orca.executable',return_value=Path('/fixture/orca')), \
+             patch('pod.orca.subprocess.run',return_value=subprocess.CompletedProcess([],0,'orca 1\n','')) as runner:
+            read_command(['--version'])
+            self.assertNotIn('env',runner.call_args.kwargs)
 
-        with patch.dict(os.environ, {**native, **overrides}), \
-             patch("pod.orca.executable", return_value=Path("/native/orca")), \
-             patch("pod.orca.subprocess.run", side_effect=completed):
-            self.assertEqual(read_command(["--version"])["version"], "orca 1.0")
-
-    def test_read_adapter_rejects_consuming_and_guessed_verbs_before_process(self):
-        with patch("pod.orca.subprocess.run") as runner:
-            for argv in (
-                ["orchestration", "check", "--json"],
-                ["orchestration", "check", "--ack", "delivery", "--json"],
-                ["orchestration", "dispatch-list", "--json"],
-                ["orchestration", "worker-list", "--include-remote", "--json", "--run", "r", "--ack", "d"],
-            ):
-                with self.assertRaises(PodError):
-                    read_command(argv)
+    def test_read_allowlist_refuses_native_mutations_and_account_reads(self):
+        with patch('pod.orca.subprocess.run') as runner:
+            for argv in (['account','list','--json'],['host','list','--json'],
+                         ['orchestration','worker-list','--include-remote','--json'],
+                         ['orchestration','check','--json'],['orchestration','run-list','--json']):
+                with self.subTest(argv=argv),self.assertRaises(PodError): read_command(argv)
             runner.assert_not_called()
 
-    def test_paginated_exact_run_worker_list_requires_stable_runtime_and_complete_pages(self):
-        pages = [
-            {"runtime": "r", "result": {"scope": {"source": "run"}, "workers": [{"dispatchId": "a"}],
-                                         "page": {"hasMore": True, "nextCursor": "next"}}},
-            {"runtime": "r", "result": {"scope": {"source": "run"}, "workers": [{"dispatchId": "b"}],
-                                         "page": {"hasMore": False}}},
-        ]
-        with patch("pod.orca.read_command", side_effect=pages) as reader:
-            run_workers = worker_rows("run")
-            self.assertEqual([x["dispatchId"] for x in run_workers["workers"]], ["a", "b"])
-            self.assertTrue(run_workers["complete"])
-            self.assertIn("--cursor", reader.call_args.args[0])
+    def test_exact_run_worker_pages_and_authority_shape(self):
+        pages=[{'runtime':'r','result':{'scope':{'source':'run'},'workers':[{'dispatchId':'a'}],
+                                       'page':{'hasMore':True,'nextCursor':'next'}}},
+               {'runtime':'r','result':{'scope':{'source':'run'},'workers':[{'dispatchId':'b'}],
+                                       'page':{'hasMore':False}}}]
+        with patch('pod.orca.read_command',side_effect=pages):
+            self.assertEqual([row['dispatchId'] for row in worker_rows('run')['workers']],['a','b'])
+        with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'run':{
+                'id':'run','coordinator_handle':'owner','consumer_generation':1}}}):
+            self.assertEqual(current_run()['run']['id'],'run')
+        with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'run':{'id':'run'}}}):
+            with self.assertRaises(PodError): current_run()
 
-    def test_unscoped_worker_and_all_run_enumeration_are_not_adapter_reads(self):
-        with patch("pod.orca.subprocess.run") as runner:
-            for argv in (["orchestration", "run-list", "--limit", "100", "--json"],
-                         ["orchestration", "worker-list", "--include-remote", "--json",
-                          "--limit", "100"]):
-                with self.subTest(argv=argv), self.assertRaises(PodError) as caught:
-                    read_command(argv)
-                self.assertEqual(caught.exception.code, "unsupported_orca_read")
-            runner.assert_not_called()
-        with self.assertRaises(PodError) as caught:
-            worker_rows("")
-        self.assertEqual(caught.exception.code, "orca_contract")
+    def test_capability_is_required_for_delegation_only(self):
+        with patch('pod.operations.contract',return_value={'status':'observed','runtime':'r',
+                'capabilities':{'launch_preferences_v1':True}}):
+            self.assertEqual(OrcaPort().capability()['runtime'],'r')
+        with patch('pod.operations.contract',return_value={'status':'observed','runtime':'r',
+                'capabilities':{'launch_preferences_v1':False}}):
+            with self.assertRaises(PodError) as caught: OrcaPort().capability()
+            self.assertEqual(caught.exception.code,'launch_preferences_unavailable')
 
-    def test_current_run_requires_the_native_coordinator_binding_shape(self):
-        bound = {"runtime": "r", "result": {"run": {
-            "id": "run", "coordinator_handle": "owner", "consumer_generation": 7,
-            "objective": "objective"}}}
-        with patch("pod.orca.read_command", return_value=bound):
-            self.assertEqual(current_run(), {"runtime": "r", "run": {
-                "id": "run", "coordinator_handle": "owner", "consumer_generation": 7}})
-        with patch("pod.orca.read_command", return_value={
-                "runtime": "r", "result": {"run": None}}):
-            self.assertEqual(current_run(), {"runtime": "r", "run": None})
-        for malformed in ({}, {"run": "run"}, {"run": {"id": "run",
-                          "coordinator_handle": "owner"}}):
-            with self.subTest(malformed=malformed), \
-                 patch("pod.orca.read_command", return_value={"runtime": "r",
-                                                               "result": malformed}), \
-                 self.assertRaises(PodError) as caught:
-                current_run()
-            self.assertEqual(caught.exception.code, "orca_contract")
+    def test_three_exact_worker_argv_shapes(self):
+        port=OrcaPort()
+        route={'agent':'codex','model':'gpt-6-sol','effort':'high','context':'native_default','reason':'test'}
+        with patch('pod.operations.mutate_command',return_value={'runtime':'r','exit':0,'request_uuid':None,
+                'result':{'state':'ready'}}) as mutate:
+            port.start_worker(run='r',task='t',owner='o',route=route)
+            self.assertEqual(mutate.call_args.args[0][-3:],['--effort','high','--json'])
+            port.start_worker(run='r',task='t',owner='o',route={**route,'effort':'native_default'})
+            self.assertNotIn('--effort',mutate.call_args.args[0])
+            port.start_worker(run='r',task='t',owner='o',route=route,terminal='terminal')
+            argv=mutate.call_args.args[0]
+            self.assertIn('--terminal',argv)
+            self.assertNotIn('--model',argv)
+            self.assertNotIn('--agent',argv)
 
-    def test_cached_metadata_redacts_accounts_and_keeps_timestamps(self):
-        result = {"runtime": "r", "result": {"claude": [{"token": "secret"}], "rateLimits": {
-            "claude": {"status": "ok", "updatedAt": 1000,
-                       "session": {"usedPercent": 20, "windowMinutes": 300, "resetsAt": 2000},
-                       "usageMetadata": {"private": "secret"}},
-            "codex": {"status": "unknown", "updatedAt": None}}}}
-        with patch("pod.orca.read_command", return_value=result):
-            metadata = account_metadata()
-        self.assertEqual(metadata["providers"]["claude"]["updated_at_ms"], 1000)
-        self.assertEqual(metadata["providers"]["claude"]["freshness"], "stale")
-        self.assertEqual(metadata["providers"]["claude"]["windows"]["session"]["usedPercent"], 20)
-        self.assertNotIn("secret", json.dumps(metadata))
-        self.assertEqual(metadata["providers"]["claude"]["account_association"], "host_login")
-
-    def test_actual_receipt_shape_and_optional_terminal(self):
-        request = {"agent": "codex", "model": "m", "effort": "high"}
-        effective_launch(request, {"state": "ready", "runId": "r", "taskId": "t", "dispatchId": "d",
-                                   "launch": {"requested": request, "effective": request}})
-        with self.assertRaises(PodError):
-            effective_launch(request, {"state": "ready", "runId": "r", "taskId": "t", "dispatchId": "d",
-                                       "launch": {"requested": request, "effective": {**request, "effort": "medium"}}})
-
-
-class RouteEstablishmentTests(unittest.TestCase):
-    """Establishment against sanitized captures of the installed runtime."""
-
-    def snapshot(self):
-        with patch("pod.orca.read_command", side_effect=[{"version": ORCA_VERSION, "executable": "/fixture/orca"},
-                                                          envelope("status")]):
-            return contract()
-
-    def accounts(self):
-        with patch("pod.orca.read_command", return_value=envelope("account-list")):
-            return account_metadata_raw()
-
-    def fleet(self):
-        with patch("pod.orca.read_command", return_value=envelope("host-list")):
-            return hosts()
-
-    def established(self, *, agent="codex", model="gpt-6-sol", billing="included",
-                    login=None, bucket=None, delegation=False, context=None,
-                    effective_context=None):
-        accounts = self.accounts()
-        identity_digest = accounts["providers"][agent].get("identity_digest")
-        login = login or {"auth": "oauth", "subscription": True,
-                          "identity_digest": identity_digest or "a" * 64}
-        identity_digest = identity_digest or login.get("identity_digest")
-        route = {"agent": agent, "model": model, "account": identity_digest,
-                 "bucket": bucket, "effort": "high", "context": context,
-                 "effective_context": effective_context}
-        return route, route_establishment(
-            route, {"billing": billing},
-            snapshot=self.snapshot(), accounts=accounts, login=login,
-            fleet=self.fleet(), child_delegation=delegation)
-
-    def test_contract_reports_the_runtime_and_advertised_contracts(self):
-        snapshot = self.snapshot()
-        self.assertEqual(snapshot["status"], "observed")
-        self.assertEqual(snapshot["version"], ORCA_VERSION)
-        self.assertTrue(snapshot["runtime"])
-        self.assertTrue(snapshot["capabilities"]["contract_v1"])
-        self.assertTrue(snapshot["capabilities"]["launch_preferences_v1"])
-        self.assertEqual(set(snapshot), {"status", "version", "executable", "runtime",
-                                         "capabilities", "runtime_state"})
-
-    def test_controls_are_tiered_and_carry_no_account_identifier(self):
-        route, established = self.established()
-        tiers = {name: control["tier"] for name, control in established["controls"].items()}
-        self.assertEqual(tiers["effective_launch"], "enforceable_control")
-        self.assertEqual(tiers["descendant_depth"], "enforceable_control")
-        self.assertEqual(tiers["descendant_count"], "owner_route_config")
-        self.assertEqual(tiers["child_delegation"], "owner_route_config")
-        self.assertEqual(tiers["billing_mode"], "runtime_observation")
-        self.assertEqual(tiers["quota_bucket"], "runtime_observation")
-        self.assertEqual(tiers["physical_capacity"], "unavailable")
-        self.assertEqual(established["login"]["mode"], "host_login")
-        self.assertEqual(established["billing"], {"observed": "subscription", "approved": "included"})
-        self.assertEqual(established["hard_stops"], [])
-        encoded = json.dumps(established)
-        source = receipt("account-list")["result"]["codex"]["systemDefault"]
-        for leak in (source["email"], source["providerAccountId"], source["workspaceLabel"]):
-            self.assertNotIn(leak, encoded)
-        self.assertEqual(len(established["login"]["identity_digest"]), 64)
-        require_route_establishment(established, route)
-
-    def test_installed_worker_contract_refuses_context_before_effect(self):
-        route, established = self.established(context="max", effective_context=900000)
-        self.assertEqual(established["controls"]["context_window"]["tier"], "unavailable")
-        self.assertIsNone(established["route"]["effective_context"])
-        self.assertIn("context_control_unavailable", established["hard_stops"])
-        with self.assertRaises(PodError) as caught:
-            require_route_establishment(established, route)
-        self.assertEqual(caught.exception.code, "context_control_unavailable")
-
-    def test_an_included_route_survives_an_unavailable_quota_bucket(self):
-        """The regression: absent optional metadata is a disclosure, not a blocker."""
-        route, established = self.established(agent="claude", model="claude-sonnet-5")
-        observed_identity = "a" * 64
-        empty = {"runtime": "uuid-0001", "providers": {"claude": {
-                     "managed_accounts": 0, "default_identity": observed_identity,
-                     "default_auth": "oauth", "default_has_auth": True, "windows": {},
-                     "account_association": "host_login"}}}
-        sparse = route_establishment(route, {"billing": "included"},
-                                     snapshot=self.snapshot(),
-                                     accounts=empty,
-                                     login={"auth": "oauth", "subscription": True,
-                                            "identity_digest": None},
-                                     fleet=self.fleet())
-        self.assertEqual(sparse["hard_stops"], [])
-        self.assertIn("provider quota windows are unavailable to the installed runtime",
-                      sparse["disclosures"])
-        require_route_establishment(sparse, route)
-
-    def test_account_rotation_and_unavailable_identity_fail_before_route_use(self):
-        route = {"agent": "codex", "model": "gpt-6-sol", "account": "a" * 64,
-                 "bucket": "default", "effort": "high"}
-        approved = "a" * 64
-        base_accounts = {"runtime": "uuid-0001", "providers": {"codex": {
-            "managed_accounts": 1, "active_account": approved, "default_identity": None,
-            "selected_auth": "oauth", "selected_has_auth": True,
-            "default_auth": "oauth", "default_has_auth": True, "windows": {}}}}
-        login = {"auth": "oauth", "subscription": True, "identity_digest": None}
-        for active in ("b" * 64, None):
-            accounts = json.loads(json.dumps(base_accounts))
-            accounts["providers"]["codex"]["active_account"] = active
-            established = route_establishment(
-                route, {"billing": "paid"},
-                snapshot=self.snapshot(), accounts=accounts, login=login, fleet=self.fleet())
-            with self.subTest(active=active), self.assertRaises(PodError) as caught:
-                require_route_establishment(established, route)
-            self.assertEqual(caught.exception.code, "account_binding_unverified")
-        matched = route_establishment(
-            route, {"billing": "included"},
-            snapshot=self.snapshot(), accounts=base_accounts, login=login, fleet=self.fleet())
-        require_route_establishment(matched, route)
-
-    def test_managed_account_cannot_borrow_unrelated_host_subscription_proof(self):
-        identity_digest = "a" * 64
-        route = {"agent": "codex", "model": "gpt-6-sol", "account": identity_digest,
-                 "bucket": "default", "effort": "high"}
-        accounts = {"runtime": "uuid-0001", "providers": {"codex": {
-            "managed_accounts": 1, "active_account": identity_digest,
-            "selected_auth": None, "selected_has_auth": False, "windows": {}}}}
-        established = route_establishment(
-            route, {"billing": "included"}, snapshot=self.snapshot(), accounts=accounts,
-            login={"auth": "oauth", "subscription": True, "identity_digest": "b" * 64},
-            fleet=self.fleet())
-        self.assertIn("billing_mode_unverified", established["hard_stops"])
-        with self.assertRaises(PodError) as caught:
-            require_route_establishment(established, route)
-        self.assertEqual(caught.exception.code, "billing_mode_unverified")
-
-    def test_system_default_billing_cannot_be_overridden_by_another_login_context(self):
-        identity_digest = "a" * 64
-        route = {"agent": "codex", "model": "gpt-6-sol", "account": identity_digest,
-                 "bucket": "default", "effort": "high"}
-        base = {"runtime": "uuid-0001", "providers": {"codex": {
-            "managed_accounts": 0, "default_identity": identity_digest,
-            "default_auth": "api_key", "default_has_auth": True, "windows": {}}}}
-        unrelated_oauth = {"auth": "oauth", "subscription": True,
-                           "identity_digest": "b" * 64}
-        api = route_establishment(route, {"billing": "included"}, snapshot=self.snapshot(),
-                                  accounts=base, login=unrelated_oauth, fleet=self.fleet())
-        self.assertEqual(api["billing"]["observed"], "api")
-        self.assertIn("billing_mode_unverified", api["hard_stops"])
-        with self.assertRaises(PodError):
-            require_route_establishment(api, route)
-
-        unavailable = json.loads(json.dumps(base))
-        unavailable["providers"]["codex"].update(default_auth=None,
-                                                   default_has_auth=False)
-        unknown = route_establishment(route, {"billing": "included"},
-                                      snapshot=self.snapshot(), accounts=unavailable,
-                                      login=unrelated_oauth, fleet=self.fleet())
-        self.assertEqual(unknown["billing"]["observed"], "unknown")
-        self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
-
-        unavailable["providers"]["codex"].update(default_auth="api_key")
-        same_identity_login = {"auth": "oauth", "subscription": True,
-                               "identity_digest": identity_digest}
-        same_identity = route_establishment(route, {"billing": "included"},
-                                            snapshot=self.snapshot(), accounts=unavailable,
-                                            login=same_identity_login, fleet=self.fleet())
-        self.assertEqual(same_identity["billing"]["observed"], "unknown")
-        self.assertEqual(same_identity["hard_stops"], ["billing_mode_unverified"])
-
-        partial = json.loads(json.dumps(base))
-        partial["providers"]["codex"].update(default_present=True,
-                                               default_identity=None)
-        incomplete = route_establishment(route, {"billing": "included"},
-                                         snapshot=self.snapshot(), accounts=partial,
-                                         login=unrelated_oauth, fleet=self.fleet())
-        self.assertIsNone(incomplete["route"]["account"])
-        self.assertEqual(incomplete["billing"]["observed"], "unknown")
-        self.assertEqual(incomplete["hard_stops"], ["account_binding_unverified"])
-
-        subscribed = json.loads(json.dumps(base))
-        subscribed["providers"]["codex"].update(default_auth="oauth",
-                                                  default_has_auth=True)
-        exact = route_establishment(route, {"billing": "included"},
-                                    snapshot=self.snapshot(), accounts=subscribed,
-                                    login=unrelated_oauth, fleet=self.fleet())
-        self.assertEqual(exact["login"]["proof_source"], "orca_system_default")
-        require_route_establishment(exact, route)
-
-    def test_billing_and_paid_fallback_fail_closed(self):
-        route, unknown = self.established(login={"auth": "unknown", "subscription": None,
-                                                 "identity_digest": "a" * 64},
-                                          agent="claude", model="claude-sonnet-5")
-        self.assertEqual(unknown["hard_stops"], ["billing_mode_unverified"])
-        with self.assertRaises(PodError) as blocked:
-            require_route_establishment(unknown, route)
-        self.assertEqual(blocked.exception.code, "billing_mode_unverified")
-        route, paid = self.established(agent="claude", model="claude-sonnet-5", billing="unknown",
-                                       login={"auth": "api_key", "subscription": False,
-                                              "identity_digest": "a" * 64})
-        self.assertEqual(paid["hard_stops"], ["paid_route_forbidden"])
-        with self.assertRaises(PodError) as refused:
-            require_route_establishment(paid, route)
-        self.assertEqual(refused.exception.code, "paid_route_forbidden")
-
-    def test_delegation_is_described_as_policy_not_as_a_sandbox(self):
-        _, established = self.established()
-        control = established["controls"]["child_delegation"]
-        self.assertFalse(control["enabled"])
-        self.assertIn("not a provider sandbox", control["note"])
-        self.assertIn("worker-initiated delegation is refused by Pod admission, not by a provider sandbox",
-                      established["disclosures"])
-
-    def test_a_route_mismatch_and_an_unproven_runtime_both_refuse(self):
-        route, established = self.established()
-        with self.assertRaises(PodError) as mismatch:
-            require_route_establishment(established, {**route, "account": "other"})
-        self.assertEqual(mismatch.exception.code, "account_binding_unverified")
-        with self.assertRaises(PodError) as authority:
-            require_route_establishment({**established, "runtime": None}, route)
-        self.assertEqual(authority.exception.code, "native_authority_unverified")
-        with self.assertRaises(PodError) as absent:
-            require_route_establishment({"schema": "other/v1"}, route)
-        self.assertEqual(absent.exception.code, "route_establishment_missing")
-
-    def test_a_missing_agent_executable_is_unknown_not_a_global_failure(self):
-        with patch("pod.orca.shutil.which", return_value=None):
-            observed = agent_login_mode("codex")
-        self.assertEqual(observed["auth"], "unknown")
-        self.assertEqual(observed["reason"], "agent_executable_absent")
-        with self.assertRaises(PodError):
-            agent_login_mode("cursor")
-
-    def test_a_login_line_on_stderr_is_still_read(self):
-        """Codex answers `login status` on stderr; only a live probe showed that."""
-        on_stderr = subprocess.CompletedProcess([], 0, "", "Logged in using ChatGPT\n")
-        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
-             patch("pod.orca.subprocess.run", return_value=on_stderr):
-            self.assertEqual(agent_login_mode("codex"),
-                             {"auth": "oauth", "subscription": True, "identity_digest": None})
-        api_on_stderr = subprocess.CompletedProcess([], 0, "", "Logged in using an API key\n")
-        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
-             patch("pod.orca.subprocess.run", return_value=api_on_stderr):
-            self.assertEqual(agent_login_mode("codex")["auth"], "api_key")
-
-    def test_login_probes_read_only_the_non_secret_mode(self):
-        codex = subprocess.CompletedProcess([], 0, "Logged in using ChatGPT\n", "")
-        claude = subprocess.CompletedProcess([], 0, json.dumps({
-            "loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty",
-            "email": "person@example.invalid", "orgId": "org-secret"}), "")
-        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
-             patch("pod.orca.subprocess.run", return_value=codex) as runner:
-            observed = agent_login_mode("codex")
-            self.assertEqual(runner.call_args.args[0][1:], ["login", "status"])
-        self.assertEqual(observed, {"auth": "oauth", "subscription": True, "identity_digest": None})
-        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
-             patch("pod.orca.subprocess.run", return_value=claude) as runner:
-            observed = agent_login_mode("claude")
-            self.assertEqual(runner.call_args.args[0][1:], ["auth", "status", "--json"])
-        self.assertEqual(observed["auth"], "oauth")
-        self.assertTrue(observed["subscription"])
-        self.assertNotIn("org-secret", json.dumps(observed))
-        self.assertTrue(observed["identity_digest"])
-
-
-class MutationAllowlistTests(unittest.TestCase):
-    def test_only_known_mutations_reach_a_process(self):
-        with patch("pod.orca.subprocess.run") as runner:
-            for argv in (["orchestration", "reset", "--json"],
-                         ["orchestration", "worker-release", "--dispatch", "d", "--json"],
-                         ["orchestration", "worker-start", "--task", "t", "--json"],
-                         ["orchestration", "worker-start", "--task", "t", "--run", "r",
-                          "--worktree", "new-child", "--agent", "codex", "--model", "m",
-                          "--effort", "high", "--json"],
-                         ["repo", "add", "--path", "/tmp/x", "--json"],
-                         ["orchestration", "check"],
-                         ["orchestration", "check", "--run", "r", "--wait", "--types", "x",
-                          "--timeout-ms", "9000000", "--json"]):
-                with self.subTest(argv=argv):
-                    with self.assertRaises(PodError) as caught:
-                        mutate_command(argv)
-                    self.assertEqual(caught.exception.code, "unsupported_orca_mutation")
+    def test_mutation_allowlist_blocks_every_other_native_effect(self):
+        with patch('pod.orca.subprocess.run') as runner:
+            for argv in (['orchestration','worker-release','--dispatch','d','--json'],
+                         ['orchestration','worker-start','--task','t','--json'],
+                         START[:-1]+['--context','max','--json'],
+                         START[:-1]+['--terminal','t','--json'],
+                         ['orchestration','worker-start','--task','t','--run','r','--worktree',
+                          'new-child','--agent','codex','--model','gpt-6-sol','--json']):
+                with self.subTest(argv=argv),self.assertRaises(PodError) as caught:
+                    mutate_command(argv)
+                self.assertEqual(caught.exception.code,'unsupported_orca_mutation')
             runner.assert_not_called()
 
-    def test_a_structured_failure_exit_is_returned_not_raised(self):
-        payload = {"ok": True, "result": {"state": "failed", "failedStage": "dispatch_input",
-                                          "dispatchId": "ctx_x0001"},
-                   "_meta": {"runtimeId": "runtime"}}
-        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
-        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
-                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
-        with patch("pod.orca.executable", return_value=Path("orca")), \
-             patch("pod.orca.subprocess.run", return_value=completed):
-            receipt_value = mutate_command(argv, accept_exit=(0, 1))
-            self.assertEqual(receipt_value["exit"], 1)
-            self.assertEqual(receipt_value["result"]["state"], "failed")
-            with self.assertRaises(PodError) as unexpected:
-                mutate_command(argv)
-            self.assertEqual(unexpected.exception.code, "native_effect_uncertain")
+    def test_refusal_envelope_preserves_request_and_partial_effects(self):
+        request='11111111-1111-4111-8111-111111111111'
+        for code in ('task_not_found','task_not_startable','inject_rejected','runtime_error'):
+            value={'ok':False,'error':{'code':code,'message':'refused',
+                                      'data':{'orchestrationRequestId':request}},
+                   'result':{'dispatchId':'dispatch'},'_meta':{'runtimeId':'r'}}
+            decoded=_mutation_envelope(json.dumps(value))
+            self.assertEqual(decoded['request_uuid'],request)
+            self.assertEqual(decoded['result']['dispatchId'],'dispatch')
+        with self.assertRaises(PodError):
+            _mutation_envelope(json.dumps({'ok':False,'error':{'code':'unknown'},
+                                           '_meta':{'runtimeId':'r'}}))
 
-    def test_documented_refusal_envelope_preserves_runtime_and_request(self):
-        request_id = "11111111-1111-4111-8111-111111111111"
-        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
-                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
-        for code in ("task_not_found", "task_not_startable", "inject_rejected", "runtime_error"):
-            with self.subTest(code=code):
-                payload = {"ok": False,
-                           "error": {"code": code, "message": "refused",
-                                     "data": {"orchestrationRequestId": request_id,
-                                              "nextSteps": "check task-list"}},
-                           "_meta": {"runtimeId": "runtime"}}
-                completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
-                with patch("pod.orca.executable", return_value=Path("orca")), \
-                     patch("pod.orca.subprocess.run", return_value=completed):
-                    receipt_value = mutate_command(argv, accept_exit=(0, 1))
-                self.assertEqual(receipt_value["runtime"], "runtime")
-                self.assertEqual(receipt_value["request_uuid"], request_id)
-                self.assertEqual(receipt_value["result"]["error"]["code"], code)
-                self.assertNotIn("state", receipt_value["result"])
+    def test_request_reference_conflict_is_not_flattened_away(self):
+        one='11111111-1111-4111-8111-111111111111'
+        two='22222222-2222-4222-8222-222222222222'
+        value={'ok':False,'error':{'code':'inject_rejected','data':{'orchestrationRequestId':one}},
+               'result':{'mutation':{'requestId':two}},'_meta':{'runtimeId':'r'}}
+        decoded=_mutation_envelope(json.dumps(value))
+        self.assertTrue(decoded['result']['_request_conflict'])
 
-    def test_unknown_refusal_code_is_native_effect_uncertain(self):
-        """A code the installed guide does not document proves nothing about effects."""
-        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
-                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
-        for code in ("quota_exhausted", "unknown", None):
-            with self.subTest(code=code):
-                payload = {"ok": False, "error": {"code": code, "message": "refused"},
-                           "_meta": {"runtimeId": "runtime"}}
-                completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
-                with patch("pod.orca.executable", return_value=Path("orca")), \
-                     patch("pod.orca.subprocess.run", return_value=completed):
-                    with self.assertRaises(PodError) as caught:
-                        mutate_command(argv, accept_exit=(0, 1))
-                self.assertEqual(caught.exception.code, "native_effect_uncertain")
-
-    def test_refusal_joins_every_request_reference_before_flattening(self):
-        first = "11111111-1111-4111-8111-111111111111"
-        second = "22222222-2222-4222-8222-222222222222"
-        variants = {
-            "result_conflicts_with_envelope": ({"requestId": first},
-                                                {"requestId": second}, first, first),
-            "envelope_conflicts_with_result": ({"requestId": second},
-                                                {"requestId": first}, first, second),
-            "malformed_result": ({"requestId": None}, {"requestId": first}, first, first),
-            "malformed_envelope": ({"requestId": first}, "malformed", first, first),
-        }
-        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r",
-                "--worktree", "current", "--agent", "codex", "--model", "m",
-                "--effort", "high", "--json"]
-        for name, (result_mutation, envelope_mutation, error_request, preserved) in variants.items():
-            with self.subTest(name=name):
-                payload = {"ok": False,
-                           "error": {"code": "task_not_startable", "message": "refused",
-                                     "data": {"orchestrationRequestId": error_request}},
-                           "result": {"mutation": result_mutation},
-                           "mutation": envelope_mutation,
-                           "_meta": {"runtimeId": "runtime"}}
-                completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
-                with patch("pod.orca.executable", return_value=Path("orca")), \
-                     patch("pod.orca.subprocess.run", return_value=completed):
-                    receipt_value = mutate_command(argv, accept_exit=(0, 1))
-                self.assertEqual(receipt_value["request_uuid"], preserved)
-                self.assertTrue(receipt_value["result"]["_request_conflict"])
-
-        agreeing = {"ok": False,
-                    "error": {"code": "task_not_startable", "message": "refused",
-                              "data": {"orchestrationRequestId": first}},
-                    "result": {"mutation": {"requestId": first}},
-                    "mutation": {"requestId": first},
-                    "_meta": {"runtimeId": "runtime"}}
-        completed = subprocess.CompletedProcess([], 1, json.dumps(agreeing), "")
-        with patch("pod.orca.executable", return_value=Path("orca")), \
-             patch("pod.orca.subprocess.run", return_value=completed):
-            receipt_value = mutate_command(argv, accept_exit=(0, 1))
-        self.assertEqual(receipt_value["request_uuid"], first)
-        self.assertNotIn("_request_conflict", receipt_value["result"])
-
-        no_reference = {"ok": False,
-                        "error": {"code": "task_not_found", "message": "refused"},
-                        "_meta": {"runtimeId": "runtime"}}
-        completed = subprocess.CompletedProcess([], 1, json.dumps(no_reference), "")
-        with patch("pod.orca.executable", return_value=Path("orca")), \
-             patch("pod.orca.subprocess.run", return_value=completed):
-            receipt_value = mutate_command(argv, accept_exit=(0, 1))
-        self.assertIsNone(receipt_value["request_uuid"])
-        self.assertNotIn("_request_conflict", receipt_value["result"])
-
-    def test_refusal_envelope_preserves_partial_effect_evidence(self):
-        request_id = "11111111-1111-4111-8111-111111111111"
-        payload = {"ok": False, "error": {"code": "runtime_error", "message": "failed",
-                                           "data": {"residualResources": [
-                                               {"kind": "terminal"}]}},
-                   "result": {"dispatchId": "dispatch", "workerId": "worker"},
-                   "mutation": {"requestId": request_id},
-                   "_meta": {"runtimeId": "runtime"}}
-        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
-        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
-                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
-        with patch("pod.orca.executable", return_value=Path("orca")), \
-             patch("pod.orca.subprocess.run", return_value=completed):
-            receipt_value = mutate_command(argv, accept_exit=(0, 1))
-        self.assertEqual(receipt_value["result"]["dispatchId"], "dispatch")
-        self.assertEqual(receipt_value["result"]["workerId"], "worker")
-        self.assertEqual(receipt_value["result"]["error"]["data"]["residualResources"],
-                         [{"kind": "terminal"}])
-
-    def test_refusal_envelope_preserves_conflicting_envelope_evidence(self):
-        payload = {"ok": False, "error": {"code": "inject_rejected", "message": "refused"},
-                   "result": {"dispatchId": "one"}, "dispatchId": "two",
-                   "workerId": "three", "_meta": {"runtimeId": "runtime"}}
-        completed = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
-        argv = ["orchestration", "worker-start", "--task", "t", "--run", "r", "--worktree",
-                "current", "--agent", "codex", "--model", "m", "--effort", "high", "--json"]
-        with patch("pod.orca.executable", return_value=Path("orca")), \
-             patch("pod.orca.subprocess.run", return_value=completed):
-            receipt_value = mutate_command(argv, accept_exit=(0, 1))
-        self.assertEqual(receipt_value["result"]["dispatchId"], "one")
-        self.assertEqual(receipt_value["result"]["workerId"], "three")
-        self.assertEqual(receipt_value["result"]["_envelope_conflicts"]["dispatchId"], "two")
-
-    def test_worktree_selectors_accept_existing_placements_only(self):
-        for value in ("current", "active", "path:/fixture/repo", "id:abc", "name:task",
-                      "branch:main", "issue:7"):
-            self.assertEqual(worktree_selector(value), value)
-        for value in ("new-child", "new-top-level", "", "--worktree", None, "path:"):
+    def test_worktree_selector_and_identity_refuse_creation_or_contradiction(self):
+        for value in ('current','active','path:/fixture/repo','id:abc','name:task'):
+            self.assertEqual(worktree_selector(value),value)
+        for value in ('new-child','new-top-level','',None):
             self.assertIsNone(worktree_selector(value))
+        row={'path':'/fixture/repo','branch':'refs/heads/orca/task','isBare':False,
+             'git':{'path':'/fixture/repo','branch':'refs/heads/orca/task','isBare':False}}
+        with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'worktree':row}}):
+            self.assertEqual(worktree_identity('current')['branch'],'orca/task')
+        with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'worktree':{
+                **row,'git':{**row['git'],'path':'/fixture/other'}}}}):
+            with self.assertRaises(PodError): worktree_identity('current')
 
-    def test_native_worktree_resolution_requires_one_coherent_identity(self):
-        row = {"path": "/fixture/repo", "branch": "refs/heads/orca/task", "isBare": False,
-               "git": {"path": "/fixture/repo", "branch": "refs/heads/orca/task",
-                       "isBare": False}}
-        with patch("pod.orca.read_command", return_value={
-                   "runtime": "runtime", "result": {"worktree": row}}):
-            self.assertEqual(worktree_identity("name:task"), {
-                "runtime": "runtime", "path": "/fixture/repo", "branch": "orca/task"})
-        with patch("pod.orca.read_command", return_value={
-                   "runtime": "runtime", "result": {"worktree": {
-                       **row, "git": {**row["git"], "path": "/fixture/other"}}}}), \
-             self.assertRaises(PodError) as contradictory:
-            worktree_identity("current")
-        self.assertEqual(contradictory.exception.code, "worktree_resolution_ambiguous")
-        with patch("pod.orca.read_command", side_effect=PodError("orca_read_failed", "missing")), \
-             self.assertRaises(PodError) as unavailable:
-            worktree_identity("current")
-        self.assertEqual(unavailable.exception.code, "worktree_resolution_unavailable")
-
-    def test_the_read_allowlist_covers_the_verbs_establishment_needs(self):
-        with patch("pod.orca.subprocess.run") as runner:
-            for argv in (["orchestration", "check", "--run", "r", "--json"],
-                         ["orchestration", "worker-start", "--task", "t", "--run", "r",
-                          "--worktree", "current", "--agent", "codex", "--model", "m",
-                          "--effort", "high", "--json"],
-                         ["orchestration", "run-create", "--objective", "o", "--json"],
-                         ["orchestration", "task-list", "--run", "r", "--json"],
-                         ["orchestration", "worker-read", "--dispatch", "d", "--limit", "50", "--json"]):
-                with self.subTest(argv=argv):
-                    with self.assertRaises(PodError) as caught:
-                        read_command(argv)
-                    self.assertEqual(caught.exception.code, "unsupported_orca_read")
-            runner.assert_not_called()
-        for argv in (["status", "--json"], ["host", "list", "--json"],
-                     ["worktree", "show", "--worktree", "current", "--json"],
-                     ["orchestration", "run-current", "--json"],
-                     ["orchestration", "request-show", "--request",
-                      "11111111-1111-4111-8111-111111111111", "--json"]):
-            with self.subTest(argv=argv):
-                with patch("pod.orca.executable", return_value=Path("orca")), \
-                     patch("pod.orca.subprocess.run",
-                           return_value=subprocess.CompletedProcess([], 0, json.dumps(
-                               {"ok": True, "result": {}, "_meta": {"runtimeId": "r"}}), "")):
-                    self.assertEqual(read_command(argv)["runtime"], "r")
-
-
-class ReviewFindingRegressions(unittest.TestCase):
-    """Each of these reproduces a defect an independent review found."""
-
-    def login(self, agent, stdout="", stderr="", code=0):
-        completed = subprocess.CompletedProcess([], code, stdout, stderr)
-        with patch("pod.orca.shutil.which", return_value="/fixture/agent"), \
-             patch("pod.orca.subprocess.run", return_value=completed):
-            return agent_login_mode(agent)
-
-    def test_an_absent_codex_login_is_never_read_as_a_subscription(self):
-        """`logged in` is a substring of `not logged in`.
-
-        Reading it as a match reported an absent login as an approved subscription, which
-        is the single condition the billing hard stop exists to catch.
-        """
-        for text in ("Not logged in", "not logged in\n", "You are not signed in",
-                     "Logged out", "", "unrecognised output"):
-            with self.subTest(text=text):
-                observed = self.login("codex", stderr=text)
-                self.assertEqual(observed["auth"], "unknown", text)
-                self.assertIsNone(observed["subscription"], text)
-        self.assertEqual(self.login("codex", stderr="Logged in using ChatGPT")["auth"], "oauth")
-        self.assertEqual(self.login("codex", stderr="Logged in using an API key")["auth"], "api_key")
-
-    def test_a_claude_session_that_is_not_logged_in_is_unknown(self):
-        observed = self.login("claude", stdout=json.dumps({"loggedIn": False}))
-        self.assertEqual(observed["auth"], "unknown")
-        self.assertIsNone(observed["subscription"])
-
-    def test_the_quota_bucket_is_derived_and_cannot_be_asserted(self):
-        """A caller could name the bucket and have it reported back as an observation."""
-        snapshot = {"status": "observed", "runtime": "r", "version": ORCA_VERSION,
-                    "executable": "/fixture/orca", "capabilities": {}}
-        accounts = {"runtime": "r", "providers": {"claude": {"managed_accounts": 0,
-                                             "windows": {"weekly": {}},
-                                             "account_association": "host_login"}}}
-        asserted = {"agent": "claude", "model": "claude-fable-5-1", "account": "a" * 64,
-                    "bucket": "default", "effort": "high"}
-        established = route_establishment(asserted, {"billing": "included"}, snapshot=snapshot,
-                                          accounts=accounts,
-                                          login={"auth": "oauth", "subscription": True,
-                                                 "identity_digest": None},
-                                          fleet={"runtime": "r", "hosts": ["local"],
-                                                 "local_only": True})
-        self.assertEqual(established["route"]["bucket"], "fable")
-        self.assertEqual(established["controls"]["quota_bucket"]["bucket"], "fable")
-        with self.assertRaises(PodError) as caught:
-            require_route_establishment(established, asserted)
-        self.assertEqual(caught.exception.code, "account_binding_unverified")
-
-    def test_a_run_worker_page_cannot_introduce_a_scope_the_first_page_lacked(self):
-        pages = [{"runtime": "r", "result": {"scope": None, "workers": [],
-                                             "page": {"hasMore": True, "nextCursor": "next"}}},
-                 {"runtime": "r", "result": {"scope": {"source": "all"}, "workers": [],
-                                             "page": {"hasMore": False}}}]
-        with patch("pod.orca.read_command", side_effect=pages):
-            with self.assertRaises(PodError) as caught:
-                worker_rows("run")
-        self.assertEqual(caught.exception.code, "orca_scope_changed")
+    def test_contract_reports_observed_capabilities_without_probing_accounts(self):
+        with patch('pod.orca.read_command',side_effect=[{'version':ORCA_VERSION,'executable':'/fixture/orca'},
+                envelope('status')]) as reader:
+            found=contract()
+        self.assertEqual(found['status'],'observed')
+        self.assertTrue(found['capabilities']['launch_preferences_v1'])
+        self.assertEqual(reader.call_count,2)

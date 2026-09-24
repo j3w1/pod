@@ -10,13 +10,13 @@ import yaml
 
 from .errors import PodError
 
-BUNDLE_TEXT = ("SKILL.md", "VERSION", "agents/openai.yaml", "scripts/pod.py",
+BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "agents/openai.yaml", "scripts/pod.py",
                "references/execution-spec.md", "references/planning.md", "references/models.md",
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md")
-BUNDLE_MODULES = ("__init__.py", "__main__.py", "bundle.py", "cli.py", "config.py", "context.py",
+BUNDLE_MODULES = ("__init__.py", "__main__.py", "bundle.py", "catalog.py", "cli.py", "config.py", "context.py",
                   "errors.py", "github.py", "governor.py", "internal.py", "ledger.py", "operations.py",
-                  "orca.py", "quota.py", "records.py", "routing.py", "setup.py",
+                  "orca.py", "placement.py", "records.py", "selection.py",
                   "skill_validation.py", "util.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))
 IGNORED_DIRS = frozenset({"__pycache__"})

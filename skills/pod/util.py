@@ -65,7 +65,7 @@ def native_home(name: str, *, default: Path | None = None,
     if not path.is_absolute() or (path.exists() and not path.is_dir()):
         raise PodError("invalid_native_home", f"{name} must be an absolute directory path")
     boundary = (project if project is not None else Path.cwd()).resolve()
-    boundaries = [boundary]
+    boundaries = []
     from .github import repository_context
     context = repository_context(boundary)
     if context.get("repo_key") is not None:

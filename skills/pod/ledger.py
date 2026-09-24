@@ -1,4 +1,4 @@
-"""Compact Pod policy/evidence state; Orca remains lifecycle authority."""
+"""Compact objective policy/evidence state; Orca owns native lifecycle."""
 
 from __future__ import annotations
 
@@ -10,18 +10,13 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from .errors import PodError
-from .orca import require_route_establishment
-from .quota import validate_snapshot
-from .routing import quota_state
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
-
 ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred")
-CONTEXT_SCHEMA = "pod-context/v3"
+CONTEXT_SCHEMA = "pod-context/v4"
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
-                   "interventions", "source_rejections"}
-
+                   "interventions", "source_rejections", "constraints"}
 
 def state_root(project: Path | None = None) -> Path:
     override = explicit_home("POD_STATE_HOME")
@@ -81,7 +76,7 @@ def _lock(path: Path) -> Iterator[None]:
 def _empty() -> dict:
     return {"schema": CONTEXT_SCHEMA, "revision": 0, "owner": None,
             "admissions": {}, "checkpoint": None, "interventions": {},
-            "source_rejections": {}}
+            "source_rejections": {}, "constraints": []}
 
 
 def binding_valid(binding: object) -> bool:
@@ -97,37 +92,33 @@ def binding_valid(binding: object) -> bool:
 def _validate_admission(key: str, row: object) -> None:
     required = {"schema", "state", "admission_id", "objective", "owner", "request",
                 "route_decision", "effective_evidence", "runtime", "request_uuid",
-                "run_id", "task_id", "plan_revision", "packet_id", "worktree", "bucket",
-                "native_binding", "recovery", "error", "created_at", "updated_at"}
+                "run_id", "task_id", "plan_revision", "packet_id", "worktree", "reuse_of",
+                "native_binding", "recovery", "error", "failures", "created_at", "updated_at"}
     value = exact(row, required, required, name="admission")
-    if value["schema"] != "pod-admission/v2" or value["admission_id"] != key:
+    if value["schema"] != "pod-admission/v3" or value["admission_id"] != key:
         raise PodError("state_unsupported", "Admission identity or schema is unsupported")
     if value["state"] not in ADMISSION_STATES:
         raise PodError("state_unsupported", "Admission state is unsupported")
-    for field in ("objective", "owner", "run_id", "task_id", "plan_revision", "packet_id", "worktree"):
+    for field in ("objective", "owner", "run_id", "task_id", "plan_revision", "packet_id", "worktree", "runtime"):
         if not isinstance(value[field], str) or not value[field]:
             raise PodError("state_unsupported", "Admission binding is incomplete")
-    if not isinstance(value["request"], dict) or not isinstance(value["route_decision"], dict):
-        raise PodError("state_unsupported", "Admission policy evidence is malformed")
-    if not isinstance(value["effective_evidence"], dict):
-        raise PodError("state_unsupported", "Admission effective evidence is malformed")
-    if not isinstance(value["runtime"], str) or not value["runtime"]:
-        raise PodError("state_unsupported", "Admission runtime is unavailable")
-    request_uuid = value["request_uuid"]
-    if request_uuid is not None and (not isinstance(request_uuid, str) or not request_uuid):
-        raise PodError("state_unsupported", "Admission request UUID is malformed")
-    binding = value["native_binding"]
-    if value["state"] in ("bound", "closed") and not binding_valid(binding):
+    if not all(isinstance(value[key], dict) for key in ("request", "route_decision", "effective_evidence", "recovery")):
+        raise PodError("state_unsupported", "Admission evidence is malformed")
+    if not isinstance(value["failures"], list) or len(value["failures"]) > 16:
+        raise PodError("state_unsupported", "Admission failures are malformed")
+    if value["request_uuid"] is not None and not isinstance(value["request_uuid"], str):
+        raise PodError("state_unsupported", "Request UUID is malformed")
+    if value["reuse_of"] is not None and not isinstance(value["reuse_of"], str):
+        raise PodError("state_unsupported", "Reuse identity is malformed")
+    if value["state"] in ("bound", "closed") and not binding_valid(value["native_binding"]):
         raise PodError("state_unsupported", "Bound admission lacks exact native identity")
-    if binding is not None and not binding_valid(binding):
+    if value["native_binding"] is not None and not binding_valid(value["native_binding"]):
         raise PodError("state_unsupported", "Admission native identity is malformed")
 
 
 def _validate_context(value: object) -> dict:
-    """Accept exactly the current context schema; any other record is unsupported, not converted."""
     if not isinstance(value, dict) or value.get("schema") != CONTEXT_SCHEMA:
-        raise PodError("state_unsupported",
-                       f"State record is not {CONTEXT_SCHEMA}; archive or remove it before new admissions")
+        raise PodError("state_unsupported", f"State record is not {CONTEXT_SCHEMA}; preserve it and use a new objective")
     state = exact(value, _CONTEXT_FIELDS, _CONTEXT_FIELDS, name="context")
     if type(state["revision"]) is not int or state["revision"] < 0:
         raise PodError("state_unsupported", "State revision is malformed")
@@ -139,8 +130,12 @@ def _validate_context(value: object) -> dict:
         if not isinstance(key, str) or not key:
             raise PodError("state_unsupported", "Admission key is malformed")
         _validate_admission(key, row)
-    if not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict):
+    if (not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict)
+            or not isinstance(state["constraints"], list) or len(state["constraints"]) > 64):
         raise PodError("state_unsupported", "Context evidence is malformed")
+    from .selection import validate_constraint
+    for row in state["constraints"]:
+        validate_constraint(row)
     return state
 
 
@@ -168,13 +163,11 @@ def context_root_for_run(run_id: str) -> Path | None:
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
     matches = []
-    unsupported_seen = False
     for path in root.glob("*/context.json"):
         try:
             state = _read(path)
         except PodError as exc:
             if exc.code == "state_unsupported":
-                unsupported_seen = True
                 continue
             raise
         checkpoint_value = state.get("checkpoint")
@@ -184,8 +177,6 @@ def context_root_for_run(run_id: str) -> Path | None:
             matches.append(path.parent)
     if len(matches) > 1:
         raise PodError("ambiguous_context", "Multiple local contexts bind this Run")
-    if not matches and unsupported_seen:
-        raise PodError("state_unsupported", "An unsupported state record may bind this Run")
     return matches[0] if matches else None
 
 
@@ -232,15 +223,18 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
 
 
 def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
+    from . import __version__
+    from .config import effective
     bounded_text(owner, name="owner")
-    exact(value, {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
-                  "assignments", "questions", "verification_gaps", "next_safe_action",
-                  "route_decisions", "quota_visibility", "objective", "objective_source",
-                  "worktree", "blocker", "remaining_gates"},
-          {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
-           "assignments", "questions", "verification_gaps", "next_safe_action"}, name="checkpoint")
-    if value["schema"] != "pod-checkpoint/v1" or not isinstance(native.get("runtime"), str):
+    allowed = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
+               "assignments", "questions", "verification_gaps", "next_safe_action",
+               "route_decisions", "objective", "objective_source", "worktree", "blocker", "remaining_gates"}
+    required = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
+                "assignments", "questions", "verification_gaps", "next_safe_action"}
+    exact(value, allowed, required, name="checkpoint")
+    if value["schema"] != "pod-checkpoint/v2" or not isinstance(native.get("runtime"), str):
         raise PodError("invalid_checkpoint", "Checkpoint needs current native runtime readback")
+    value = {**value, "policy_revision": effective(project)["revision"]}
     if "objective" in value and value["objective"] != objective:
         raise PodError("invalid_checkpoint", "Checkpoint objective differs from its state key")
     if "objective_source" in value:
@@ -248,7 +242,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         validate_issue_binding(value["objective_source"])
     if "worktree" in value:
         from .records import packet
-        probe = {"schema": "pod-packet/v1", "objective": objective, "criteria": [],
+        probe = {"schema": "pod-packet/v2", "objective": objective, "criteria": [],
                  "responsibility": "checkpoint validation", "scope": [], "actions": [],
                  "candidate": value["candidate"], "context": [], "dependencies": [],
                  "route": {"agent": "direct"}, "policy_revision": value["policy_revision"],
@@ -261,82 +255,15 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         state["owner"] = owner
-        state["checkpoint"] = {**value, "objective": objective}
+        state["checkpoint"] = {**value, "objective": objective, "pod_version": __version__}
         _write(path, state)
         return state
 
 
-def admission_identity(*, objective: str, run_id: str, task_id: str, packet_id: str,
-                       plan_revision: str) -> str:
-    """Stable Pod identity for one policy decision, never an Orca request UUID."""
-    return digest({"objective": objective, "run": run_id, "task": task_id,
-                   "packet": packet_id, "plan_revision": plan_revision})
-
-
-def _grant_matches(grant: dict | None, authorized: list, *, objective: str, run_id: str,
-                   plan_revision: str, account: str, capacity: int, now: datetime) -> bool:
-    if not isinstance(grant, dict) or grant not in authorized:
-        return False
-    try:
-        expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
-    except (KeyError, TypeError, ValueError):
-        return False
-    return (grant.get("action") == "exceptional_capacity" and grant.get("objective") == objective
-            and grant.get("run") == run_id and grant.get("plan_revision") == plan_revision
-            and grant.get("account") == account and type(grant.get("limit")) is int
-            and capacity <= grant["limit"] <= 8 and capacity >= 4
-            and isinstance(grant.get("reason"), str) and bool(grant["reason"].strip())
-            and expiry.tzinfo is not None and now.tzinfo is not None and now <= expiry)
-
-
-def _spending_grant_binding(grants: list, supplied: object, *, requested: dict,
-                            objective: str, now: datetime) -> tuple[dict, int]:
-    if not isinstance(supplied, dict):
-        raise PodError("spending_grant_required", "Paid launch lacks its exact spending grant")
-    matches = [grant for grant in grants if isinstance(grant, dict) and grant.get("id") == supplied.get("id")]
-    if len(matches) != 1:
-        raise PodError("spending_grant_required", "Paid launch grant identity is unavailable")
-    grant = matches[0]
-    expected = {"id": grant["id"], "identity": digest(grant), "units": 1,
-                "scope": digest({key: grant.get(key) for key in
-                                 ("id", "action", "account", "model", "objective")})}
-    try:
-        expiry = datetime.fromisoformat(grant["valid_until"].replace("Z", "+00:00"))
-    except (KeyError, TypeError, ValueError) as exc:
-        raise PodError("spending_grant_required", "Paid launch grant validity is invalid") from exc
-    if (supplied != expected or grant.get("action") != "paid_usage"
-            or grant.get("account") != requested.get("account")
-            or grant.get("model") != requested.get("model")
-            or grant.get("objective") != objective
-            or type(grant.get("max_units")) is not int or grant["max_units"] < 1
-            or expiry.tzinfo is None or now.tzinfo is None or now > expiry):
-        raise PodError("spending_grant_required", "Paid launch grant scope or validity changed")
-    return expected, grant["max_units"]
-
-
-def _bucket_overlap(provider: str, account: str, bucket: str | None, other: dict) -> bool:
-    if other.get("account") == account:
-        return True
-    other_provider = other.get("agent")
-    if other_provider is None:
-        return True
-    if other_provider != provider:
-        return False
-    other_bucket = other.get("bucket")
-    return bucket is None or other_bucket is None or bucket == other_bucket
-
-
-def _all_admissions(project: Path) -> list[tuple[Path, dict]]:
-    root = state_root(project)
-    if root.is_symlink():
-        raise PodError("unsafe_state", "State root is redirected")
-    rows = []
-    if not root.exists():
-        return rows
-    for path in root.glob("*/context.json"):
-        state = _read(path)
-        rows.extend((path, row) for row in state["admissions"].values())
-    return rows
+def admission_identity(*, objective: str, run_id: str, task_id: str,
+                       packet_id: str | None = None, plan_revision: str | None = None) -> str:
+    """Re-entry identity excludes mutable preference, Governor and version revisions."""
+    return digest({"objective": objective, "run": run_id, "task": task_id})
 
 
 def logical_projection(project: Path, native: dict, *, objective: str,
@@ -374,7 +301,7 @@ def logical_projection(project: Path, native: dict, *, objective: str,
             continue
         outstanding.append({**admission["request"], "objective": objective,
                             "admission_id": admission_id, "task": task,
-                            "state": admission["state"], "bucket": admission.get("bucket")})
+                            "state": admission["state"]})
     return {"schema": "pod-logical-projection/v1", "runtime": native["runtime"],
             "authoritative": native.get("authoritative") is True,
             "owner": native.get("owner") if native.get("authoritative") is True else None,
@@ -401,222 +328,123 @@ def _native_assignment_settled(shown: dict) -> bool:
             and stage.get("detail") == "settled")
 
 
-def _quota_hold(provider: str, account: str, bucket: str | None,
-                snapshot: dict | None, state: str, *, now: datetime,
-                freshness: int, project: Path | None = None) -> bool:
-    """Keep exhaustion monotonic until a fresh positive window clears it."""
-    root = state_root(project)
-    path = root / "quota-holds.json"
-    key = digest({"provider": provider, "account": account, "bucket": bucket})
-    with _lock(path):
-        raw = bounded_json(path) if path.exists() else {"schema": "pod-quota-holds/v3", "holds": {}}
-        exact(raw, {"schema", "holds"}, {"schema", "holds"}, name="quota_holds")
-        if raw["schema"] != "pod-quota-holds/v3" or not isinstance(raw["holds"], dict):
-            raise PodError("state_unsupported", "Quota hold schema is unsupported")
-        hold = raw["holds"].get(key, {"windows": {}})
-        if not isinstance(hold, dict) or not isinstance(hold.get("windows"), dict):
-            raise PodError("state_unsupported", "Quota hold identity is malformed")
-        windows = dict(hold["windows"])
-        supported = None
-        if state != "unknown" and snapshot is not None:
-            try:
-                candidate = validate_snapshot(snapshot)
-                observed = datetime.fromisoformat(candidate["observed_at"].replace("Z", "+00:00"))
-                if (candidate["provider"] == provider and candidate["account"] == account
-                        and candidate["bucket"] == bucket
-                        and candidate["source"] in ("supported", "supported_metadata")
-                        and candidate["confidence"] == "observed"
-                        and observed.tzinfo is not None and now.tzinfo is not None
-                        and 0 <= (now - observed).total_seconds()):
-                    supported = candidate, observed, (now - observed).total_seconds() <= freshness
-            except (PodError, TypeError, ValueError, OverflowError):
-                pass
-        changed = False
-        if supported is not None:
-            candidate, observed, fresh = supported
-            values = {row["name"]: (row.get("remaining_percent"), row.get("reset_at"))
-                      for row in candidate["windows"]}
-            if "remaining_percent" in candidate:
-                values["aggregate"] = (candidate["remaining_percent"], None)
-            for name, (remaining, reset_at) in values.items():
-                previous = windows.get(name)
-                previous_at = None
-                if previous is not None:
-                    if not isinstance(previous, dict) or not isinstance(previous.get("observed_at"), str):
-                        raise PodError("state_unsupported", "Quota hold window is malformed")
-                    try:
-                        previous_at = datetime.fromisoformat(
-                            previous["observed_at"].replace("Z", "+00:00"))
-                    except ValueError as exc:
-                        raise PodError("state_unsupported",
-                                       "Quota hold timestamp is malformed") from exc
-                    if previous_at.tzinfo is None:
-                        raise PodError("state_unsupported",
-                                       "Quota hold timestamp has no timezone")
-                if remaining == 0 and (previous_at is None or observed > previous_at):
-                    windows[name] = {"observed_at": observed.isoformat(), "reset_at": reset_at}
-                    changed = True
-                elif (fresh and remaining is not None and remaining > 0
-                      and previous_at is not None and observed > previous_at):
-                    del windows[name]
-                    changed = True
-        if changed:
-            if windows:
-                raw["holds"][key] = {"windows": windows}
-            else:
-                raw["holds"].pop(key, None)
-            atomic_json(path, raw)
-        if state == "exhausted":
-            return True
-        return bool(windows)
-
-
 def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
-            requested: dict, route_decision: dict, establishment: dict,
-            native_reader: Callable[[], dict], capacity: int, run_id: str,
+            requested: dict, native_reader: Callable[[dict], dict], run_id: str,
             task_id: str, plan_revision: str, packet_id: str, worktree: str,
-            frozen_packet: dict,
-            exceptional_grant: dict | None = None, capacity_reason: str | None = None,
-            spending_grant: dict | None = None, task_policy: dict | None = None,
+            frozen_packet: dict, expected_runtime: str, placement_binding: dict,
+            reuse_of: str | None = None,
             now: datetime | None = None) -> dict:
-    """Serialize policy and logical fan-out validation before the native start seam."""
+    """Final serialized admission: preference read is last, before writing the row."""
+    from . import __version__
+    from .config import load
+    from .selection import validate_choice, worker_ceiling
     moment = now or datetime.now(timezone.utc)
-    if not isinstance(admission_id, str) or not admission_id:
-        raise PodError("invalid_admission", "Admission identity is required")
-    if capacity < 1 or capacity > 8:
-        raise PodError("invalid_capacity", "Worker capacity must be between one and eight")
-    require_route_establishment(establishment, requested)
-    if route_decision.get("status") != "usable" or route_decision.get("selected") != requested:
-        raise PodError("route_unusable", "Admission needs the exact usable route decision")
-    if not isinstance(route_decision.get("policy_revision"), str):
-        raise PodError("route_unusable", "Route decision lacks a policy revision")
     path = _path(project, objective)
-    with _lock(state_root(project) / "admission" / "state"), _lock(path):
-        from .config import effective
-        current_policy = effective(project, task=task_policy)
-        if current_policy["revision"] != route_decision.get("policy_revision"):
-            raise PodError("policy_revision_mismatch", "Admission policy changed after route selection")
-        policy = current_policy["policy"]["policy"]
-        route_model = current_policy["policy"]["models"].get(requested.get("alias"))
-        if (not isinstance(route_model, dict) or not route_model.get("approved")
-                or route_model.get("agent") != requested.get("agent")
-                or route_model.get("model") != requested.get("model")
-                or route_model.get("account") != requested.get("account")):
-            raise PodError("route_unusable", "Requested route is no longer approved and exact")
+    with _lock(path):
         state = _read(path)
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         existing = state["admissions"].get(admission_id)
-        if existing:
-            immutable = (existing["objective"], existing["run_id"], existing["task_id"],
-                         existing["packet_id"], existing["plan_revision"], existing["request"],
-                         existing["worktree"])
-            expected = (objective, run_id, task_id, packet_id, plan_revision, requested, worktree)
-            if immutable != expected:
+        if existing is not None:
+            if (existing["objective"] != objective or existing["run_id"] != run_id
+                    or existing["task_id"] != task_id or existing["packet_id"] != packet_id
+                    or existing["plan_revision"] != plan_revision or existing["worktree"] != worktree):
                 raise PodError("admission_conflict", "Admission identity was reused for different work")
             return {**existing, "existing": True}
-        if any(row.get("run_id") == run_id and row.get("task_id") == task_id
-               and row.get("state") in ("reserved", "unresolved")
-               for row in state["admissions"].values() if isinstance(row, dict)):
-            raise PodError("unresolved_prior_attempt",
-                           "A revised packet cannot replace an uncertain attempt for the same native Task")
-        native = native_reader()
+        if any(row["task_id"] == task_id and row["state"] in ("reserved", "unresolved")
+               for row in state["admissions"].values()):
+            raise PodError("unresolved_prior_attempt", "An unsettled Task cannot be replaced")
+        if (state.get("checkpoint") or {}).get("pod_version") != __version__:
+            raise PodError("installed_version_changed", "Reload the installed skill and write a fresh checkpoint")
+        native = native_reader(state)
         if (native.get("authoritative") is not True or native.get("owner") != owner
-                or native.get("runtime") != establishment.get("runtime")
-                or native.get("scope") != "objective_assignments"
-                or native.get("complete") is not True):
-            raise PodError("native_authority_unverified",
-                           "Admission lacks stable current-Run authority")
+                or native.get("scope") != "objective_assignments" or native.get("complete") is not True
+                or not isinstance(native.get("runtime"), str)):
+            raise PodError("native_authority_unverified", "Admission lacks stable native Run authority")
+        if native["runtime"] != expected_runtime:
+            raise PodError("orca_runtime_changed", "Launch capability and native authority changed runtime")
         checkpoint_value = state.get("checkpoint")
         body = frozen_packet.get("body") if isinstance(frozen_packet, dict) else None
         if (not isinstance(body, dict) or frozen_packet.get("packet_id") != packet_id
-                or body.get("candidate") != (checkpoint_value or {}).get("candidate")
-                or body.get("criteria") != (checkpoint_value or {}).get("criteria")
+                or body.get("candidate") != checkpoint_value.get("candidate")
+                or body.get("criteria") != checkpoint_value.get("criteria")
                 or body.get("plan_revision") != plan_revision
-                or body.get("policy_revision") != current_policy["revision"]
-                or body.get("objective_source") != (checkpoint_value or {}).get("objective_source")
-                or body.get("worktree") != (checkpoint_value or {}).get("worktree")):
-            raise PodError("packet_plan_mismatch", "Packet differs from the current owned checkpoint")
-        if "delegate" in body.get("actions", []) and not policy.get("child_delegation"):
-            raise PodError("delegation_unauthorized", "Worker delegation is not authorized")
+                or body.get("objective_source") != checkpoint_value.get("objective_source")
+                or body.get("worktree") != checkpoint_value.get("worktree")):
+            raise PodError("packet_plan_mismatch", "Packet differs from current checkpoint")
         bound_sources = [*body["sources"], *({"path": ref["path"], "state": "present",
                           "sha256": ref["sha256"]} for ref in body["context"]
                          if ref["kind"] in ("source", "instruction"))]
         _check_bound_sources_locked(project, path, state, packet_id, bound_sources)
-        if capacity <= 3 and capacity > min(policy["max_workers"], policy["ordinary_max"]):
-            raise PodError("capacity_ceiling", "Capacity exceeds the ordinary worker ceiling")
-        if capacity == 3 and not (isinstance(capacity_reason, str) and capacity_reason.strip()):
-            raise PodError("capacity_reason_required", "Three workers needs a reason")
-        if capacity >= 4 and not _grant_matches(exceptional_grant, policy.get("exceptional_grants", []),
-                                                 objective=objective, run_id=run_id,
-                                                 plan_revision=plan_revision,
-                                                 account=requested["account"], capacity=capacity,
-                                                 now=moment):
-            raise PodError("exceptional_capacity_grant_required", "Four to eight workers needs an exact grant")
-        if (capacity >= 4
-                and current_policy["provenance"].get("policy.max_workers") in ("project", "task")
-                and capacity > policy["max_workers"]):
-            raise PodError("capacity_ceiling", "Local hard capacity restriction remains effective")
-        qstate, _ = quota_state(native.get("quota"), provider=requested["agent"],
-                             account=requested["account"], bucket=requested.get("bucket"),
-                             policy=policy, now=moment)
-        if _quota_hold(requested["agent"], requested["account"], requested.get("bucket"),
-                       native.get("quota"), qstate, now=moment,
-                       freshness=policy.get("quota_fresh_seconds", 60), project=project):
-            raise PodError("quota_exhausted", "Current applicable quota bucket is exhausted")
         projection = logical_projection(project, native, objective=objective)
-        outstanding = projection["outstanding"]
-        overlapping = [row for row in outstanding
-                       if _bucket_overlap(requested["agent"], requested["account"],
-                                          requested.get("bucket"), row)]
-        if len(outstanding) >= capacity:
-            raise PodError("logical_capacity_full", "Objective fan-out limit is occupied")
-        if qstate == "unknown" and overlapping:
-            raise PodError("unknown_quota_capacity",
-                           "Unknown quota permits one outstanding logical assignment on this objective route")
-        grant_binding = None
-        if route_model.get("billing", "unknown") != "included":
-            grant_binding, maximum = _spending_grant_binding(policy.get("spending_grants", []),
-                                                              route_decision.get("spending_grant"), requested=requested,
-                                                              objective=objective, now=moment)
-            used = 0
-            for _, prior in _all_admissions(project):
-                prior_request = prior.get("request")
-                prior_grant = prior.get("recovery", {}).get("spending_grant")
-                if (isinstance(prior_request, dict)
-                        and prior_request.get("account") == requested.get("account")
-                        and prior_request.get("model") == requested.get("model")
-                        and prior_grant is None):
-                    raise PodError("spending_history_unverified",
-                                   "Earlier matching admission lacks grant accounting")
-                if prior_grant is None:
-                    continue
-                if (not isinstance(prior_grant, dict)
-                        or type(prior_grant.get("units")) is not int
-                        or prior_grant["units"] < 1
-                        or not isinstance(prior_grant.get("scope"), str)):
-                    raise PodError("state_unsupported",
-                                   "Spending grant accounting is malformed")
-                if prior_grant["scope"] == grant_binding["scope"]:
-                    used += prior_grant["units"]
-            if used >= maximum:
-                raise PodError("spending_grant_exhausted", "Spending grant units are exhausted")
+        failures = [failure for prior in state["admissions"].values() for failure in prior["failures"]]
+        if any(f.get("kind") == "safety_refusal" and f.get("task") == task_id and not f.get("cleared_at")
+               for f in failures):
+            raise PodError("safety_refusal", "A safety refusal bars another model on this Task")
+        from .selection import failure_active
+        for prior in state["admissions"].values():
+            if prior["request"].get("model") == requested.get("model"):
+                continue
+            if not any(failure_active(f, now=moment) for f in prior["failures"]):
+                continue
+            if prior["state"] == "deferred":
+                continue
+            matches = [item for item in native["assignments"]
+                       if item.get("admission_id") == prior["admission_id"]]
+            if len(matches) != 1 or matches[0].get("settled") is not True:
+                raise PodError("failed_attempt_unsettled", "Settle the failed attempt before an alternative route")
+        # The personal file is read after every other check under the objective lock.
+        snapshot = load(project)
+        if snapshot["policy_revision"] != checkpoint_value.get("policy_revision"):
+            raise PodError("policy_revision_mismatch", "Governor policy changed since checkpoint")
+        if body.get("policy_revision") != snapshot["policy_revision"]:
+            raise PodError("policy_revision_mismatch", "Packet Governor policy changed")
+        if body.get("route", {}).get("preference_revision") != snapshot["revision"]:
+            raise PodError("preference_changed", "Preferences changed before native dispatch")
+        ceiling = worker_ceiling(snapshot, state["constraints"])
+        if len(projection["outstanding"]) >= ceiling:
+            raise PodError("logical_capacity_full", "Objective logical worker ceiling is occupied")
+        if "delegate" in body.get("actions", []) and not any(
+                c["kind"] == "allow_delegation" and c["provenance"] == "user_direct" and c.get("active", True)
+                for c in state["constraints"]):
+            raise PodError("delegation_unauthorized", "Worker delegation lacks direct user intent")
+        checked = validate_choice(snapshot, state["constraints"], failures, requested,
+                                  task=task_id, role=body.get("responsibility"), now=moment)
+        if not checked["allowed"]:
+            raise PodError("preference_changed", f"Proposed route is no longer allowed: {checked['code']}")
+        if reuse_of is not None:
+            prior = state["admissions"].get(reuse_of)
+            if (prior is None or prior["state"] not in ("bound", "closed")
+                    or not binding_valid(prior.get("native_binding"))
+                    or not prior["native_binding"]["terminalHandle"]):
+                raise PodError("reuse_unavailable", "Terminal reuse needs a settled, known prior attempt")
+            matches = [a for a in native["assignments"] if a.get("admission_id") == reuse_of]
+            if len(matches) != 1 or matches[0].get("settled") is not True:
+                raise PodError("reuse_unavailable", "Prior attempt has not settled natively")
+            effective_route = prior["route_decision"].get("effective", {})
+            if any(effective_route.get(key) in (None, "unknown")
+                   or requested[key] != effective_route[key] for key in ("agent", "model", "effort")):
+                raise PodError("reuse_route_changed", "Terminal reuse cannot switch the prior effective model")
         stamp = moment.isoformat()
-        row = {"schema": "pod-admission/v2", "state": "reserved",
-               "admission_id": admission_id, "objective": objective, "owner": owner,
-               "request": requested, "route_decision": route_decision,
-               "effective_evidence": establishment, "runtime": native["runtime"],
+        decision = {"agent": requested["agent"], "model": requested["model"],
+                    "requested_effort": requested["effort"], "requested_context": requested["context"],
+                    "reason": requested["reason"], "preference_revision": snapshot["revision"],
+                    "policy_revision": snapshot["policy_revision"], "mode": snapshot["mode"],
+                    "constraint_refs": [c.get("id") for c in state["constraints"] if c.get("active", True)],
+                    "pod_version": __version__, "effective": {"agent": "unknown", "model": "unknown",
+                    "effort": "unknown", "context": "unknown"},
+                    "route_mismatch": False, "effective_unknown": True}
+        row = {"schema": "pod-admission/v3", "state": "reserved", "admission_id": admission_id,
+               "objective": objective, "owner": owner, "request": requested,
+               "route_decision": decision, "effective_evidence": {}, "runtime": native["runtime"],
                "request_uuid": None, "run_id": run_id, "task_id": task_id,
                "plan_revision": plan_revision, "packet_id": packet_id, "worktree": worktree,
-               "bucket": requested.get("bucket"), "native_binding": None,
-               "recovery": {
-                   "checkpoint_binding": {key: checkpoint_value.get(key) for key in
-                                          ("candidate", "criteria", "plan_revision",
-                                           "policy_revision", "objective_source", "worktree")},
-                   **({"placement_binding": body.get("placement", body.get("worktree"))}
-                      if body.get("placement", body.get("worktree")) is not None else {}),
-                   **({"spending_grant": grant_binding} if grant_binding else {})},
-               "error": None, "created_at": stamp, "updated_at": stamp}
+               "reuse_of": reuse_of, "native_binding": None,
+               "recovery": {"checkpoint_binding": {key: checkpoint_value.get(key) for key in
+                                                 ("candidate", "criteria", "plan_revision", "policy_revision",
+                                                  "objective_source", "worktree")},
+                            "placement_binding": placement_binding},
+               "error": None, "failures": [], "created_at": stamp, "updated_at": stamp}
         state["owner"] = owner
         state["admissions"][admission_id] = row
         _write(path, state)
@@ -724,3 +552,71 @@ def _intervention_locked(project: Path, objective: str, state: dict, *, task: st
                     "diagnosis_source": diagnosis_source,
                     "diagnosis_source_digest": diagnosis_source["sha256"] if diagnosis_source else None})
     return {"correction_identity": identity, "dispatch_authorized": False, "scope": key}
+def constraints_update(project: Path, objective: str, *, owner: str,
+                       action: str, value: dict | None = None, constraint_id: str | None = None) -> dict:
+    from .config import load
+    from .selection import validate_constraint
+    path = _path(project, objective)
+    if action == "list":
+        state = read(project, objective)
+        return {"constraints": state["constraints"] if state else []}
+    with _lock(path):
+        state = _read(path)
+        if state["owner"] != owner:
+            raise PodError("coordinator_conflict", "Constraint belongs to another coordinator")
+        if action == "add":
+            snapshot = load(project)
+            row = validate_constraint(value, snapshot)
+            if not isinstance(row.get("id"), str) or not row["id"] or len(row["id"]) > 128:
+                raise PodError("invalid_constraint", "Constraint id is required")
+            if any(c.get("id") == row["id"] for c in state["constraints"]):
+                raise PodError("constraint_conflict", "Constraint id is already present")
+            state["constraints"].append(row)
+        elif action == "revoke":
+            matches = [c for c in state["constraints"] if c.get("id") == constraint_id]
+            if len(matches) != 1:
+                raise PodError("unknown_constraint", "Constraint id is unavailable")
+            matches[0]["active"] = False
+        else:
+            raise PodError("invalid_constraint_action", "Constraint action is unsupported")
+        _write(path, state)
+        return {"constraints": state["constraints"]}
+
+
+def route_failure(project: Path, objective: str, *, owner: str, admission_id: str,
+                  kind: str, source: str, retry_after: str | None = None,
+                  clear: bool = False, cleared_by: str | None = None) -> dict:
+    from .selection import FAILURE_KINDS
+    if kind not in FAILURE_KINDS or not isinstance(source, str) or not source or len(source) > 256:
+        raise PodError("invalid_route_failure", "Failure kind and source are required")
+    if kind == "safety_refusal" and retry_after is not None:
+        raise PodError("invalid_route_failure", "Safety refusal has no timed retry")
+    if retry_after is not None:
+        try:
+            parsed = datetime.fromisoformat(retry_after.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PodError("invalid_route_failure", "Retry-after must be an ISO timestamp") from exc
+        if parsed.tzinfo is None:
+            raise PodError("invalid_route_failure", "Retry-after needs a timezone")
+    def apply(row: dict) -> None:
+        if clear:
+            if cleared_by not in ("user", "runtime_change"):
+                raise PodError("invalid_route_failure", "Clear needs user or runtime-change provenance")
+            matched = False
+            for failure in row["failures"]:
+                if failure["kind"] == kind and not failure.get("cleared_at"):
+                    failure["cleared_at"] = datetime.now(timezone.utc).isoformat()
+                    failure["cleared_by"] = cleared_by
+                    matched = True
+            if not matched:
+                raise PodError("unknown_route_failure", "No matching active failure to clear")
+        else:
+            if row["state"] not in ("closed", "deferred", "bound"):
+                raise PodError("failure_attempt_unsettled", "Record actual failure on its own settled attempt")
+            if len(row["failures"]) >= 16:
+                raise PodError("route_failure_full", "Attempt failure record is full")
+            row["failures"].append({"kind": kind, "source": source, "retry_after": retry_after,
+                                    "model": row["request"]["model"], "task": row["task_id"],
+                                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                                    "cleared_at": None, "cleared_by": None})
+    return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
