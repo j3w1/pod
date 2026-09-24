@@ -49,6 +49,8 @@ class TuiPtyTests(unittest.TestCase):
 
     def test_all_six_guidance_panels_change_on_focus(self):
         session=self.open()
+        from pod.catalog import load as load_catalog
+        catalog=load_catalog()
         expected=['Claude Opus 5.5','Claude Sonnet 5','GPT-6 Astra',
                   'GPT-6 Luna','GPT-6 Sol','Claude Fable 5.1']
         for index,name in enumerate(expected):
@@ -56,10 +58,26 @@ class TuiPtyTests(unittest.TestCase):
                 if index:
                     session.send('\x1bOB')
                     session.wait_for(lambda s:name in self.focused(s))
+                    session.settle()
                 self.assertIn(name,self.focused(session))
                 self.assertIn('Pod example:',session.text())
                 self.assertIn('context native default',session.text())
                 self.assertIn('AA ',session.text())
+                model=next(row for row in catalog['models'] if row['name']==name)
+                self.assertIn(model['guidance'],' '.join(session.text().split()))
+                session.send('\n')
+                session.wait_for('[expanded]')
+                session.settle()
+                expanded=session.text()
+                self.assertIn(model['guidance'],' '.join(expanded.split()))
+                self.assertIn('Documented context:',expanded)
+                self.assertIn('AA score index;',expanded)
+                self.assertIn('Official source:',expanded)
+                self.assertIn('AA source:',expanded)
+                for variant in catalog['reference_benchmark']['models'][model['id']]['variants']:
+                    self.assertIn(variant['profile']+': score',expanded)
+                session.send('\x1b')
+                session.wait_for(lambda s:'[expanded]' not in s.text())
 
     def test_sort_filter_focus_identity_and_space_edits_same_id(self):
         session=self.open()
@@ -78,15 +96,24 @@ class TuiPtyTests(unittest.TestCase):
         session.wait_for(lambda _s:self.load(personal=self.config)['saved']['claude-opus-5-5']=='preferred')
         self.assertEqual(self.load(personal=self.config)['saved']['claude-fable-5-1'],'available')
         session.wait_for('Saved just now')
+        title=session.lines()[0]
+        self.assertIn('My selection',title)
+        self.assertIn('6 eligible',title)
+        self.assertIn('Saved just now',title)
 
     def test_sizes_resize_and_tiny_recovery(self):
         session=self.open()
         self.assertIn('Runtime',session.lines()[2])
+        self.assertIn('Space / s f r Enter ? q',session.text())
         session.resize(60,20)
         session.wait_for(lambda s:'Runtime' not in s.lines()[2] and 'Details' in s.text())
+        session.settle()
         self.assertIn('USD/task',session.lines()[2])
+        self.assertIn('Space / s f r Enter ? q',session.text())
         session.resize(40,15)
         session.wait_for(lambda s:'Rank' not in s.lines()[2] and 'Details' in s.text())
+        session.settle()
+        self.assertIn('Space / s f r Enter ? q',session.text())
         session.resize(39,11)
         session.wait_for('Terminal too small')
         session.resize(40,15)

@@ -8,7 +8,7 @@ from pod.config import load as preferences, write_defaults
 from pod.config import set_model
 from pod.term import Capabilities, capabilities, clean, display_width, safe_text, elide_middle
 from pod.tui_render import AA_CLARIFICATION, AA_URL, frame, summary
-from pod.tui_state import initial, reduce, refresh, visible_ids, with_runtime
+from pod.tui_state import initial, reduce, refresh, visible_ids, with_notice, with_runtime
 from tests.common import fixture
 
 NOW = datetime(2026, 9, 25, tzinfo=timezone.utc)
@@ -187,6 +187,8 @@ class TuiRenderTests(unittest.TestCase):
         for model_id in IDS:
             state=replace(self.state,focus_id=model_id,expanded=True)
             text=self.picture(state).plain
+            model=next(row for row in state.catalog['models'] if row['id']==model_id)
+            self.assertIn(model['guidance'],' '.join(text.split()))
             reference=state.catalog['reference_benchmark']['models'][model_id]
             for variant in reference['variants']:
                 self.assertIn(variant['profile']+': score',text)
@@ -201,6 +203,23 @@ class TuiRenderTests(unittest.TestCase):
         restored,_=reduce(after,'ESC')
         self.assertEqual(restored.focus_id,state.focus_id)
         self.assertFalse(restored.expanded)
+
+    def test_keys_and_save_feedback_survive_layouts(self):
+        for size in ((80,24),(60,20),(40,15),(40,20),(40,24),(60,24),(100,30)):
+            for mode in ('normal','expanded','help'):
+                state=replace(self.state,expanded=mode=='expanded',help_open=mode=='help')
+                with self.subTest(size=size,mode=mode):
+                    self.assertIn('Space / s f r Enter ? q',self.picture(state,size=size).plain)
+        saved=with_notice(self.state,'Saved just now')
+        title=self.picture(saved).lines[0].text
+        self.assertIn('My selection',title)
+        self.assertIn('6 eligible',title)
+        self.assertIn('Saved just now',title)
+        all_mode=with_notice(refresh(self.state,{**self.state.preferences,'mode':'all'}),'Saved just now')
+        all_title=self.picture(all_mode).lines[0].text
+        self.assertIn('All models',all_title)
+        self.assertIn('6 eligible',all_title)
+        self.assertIn('Saved just now',all_title)
 
     def test_long_path_help_missing_invalid_and_age(self):
         long_path='/tmp/'+'very-long-component/'*16+'config.yaml'

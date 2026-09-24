@@ -185,10 +185,9 @@ def _details(state: State, width: int, budget: int, caps: Capabilities,
         examples = "Not set (not eligible) | " + examples
     if state.expanded:
         context = model["documented_context_tokens"]
-        guidance = _bounded([Line(row) for row in wrap(safe_text(model["guidance"], caps), width)],
-                            2, width, caps)
+        guidance = [Line(row) for row in wrap(safe_text(model["guidance"], caps), width)]
         items = [
-            examples, identity, aa, _rank_detail(state, model_id, caps),
+            examples, identity, aa,
             "Documented context: " + (f"{context:,} tokens" if context else "not stated") + "; worker uses native default.",
             "AA score index; USD/task and first-chunk seconds are reference metrics.",
             "Official source: " + model["sources"][0]["url"],
@@ -216,16 +215,21 @@ def _footer(state: State, width: int, rows: int, caps: Capabilities, now: dateti
     benchmark = state.catalog["reference_benchmark"]
     indicator = (f"Benchmark reference{glyph(caps, 'dot')}{benchmark['captured']}"
                  f"{glyph(caps, 'dot')}{_age_label(state, now)}")
+    keys = safe_text("↑/↓ Space / s f r Enter ? q", caps)
+    on_rule = display_width(indicator) + display_width(keys) + 2 <= width
+    heading = f"{indicator}  {keys}" if on_rule else indicator
     if state.expanded or state.help_open:
-        entries = [indicator]
+        entries = [heading] if on_rule else [heading, keys]
     elif rows >= 24:
-        entries = [indicator, *wrap(safe_text(AA_CLARIFICATION, caps), width), AA_URL, SESSION_LINE]
+        entries = [heading, *wrap(safe_text(AA_CLARIFICATION, caps), width), AA_URL, SESSION_LINE]
+        if not on_rule:
+            entries.append(keys)
     elif rows >= 20:
-        entries = [indicator, "↑/↓ move  Space state  r all  / find  ? help  q quit"]
+        entries = [heading] if on_rule else [heading, keys]
     else:
-        entries = ["Space state  r all  ? help  q quit"]
-    return [_rule(entries[0], width, caps)] + [Line(safe_text(item, caps), "footer")
-                                                     for item in entries[1:]]
+        entries = [keys]
+    return [_rule(entries[0], width, caps)] + [Line(row, "footer") for item in entries[1:]
+                                               for row in wrap(safe_text(item, caps), width)]
 
 
 def frame(state: State, cols: int, rows: int, caps: Capabilities, now: datetime) -> Frame:
@@ -236,18 +240,18 @@ def frame(state: State, cols: int, rows: int, caps: Capabilities, now: datetime)
         tiny = [Line("Terminal too small", "heading"), Line("Resize, or press q to quit", "footer")]
         return Frame(tuple(Line(_fit(item.text, width, caps), item.role) for item in tiny[:rows]), cols, rows)
     mode = "All models" if state.preferences["mode"] == "all" else "My selection"
-    if state.preferences["mode"] == "all":
-        mode += " — your choices are saved" + (" (r restores)" if not state.notice else "")
     if state.preferences["errors"]:
         mode = "Preferences unavailable — read-only"
     title = (f"{'~' if caps.ascii_only else '≋'} Pod  {mode}  "
              f"{len(state.preferences['eligible'])} eligible")
     if state.notice:
-        prefix = f"{'~' if caps.ascii_only else '≋'} Pod  "
-        prominent = prefix + elide_middle(safe_text(state.notice, caps),
-                                          width - display_width(prefix),
-                                          ascii_only=caps.ascii_only)
-        title = prominent if display_width(prominent) + 3 + display_width(mode) > width else prominent + "  " + mode
+        notice = ("no change saved" if state.notice.endswith("; no change saved")
+                  else state.notice)
+        remaining = width - display_width(title) - 3
+        if remaining > 0:
+            title += "  · " + _fit(notice, remaining, caps)
+    elif state.preferences["mode"] == "all":
+        title += " — your choices are saved (r restores)"
     elif not state.preferences["errors"] and not state.preferences["eligible"]:
         title = (f"{'~' if caps.ascii_only else '≋'} Pod  0 eligible  "
                  "Delegation disabled — coordinator work remains available")
@@ -255,7 +259,7 @@ def frame(state: State, cols: int, rows: int, caps: Capabilities, now: datetime)
     fields = _columns(width)
     footer = _footer(state, width, rows, caps, now)
     if state.expanded or state.help_open:
-        table_height = 2 if rows >= 20 else 1
+        table_height = 1
     elif rows >= 24:
         table_height = 6
     elif rows >= 20:
