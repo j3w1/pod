@@ -380,6 +380,29 @@ def launcher_info(path: Path, template: bytes) -> dict:
             "reason": "owned" if actual == template else "foreign"}
 
 
+def _reconcilable_copy(canonical: Path, receipt: dict | None, source_bundle: Path) -> bool:
+    """An interrupted skills-CLI copy can be replaced only for its exact target."""
+    if (not receipt or receipt.get("status") != "installing" or not canonical.is_dir()
+            or canonical.is_symlink() or receipt["target"]["version"] != _version(source_bundle)
+            or receipt["target"]["digest"] != bundle_digest(source_bundle)):
+        return False
+    names = set(_inventory(source_bundle))
+    directories = {str(parent) for name in names for parent in Path(name).parents if str(parent) != "."}
+    for child in canonical.rglob("*"):
+        relative = child.relative_to(canonical).as_posix()
+        if child.is_symlink():
+            return False
+        if child.is_dir():
+            if relative not in directories:
+                return False
+        elif child.is_file():
+            if relative not in names:
+                return False
+        else:
+            return False
+    return True
+
+
 def _preflight(stage: Path, paths: dict[str, Path], template: bytes) -> None:
     if platform.system() != "Linux" or os.geteuid() == 0:
         raise InstallError(1, "Run as a non-root user on Linux")
@@ -399,15 +422,21 @@ def _preflight(stage: Path, paths: dict[str, Path], template: bytes) -> None:
     for name in _inventory(source_bundle):
         if not source_bundle.joinpath(*name.split("/")).is_file():
             raise InstallError(1, f"Source bundle file {name} is missing")
+    receipt = read_receipt(paths["data"] / "install.json")
     canonical = paths["canonical"]
-    if canonical.is_symlink() or (canonical.exists() and (not canonical.is_dir() or not (canonical / "SKILL.md").is_file())):
+    if canonical.is_symlink() or (canonical.exists() and not canonical.is_dir()):
         raise InstallError(1, f"Refuse foreign canonical skill path: {canonical}")
+    if canonical.is_dir():
+        incomplete = (not (canonical / "SKILL.md").is_file()
+                      or receipt is not None and receipt["status"] == "installing"
+                      and optional_digest(canonical) is None)
+        if incomplete and not _reconcilable_copy(canonical, receipt, source_bundle):
+            raise InstallError(1, f"Refuse foreign canonical skill path: {canonical}")
     claude_link = paths["claude"] / "skills/pod"
     if claude_link.exists() or claude_link.is_symlink():
         if not claude_link.is_symlink() or claude_link.resolve(strict=False) != canonical.resolve(strict=False):
             raise InstallError(1, f"Refuse foreign Claude skill path: {claude_link}")
     launcher = launcher_info(paths["launcher"], template)
-    receipt = read_receipt(paths["data"] / "install.json")
     prior_template = receipt.get("launcher_digest") if receipt else None
     prior_owned = (paths["launcher"].is_file() and not paths["launcher"].is_symlink()
                    and prior_template == hashlib.sha256(paths["launcher"].read_bytes()).hexdigest())
@@ -662,7 +691,9 @@ def install(stage: Path) -> int:
                    detail=_path_label(path_status, []))
             _print_summary(paths, prefs, path_status, _duplicates(paths), None)
             return 0
-        previous = {"version": _version(canonical), "digest": current} if current and (canonical / "VERSION").is_file() else None
+        previous = ({"version": _version(canonical), "digest": current}
+                    if current and (canonical / "VERSION").is_file() else
+                    receipt.get("previous") if receipt and receipt["status"] == "installing" else None)
         record = {"schema": "pod-install/v1", "status": "installing", "previous": previous,
                   "target": target, "launcher": str(paths["launcher"]),
                   "launcher_digest": hashlib.sha256(template).hexdigest(),

@@ -367,6 +367,32 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(json.loads(self.receipt.read_text())["status"], "installed")
         self.assertEqual((self.canonical / "SKILL.md").read_bytes(), changed)
 
+    def test_receipt_backed_empty_and_partial_copy_recover_but_foreign_content_does_not(self):
+        self.installed()
+        def interrupt(contents: dict[str, bytes]) -> None:
+            receipt=json.loads(self.receipt.read_text())
+            receipt['status']='installing'
+            self.receipt.write_text(json.dumps(receipt))
+            shutil.rmtree(self.canonical)
+            self.canonical.mkdir()
+            for name,data in contents.items():
+                target=self.canonical/name
+                target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_bytes(data)
+        interrupt({})
+        self.assertEqual(run_install(self.env).returncode,0)
+        self.assertEqual(json.loads(self.receipt.read_text())['status'],'installed')
+        self.assertEqual(run_pod(self.env,'--version').stdout.strip(),(ROOT/'VERSION').read_text().strip())
+        interrupt({'catalog.json':b'partial catalog copy'})
+        self.assertEqual(run_install(self.env).returncode,0)
+        self.assertEqual(json.loads(self.receipt.read_text())['status'],'installed')
+        interrupt({'foreign.txt':b'unrelated contents'})
+        refused=run_install(self.env)
+        self.assertEqual(refused.returncode,1,refused.stdout+refused.stderr)
+        self.assertIn('foreign canonical skill path',refused.stderr)
+        self.assertEqual((self.canonical/'foreign.txt').read_bytes(),b'unrelated contents')
+        self.assertEqual(json.loads(self.receipt.read_text())['status'],'installing')
+
     def test_concurrent_installer_and_sigint(self):
         env = {**self.env, "POD_TEST_NPX_MODE": "sleep"}
         first = subprocess.Popen(["sh", str(ROOT / "install.sh")], env=env, cwd=self.root / "work",
