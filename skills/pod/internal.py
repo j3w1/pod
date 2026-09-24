@@ -24,9 +24,8 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
         raise PodError("native_authority_unverified",
                        "Governor mutation does not own this Pod objective context")
     if mutating and not version_exempt:
-        from . import __version__
-        if (state.get("checkpoint") or {}).get("pod_version") != __version__:
-            raise PodError("installed_version_changed", "Reload Pod and write a fresh checkpoint")
+        from .bundle import require_current_identity
+        require_current_identity(state.get("checkpoint"))
     authority_runs: set[str] = set()
     runtimes: set[object] = set()
     assignments = []

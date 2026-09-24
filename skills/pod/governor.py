@@ -406,10 +406,8 @@ def _pending_interventions(state: dict, unit: str | None = None,
 
 
 def _require_version(state: dict) -> None:
-    from . import __version__
-    checkpoint = state.get("checkpoint")
-    if not isinstance(checkpoint, dict) or checkpoint.get("pod_version") != __version__:
-        raise PodError("installed_version_changed", "Reload Pod and write a fresh checkpoint")
+    from .bundle import require_current_identity
+    require_current_identity(state.get("checkpoint"))
 
 
 def _assert_authority(project: Path, objective: str, owner: str, state: dict) -> None:

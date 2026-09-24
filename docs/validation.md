@@ -126,6 +126,14 @@ can diagnose without it. Project authorization remains separate from technical
 readiness. Unknown cost stays unknown; reuse and deferral counters are not an
 estimate of savings.
 
+Each checkpoint records the running root version and the installer's canonical
+bundle digest. A same-version bundle change, or an older checkpoint without a
+digest, blocks new admission and Governor mutation as
+`installed_version_changed`; status names the checkpoint and running identities,
+and doctor names the running and receipt identities. Existing request recovery
+stays available. A fresh authorized checkpoint after skill reload and a new
+`pod config --json` read establishes the new identity.
+
 ## Live runtime boundary
 
 The installed Orca worker contract supplies per-worker model and effort

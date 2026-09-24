@@ -3,6 +3,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import unittest
@@ -13,7 +14,7 @@ from pod.cli import execute, main, parser
 from pod.config import load, write_defaults
 from pod.errors import PodError
 from pod.placement import inspect
-from tests.common import HOST_HOME, HOST_POD_DATA, disposable_path, fixture
+from tests.common import HOST_HOME, HOST_POD_DATA, disposable_path, fixture, modified_bundle
 
 
 class CliTests(unittest.TestCase):
@@ -89,6 +90,35 @@ class CliTests(unittest.TestCase):
         self.assertFalse(receipt.is_relative_to(HOST_POD_DATA))
         self.assertTrue(receipt.is_relative_to(self.root))
         self.assertNotIn(str(HOST_HOME / '.local/bin'),os.environ['PATH'].split(os.pathsep))
+
+    def test_doctor_shows_same_version_bundle_drift_and_both_identities(self):
+        from pod.bundle import bundle_root, running_identity
+        original=running_identity()
+        canonical=self.root/'.agents/skills/pod'
+        canonical.parent.mkdir(parents=True)
+        shutil.copytree(bundle_root(),canonical,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+        receipt=self.root/'data/pod/install.json'
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(json.dumps({'schema':'pod-install/v1','status':'installed',
+                                       'previous':None,'target':{'version':original['version'],
+                                                                 'digest':original['bundle_digest']}}))
+        changed=modified_bundle(self.root)
+        with patch('pod.cli.contract',return_value={'status':'unavailable'}):
+            same=execute(parser().parse_args(['doctor','--json']),self.project)
+        self.assertFalse(same['installed_version_drift'])
+        with patch('pod.bundle.bundle_root',return_value=changed), \
+             patch('pod.cli.contract',return_value={'status':'unavailable'}):
+            drift=execute(parser().parse_args(['doctor','--json']),self.project)
+            output=StringIO()
+            with patch('pathlib.Path.cwd',return_value=self.project),redirect_stdout(output):
+                self.assertEqual(main(['doctor']),0)
+        self.assertTrue(drift['installed_version_drift'])
+        self.assertEqual(drift['bundle_identity']['receipt'],original)
+        self.assertEqual(drift['bundle_identity']['running']['version'],original['version'])
+        self.assertNotEqual(drift['bundle_identity']['running']['bundle_digest'],original['bundle_digest'])
+        self.assertIn(original['bundle_digest'][:12],output.getvalue())
+        self.assertIn(drift['bundle_identity']['running']['bundle_digest'][:12],output.getvalue())
+        self.assertIn('Bundle drift',output.getvalue())
 
     def test_doctor_is_passive_and_reports_unsupported_state_objective_scoped(self):
         from pod.ledger import _path

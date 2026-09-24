@@ -1107,7 +1107,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_governor.CandidateTests.test_version_drift_blocks_mutation_but_status_remains_read_only",
+      "offline_test": "tests.test_governor.CandidateTests.test_same_version_changed_bundle_blocks_governor_mutations",
       "status": "NOT_RUN"
     },
     {
@@ -1115,7 +1115,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_cli.CliTests.test_doctor_is_passive_and_reports_unsupported_state_objective_scoped",
+      "offline_test": "tests.test_cli.CliTests.test_doctor_shows_same_version_bundle_drift_and_both_identities",
       "status": "NOT_RUN"
     },
     {

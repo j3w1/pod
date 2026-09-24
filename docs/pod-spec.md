@@ -88,7 +88,7 @@ remain first-class. Issue and worktree source bindings create no issue or worktr
 | R45 | B | Recovery selects the objective and reads native state before action. Native request-show governs completed/pending/absent request recovery; exact Run/Task/Dispatch readback may bind only one matching attempt. Missing, ambiguous or unresolved own evidence keeps its logical reservation outstanding and never justifies relaunch. There is no Pod retry, release or lifecycle loop and no daemon. | A22,A31,A60,A69,A95 |
 | R46 | B,H | Steering creates a new revision, reconciles affected assignments at safe native boundaries, preserves useful unaffected work and prevents obsolete reports/proof satisfying revised work. Material acceptance changes require explicit authorization. | A30,A43,A67 |
 | R47 | B,H | Record relevant observed outcomes and suggest preferences only after a meaningful pattern. Never silently rewrite preferences, infer savings from model labels or launch paid A/B experiments automatically. | A37,A70 |
-| R48 | B | Read-only status and doctor report preferences, resolved paths, current native work, constraints, decisions, mismatches, version drift, catalog/benchmark age, blockers and next actions. Reads do not repair, dispatch, run models or alter preferences. | A34,A40,A49,A71,A133 |
+| R48 | B | Read-only status and doctor report preferences, resolved paths, current native work, constraints, decisions, mismatches, installed bundle identity drift, catalog/benchmark age, blockers and next actions. Reads do not repair, dispatch, run models or alter preferences. | A34,A40,A49,A71,A133 |
 | R49 | B,H | The one-shot installer places both agent skills, dependencies and a user-local launcher from one validated bundle. Reinstall and update preserve edited preferences and foreign files; diagnose duplicate/shadowing copies and interrupted installs. | A32,A33,A72,A134 |
 | R50 | H | Follow registered host paths/worktree mechanisms/native profiles/admin boundaries. Canonical pod registration/relocation uses owner-managed mechanism. Coding must not change global policy, weaken protections/gates or perform unauthorized deployment/provider/publication actions. | A73 |
 | R51 | H | Claim live-verified coordination only with passing live evidence for Claude Code and Codex on Linux, each with real Orca delegation through the production adapter. Synthetic, hosted and review checks never substitute for it, and missing live evidence stays NOT_RUN. Unsupported optional capabilities fail conservatively and cannot be marketed as verified. | A74 |
@@ -120,7 +120,7 @@ remain first-class. Issue and worktree source bindings create no issue or worktr
 | R77 | B,H | Objective constraints retain provenance and cannot edit the personal file. Only direct user instructions may permit a scoped Disabled-model or descendant exception. A later saved-state or mode change lapses the model exception; indirect text may only narrow. | A121,A141 |
 | R78 | B,H | Reactive failure records are attempt-local. Honor native retry-after, require settlement before alternatives, and bar same-Task rerouting after safety refusal. Routine questions use Orca reply; advisories keep the route, informational warnings need no input, and unknown or permission prompts block locally. | A127,A141 |
 | R79 | B,I | The one-shot installer and explicit update use a staged checked bundle, isolated dependency environment and owned user-local launcher, preserve user-edited files and report PATH or duplicate-copy limitations. Installation is separate from runtime connection and authentication. | A134,A136,A137,A142 |
-| R80 | H | Check installed-version drift before new admission and Governor mutation, stamping a fresh checkpoint after reload; unresolved native request recovery remains available. Record preference and Governor policy revisions separately so a model edit does not supersede candidate proof. | A124,A132,A142 |
+| R80 | H | Stamp the running `{version, bundle_digest}` in each checkpoint and refuse a new admission or Governor mutation if either differs, including a checkpoint missing the digest. Reload the skill and write a fresh checkpoint; existing native request recovery remains available. Record preference and Governor policy revisions separately so a model edit does not supersede candidate proof. | A124,A132,A142 |
 
 
 ## Public interfaces
@@ -273,8 +273,12 @@ Worker interaction follows this bounded decision table:
 | Unknown or permission prompt | Localized blocker; never auto-accept. |
 | Safety refusal | No reroute. |
 
-New admissions and Governor mutations refuse `installed_version_changed` until
-skill reload and a fresh Pod-stamped checkpoint. Recovery remains available.
+The checkpoint binds root `VERSION` and the installer's canonical bundle digest,
+computed from running bundle files without caches. A same-version code change or
+missing checkpoint digest refuses a new admission or Governor mutation with
+`installed_version_changed`; status and doctor show both identities. Reload the
+skill, re-read `pod config --json`, and write a fresh checkpoint. Recovery of
+an existing native request remains available.
 The Governor keeps ALLOW/REUSE/DEFER, preflight, consolidation, CI reuse,
 supersedence, classification and scoped efficiency exceptions; it uses the
 Governor policy revision, not preference bytes. Orca owns lifecycle, and project

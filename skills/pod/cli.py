@@ -11,7 +11,8 @@ import shutil
 import subprocess
 import sys
 
-from .bundle import bundle_root, version
+from .bundle import (RELOAD_ACTION, bundle_root, checkpoint_identity, identity_drift_message,
+                     identity_label, identity_matches, running_identity, version)
 from .catalog import age, by_id, load as load_catalog, ranks, reference_rows
 from .config import load as load_config, personal_path, read_yaml, write_defaults
 from .errors import PodError
@@ -84,6 +85,7 @@ def _config(project: Path, *, edit: bool) -> dict:
 
 def _doctor(project: Path) -> dict:
     from . import installer
+    running = running_identity()
     preferences = load_config(project)
     snapshot = contract()
     try:
@@ -96,6 +98,8 @@ def _doctor(project: Path) -> dict:
         receipt_path = paths["data"] / "install.json"
         receipt = installer.read_receipt(receipt_path)
         target = receipt.get("target") if isinstance(receipt, dict) and isinstance(receipt.get("target"), dict) else {}
+        receipt_identity = {"version": target.get("version"), "bundle_digest": target.get("digest")} if receipt else None
+        drift = not identity_matches(receipt_identity, running) if receipt_identity else None
         canonical_digest = installer.optional_digest(paths["canonical"])
         venv = installer._venv_path(paths)
         launcher = paths["launcher"]
@@ -113,6 +117,9 @@ def _doctor(project: Path) -> dict:
                                "venv": {"path": str(venv), "ready": installer._venv_ready(venv), "pin": installer.PIN},
                                "duplicates": installer._duplicates(paths),
                                "lock_entry": skills_cli_entry()}
+        installation_checks["running_identity"] = running
+        installation_checks["receipt_identity"] = receipt_identity
+        installation_checks["installed_version_drift"] = drift
         installation_checks["healthy"] = bool(installed == "installed" and installation_checks["digest_matches"]
                                                and installation_checks["venv"]["ready"]
                                                and launcher_ownership["owned"]
@@ -128,8 +135,12 @@ def _doctor(project: Path) -> dict:
         shadowed = False
         installed = "installation needs attention"
         installation_checks = {"error": str(exc)}
+        receipt_identity = None
+        drift = None
     return {"schema": "pod-cli/v4", "status": "observed", "version": version(),
             "bundle": str(bundle_root()), "installation": installed,
+            "bundle_identity": {"running": running, "receipt": receipt_identity, "drift": drift},
+            "installed_version_drift": drift,
             "installation_checks": installation_checks,
             "launcher": {"path": str(launcher), "exists": launcher.is_file(), "shadowed": shadowed,
                          "ownership": launcher_ownership},
@@ -146,7 +157,9 @@ def _doctor(project: Path) -> dict:
 
 def _status(project: Path, run: str | None) -> dict:
     preferences = load_config(project)
+    running = running_identity()
     result = {"schema": "pod-cli/v4", "status": "selection_required", "run": run,
+              "bundle_identity": {"running": running, "checkpoint": None, "drift": None},
               "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
                                                                "max_active", "errors")},
               "constraints": [], "route_decisions": [], "route_mismatch": False,
@@ -179,6 +192,8 @@ def _status(project: Path, run: str | None) -> dict:
                        "next_safe_action": "inspect the objective state"})
         return result
     checkpoint = state.get("checkpoint") if state else None
+    recorded = checkpoint_identity(checkpoint) if checkpoint else None
+    drift = bool(checkpoint and not identity_matches(recorded, running))
     admissions = list(state["admissions"].values()) if state else []
     checkpoint_refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else None
     checkpoint_assignments = checkpoint.get("assignments") if isinstance(checkpoint, dict) else None
@@ -208,7 +223,9 @@ def _status(project: Path, run: str | None) -> dict:
                                       if checkpoint else None,
                    "route_mismatch": any(row["route_decision"].get("route_mismatch") for row in admissions),
                    "effective_unknown": any(row["route_decision"].get("effective_unknown") for row in admissions),
-                   "installed_version_drift": bool(checkpoint and checkpoint.get("pod_version") != version()),
+                   "installed_version_drift": drift,
+                   "bundle_identity": {"checkpoint": recorded, "running": running, "drift": drift},
+                   "installed_version_detail": identity_drift_message(checkpoint, running=running) if drift else None,
                    "native": {"worker_count": len(workers["workers"]), "scope": workers.get("scope"),
                               "complete": workers.get("complete")},
                    "pending_admissions": sum(row["state"] in ("reserved", "unresolved") for row in admissions),
@@ -221,7 +238,7 @@ def _status(project: Path, run: str | None) -> dict:
                                        if checkpoint else "inspect native Run"})
     if result["installed_version_drift"]:
         result["blocker"] = "installed_version_changed"
-        result["next_safe_action"] = "reload Pod and write a fresh checkpoint"
+        result["next_safe_action"] = RELOAD_ACTION
     elif preferences["errors"] and result["blocker"] is None:
         result["blocker"] = "preferences_unavailable"
         result["next_safe_action"] = "inspect and correct the personal preference file"
@@ -283,6 +300,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "doctor":
         print(f"Pod {version()}: {result['installation']}")
         checks = result["installation_checks"]
+        identity = result["bundle_identity"]
+        print(f"Running bundle: {identity_label(identity['running'])}")
+        if identity["receipt"] is not None:
+            print(f"Receipt bundle: {identity_label(identity['receipt'])}")
+        if identity["drift"]:
+            print(f"Bundle drift: {RELOAD_ACTION}")
         if checks.get("receipt_status"):
             print(f"Installer: receipt {checks['receipt_status']}; bundle "
                   f"{'matches' if checks['digest_matches'] else 'differs from'} receipt; "
@@ -299,6 +322,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Orca: {result['orca']['status']}")
     elif args.command == "status":
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
+        identity = result["bundle_identity"]
+        if identity["checkpoint"] is not None:
+            print(f"Checkpoint bundle: {identity_label(identity['checkpoint'])}; "
+                  f"running: {identity_label(identity['running'])}")
         for ref in result.get("native_references", []):
             print(f"  Task {ref['task']} | Dispatch {ref['dispatch'] or 'pending'} | "
                   f"worker {ref['worker'] or 'unknown'} | terminal {ref['terminal'] or 'none'} | {ref['state']}")

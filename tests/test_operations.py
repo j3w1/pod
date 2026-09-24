@@ -14,7 +14,7 @@ from pod.ledger import (admission_identity, checkpoint, constraints_update, read
 from pod.operations import (_assignment_evidence, _preflight_refusal_classification,
                             guarded_start, recover_admission, OrcaPort)
 from pod.records import packet, source_identity
-from tests.common import fixture
+from tests.common import fixture, modified_bundle
 
 REQUEST='11111111-1111-4111-8111-111111111111'
 OTHER='22222222-2222-4222-8222-222222222222'
@@ -496,6 +496,76 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(caught.exception.code,'installed_version_changed')
         self.assertEqual(self.start()['status'],'bound')
 
+    def test_same_version_changed_bundle_blocks_new_start_but_not_existing_recovery(self):
+        from pod.bundle import running_identity
+        from pod.cli import execute, main as cli_main, parser
+        from pod.installer import bundle_digest, read_receipt
+        from contextlib import redirect_stdout
+        from io import StringIO
+        original=running_identity()
+        first=self.start()['admission']
+        changed=modified_bundle(self.root)
+        self.assertEqual((changed/'VERSION').read_text().strip(),original['version'])
+        receipt_path=Path(os.environ['XDG_DATA_HOME'])/'pod/install.json'
+        receipt_path.parent.mkdir(parents=True)
+        receipt_path.write_text(json.dumps({'schema':'pod-install/v1','status':'installed',
+            'previous':{'version':original['version'],'digest':original['bundle_digest']},
+            'target':{'version':original['version'],'digest':bundle_digest(changed)}}))
+        receipt=read_receipt(receipt_path)
+        self.assertEqual(receipt['previous']['version'],receipt['target']['version'])
+        self.assertNotEqual(receipt['previous']['digest'],receipt['target']['digest'])
+        update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
+                         update=lambda row:row.update(state='unresolved',native_binding=None))
+        with patch('pod.bundle.bundle_root',return_value=changed):
+            current=running_identity()
+            self.assertEqual(current['version'],original['version'])
+            self.assertNotEqual(current['bundle_digest'],original['bundle_digest'])
+            self.assertEqual(current['bundle_digest'],receipt['target']['digest'])
+            with self.assertRaises(PodError) as blocked:
+                self.start('new-task')
+            self.assertEqual(blocked.exception.code,'installed_version_changed')
+            self.assertIn(original['bundle_digest'][:12],str(blocked.exception))
+            self.assertIn(current['bundle_digest'][:12],str(blocked.exception))
+            self.assertIn('pod config --json',str(blocked.exception))
+            self.assertEqual(len(self.port.starts),1)
+            self.assertEqual(len(read(self.project,'objective')['admissions']),1)
+            self.port.state='completed'
+            recovered=self.recover(first)
+            self.assertEqual(recovered['status'],'bound')
+            self.assertEqual(len(self.port.starts),1)
+            with patch('pod.cli.worker_rows',return_value={'workers':[],
+                     'scope':{'source':'flag','run':'run'},'complete':True}):
+                status=execute(parser().parse_args(['status','--run','run','--json']),self.project)
+            self.assertTrue(status['installed_version_drift'])
+            self.assertEqual(status['bundle_identity']['checkpoint'],original)
+            self.assertEqual(status['bundle_identity']['running'],current)
+            self.assertEqual(status['blocker'],'installed_version_changed')
+            with patch('pod.cli.worker_rows',return_value={'workers':[],
+                     'scope':{'source':'flag','run':'run'},'complete':True}), \
+                 patch('pathlib.Path.cwd',return_value=self.project), \
+                 redirect_stdout(StringIO()) as human:
+                self.assertEqual(cli_main(['status','--run','run']),0)
+            self.assertIn(original['bundle_digest'][:12],human.getvalue())
+            self.assertIn(current['bundle_digest'][:12],human.getvalue())
+            self.checkpoint()
+            self.assertEqual(self.start('new-task')['status'],'bound')
+
+    def test_missing_checkpoint_digest_blocks_only_new_admission(self):
+        from pod.ledger import _lock, _path, _read, _write
+        path=_path(self.project,'objective')
+        with _lock(path):
+            state=_read(path)
+            state['checkpoint'].pop('bundle_digest')
+            _write(path,state)
+        with self.assertRaises(PodError) as blocked:
+            self.start()
+        self.assertEqual(blocked.exception.code,'installed_version_changed')
+        self.assertIn('digest missing',str(blocked.exception))
+        self.assertEqual(self.port.starts,[])
+        self.assertFalse(read(self.project,'objective')['admissions'])
+        self.checkpoint()
+        self.assertEqual(self.start()['status'],'bound')
+
     def test_internal_admission_cannot_accept_caller_asserted_capability(self):
         request={'project':str(self.project),'objective':'objective','owner':'owner',
                  'run':'run','task':'task','plan_revision':'plan','packet':self.frozen(),
@@ -843,7 +913,7 @@ class AdmissionTests(unittest.TestCase):
         checkpoint_value=read(self.project,'objective')['checkpoint']
         checkpoint(self.project,'objective',owner='owner',
                    value={key:value for key,value in {**checkpoint_value,'objective_source':source}.items()
-                          if key!='pod_version'},native={'runtime':'runtime'})
+                      if key not in ('pod_version','bundle_digest')},native={'runtime':'runtime'})
         frozen=packet({**self.frozen()['body'],'objective_source':source})
         with patch('pod.github.issue_recheck',return_value={'status':'current'}):
             first=self.start(frozen=frozen)['admission']
@@ -921,7 +991,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_two_objectives_have_independent_logical_slots(self):
         checkpoint_value={key:value for key,value in read(self.project,'objective')['checkpoint'].items()
-                          if key not in ('pod_version','objective')}
+                          if key not in ('pod_version','bundle_digest','objective')}
         checkpoint(self.project,'second',owner='owner',value=checkpoint_value,native={'runtime':'runtime'})
         for task in ('first','second'):
             self.assertEqual(self.start(task)['status'],'bound')

@@ -34,8 +34,12 @@ class LedgerTests(unittest.TestCase):
     def test_checkpoint_is_versioned_and_context_is_compact(self):
         state=self.checkpoint()
         from pod import __version__
+        from pod.bundle import bundle_root, running_identity
+        from pod.installer import bundle_digest
         self.assertEqual(state['schema'],'pod-context/v4')
         self.assertEqual(state['checkpoint']['pod_version'],__version__)
+        self.assertEqual(state['checkpoint']['bundle_digest'],running_identity()['bundle_digest'])
+        self.assertEqual(state['checkpoint']['bundle_digest'],bundle_digest(bundle_root()))
         self.assertEqual(state['constraints'],[])
         self.assertEqual(ADMISSION_STATES,('reserved','bound','unresolved','closed','deferred'))
 

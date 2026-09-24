@@ -23,7 +23,7 @@ from pod.governor import (classify_failure, decide, discover_triggers, enforceme
                           observe_candidate, prepare_candidate, reconcile, record_correction,
                           record_outcome, record_preflight, status)
 from pod.ledger import checkpoint
-from tests.common import fixture
+from tests.common import fixture, modified_bundle
 
 NOW = datetime(2026, 9, 21, tzinfo=timezone.utc)
 COMMIT, TREE = "a" * 40, "c" * 40
@@ -266,6 +266,28 @@ class CandidateTests(GovernorCase):
                                   observation=observation(), now=NOW)
             self.assertEqual(caught.exception.code, "installed_version_changed")
             self.assertEqual(status(self.project, "objective")["schema"], "pod-governor/v2")
+
+    def test_same_version_changed_bundle_blocks_governor_mutations(self):
+        from pod.bundle import running_identity
+        from pod.internal import run as internal_run
+        prior=running_identity()
+        self.prepared()
+        changed=modified_bundle(self.root)
+        with patch('pod.bundle.bundle_root',return_value=changed):
+            current=running_identity()
+            self.assertEqual(current['version'],prior['version'])
+            self.assertNotEqual(current['bundle_digest'],prior['bundle_digest'])
+            with self.assertRaises(PodError) as blocked:
+                prepare_candidate(self.project,'objective',owner='owner',unit='release',
+                                  observation=observation(),now=NOW)
+            self.assertEqual(blocked.exception.code,'installed_version_changed')
+            self.assertIn(prior['bundle_digest'][:12],str(blocked.exception))
+            self.assertIn(current['bundle_digest'][:12],str(blocked.exception))
+            with self.assertRaises(PodError) as internal:
+                internal_run('governor-prepare',{'project':str(self.project),'objective':'objective',
+                                                'owner':'owner','unit':'release'})
+            self.assertEqual(internal.exception.code,'installed_version_changed')
+            self.assertEqual(status(self.project,'objective')['schema'],'pod-governor/v2')
 
     def test_version_drift_does_not_prevent_settling_an_admitted_effect(self):
         candidate = self.prepared()["candidate"]

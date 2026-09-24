@@ -290,7 +290,7 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
 
 
 def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
-    from . import __version__
+    from .bundle import running_identity
     from .config import effective
     bounded_text(owner, name="owner")
     allowed = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
@@ -335,7 +335,12 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         value = {**value, "native_refs": [{"runId": run, "runtime": runtime}
                                            for run, runtime in sorted(authority["references"].items())]}
         state["owner"] = owner
-        state["checkpoint"] = {**value, "objective": objective, "pod_version": __version__}
+        identity = running_identity()
+        if identity["bundle_digest"] is None:
+            raise PodError("installed_version_changed", "Running bundle is incomplete; reload the skill and write a fresh checkpoint")
+        state["checkpoint"] = {**value, "objective": objective,
+                               "pod_version": identity["version"],
+                               "bundle_digest": identity["bundle_digest"]}
         _write(path, state)
         return state
 
@@ -437,8 +442,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         if any(row["task_id"] == task_id and row["state"] in ("reserved", "unresolved")
                for row in state["admissions"].values()):
             raise PodError("unresolved_prior_attempt", "An unsettled Task cannot be replaced")
-        if (state.get("checkpoint") or {}).get("pod_version") != __version__:
-            raise PodError("installed_version_changed", "Reload the installed skill and write a fresh checkpoint")
+        from .bundle import require_current_identity
+        require_current_identity(state.get("checkpoint"))
         native = native_reader(state)
         if (native.get("authoritative") is not True or native.get("owner") != owner
                 or native.get("scope") != "objective_assignments" or native.get("complete") is not True
