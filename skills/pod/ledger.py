@@ -395,22 +395,38 @@ def logical_projection(project: Path, native: dict, *, objective: str,
             "physical_capacity": native.get("physical_capacity", "unavailable")}
 
 
-_SETTLED_ASSIGNMENT_OUTCOMES = frozenset(
-    {"succeeded", "failed", "stopped", "canceled", "cancelled", "abandoned"})
+_SETTLED_OUTCOME_STATUSES = {
+    "succeeded": frozenset({"completed"}),
+    "failed": frozenset({"failed"}),
+    "stopped": frozenset({"failed"}),
+    "canceled": frozenset({"canceled", "cancelled"}),
+    "cancelled": frozenset({"canceled", "cancelled"}),
+}
 
 
 def _native_assignment_settled(shown: dict) -> bool:
-    """Read only Orca's assignment outcome and its settlement qualifier."""
+    """Require a terminal attempt, not one success-specific stage detail."""
     result = shown.get("result") if isinstance(shown, dict) else None
     projection = result.get("projection") if isinstance(result, dict) else None
-    if not isinstance(projection, dict):
+    dispatch = result.get("dispatch") if isinstance(result, dict) else None
+    if not isinstance(projection, dict) or not isinstance(dispatch, dict):
         return False
     stage = projection.get("stage")
     if not isinstance(stage, dict):
         return False
     outcome = projection.get("outcome")
-    return (isinstance(outcome, str) and outcome in _SETTLED_ASSIGNMENT_OUTCOMES
-            and stage.get("detail") == "settled")
+    raw_statuses = (stage.get("dispatch"), dispatch.get("status"))
+    statuses = [value for value in raw_statuses if value is not None]
+    return (isinstance(outcome, str) and outcome in _SETTLED_OUTCOME_STATUSES
+            and bool(statuses) and all(isinstance(value, str) for value in statuses)
+            and len(set(statuses)) == 1
+            and statuses[0] in _SETTLED_OUTCOME_STATUSES[outcome]
+            and isinstance(dispatch.get("id"), str)
+            and projection.get("dispatchId") == dispatch["id"]
+            and isinstance(dispatch.get("runId"), str)
+            and projection.get("runId") == dispatch["runId"]
+            and isinstance(dispatch.get("taskId"), str)
+            and projection.get("taskId") == dispatch["taskId"])
 
 
 def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -692,7 +708,8 @@ def constraints_update(project: Path, objective: str, *, owner: str,
 
 def route_failure(project: Path, objective: str, *, owner: str, admission_id: str,
                   kind: str, source: str, retry_after: str | None = None,
-                  clear: bool = False, cleared_by: str | None = None) -> dict:
+                  clear: bool = False, cleared_by: str | None = None,
+                  native_reader: Callable[[dict], dict] | None = None) -> dict:
     from .selection import FAILURE_KINDS
     if kind not in FAILURE_KINDS or not isinstance(source, str) or not source or len(source) > 256:
         raise PodError("invalid_route_failure", "Failure kind and source are required")
@@ -720,6 +737,22 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
         else:
             if row["state"] not in ("closed", "deferred", "bound"):
                 raise PodError("failure_attempt_unsettled", "Record actual failure on its own settled attempt")
+            if row["state"] == "bound":
+                try:
+                    if native_reader is None:
+                        from .operations import OrcaPort
+                        native = OrcaPort(project).read_native(
+                            owner, authority_runs=(row["run_id"],), assignments=(row,))
+                    else:
+                        native = native_reader(row)
+                    projected = logical_projection(project, native, objective=objective)
+                    if (native.get("authoritative") is not True or native.get("owner") != owner
+                            or native.get("runtime") != row["runtime"]
+                            or admission_id in projected["outstanding_ids"]):
+                        raise PodError("failure_attempt_unsettled", "Native attempt is not settled")
+                except PodError as exc:
+                    raise PodError("failure_attempt_unsettled",
+                                   "Record actual failure only after exact native settlement") from exc
             if len(row["failures"]) >= 16:
                 raise PodError("route_failure_full", "Attempt failure record is full")
             row["failures"].append({"kind": kind, "source": source, "retry_after": retry_after,

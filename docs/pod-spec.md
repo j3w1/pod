@@ -23,6 +23,10 @@ policy, explicit user authorization and project governance retain their own auth
 
 Pod decides desired fan-out, not physical occupancy: one logical reservation per Pod
 assignment, freed by exact native assignment settlement regardless of retained terminals.
+Settlement requires the exact Run/Task/Dispatch join, a settled projection outcome,
+and a terminal Dispatch status. A failed stopped attempt qualifies even when its
+stage detail is `process_stopped`; an active, unverifiable or undocumented
+abandoned attempt does not. Resource release alone proves nothing.
 Independent objectives do not census each other, and Pod never queries, infers or claims
 physical capacity. Orca's documented effect-free preflight refusals (`task_not_found`,
 `task_not_startable`, `inject_rejected`) create a durable deferred admission with no binding
@@ -68,7 +72,7 @@ remain first-class. Issue and worktree source bindings create no issue or worktr
 | R25 | B | Treat accepted input, started reasoning, native settlement and accepted output as different native observations. Silence/lost responses do not prove failure, justify resending input or authorize replacement work. Recover the same immutable admission through Orca request-show: record a completed receipt, join a pending request with Orca's UUID, or inspect exact Run/Task/Dispatch identity after an absent result or when no UUID was recorded. Missing, ambiguous or contradictory evidence holds and never starts fresh; a later incomplete observation cannot erase a known request-identity conflict. | A22,A58,A95 |
 | R26 | H | Zero workers is valid. The default maximum is two active logical assignments per objective; personal `workers.max_active` may be 0–8 and direct constraints may narrow it. Every investigator, reviewer and authorized descendant counts. Native settlement frees a slot even when a terminal is retained; never infer physical occupancy. | A18,A19,A130 |
 | R27 | H | Only the coordinator delegates unless direct user intent explicitly permits a descendant. Every Pod-managed descendant needs its own objective reservation under the same ceiling. Native limits and hidden provider fan-out are not Pod observations. | A16,A19,A20,A21 |
-| R28 | H | Serialize admission under the objective lock, recording one logical reservation before each worker start. Reserved and unresolved attempts remain outstanding; exact native settlement frees a bound slot. Do not census other objectives or reconstruct physical occupancy. Documented effect-free Orca refusals defer; uncertain errors require exact request and worker readback. | A18,A21,A22,A59,A96 |
+| R28 | H | Serialize admission under the objective lock, recording one logical reservation before each worker start. Reserved and unresolved attempts remain outstanding; an exact Run/Task/Dispatch readback with settled outcome and terminal Dispatch status frees a bound slot, including a failed stopped attempt. Do not census other objectives or reconstruct physical occupancy. Documented effect-free Orca refusals defer; uncertain errors require exact request and worker readback. | A18,A21,A22,A59,A96 |
 | R29 | H | Establish one authoritative coordinator per objective. Adoption reconciles pending effects/native authority before dispatch. Before Governor preparation, admission, execution or any journal mutation, join the caller's stable native current-Run binding (Run, coordinator handle and consumer generation) to that objective's exact native references, runtime and existing Pod owner. Terminal self-identity alone is not authority; a missing, unrelated, changed, worker-only or takeover binding blocks. Failed authority still permits read-only diagnosis/status and safe direct work. A local lock is not distributed fencing; never manufacture a replacement controller or silently create/adopt a Run. | A21,A31,A60 |
 | R30 | H | Parallelize only independent responsibilities/editing boundaries; begin with one writer when contracts are unsettled. Use project/host-supported isolation. Preserve unrelated changes; never silently stash/reset/clean or execute unauthorized setup hooks. | A24,A42,A61 |
 | R31 | B | Use bounded versioned packets carrying objective/criteria, responsibility, scope, candidate, context references, dependencies, permitted actions, route, revisions, reporting contract and native bindings when issued. Do not clone the full coordinator transcript or predict runtime identities. | A24,A35,A62 |
@@ -308,7 +312,7 @@ scenarios. Behavioral/live claims cannot be certified by checking document text.
 | A15 | A recorded unavailable or authentication failure is not retried blindly. |
 | A16 | An alternative route waits for exact settlement or proven no-start of the failed attempt. |
 | A17 | Model-state actions change no provider billing, service or account setting. |
-| A18 | Five ready Tasks at logical fan-out two admit two, block the third by policy, and admit the next useful Task after exact assignment settlement even if its terminal is retained. |
+| A18 | Five ready Tasks at logical fan-out two admit two, block the third by policy, and admit the next useful Task after exact assignment settlement, including a stopped failed Dispatch, even if its terminal is retained. |
 | A19 | `workers.max_active` accepts 0–8 and cannot be widened by an objective constraint. |
 | A20 | Descendant delegation requires direct user intent and counts under the same objective ceiling. |
 | A21 | Concurrent managed admissions serialize objective-local reservations and do not exceed logical fan-out; stable native coordinator authority is still required. |
