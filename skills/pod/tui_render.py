@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .catalog import age, by_id, ranks, reference_rows
+from .catalog import age, by_id, ranks, reference_entry, reference_rows
 from .term import Capabilities, clean, clip, display_width, elide_middle, glyph, pad, safe_text, wrap
 from .tui_state import FILTERS, SORTS, State, visible_ids
 
@@ -80,10 +80,11 @@ def _table_line(state: State, model_id: str, caps: Capabilities,
     label = saved.capitalize() if saved in ("preferred", "available", "disabled") else "Not set"
     symbol = glyph(caps, saved) if saved in ("preferred", "available", "disabled") else "?"
     rank = ranks(state.catalog)[model_id]
-    tied = sum(value == rank for value in ranks(state.catalog).values()) > 1
+    tied = rank is not None and sum(value == rank for value in ranks(state.catalog).values()) > 1
     values = {"state": f"{symbol} {label}", "model": model["name"],
               "agent": "Claude" if model["agent"] == "claude" else "Codex",
-              "rank": f"{rank}{'=' if tied else ''}/6", "score": str(metrics["intelligence"]),
+              "rank": glyph(caps, "dash") if rank is None else f"{rank}{'=' if tied else ''}/6",
+              "score": _metric(metrics["intelligence"], caps=caps),
               "usd": glyph(caps, "dash") if metrics["usd_per_task"] is None else f"${metrics['usd_per_task']:g}",
               "first": glyph(caps, "dash") if metrics["first_chunk_s"] is None else f"{metrics['first_chunk_s']:g}s",
               "runtime": state.runtime}
@@ -104,18 +105,23 @@ def _metric(value: float | int | None, *, prefix: str = "", suffix: str = "", ca
 
 def _age_label(state: State, now: datetime) -> str:
     days = age(state.catalog, today=now.date())
+    if days is None:
+        return "—"
     return "today" if days == 0 else "1 day" if days == 1 else f"{days} days"
 
 
 def _rank_detail(state: State, model_id: str, caps: Capabilities) -> str:
     rank = ranks(state.catalog)[model_id]
+    if rank is None:
+        return safe_text("— of 6 — benchmark rank is unknown until six scores are present", caps)
     tied = sum(value == rank for value in ranks(state.catalog).values()) > 1
     suffix = " (tied)" if tied else ""
     return safe_text(f"{rank} of 6{suffix} — among Pod's six supported models, not AA's overall rank", caps)
 
 
 def _help_rows(state: State, width: int, caps: Capabilities, now: datetime) -> list[str]:
-    benchmark = state.catalog["reference_benchmark"]
+    benchmark = state.catalog.get("reference_benchmark")
+    benchmark = benchmark if isinstance(benchmark, dict) else {}
     path_label = "Preferences: "
     path = elide_middle(safe_text(state.preferences["path"], caps),
                         max(1, width - display_width(path_label)), ascii_only=caps.ascii_only)
@@ -125,7 +131,7 @@ def _help_rows(state: State, width: int, caps: Capabilities, now: datetime) -> l
         "/ searches by model, id or agent; Esc clears; s sorts; f filters providers.",
         "Enter expands Details; Page Down/Up scrolls; Esc closes; ? toggles help; q quits.",
         AA_CLARIFICATION, AA_URL, SESSION_LINE,
-        f"Benchmark reference {glyph(caps, 'dot')}{benchmark['captured']}{glyph(caps, 'dot')}{_age_label(state, now)}",
+        f"Benchmark reference {glyph(caps, 'dot')}{benchmark.get('captured') or glyph(caps, 'dash')}{glyph(caps, 'dot')}{_age_label(state, now)}",
         path_label + path,
     ]
     return [line for item in items for line in wrap(safe_text(item, caps), width)]
@@ -172,16 +178,19 @@ def _details(state: State, width: int, budget: int, caps: Capabilities,
     model_id = state.focus_id if state.focus_id in visible else visible[0]
     model = by_id(state.catalog)[model_id]
     metrics = reference_rows(state.catalog)[model_id]
-    reference = state.catalog["reference_benchmark"]["models"][model_id]
+    reference = reference_entry(state.catalog, model_id)
+    benchmark = state.catalog.get("reference_benchmark")
+    captured = benchmark.get("captured") if isinstance(benchmark, dict) else None
+    captured = captured if isinstance(captured, str) else glyph(caps, "dash")
     join = glyph(caps, "dot")
     effort = "native default"
     identity = f"ID {model_id}{join}effort auto{join}context {effort}{join}Runtime {state.runtime}"
-    aa = (f"AA {reference['reference_variant']}{join}{metrics['intelligence']}"
+    aa = (f"AA {reference['reference_variant']}{join}{_metric(metrics['intelligence'], caps=caps)}"
           f"{join}{_metric(metrics['usd_per_task'], prefix='$', suffix='/task', caps=caps)}"
           f"{join}{_metric(metrics['first_chunk_s'], suffix='s', caps=caps)}"
-          f"{join}{state.catalog['reference_benchmark']['captured']}")
+          f"{join}{captured}")
     examples = "Pod example: " + model["examples"][0]
-    if state.preferences["saved"].get(model_id) is None:
+    if state.preferences["saved"].get(model_id) is None and state.preferences["mode"] != "all":
         examples = "Not set (not eligible) | " + examples
     if width < 50 and budget <= 7 and not state.expanded:
         _, suited, purpose = model["guidance"].partition("Suited to ")
@@ -194,8 +203,8 @@ def _details(state: State, width: int, budget: int, caps: Capabilities,
             examples,
             f"ID {model_id}; effort auto",
             context_runtime,
-            f"AA {reference['reference_variant']} {metrics['intelligence']} "
-            f"{state.catalog['reference_benchmark']['captured']}",
+            f"AA {reference['reference_variant']} {_metric(metrics['intelligence'], caps=caps)} "
+            f"{captured}",
         ]
         return [Line(_fit(item, width, caps)) for item in compact[:budget]]
     if state.expanded:
@@ -208,8 +217,10 @@ def _details(state: State, width: int, budget: int, caps: Capabilities,
             "Official source: " + model["sources"][0]["url"],
             "AA source: " + AA_URL,
         ]
-        items.extend(f"{variant['profile']}: score {variant['intelligence']}, "
-                     f"{_metric(variant['usd_per_task'], prefix='$', caps=caps)}/task, "
+        if ranks(state.catalog)[model_id] is None:
+            items.insert(3, _rank_detail(state, model_id, caps))
+        items.extend(f"{variant['profile']}: score {_metric(variant['intelligence'], caps=caps)}, "
+                     f"{_metric(variant['usd_per_task'], prefix='$', suffix='/task', caps=caps)}, "
                      f"{_metric(variant['first_chunk_s'], suffix='s first', caps=caps)}"
                      for variant in reference["variants"])
         lines = guidance + [Line(row) for item in items for row in wrap(safe_text(item, caps), width)]
@@ -227,8 +238,9 @@ def _details(state: State, width: int, budget: int, caps: Capabilities,
 
 
 def _footer(state: State, width: int, rows: int, caps: Capabilities, now: datetime) -> list[Line]:
-    benchmark = state.catalog["reference_benchmark"]
-    indicator = (f"Benchmark reference{glyph(caps, 'dot')}{benchmark['captured']}"
+    benchmark = state.catalog.get("reference_benchmark")
+    benchmark = benchmark if isinstance(benchmark, dict) else {}
+    indicator = (f"Benchmark reference{glyph(caps, 'dot')}{benchmark.get('captured') or glyph(caps, 'dash')}"
                  f"{glyph(caps, 'dot')}{_age_label(state, now)}")
     keys = safe_text("↑/↓ Space / s f r Enter ? q", caps)
     on_rule = display_width(indicator) + display_width(keys) + 2 <= width

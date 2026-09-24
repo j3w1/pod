@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
+from pod.catalog import load as load_catalog
 from pod.config import load, set_mode, set_model, write_defaults
 from pod.errors import PodError
 from pod.selection import active_constraints, failure_active, validate_choice, validate_constraint, worker_ceiling
@@ -41,6 +44,14 @@ class SelectionTests(unittest.TestCase):
                                    ({**choice(),'reason':''},'reason_missing')):
             self.assertEqual(validate_choice(snapshot,[],[],selected)['code'],expected)
         self.assertTrue(validate_choice(snapshot,[],[],choice(effort='native_default'))['allowed'])
+
+    def test_missing_benchmark_group_cannot_block_supported_selection(self):
+        document=deepcopy(load_catalog())
+        del document['reference_benchmark']['models']['gpt-6-luna']
+        snapshot=load(personal=self.path)
+        with patch('pod.catalog.load',return_value=document):
+            self.assertTrue(validate_choice(snapshot,[],[],choice())['allowed'])
+            self.assertTrue(validate_choice(snapshot,[],[],choice('gpt-6-luna'))['allowed'])
 
     def test_indirect_constraints_narrow_and_disabled_exception_lapses(self):
         snap=load(personal=self.path)

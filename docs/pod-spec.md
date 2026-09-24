@@ -54,7 +54,7 @@ remain first-class. Issue and worktree source bindings create no issue or worktr
 | R11 | B,H | Read one personal YAML authority for selection, saved model states and maximum active workers. Project YAML may hold only restrictive Governor policy. Objective constraints retain provenance without becoming another preference file. | A05,A32,A46,A76 |
 | R12 | H | Parse bounded YAML safely. Reject duplicate keys, invalid types, unsupported schema/policy fields, arbitrary tags, executable includes and resource-exhausting structures. Preference data must never execute shell commands. | A47 |
 | R13 | H | Project, issue, repository and worker material cannot widen the personal model pool or grant worker delegation. Direct user constraints may narrow it; an explicit direct exception for a Disabled model stays scoped and visible. Project Governor policy only narrows personal authority. | A09,A12,A46,A121 |
-| R14 | B | Maintain exactly six base model identities in one bundled catalog. Official attributed guidance and dated reference benchmarks inform judgment; neither proves native access, invocation settings or billing. Effort variants are detail, not selectable models. | A10,A45,A48,A116,A122 |
+| R14 | B | Maintain exactly six base model identities in one bundled catalog. Official attributed guidance and dated reference benchmarks inform judgment; neither proves native access, invocation settings or billing. Missing optional benchmark rows/scores show unknown metrics and never block a supported model. Effort variants are detail, not selectable models. | A10,A45,A48,A116,A122 |
 | R15 | B,H | The coordinator selects a suitable eligible agent/model/effort/context for each assignment and records a short reason. A deterministic boundary validates eligibility, constraint, effort, agent and native context support without reranking or another model call. An attempt keeps its route; safe replacement needs a fresh decision. Safety refusal bars rerouting the same Task. | A05,A06,A07,A36,A123 |
 | R16 | H | Read current preferences before selection and at the serialized final admission boundary. Bind their byte revision to the decision. A changed, invalid or missing preference file refuses a new start rather than silently widening the pool. Once a row is written, later edits do not alter that submitted attempt; pending same-request replay never rechecks preferences. | A11,A12,A49,A124 |
 | R17 | B | Expose a dispatch-free current preference/catalog view and validate coordinator-proposed choices deterministically. Sorting and benchmark ranks never become routing inputs or trigger model calls. | A34,A50,A125 |
@@ -65,7 +65,7 @@ remain first-class. Issue and worktree source bindings create no issue or worktr
 | R22 | B,H | Keep the coordinator conversation, model, effort and host settings unchanged. Preserve useful integration, verification and reporting headroom; checkpoint before foreseeable interruption. Worker selection changes only workers. | A31,A37,A55 |
 | R23 | I,H | Resolve the applicable Orca runtime through installed discovery and guide. Validate worker-start launch-preferences capability, exact read/start/request contracts and optional terminal identity. Do not substitute a runtime, host or direct provider API. | A08,A56,A94 |
 | R24 | H | Before a new start validate current authority, placement, logical ceiling, packet/source bindings, version and selected route. Record requested and observed effective model/effort/context separately; unknown stays unknown and a mismatch blocks acceptance. Pending replay retains its admitted request and does not become a new preference decision. | A08,A20,A57,A124,A129 |
-| R25 | B | Treat accepted input, started reasoning, native settlement and accepted output as different native observations. Silence/lost responses do not prove failure, justify resending input or authorize replacement work. Recover the same immutable admission through Orca request-show: record a completed receipt, join a pending request with Orca's UUID, or inspect exact Run/Task/Dispatch identity after an absent result. Missing, ambiguous or contradictory evidence holds and never starts fresh; a later incomplete observation cannot erase a known request-identity conflict. | A22,A58,A95 |
+| R25 | B | Treat accepted input, started reasoning, native settlement and accepted output as different native observations. Silence/lost responses do not prove failure, justify resending input or authorize replacement work. Recover the same immutable admission through Orca request-show: record a completed receipt, join a pending request with Orca's UUID, or inspect exact Run/Task/Dispatch identity after an absent result or when no UUID was recorded. Missing, ambiguous or contradictory evidence holds and never starts fresh; a later incomplete observation cannot erase a known request-identity conflict. | A22,A58,A95 |
 | R26 | H | Zero workers is valid. The default maximum is two active logical assignments per objective; personal `workers.max_active` may be 0–8 and direct constraints may narrow it. Every investigator, reviewer and authorized descendant counts. Native settlement frees a slot even when a terminal is retained; never infer physical occupancy. | A18,A19,A130 |
 | R27 | H | Only the coordinator delegates unless direct user intent explicitly permits a descendant. Every Pod-managed descendant needs its own objective reservation under the same ceiling. Native limits and hidden provider fan-out are not Pod observations. | A16,A19,A20,A21 |
 | R28 | H | Serialize admission under the objective lock, recording one logical reservation before each worker start. Reserved and unresolved attempts remain outstanding; exact native settlement frees a bound slot. Do not census other objectives or reconstruct physical occupancy. Documented effect-free Orca refusals defer; uncertain errors require exact request and worker readback. | A18,A21,A22,A59,A96 |
@@ -136,7 +136,7 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod doctor [--json]` | Read-only installation, catalog, preference, runtime capability and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
 | `pod --version` | Reports the installed root `VERSION` before dependency checks. |
-| `pod internal <op> --input FILE` | Hidden structured operation for the skill; JSON only, no public command tree. |
+| `pod internal <op> --input FILE` or `--input -` | Hidden structured operation for the skill; bounded JSON from a regular file or stdin, with no public command tree. |
 
 Codex invokes `$pod ...` and Claude Code invokes `/pod ...` inside an existing
 conversation. The global launcher is user-local; the one-shot installer from `main`
@@ -172,7 +172,7 @@ is ineligible for new starts. `selection: all` makes all six available while
 preserving the saved map. Returning to `custom` restores it. A state edit in All
 models applies to the saved map and changes the mode to My selection in one write.
 An empty custom pool is valid and disables delegation only. A syntactically valid
-sparse custom map keeps its explicit choices; omitted ids are shown as
+sparse custom map keeps its explicit choices through All models and back; omitted ids are shown as
 “Not set (not eligible)”. Missing files and invalid or incomplete YAML structure
 have no eligible pool and never default to All models; no internal operation writes
 preferences. The installer creates the
@@ -193,8 +193,10 @@ Analysis reference snapshot. The six ids are `claude-opus-5-5`,
 `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol` and
 `gpt-6-luna`. `python -m pod.catalog --check` validates it. AA's selected
 reference profile is dated 2026-09-24; profile, intelligence, USD per benchmark
-task and first-chunk seconds stay together in one variant row. Missing values
-show `—`. Ranking uses competition rank among the six supported base models,
+task and first-chunk seconds stay together in one variant row. Missing or incomplete
+optional benchmark rows show unknown metrics as `—` without blocking selection,
+admission or config reads. If any score is missing, the six-model ranking is
+unknown. Ranking otherwise uses competition rank among the six supported base models,
 never AA's global rank. The TUI attributes
 `https://artificialanalysis.ai/leaderboards/models`, shows benchmark age and
 states: “AA metrics show each model's selected reference benchmark profile and
@@ -241,7 +243,10 @@ Admission validates packet and recovers prior effects first, then issue, placeme
 authority, version, source and logical-ceiling checks. Under the objective lock,
 the final preference read validates the choice immediately before persisting the
 admission row and submitting native `worker-start`; the lock is released before
-the subprocess. A changed choice refuses `preference_changed` without a write.
+the subprocess. A changed revision with a now-ineligible choice reports
+`preference_changed`; an ineligible choice at the same revision reports its
+specific selection reason. A changed revision with an otherwise valid choice
+reports `preference_revision_stale`. All refuse before a row write.
 An edit after row persistence is after this boundary and does not alter the
 attempt. Pending same-UUID replay checks authority, runtime, placement, issue
 body and checkpoint core but does not re-check preferences. Completed and absent

@@ -164,6 +164,16 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(self.start()['status'],'bound')
         self.assertEqual(len(self.port.starts),1)
 
+    def test_missing_benchmark_row_cannot_block_admission(self):
+        from pod.catalog import load as load_catalog
+        document=deepcopy(load_catalog())
+        del document['reference_benchmark']['models']['gpt-6-luna']
+        with patch('pod.catalog.load',return_value=document):
+            result=self.start()
+        self.assertEqual(result['status'],'bound')
+        self.assertEqual(result['admission']['route_decision']['model'],'gpt-6-sol')
+        self.assertEqual(len(self.port.starts),1)
+
     def test_before_boundary_edit_refuses_with_no_admission_and_after_row_keeps_start(self):
         frozen=self.frozen()
         set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
@@ -181,6 +191,26 @@ class AdmissionTests(unittest.TestCase):
         result=self.start(frozen=self.frozen())
         set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
         self.assertEqual(read(self.project,'objective')['admissions'][result['admission']['admission_id']]['state'],'bound')
+
+    def test_boundary_distinguishes_stale_revision_from_current_ineligibility(self):
+        set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
+        disabled_packet=self.frozen()
+        with self.assertRaises(PodError) as disabled:
+            self.start(task='disabled-now',frozen=disabled_packet)
+        self.assertEqual(disabled.exception.code,'model_ineligible')
+        self.assertFalse(read(self.project,'objective')['admissions'])
+        set_model(self.personal,'gpt-6-sol','available',displayed=load_config(self.project))
+        permitted_packet=self.frozen()
+        set_model(self.personal,'gpt-6-luna','disabled',displayed=load_config(self.project))
+        with self.assertRaises(PodError) as stale:
+            self.start(task='other-edit',frozen=permitted_packet)
+        self.assertEqual(stale.exception.code,'preference_revision_stale')
+        self.assertFalse(read(self.project,'objective')['admissions'])
+        unsupported=self.frozen(route={**ROUTE,'effort':'ultra'})
+        with self.assertRaises(PodError) as effort:
+            self.start(task='bad-effort',frozen=unsupported)
+        self.assertEqual(effort.exception.code,'effort_unsupported')
+        self.assertFalse(read(self.project,'objective')['admissions'])
 
     def test_missing_and_partial_preferences_disable_new_workers(self):
         self.personal.unlink()
@@ -255,6 +285,35 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(recover_admission(self.project,'objective',owner='owner',
                          admission_id=first['admission_id'],worktree='current',port=self.port)['status'],'bound')
         self.assertEqual(len(self.port.starts),1)
+
+    def test_no_uuid_recovery_binds_one_exact_existing_worker_without_relaunch(self):
+        first=self.recovery_case()
+        update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
+                         update=lambda row:row.update(request_uuid=None))
+        result=self.recover(first)
+        self.assertEqual(result['action'],'inspect_without_uuid')
+        self.assertEqual(result['status'],'bound')
+        self.assertIsNone(result['admission']['request_uuid'])
+        self.assertEqual(result['admission']['native_binding']['dispatchId'],
+                         first['native_binding']['dispatchId'])
+        self.assertEqual(self.port.starts,[])
+
+    def test_no_uuid_recovery_holds_zero_or_several_exact_workers(self):
+        first=self.recovery_case()
+        update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
+                         update=lambda row:row.update(request_uuid=None))
+        worker=self.port.workers.pop(first['native_binding']['dispatchId'])
+        absent=self.recover(first)
+        self.assertEqual(absent['status'],'unresolved')
+        self.assertEqual(absent['admission']['error']['code'],'native_attempt_absent')
+        self.assertEqual(absent['admission']['error']['detail']['matching'],0)
+        self.port.workers['dispatch-1']=worker
+        self.port.workers['dispatch-2']=dict(worker)
+        ambiguous=self.recover(first)
+        self.assertEqual(ambiguous['status'],'unresolved')
+        self.assertEqual(ambiguous['admission']['error']['code'],'native_attempt_ambiguous')
+        self.assertEqual(ambiguous['admission']['error']['detail']['matching'],2)
+        self.assertEqual(self.port.starts,[])
 
     def test_completed_conflict_survives_incomplete_and_absent_until_coherent_receipt(self):
         prior=self.recovery_case()
@@ -584,14 +643,16 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(held['error']['code'],'native_request_conflict')
         self.assertEqual(len(self.port.starts),1)
 
-    def test_lost_start_response_without_uuid_holds_instead_of_restarting(self):
+    def test_lost_start_response_without_uuid_reads_back_and_holds_without_relaunch(self):
         with patch.object(self.port,'start_worker',side_effect=PodError('native_effect_uncertain','lost')) as start:
             with self.assertRaises(PodError): self.start()
         self.assertEqual(start.call_count,1)
         admission=next(iter(read(self.project,'objective')['admissions'].values()))
         self.assertEqual(admission['state'],'unresolved')
         self.assertIsNone(admission['request_uuid'])
-        self.assertEqual(self.start()['action'],'hold')
+        recovered=self.start()
+        self.assertEqual(recovered['action'],'inspect_without_uuid')
+        self.assertEqual(recovered['admission']['error']['code'],'native_attempt_absent')
         self.assertEqual(len(self.port.starts),0)
 
     def test_alternative_after_failure_requires_native_settlement(self):
@@ -772,7 +833,7 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught: self.start('task2',frozen=frozen)
         self.assertEqual(caught.exception.code,'preference_changed')
         with self.assertRaises(PodError) as caught: self.start('task2',frozen=self.frozen(route=alternative))
-        self.assertEqual(caught.exception.code,'preference_changed')
+        self.assertEqual(caught.exception.code,'model_ineligible')
         self.assertEqual(len(self.port.starts),1)
 
     def test_issue_change_holds_pending_replay_but_completed_read_is_observational(self):
@@ -844,6 +905,18 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(PodError) as blocked:
             self.start(task='unavailable',frozen=unavailable)
         self.assertEqual(blocked.exception.code,'source_unbound')
+        self.assertEqual(self.port.starts,[])
+
+    def test_new_output_file_is_not_a_bound_source_and_refusal_names_next_action(self):
+        output='trial/t3-install-notes.md'
+        frozen=self.frozen(sources=[{'path':output,'state':'present','sha256':'a'*64}])
+        with self.assertRaises(PodError) as blocked:
+            self.start(task='future-output',frozen=frozen)
+        self.assertEqual(blocked.exception.code,'source_absent')
+        self.assertIn(output,str(blocked.exception))
+        self.assertIn('existing inputs',str(blocked.exception))
+        self.assertIn('scope/actions',str(blocked.exception))
+        self.assertIn('rebuild the packet',str(blocked.exception))
         self.assertEqual(self.port.starts,[])
 
     def test_two_objectives_have_independent_logical_slots(self):

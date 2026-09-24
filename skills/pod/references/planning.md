@@ -23,6 +23,8 @@ admission after Orca issues them; they are not predicted packet fields.
 Context entries are bounded source, instruction or summary references with
 digests. Include only relevant material, excluding secrets and the full
 conversation. Unavailable sources need a fresh binding before admission.
+Sources are existing inputs the worker reads; files it will create belong in
+scope and permitted actions, never in source bindings.
 Definitively changed or absent sources reject that assignment; restored bytes
 do not erase the rejection. This is no atomic snapshot against external writers.
 

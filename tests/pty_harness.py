@@ -20,6 +20,8 @@ import termios
 import time
 from typing import Callable
 
+from tests.common import disposable_path
+
 try:
     import pyte
     import wcwidth
@@ -45,11 +47,13 @@ def fixture_config(path: Path) -> None:
 
 def environment(home: Path, **extra: str) -> dict[str, str]:
     result = {key: value for key, value in os.environ.items()
-              if key in ("PATH", "TMPDIR", "SYSTEMROOT")}
+              if key in ("TMPDIR", "SYSTEMROOT")}
     result.update({"HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
+                   "XDG_DATA_HOME": str(home / "data"),
                    "XDG_STATE_HOME": str(home / "state"),
                    "CODEX_HOME": str(home / "codex"),
                    "CLAUDE_CONFIG_DIR": str(home / "claude"),
+                   "PATH": disposable_path(home),
                    "ORCA_CLI_COMMAND": str(home / "missing-orca"),
                    "TERM": "xterm-256color", "LANG": "C.UTF-8"})
     result.update(extra)
@@ -58,7 +62,8 @@ def environment(home: Path, **extra: str) -> dict[str, str]:
 
 class PtySession:
     def __init__(self, *, home: Path, cwd: Path, cols: int = 80, rows: int = 24,
-                 env_extra: dict[str, str] | None = None, argv: list[str] | None = None):
+                 env_extra: dict[str, str] | None = None, argv: list[str] | None = None,
+                 launcher: Path = LAUNCHER):
         if not dependencies_available():
             raise RuntimeError("Install pinned pyte and wcwidth test dependencies")
         self.cols, self.rows = cols, rows
@@ -73,7 +78,7 @@ class PtySession:
             try:
                 fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
                 os.chdir(cwd)
-                os.execve(sys.executable, [sys.executable, "-I", str(LAUNCHER), *(argv or [])], env)
+                os.execve(sys.executable, [sys.executable, "-I", str(launcher), *(argv or [])], env)
             except Exception:
                 os._exit(127)
         self.pid, self.master = pid, master

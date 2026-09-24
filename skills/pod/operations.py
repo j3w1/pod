@@ -542,7 +542,12 @@ def _current_authority(project: Path, objective: str, admission: dict, *, issue_
 def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: str,
                   port: NativePort, request_uuid: str | None) -> dict:
     admission = read(project, objective)["admissions"][admission_id]
-    rows = port.find_worker(run=admission["run_id"], task=admission["task_id"])
+    try:
+        rows = port.find_worker(run=admission["run_id"], task=admission["task_id"])
+    except PodError as exc:
+        return _hold(project, objective, owner=owner, admission_id=admission_id,
+                     request_uuid=request_uuid, code="native_readback_unavailable",
+                     detail=f"Exact Run/Task readback failed: {exc.code}")
     candidates = []
     errors = []
     for row in rows:
@@ -582,9 +587,13 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
     if request_uuid is None:
         if _known_request_conflict(admission):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
-        row = _hold(project, objective, owner=owner, admission_id=admission_id,
-                    request_uuid=None, code="native_request_missing", detail="No Orca-issued UUID")
-        return {"status": row["state"], "admission": row, "action": "hold"}
+        authority = native_port.read_native(owner, authority_runs=(admission["run_id"],))
+        if (authority.get("authoritative") is not True or authority.get("owner") != owner
+                or authority.get("runtime") != admission["runtime"]):
+            raise PodError("native_authority_unverified", "No-UUID readback lost Run ownership")
+        row = _adopt_unique(project, objective, owner=owner, admission_id=admission_id,
+                            port=native_port, request_uuid=None)
+        return {"status": row["state"], "admission": row, "action": "inspect_without_uuid"}
     try:
         request_uuid = _valid_request_uuid(request_uuid)
     except PodError as exc:

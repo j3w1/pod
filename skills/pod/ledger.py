@@ -259,6 +259,7 @@ def check_bound_sources(project: Path, objective: str, *, owner: str,
 def _check_bound_sources_locked(project: Path, path: Path, state: dict,
                                 assignment: str, sources: list[dict]) -> dict:
     from .records import source_identity
+    from .term import clean
     if state["source_rejections"].get(assignment):
         raise PodError("source_rejected", "Assignment has a durable definitive source rejection")
     for entry in sources:
@@ -278,7 +279,13 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
         if reason:
             state["source_rejections"][assignment] = {"reason": reason, "path": entry["path"]}
             _write(path, state)
-            raise PodError(reason, "Bound source is absent or changed")
+            named = repr(clean(entry["path"]))
+            if reason == "source_absent":
+                message = (f"Bound source {named} is absent. Sources are existing inputs the worker reads; "
+                           "list files the worker will create in scope/actions, rebuild the packet and admit again")
+            else:
+                message = f"Bound source {named} changed; reread the input, rebuild the packet and admit again"
+            raise PodError(reason, message)
     return {"status": "current", "assignment": assignment}
 
 
@@ -484,8 +491,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             raise PodError("policy_revision_mismatch", "Governor policy changed since checkpoint")
         if body.get("policy_revision") != snapshot["policy_revision"]:
             raise PodError("policy_revision_mismatch", "Packet Governor policy changed")
-        if body.get("route", {}).get("preference_revision") != snapshot["revision"]:
-            raise PodError("preference_changed", "Preferences changed before native dispatch")
+        revision_changed = body.get("route", {}).get("preference_revision") != snapshot["revision"]
         ceiling = worker_ceiling(snapshot, state["constraints"])
         if len(projection["outstanding"]) >= ceiling:
             raise PodError("logical_capacity_full", "Objective logical worker ceiling is occupied")
@@ -496,7 +502,14 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         checked = validate_choice(snapshot, state["constraints"], failures, requested,
                                   task=task_id, role=body.get("responsibility"), now=moment)
         if not checked["allowed"]:
-            raise PodError("preference_changed", f"Proposed route is no longer allowed: {checked['code']}")
+            if revision_changed:
+                raise PodError("preference_changed",
+                               f"Preferences changed before dispatch and route is no longer allowed: {checked['code']}")
+            raise PodError(checked["code"],
+                           f"Proposed route is not allowed at the current preference revision: {checked['code']}")
+        if revision_changed:
+            raise PodError("preference_revision_stale",
+                           "Preferences changed before dispatch; reread them and record a fresh decision")
         if reuse_of is not None:
             prior = state["admissions"].get(reuse_of)
             if (prior is None or prior["state"] not in ("bound", "closed")

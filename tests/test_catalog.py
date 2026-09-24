@@ -3,8 +3,11 @@ from datetime import date
 import json
 from pathlib import Path
 import unittest
+from io import StringIO
+from contextlib import redirect_stdout
+from unittest.mock import patch
 
-from pod.catalog import IDS, age, by_id, load, ranks, reference_rows, validate
+from pod.catalog import IDS, age, benchmark_warnings, by_id, load, main, ranks, reference_rows, validate
 from pod.errors import PodError
 from tests.common import fixture
 
@@ -41,7 +44,6 @@ class CatalogTests(unittest.TestCase):
         for edit in (
             lambda d: d['models'].append(deepcopy(d['models'][0])),
             lambda d: d['models'][0].update(guidance='short'),
-            lambda d: d['reference_benchmark']['models']['gpt-6-sol']['variants'][0].update(usd_per_task=-1),
             lambda d: d['models'][3].update(documented_context_tokens=872000),
             lambda d: d['models'][3].update(efforts=[{'bad':'type'}]),
             lambda d: d['models'][0]['sources'][0].update(url='http://invalid.example'),
@@ -51,3 +53,31 @@ class CatalogTests(unittest.TestCase):
                 edit(changed)
                 with self.assertRaises(PodError):
                     validate(changed)
+
+    def test_reference_gaps_are_unknown_without_invalidating_supported_models(self):
+        document=load()
+        with fixture() as root:
+            path=root/'catalog.json'
+            for change in ('missing_group','missing_score','invalid_price','missing_benchmark'):
+                with self.subTest(change=change):
+                    copy=deepcopy(document)
+                    if change=='missing_group':
+                        del copy['reference_benchmark']['models']['gpt-6-luna']
+                    elif change=='missing_score':
+                        del copy['reference_benchmark']['models']['gpt-6-luna']['variants'][0]['intelligence']
+                    elif change=='invalid_price':
+                        copy['reference_benchmark']['models']['gpt-6-luna']['variants'][0]['usd_per_task']=-1
+                    else:
+                        del copy['reference_benchmark']
+                    path.write_text(json.dumps(copy))
+                    loaded=load(path)
+                    self.assertEqual(tuple(by_id(loaded)),IDS)
+                    unknown=reference_rows(loaded)['gpt-6-luna']
+                    self.assertIsNone(unknown['intelligence'])
+                    self.assertIsNone(unknown['usd_per_task'])
+                    self.assertIsNone(unknown['first_chunk_s'])
+                    self.assertEqual(set(ranks(loaded).values()),{None})
+                    self.assertTrue(benchmark_warnings(loaded))
+                    with patch('pod.catalog.load',return_value=loaded), redirect_stdout(StringIO()) as output:
+                        self.assertEqual(main(['--check']),0)
+                    self.assertIn('Benchmark warning:',output.getvalue())

@@ -13,16 +13,18 @@ from pod.cli import execute, main, parser
 from pod.config import load, write_defaults
 from pod.errors import PodError
 from pod.placement import inspect
-from tests.common import fixture
+from tests.common import HOST_HOME, HOST_POD_DATA, disposable_path, fixture
 
 
 class CliTests(unittest.TestCase):
     def setUp(self):
         self.temp=fixture(); self.root=self.temp.__enter__(); self.addCleanup(self.temp.__exit__,None,None,None)
         self.env=patch.dict(os.environ,{'HOME':str(self.root),'XDG_CONFIG_HOME':str(self.root/'config'),
+                                     'XDG_DATA_HOME':str(self.root/'data'),
                                      'XDG_STATE_HOME':str(self.root/'state'),
                                      'CODEX_HOME':str(self.root/'other-codex'),
-                                     'CLAUDE_CONFIG_DIR':str(self.root/'other-claude')})
+                                     'CLAUDE_CONFIG_DIR':str(self.root/'other-claude'),
+                                     'PATH':disposable_path(self.root)})
         self.env.__enter__(); self.addCleanup(self.env.__exit__,None,None,None)
         self.project=self.root/'project'; self.project.mkdir()
 
@@ -80,6 +82,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(report['native_probe'],'not_run')
         self.assertEqual(report['installation'],'not installed by the one-shot installer')
         native.assert_not_called()
+
+    def test_disposable_doctor_paths_never_resolve_into_host_pod_data(self):
+        from pod.installer import receipt_path
+        receipt=receipt_path().resolve(strict=False)
+        self.assertFalse(receipt.is_relative_to(HOST_POD_DATA))
+        self.assertTrue(receipt.is_relative_to(self.root))
+        self.assertNotIn(str(HOST_HOME / '.local/bin'),os.environ['PATH'].split(os.pathsep))
 
     def test_doctor_is_passive_and_reports_unsupported_state_objective_scoped(self):
         from pod.ledger import _path

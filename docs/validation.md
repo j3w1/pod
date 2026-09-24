@@ -72,9 +72,17 @@ check. All rows stay `NOT_RUN` until actual evidence is recorded. A requirement
 change updates its scenario and coverage row in the same commit.
 
 A valid sparse custom preference map remains usable for its explicitly eligible
-models and reports omitted ids as “Not set (not eligible)”. A missing file or
+models, survives All models → My selection unchanged, and reports omitted ids as
+“Not set (not eligible)” in custom mode. A missing file or
 invalid YAML/required structure has no eligible pool. These are distinct test
 cases; neither permits an accidental All models selection.
+
+Benchmark rows are optional reference observations. A missing or incomplete row
+is shown as unknown and does not block a supported model, config read or
+admission; `pod.catalog --check` names a maintenance warning. Private helpers
+accept `--input -` for bounded JSON on stdin, while a path such as `/dev/stdin`
+remains subject to regular-file checks. A source-absence refusal names the
+missing input and tells the coordinator to put future output files in scope.
 
 Instruction budgets are whitespace-delimited: SKILL at most 750 words, each
 conditional reference at most 700, all references together at most 2200.

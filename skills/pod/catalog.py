@@ -16,6 +16,7 @@ IDS = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5",
        "gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CATALOG_PATH = Path(__file__).with_name("catalog.json")
+REFERENCE_URL = "https://artificialanalysis.ai/leaderboards/models"
 
 
 def _unique_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -60,7 +61,10 @@ def _url(value: object, name: str) -> str:
 
 
 def validate(data: object) -> dict:
-    root = _exact(data, {"schema", "models", "reference_benchmark"}, "catalog")
+    if (not isinstance(data, dict) or set(data) - {"schema", "models", "reference_benchmark"}
+            or not {"schema", "models"} <= set(data)):
+        raise PodError("invalid_catalog", "Catalog has missing or unsupported base fields")
+    root = data
     if root["schema"] != "pod-catalog/v1":
         raise PodError("invalid_catalog", "Unsupported catalog schema")
     models = root["models"]
@@ -108,36 +112,71 @@ def validate(data: object) -> dict:
             if not isinstance(host, str) or not any(
                     host == domain or host.endswith("." + domain) for domain in allowed_hosts):
                 raise PodError("invalid_catalog", "Source is not the model provider's documentation")
-    benchmark = _exact(root["reference_benchmark"], {"url", "captured", "models"}, "benchmark")
-    if _url(benchmark["url"], "benchmark URL") != "https://artificialanalysis.ai/leaderboards/models":
-        raise PodError("invalid_catalog", "Benchmark URL differs from its attribution")
-    _date(benchmark["captured"], "benchmark capture date")
-    references = benchmark["models"]
-    if not isinstance(references, dict) or set(references) != set(IDS):
-        raise PodError("invalid_catalog", "Benchmark needs exactly six model groups")
-    for model_id, item in references.items():
-        _exact(item, {"reference_variant", "variants"}, "benchmark model")
-        _text(item["reference_variant"], "reference variant", limit=80)
-        variants = item["variants"]
-        if not isinstance(variants, list) or not variants:
-            raise PodError("invalid_catalog", "Benchmark model needs variants")
-        labels = set()
-        for variant in variants:
-            _exact(variant, {"profile", "intelligence", "usd_per_task", "first_chunk_s"}, "variant")
-            profile = _text(variant["profile"], "variant profile", limit=80)
-            if profile in labels:
-                raise PodError("invalid_catalog", "Benchmark profile is duplicated")
-            labels.add(profile)
-            score = variant["intelligence"]
-            if type(score) is not int or not 0 <= score <= 100:
-                raise PodError("invalid_catalog", "Intelligence must be a score from 0 to 100")
-            for field in ("usd_per_task", "first_chunk_s"):
-                value = variant[field]
-                if value is not None and (type(value) not in (float, int) or value < 0 or value > 100000):
-                    raise PodError("invalid_catalog", f"{field} must be nonnegative or null")
-        if item["reference_variant"] not in labels or item["reference_variant"] != variants[0]["profile"]:
-            raise PodError("invalid_catalog", "Reference profile must name the first full variant")
+    # The dated third-party reference is informative and may be incomplete. It is
+    # checked separately so a missing score cannot disable a supported route.
     return root
+
+
+def _variant(row: object) -> dict | None:
+    if (not isinstance(row, dict)
+            or set(row) != {"profile", "intelligence", "usd_per_task", "first_chunk_s"}):
+        return None
+    profile, score = row["profile"], row["intelligence"]
+    if (not isinstance(profile, str) or not 1 <= len(profile) <= 80
+            or any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in profile)
+            or type(score) is not int or not 0 <= score <= 100):
+        return None
+    for field in ("usd_per_task", "first_chunk_s"):
+        value = row[field]
+        if value is not None and (type(value) not in (float, int) or not 0 <= value <= 100000):
+            return None
+    return row
+
+
+def reference_entry(document: dict, model_id: str) -> dict:
+    """Return a safe display profile, with unknowns for an incomplete AA row."""
+    benchmark = document.get("reference_benchmark")
+    groups = benchmark.get("models") if isinstance(benchmark, dict) else None
+    item = groups.get(model_id) if isinstance(groups, dict) else None
+    empty = {"profile": "Unknown", "intelligence": None,
+             "usd_per_task": None, "first_chunk_s": None}
+    if not isinstance(item, dict):
+        return {"reference_variant": "Unknown", "variants": [empty], "complete": False}
+    selected = item.get("reference_variant")
+    variants = item.get("variants")
+    if (not isinstance(selected, str) or not selected or not isinstance(variants, list)
+            or not variants or len(variants) > 32):
+        return {"reference_variant": "Unknown", "variants": [empty], "complete": False}
+    rows = [_variant(row) for row in variants]
+    labels = [row["profile"] for row in rows if row is not None]
+    if (any(row is None for row in rows) or len(labels) != len(set(labels))
+            or rows[0]["profile"] != selected):
+        return {"reference_variant": "Unknown", "variants": [empty], "complete": False}
+    return {"reference_variant": selected, "variants": rows, "complete": True}
+
+
+def benchmark_warnings(document: dict) -> list[str]:
+    """Maintenance diagnostics; none are route or catalog-base blockers."""
+    benchmark = document.get("reference_benchmark")
+    if not isinstance(benchmark, dict):
+        return ["reference benchmark is missing"]
+    warnings = []
+    if benchmark.get("url") != REFERENCE_URL:
+        warnings.append("reference benchmark attribution URL is missing or changed")
+    try:
+        _date(benchmark.get("captured"), "benchmark capture date")
+    except PodError:
+        warnings.append("reference benchmark capture date is missing or invalid")
+    groups = benchmark.get("models")
+    if not isinstance(groups, dict):
+        warnings.append("reference benchmark model groups are missing")
+    else:
+        if set(groups) - set(IDS):
+            warnings.append("reference benchmark has unsupported model groups")
+        for model_id in IDS:
+            if not reference_entry(document, model_id)["complete"]:
+                warnings.append(f"{model_id}: selected reference row is missing or incomplete")
+    return warnings
 
 
 def load(path: Path = CATALOG_PATH) -> dict:
@@ -160,19 +199,26 @@ def by_id(document: dict | None = None) -> dict[str, dict]:
 
 def reference_rows(document: dict | None = None) -> dict[str, dict]:
     doc = load() if document is None else document
-    return {model_id: next(row for row in entry["variants"] if row["profile"] == entry["reference_variant"])
-            for model_id, entry in doc["reference_benchmark"]["models"].items()}
+    return {model_id: reference_entry(doc, model_id)["variants"][0] for model_id in IDS}
 
 
-def ranks(document: dict | None = None) -> dict[str, int]:
+def ranks(document: dict | None = None) -> dict[str, int | None]:
     scores = {model_id: row["intelligence"] for model_id, row in reference_rows(document).items()}
+    if any(score is None for score in scores.values()):
+        return {model_id: None for model_id in IDS}
     return {model_id: 1 + sum(other > score for other in scores.values())
             for model_id, score in scores.items()}
 
 
-def age(document: dict | None = None, *, today: date | None = None) -> int:
+def age(document: dict | None = None, *, today: date | None = None) -> int | None:
     doc = load() if document is None else document
-    return ((today or date.today()) - date.fromisoformat(doc["reference_benchmark"]["captured"])).days
+    benchmark = doc.get("reference_benchmark")
+    captured = benchmark.get("captured") if isinstance(benchmark, dict) else None
+    try:
+        observed = _date(captured, "benchmark capture date")
+    except PodError:
+        return None
+    return ((today or date.today()) - observed).days
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,11 +226,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", required=True)
     parser.parse_args(argv)
     try:
-        load()
+        document = load()
     except PodError as exc:
         print(f"Catalog validation failed: {exc}")
         return 1
-    print("Catalog is valid: six supported models and dated reference rows")
+    warnings = benchmark_warnings(document)
+    print("Catalog is valid: six supported models and dated reference rows" if not warnings
+          else "Catalog models valid; reference benchmark needs maintenance")
+    for warning in warnings:
+        print("Benchmark warning: " + warning)
     return 0
 
 

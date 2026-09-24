@@ -1,4 +1,5 @@
 from dataclasses import replace
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
@@ -55,6 +56,30 @@ class TuiRenderTests(unittest.TestCase):
         self.assertIn(AA_CLARIFICATION.split('.')[0],' '.join(text.split()))
         self.assertIn(AA_URL,text)
         self.assertIn('Runs through your connected Codex / Claude Code sessions.',text)
+
+    def test_missing_reference_data_is_unknown_in_table_details_and_expansion(self):
+        for change in ('missing_group','missing_score','missing_benchmark'):
+            with self.subTest(change=change):
+                document=deepcopy(self.state.catalog)
+                if change=='missing_group':
+                    del document['reference_benchmark']['models']['gpt-6-luna']
+                elif change=='missing_score':
+                    del document['reference_benchmark']['models']['gpt-6-luna']['variants'][0]['intelligence']
+                else:
+                    del document['reference_benchmark']
+                state=replace(self.state,catalog=document,focus_id='gpt-6-luna')
+                picture=self.picture(state)
+                luna=next(line.text for line in picture.lines if 'GPT-6 Luna' in line.text and line.role=='focus')
+                self.assertIn('—',luna)
+                self.assertNotIn('None',picture.plain)
+                self.assertIn('AA Unknown',picture.plain)
+                self.assertIn('— of 6',picture.plain)
+                expanded=self.picture(replace(state,expanded=True)).plain
+                self.assertIn('Unknown: score —',expanded)
+                self.assertIn('— of 6',expanded)
+                self.assertIn('AA source:',expanded)
+                compact=self.picture(state,size=(40,12)).plain
+                self.assertIn('AA Unknown',compact)
 
     def test_sort_filter_and_search_preserve_model_identity_without_writes(self):
         before=self.path.read_bytes()

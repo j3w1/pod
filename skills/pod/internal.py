@@ -9,7 +9,7 @@ from pathlib import Path
 from .errors import PodError
 from .records import (acceptance, integration_observation, packet, report, source_identity,
                       verify_sources)
-from .util import bounded_json, exact
+from .util import bounded_json, bounded_stdin_json, exact
 from .context import execution_brief
 
 
@@ -307,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        value = bounded_json(args.input)
+        value = bounded_stdin_json() if args.input == Path("-") else bounded_json(args.input)
         result = run(args.operation, value)
         print(json.dumps({"schema": "pod-cli/v4", "status": "ok", "result": result}, sort_keys=True))
         return 0

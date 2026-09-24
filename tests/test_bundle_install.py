@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.bundle import BUNDLE_MODULES, bundle_root, version
-from tests.common import fixture
+from tests.common import disposable_path, fixture
 
 BUNDLE=bundle_root()
 
@@ -23,15 +23,17 @@ def copy_bundle(target:Path)->Path:
 
 
 def run(skill:Path,args:list[str],*,home:Path,cwd:Path,
-        isolated:bool=True,env_extra:dict|None=None)->subprocess.CompletedProcess:
-    env={key:value for key,value in os.environ.items() if key in ('PATH','LANG','LC_ALL','TMPDIR')}
+        isolated:bool=True,env_extra:dict|None=None,
+        input_text:str|None=None)->subprocess.CompletedProcess:
+    env={key:value for key,value in os.environ.items() if key in ('LANG','LC_ALL','TMPDIR')}
     env.update({'HOME':str(home),'XDG_CONFIG_HOME':str(home/'config'),
+                'XDG_DATA_HOME':str(home/'data'),'PATH':disposable_path(home),
                 'XDG_STATE_HOME':str(home/'state'),'CODEX_HOME':str(home/'agents'),
                 'CLAUDE_CONFIG_DIR':str(home/'claude')})
     env.update(env_extra or {})
     flags=['-I'] if isolated else ['-s','-P']
     return subprocess.run([sys.executable,*flags,str(skill/'scripts'/'pod.py'),*args],
-                          capture_output=True,text=True,cwd=cwd,env=env,timeout=30)
+                          input=input_text,capture_output=True,text=True,cwd=cwd,env=env,timeout=30)
 
 
 class CopiedBundleTests(unittest.TestCase):
@@ -113,6 +115,24 @@ class CopiedBundleTests(unittest.TestCase):
             self.assertEqual(json.loads(got.stdout)['schema'],'pod-cli/v4')
             self.assertNotIn('\x1b',got.stdout)
             self.assertNotEqual(run(skill,['internal-preview'],home=home,cwd=work).returncode,0)
+
+    def test_private_stdin_input_is_bounded_without_accepting_dev_stdin_path(self):
+        with fixture() as root:
+            skill=copy_bundle(root/'installed');home=root/'home';work=root/'unrelated'
+            home.mkdir();work.mkdir()
+            request=json.dumps({'project':str(work)})
+            accepted=run(skill,['internal','project-context','--input','-'],
+                         home=home,cwd=work,input_text=request)
+            self.assertEqual(accepted.returncode,0,accepted.stdout+accepted.stderr)
+            self.assertEqual(json.loads(accepted.stdout)['status'],'ok')
+            oversized=run(skill,['internal','project-context','--input','-'],
+                          home=home,cwd=work,input_text=' '* (128*1024+1))
+            self.assertEqual(oversized.returncode,1)
+            self.assertEqual(json.loads(oversized.stdout)['error']['code'],'record_too_large')
+            path_form=run(skill,['internal','project-context','--input','/dev/stdin'],
+                          home=home,cwd=work,input_text=request)
+            self.assertEqual(path_form.returncode,1)
+            self.assertEqual(json.loads(path_form.stdout)['error']['code'],'unsafe_record')
 
     def test_missing_dependency_is_actionable_and_version_still_works(self):
         with fixture() as root:

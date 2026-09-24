@@ -328,8 +328,9 @@ class TuiPtyTests(unittest.TestCase):
         session.wait_for(lambda s:'Runtime' in s.text() and 'Unknown' in s.text())
         session.send('\n')
         session.resize(80,24)
-        session.wait_for('Official source:')
-        for variant in catalog['reference_benchmark']['models']['claude-opus-5-5']['variants']:
+        variants=catalog['reference_benchmark']['models']['claude-opus-5-5']['variants']
+        session.wait_for(variants[-1]['profile']+': score',timeout=2)
+        for variant in variants:
             self.assertIn(variant['profile']+': score',session.text())
         session.send('\x1b')
         session.wait_for(lambda s:'Details' in self.focused(s) and '[expanded]' not in s.text())

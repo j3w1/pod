@@ -400,7 +400,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_selection.SelectionTests.test_effort_context_agent_and_reason_are_checked_without_ranking",
+      "offline_test": "tests.test_selection.SelectionTests.test_missing_benchmark_group_cannot_block_supported_selection",
       "status": "NOT_RUN"
     },
     {
@@ -408,7 +408,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_config.PreferencesTests.test_sparse_custom_map_is_valid_but_omissions_are_ineligible",
+      "offline_test": "tests.test_config.PreferencesTests.test_sparse_saved_map_survives_all_models_toggle_and_restart",
       "status": "NOT_RUN"
     },
     {
@@ -491,7 +491,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_operations.AdmissionTests.test_no_uuid_recovery_holds_zero_or_several_exact_workers",
       "status": "NOT_RUN"
     },
     {
@@ -532,7 +532,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_operations.AdmissionTests.test_new_output_file_is_not_a_bound_source_and_refusal_names_next_action",
       "status": "NOT_RUN"
     },
     {
@@ -795,7 +795,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_completed_conflict_survives_incomplete_and_absent_until_coherent_receipt",
+      "offline_test": "tests.test_operations.AdmissionTests.test_no_uuid_recovery_binds_one_exact_existing_worker_without_relaunch",
       "status": "NOT_RUN"
     },
     {
@@ -998,7 +998,7 @@
         "unit",
         "pty_subprocess"
       ],
-      "offline_test": "tests.test_cli.CliTests.test_minimal_public_surface_and_version",
+      "offline_test": "tests.test_bundle_install.CopiedBundleTests.test_private_stdin_input_is_bounded_without_accepting_dev_stdin_path",
       "status": "NOT_RUN"
     },
     {
@@ -1039,7 +1039,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_pending_replay_keeps_original_route_across_preference_and_version_edit",
+      "offline_test": "tests.test_operations.AdmissionTests.test_boundary_distinguishes_stale_revision_from_current_ineligibility",
       "status": "NOT_RUN"
     },
     {
@@ -1185,7 +1185,7 @@
         "unit",
         "pty_subprocess"
       ],
-      "offline_test": "tests.test_tui_pty.TuiPtyTests.test_fleet_toggle_across_restart_and_edit_in_all_mode",
+      "offline_test": "tests.test_sparse_toggle_pty.SparseTogglePtyTests.test_sparse_custom_all_custom_survives_restart",
       "status": "NOT_RUN"
     },
     {

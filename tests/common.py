@@ -7,6 +7,13 @@ from unittest.mock import patch
 
 ORCA_VERSION = "1.4.209"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / f"orca-{ORCA_VERSION}"
+HOST_HOME = Path.home().resolve()
+HOST_POD_DATA = Path(os.environ.get("XDG_DATA_HOME", HOST_HOME / ".local/share")).resolve() / "pod"
+
+
+def disposable_path(home: Path) -> str:
+    """Expose only a disposable launcher directory and system executables."""
+    return os.pathsep.join((str(home / ".local/bin"), "/usr/local/bin", "/usr/bin", "/bin"))
 
 
 def receipt(name: str) -> dict:
@@ -34,7 +41,10 @@ def fixture():
                  "XDG_DATA_HOME": str(base / "data-home"),
                  "XDG_STATE_HOME": str(base / "state-home"),
                  "CODEX_HOME": str(base / "codex-home"),
-                 "CLAUDE_CONFIG_DIR": str(base / "claude-home")}
+                 "CLAUDE_CONFIG_DIR": str(base / "claude-home"),
+                 "PATH": disposable_path(base / "home")}
+        if (Path(homes["XDG_DATA_HOME"]).resolve(strict=False) / "pod").is_relative_to(HOST_POD_DATA):
+            raise AssertionError("Disposable fixture resolved into the host Pod data directory")
         (base / "home").mkdir()
         with patch.dict(os.environ, homes, clear=False):
             os.environ.pop("POD_CONFIG_HOME", None)

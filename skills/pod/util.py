@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any
 
@@ -93,6 +94,20 @@ def bounded_json(path: Path, *, limit: int = MAX_RECORD) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as exc:
+        raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
+
+
+def bounded_stdin_json(*, limit: int = MAX_RECORD) -> Any:
+    """Read one private JSON request from a pipe without treating it as a path."""
+    try:
+        raw = sys.stdin.buffer.read(limit + 1)
+    except OSError as exc:
+        raise PodError("invalid_record", "Cannot read bounded JSON input") from exc
+    if len(raw) > limit:
+        raise PodError("record_too_large", "Record exceeds its size limit")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
         raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
 
 
