@@ -27,30 +27,37 @@ REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.
 LAUNCHER_MARKER = "# pod-launcher/v1"
 PATH_START = "# >>> pod path >>>"
 PATH_END = "# <<< pod path <<<"
-BANNER = ("       /\\            /\\            /\\",
-          "  ____/@@\\__    ____/@@\\__    ____/@@\\__",
-          " /  _      \\   /  _      \\   /  _      \\",
-          " \\_/ \\_____/   \\_/ \\_____/   \\_/ \\_____/",
-          " ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
-          "             P O D")
+BANNER = ("         /\\                       /\\           /\\",
+          "  ______/  \\___          ______/  \\_      __/ \\_",
+          "_/#### (o)    \\__      _/### (o)    \\_    /# (o) \\",
+          "\\_  ___  __/\\__  /      \\_  __/\\__  _/    \\_ __/_/",
+          "  \\/   \\/      \\/          \\/     \\/         \\/",
+          "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
 
-def _clean(value: object) -> str:
-    """Use the same control-character sanitizer as the model TUI."""
+def _term():
+    """Load the shared terminal helpers without importing Pod or PyYAML."""
     try:
-        from .term import clean
+        from . import term
+        return term
     except ImportError:
         name = "pod_installer_term"
         module = sys.modules.get(name)
         if module is None:
             spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("term.py"))
             if spec is None or spec.loader is None:
-                return "Installer output is unavailable"
+                raise InstallError(1, "Terminal helpers are unavailable")
             module = importlib.util.module_from_spec(spec)
             sys.modules[name] = module
             spec.loader.exec_module(module)
-        clean = module.clean
-    return clean(value)
+        return module
+
+
+def _clean(value: object) -> str:
+    try:
+        return _term().clean(value)
+    except (OSError, ImportError, InstallError):
+        return "Installer terminal helpers are unavailable"
 
 
 class InstallError(Exception):
@@ -60,16 +67,164 @@ class InstallError(Exception):
 
 
 def _say(message: str) -> None:
-    print("pod-install: " + _clean(message), flush=True)
+    if not sys.stdout.isatty():
+        print("pod-install: " + _clean(message), flush=True)
+
+
+def _utf8() -> bool:
+    setting = next((os.environ[key] for key in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(key)), "C")
+    value = setting.upper()
+    return os.environ.get("TERM") != "dumb" and ("UTF-8" in value or "UTF8" in value)
+
+
+def _color() -> bool:
+    return sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
+
+
+def _paint(value: str, code: str) -> str:
+    return f"\033[{code}m{value}\033[0m" if _color() else value
+
+
+def _marker(state: str) -> str:
+    if _utf8():
+        return {"ok": "✓", "warn": "!", "fail": "✗"}[state]
+    return {"ok": "[ok]", "warn": "[!]", "fail": "[x]"}[state]
+
+
+def _stage(label: str, *, state: str = "ok", detail: str | None = None,
+           plain: str | None = None) -> None:
+    if not sys.stdout.isatty():
+        if plain is not None:
+            _say(plain)
+        return
+    marker = _paint(_marker(state), {"ok": "38;5;37", "warn": "38;5;214", "fail": "38;5;160"}[state])
+    suffix = f"  {_clean(detail)}" if detail else ""
+    print(f"  {marker}  {_clean(label)}{suffix}", flush=True)
 
 
 def _banner(version: str) -> None:
     if not sys.stdout.isatty():
         return
-    use_color = "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
-    for index, raw in enumerate(BANNER):
-        line = raw + ("  /  " + version if index == len(BANNER) - 1 else "")
-        print(("\033[36m" + line + "\033[0m") if use_color else line, flush=True)
+    import re as _re
+    for index, line in enumerate(BANNER):
+        if not _color():
+            print(line, flush=True)
+            continue
+        if index == len(BANNER) - 1:
+            print(_paint(line, "38;5;30"), flush=True)
+            continue
+        parts = _re.split(r"(\(o\)|#+)", line)
+        print("".join(_paint(part, "38;5;255" if part == "(o)" else
+                             "38;5;23" if part.startswith("#") else "38;5;37") for part in parts if part), flush=True)
+    print(_paint(f"             Pod {version} / one-shot install", "1;38;5;153"), flush=True)
+
+
+def _section(title: str, *, stream=None) -> None:
+    stream = sys.stdout if stream is None else stream
+    width = min(60, max(24, shutil.get_terminal_size((80, 24)).columns - 2))
+    heading = "  " + title + " "
+    rule = "─" if _utf8() else "-"
+    print(_paint(heading + rule * max(0, width - len(heading)), "38;5;30"), file=stream, flush=True)
+
+
+def _display_path(path: Path, home: Path) -> str:
+    try:
+        relative = path.relative_to(home)
+        value = "~" if not relative.parts else "~/" + relative.as_posix()
+    except ValueError:
+        value = str(path)
+    width = min(52, max(14, shutil.get_terminal_size((80, 24)).columns - 24))
+    return _term().elide_middle(_clean(value), width, ascii_only=not _utf8())
+
+
+def _field(label: str, value: str) -> None:
+    print(f"  {_paint(label.ljust(18), '38;5;153')}{_clean(value)}", flush=True)
+
+
+def _path_label(path_status: str, notes: list[str]) -> str:
+    if any("shadows" in note or "symlink" in note or "manually" in note or "malformed" in note
+           for note in notes):
+        return "manual step"
+    return "ready" if "already on PATH" in path_status else "open a new shell"
+
+
+def _tty_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path_status: str,
+                 notes: list[str], duplicates: list[str], preserved: Path | None) -> None:
+    home = paths["home"]
+    path_label = _path_label(path_status, notes)
+    print(file=sys.stdout)
+    _section("Installed")
+    _field("Codex skill", _display_path(paths["canonical"], home))
+    _field("Claude Code skill", _display_path(paths["claude"] / "skills/pod", home))
+    _field("pod command", _display_path(paths["launcher"], home))
+    state = "needs attention" if prefs[0] == "invalid" else prefs[0]
+    _field("Preferences", f"{state}  {_display_path(paths['config'] / 'config.yaml', home)}")
+    _field("PATH", path_label)
+    if prefs[1]:
+        _field("Attention", f"{prefs[1]}; run pod config edit")
+    if preserved:
+        _field("Preserved", _display_path(preserved, home))
+    for duplicate in duplicates:
+        _field("Duplicate", _display_path(Path(duplicate), home) + " (inspect before removal)")
+    for note in notes:
+        _field("Note", note.replace(str(home), "~"))
+    _section("Environment")
+    print("  " + ("Orca found (connection not checked)" if shutil.which("orca") else
+                  "Orca not found (connection not checked)"), flush=True)
+    if shutil.which("codex") and shutil.which("claude"):
+        print("  codex/claude found (sign-in not checked)", flush=True)
+    else:
+        for agent in ("codex", "claude"):
+            print(f"  {agent} " + ("found" if shutil.which(agent) else "not found") +
+                  " (sign-in not checked)", flush=True)
+    print("  Existing agent sessions and workers unchanged", flush=True)
+    _section("Next")
+    if path_label == "open a new shell":
+        print("  Open a new shell for the pod command.", flush=True)
+    elif path_label == "manual step":
+        print("  Resolve the PATH note above before using the pod command.", flush=True)
+    if prefs[0] == "invalid":
+        print("  Correct preferences with pod config edit before delegation.", flush=True)
+    print("  Codex       $pod <objective>", flush=True)
+    print("  Claude Code /pod <issue-url>", flush=True)
+    print("  Optional    pod  (review models)", flush=True)
+
+
+def _failure(message: str, code: int) -> None:
+    if not sys.stdout.isatty():
+        print("pod-install: " + _clean(message), file=sys.stderr, flush=True)
+        return
+    print(file=sys.stderr)
+    _section("Install stopped", stream=sys.stderr)
+    mark = _paint(_marker("fail"), "38;5;160")
+    display = _clean(message).replace(str(Path.home()), "~")
+    width = max(20, shutil.get_terminal_size((80, 24)).columns - 7)
+    for index, row in enumerate(_term().wrap(display, width)):
+        print(f"  {mark if index == 0 else ' '}  {row}", file=sys.stderr, flush=True)
+    if code == 3:
+        state = "Skill copy may be incomplete; the receipt remains installing."
+    elif code == 130:
+        state = "Interrupted; no completed installation is claimed."
+    elif code == 2:
+        state = "No installation action was accepted."
+    else:
+        state = "The previous skill and launcher were not promoted."
+    print("  State  " + state, file=sys.stderr, flush=True)
+    print("  Existing agent sessions and workers unchanged.", file=sys.stderr, flush=True)
+    _section("Next", stream=sys.stderr)
+    if "unrelated pod command" in message:
+        print("  Inspect the unrelated pod command, then rerun:", file=sys.stderr, flush=True)
+    elif "foreign" in message or "redirected" in message:
+        print("  Inspect the reported path, then rerun:", file=sys.stderr, flush=True)
+    else:
+        print("  Resolve the reported cause, then rerun:", file=sys.stderr, flush=True)
+    try:
+        action_rows = _term().wrap(REINSTALL, max(20, shutil.get_terminal_size((80, 24)).columns - 4))
+    except (OSError, ImportError, InstallError):
+        action_rows = [REINSTALL]
+    for row in action_rows:
+        print("  " + row, file=sys.stderr, flush=True)
+    print(f"  Exit code {code}", file=sys.stderr, flush=True)
 
 
 def _absolute_env(name: str, fallback: Path) -> Path:
@@ -241,7 +396,9 @@ def _preflight(stage: Path, paths: dict[str, Path], template: bytes) -> None:
     if not source_bundle.is_dir() or not (source_bundle / "SKILL.md").is_file():
         raise InstallError(1, "Source has no Pod skill")
     _version(source_bundle)
-    _inventory(source_bundle)
+    for name in _inventory(source_bundle):
+        if not source_bundle.joinpath(*name.split("/")).is_file():
+            raise InstallError(1, f"Source bundle file {name} is missing")
     canonical = paths["canonical"]
     if canonical.is_symlink() or (canonical.exists() and (not canonical.is_dir() or not (canonical / "SKILL.md").is_file())):
         raise InstallError(1, f"Refuse foreign canonical skill path: {canonical}")
@@ -439,7 +596,11 @@ def _path(paths: dict[str, Path]) -> tuple[str, list[str]]:
 
 
 def _print_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path: str,
-                   duplicates: list[str], preserved: Path | None) -> None:
+                   duplicates: list[str], preserved: Path | None,
+                   notes: list[str] | None = None) -> None:
+    if sys.stdout.isatty():
+        _tty_summary(paths, prefs, path, notes or [], duplicates, preserved)
+        return
     _say(f"Installed Codex skill: {paths['canonical']}")
     _say(f"Installed Claude Code skill: {paths['claude'] / 'skills/pod'}")
     _say(f"Command: {paths['launcher']} ({path})")
@@ -462,9 +623,9 @@ def install(stage: Path) -> int:
     source_bundle = stage / "skills/pod"
     venv_path = _venv_path(paths)
     template = _launcher_template(venv_path / "bin/python", paths["canonical"])
-    _preflight(stage, paths, template)
     _banner(_version(source_bundle))
-    _say("Preflight ready")
+    _preflight(stage, paths, template)
+    _stage("Checking prerequisites", plain="Preflight ready")
     paths["data"].mkdir(parents=True, exist_ok=True, mode=0o700)
     lock_file = paths["data"] / ".install.lock"
     with lock_file.open("a+b") as lock:
@@ -479,6 +640,7 @@ def install(stage: Path) -> int:
         receipt = read_receipt(receipt_file)
         _say("Dependencies: pinned PyYAML")
         python = _venv(paths)
+        _stage("Preparing Python environment")
         _say("Bundle: validating source")
         target = {"version": _version(source_bundle), "digest": _check_bundle(python, stage)}
         canonical = paths["canonical"]
@@ -486,11 +648,19 @@ def install(stage: Path) -> int:
         if (receipt and receipt.get("status") == "installed" and receipt.get("target") == target
                 and current == target["digest"] and launcher_info(paths["launcher"], template)["owned"]
                 and (paths["claude"] / "skills/pod").resolve(strict=False) == canonical.resolve(strict=False)):
-            _say("Already current")
+            _stage("Installing skills", detail="Already current", plain="Already current")
+            _stage("Installing pod command", detail="already present")
             prefs = _preferences(paths, python)
             if prefs[0] == "failed":
                 raise InstallError(1, (prefs[1] or "Preferences could not be prepared") + "; rerun the installer")
-            _print_summary(paths, prefs, "already on PATH" if paths["launcher"].parent in map(Path, os.environ.get("PATH", "").split(os.pathsep)) else "existing shell may need a PATH refresh", _duplicates(paths), None)
+            _stage("Preferences", state="warn" if prefs[0] == "invalid" else "ok",
+                   detail="needs attention" if prefs[0] == "invalid" else prefs[0])
+            path_status = ("already on PATH" if paths["launcher"].parent in
+                           map(Path, os.environ.get("PATH", "").split(os.pathsep)) else
+                           "existing shell may need a PATH refresh")
+            _stage("PATH", state="ok" if "already on PATH" in path_status else "warn",
+                   detail=_path_label(path_status, []))
+            _print_summary(paths, prefs, path_status, _duplicates(paths), None)
             return 0
         previous = {"version": _version(canonical), "digest": current} if current and (canonical / "VERSION").is_file() else None
         record = {"schema": "pod-install/v1", "status": "installing", "previous": previous,
@@ -521,15 +691,18 @@ def install(stage: Path) -> int:
         if not claude_link.is_symlink() or claude_link.resolve(strict=False) != canonical.resolve(strict=False):
             raise InstallError(3, "Claude skill link differs from canonical source; rerun the installer")
         duplicates = _duplicates(paths)
-        _say("Skills: verified one canonical bundle")
+        _stage("Installing skills", plain="Skills: verified one canonical bundle")
         _atomic(paths["launcher"], template, mode=0o755)
-        _say("Launcher: installed")
+        _stage("Installing pod command", plain="Launcher: installed")
         prefs = _preferences(paths, python)
         if prefs[0] == "failed":
             raise InstallError(3, (prefs[1] or "Preferences could not be prepared") + "; rerun the installer")
-        _say("Preferences: " + prefs[0])
+        _stage("Preferences", state="warn" if prefs[0] == "invalid" else "ok",
+               detail="needs attention" if prefs[0] == "invalid" else prefs[0],
+               plain="Preferences: " + prefs[0])
         path_status, notes = _path(paths)
-        _say("PATH: " + path_status)
+        _stage("PATH", state="warn" if _path_label(path_status, notes) != "ready" else "ok",
+               detail=_path_label(path_status, notes), plain="PATH: " + path_status)
         for note in notes:
             _say(note)
         record["status"] = "installed"
@@ -541,7 +714,7 @@ def install(stage: Path) -> int:
         for child in paths["data"].glob("venv-*-preserved"):
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
-        _print_summary(paths, prefs, path_status, duplicates, preserved)
+        _print_summary(paths, prefs, path_status, duplicates, preserved, notes)
         return 0
 
 
@@ -579,7 +752,8 @@ def update() -> int:
         result = subprocess.run([str(_base_python()), str(staged), "__install", str(stage)],
                                 stdin=subprocess.DEVNULL, timeout=420)
         if result.returncode == 0:
-            _say("Reload active coordinators before new starts; running workers are unchanged")
+            _stage("Update", detail="Reload active coordinators; running workers unchanged",
+                   plain="Reload active coordinators before new starts; running workers are unchanged")
         return result.returncode
 
 
@@ -608,15 +782,19 @@ def main(argv: list[str] | None = None) -> int:
             return install(Path(args[0]))
         raise InstallError(2, "Expected one extracted source directory")
     except KeyboardInterrupt:
-        _say("Interrupted; rerun the installer to verify or recover the previous bundle")
+        if sys.stdout.isatty():
+            _failure("Interrupted before completion", 130)
+        else:
+            _say("Interrupted; rerun the installer to verify or recover the previous bundle")
         return 130
     except InstallError as exc:
-        print("pod-install: " + _clean(exc), file=sys.stderr, flush=True)
-        return _failure_code(exc.code)
+        code = _failure_code(exc.code)
+        _failure(str(exc), code)
+        return code
     except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as exc:
-        print("pod-install: installation failed; rerun the installer (" + type(exc).__name__ + ")",
-              file=sys.stderr, flush=True)
-        return _failure_code(1)
+        code = _failure_code(1)
+        _failure("installation failed; rerun the installer (" + type(exc).__name__ + ")", code)
+        return code
 
 
 if __name__ == "__main__":

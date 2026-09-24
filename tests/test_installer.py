@@ -13,7 +13,7 @@ import tempfile
 import time
 import unittest
 
-from tests.install_support import ROOT, archive_tree, local_server, run_install, run_pod, sandbox
+from tests.install_support import ROOT, archive_tree, local_server, run_install, run_install_pty, run_pod, sandbox
 from pod.installer import BANNER
 
 
@@ -21,7 +21,8 @@ class InstallerTests(unittest.TestCase):
     def test_banner_is_small_ascii_orca_pod(self):
         self.assertEqual(len(BANNER), 6)
         self.assertGreaterEqual(BANNER[0].count("/\\"), 3)
-        self.assertTrue(all(line.isascii() and len(line) <= 64 for line in BANNER))
+        self.assertTrue(all(len(line) <= 64 and all(32 <= ord(char) <= 126 for char in line)
+                            for line in BANNER))
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -40,12 +41,123 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("\x1b", result.stdout + result.stderr)
         return result
 
+    @staticmethod
+    def _plain_screen(raw: bytes) -> str:
+        return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw.decode("utf-8", "replace")).replace("\r", "")
+
+    def test_tty_art_stages_and_compact_summary(self):
+        env = {**self.env, "TERM": "xterm-256color"}
+        env.pop("NO_COLOR")
+        code, raw = run_install_pty(env)
+        self.assertEqual(code, 0, raw.decode("utf-8", "replace"))
+        text = self._plain_screen(raw)
+        lines = text.splitlines()
+        art = lines[:6]
+        self.assertTrue(all(len(line) <= 64 and all(32 <= ord(char) <= 126 for char in line)
+                            for line in art))
+        self.assertGreaterEqual(art[0].count("/\\"), 3)
+        patches = re.findall(r"(#+)\s+\(o\)", "\n".join(art))
+        self.assertGreaterEqual(len(patches), 3)
+        self.assertGreaterEqual(len({len(patch) for patch in patches}), 3)
+        self.assertIn((ROOT / "VERSION").read_text().strip(), lines[6])
+        self.assertIn("\x1b[", raw.decode("utf-8", "replace"))
+        self.assertIn(b"38;5;255", raw)
+        self.assertIn(b"38;5;30", raw)
+        stage_lines = [line for line in lines if re.match(r"^\s+[✓!✗]\s+", line)]
+        for stage in ("Checking prerequisites", "Preparing Python environment", "Installing skills",
+                      "Installing pod command", "Preferences", "PATH"):
+            self.assertEqual(sum(stage in line for line in stage_lines), 1, stage)
+        for label in ("Codex skill", "Claude Code skill", "pod command", "Preferences", "PATH",
+                      "Environment", "Next", "Optional"):
+            self.assertIn(label, text)
+        self.assertIn("~/.agents/skills/pod", text)
+        self.assertIn("~/.local/bin/pod", text)
+        self.assertIn("Existing agent sessions and workers unchanged", text)
+        self.assertNotIn("pod-install:", text)
+
+    def test_tty_ascii_and_no_color_stay_plain(self):
+        env = {**self.env, "LC_ALL": "C", "TERM": "xterm-256color", "NO_COLOR": "1"}
+        code, raw = run_install_pty(env)
+        self.assertEqual(code, 0)
+        text = self._plain_screen(raw)
+        self.assertTrue(text.isascii())
+        self.assertNotIn(b"\x1b[", raw)
+        self.assertIn("[ok]", text)
+        self.assertIn("[!]", text)
+        self.assertNotIn("pod-install:", text)
+
+    def test_tty_failure_names_state_next_action_and_code(self):
+        foreign = self.launcher
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(b"foreign command\n")
+        env = {**self.env, "TERM": "xterm-256color"}
+        env.pop("NO_COLOR")
+        code, raw = run_install_pty(env)
+        self.assertEqual(code, 1)
+        text = self._plain_screen(raw)
+        self.assertIn("Install stopped", text)
+        self.assertIn("Refuse unrelated pod command", text)
+        self.assertIn("~/.local/bin/pod", text)
+        self.assertIn("State", text)
+        self.assertIn("previous skill and launcher", text)
+        self.assertIn("Next", text)
+        self.assertIn("Exit code 1", text)
+        self.assertNotIn("pod-install:", text)
+        self.assertEqual(foreign.read_bytes(), b"foreign command\n")
+        self.assertFalse(self.receipt.exists())
+
+    def test_tty_bootstrap_failure_uses_the_same_failure_layout(self):
+        uname = self.root / "bin/uname"
+        uname.write_text("#!/bin/sh\necho Darwin\n")
+        uname.chmod(0o755)
+        env = {**self.env, "TERM": "xterm-256color"}
+        env.pop("NO_COLOR")
+        code, raw = run_install_pty(env)
+        self.assertEqual(code, 1)
+        text = self._plain_screen(raw)
+        for phrase in ("Install stopped", "Linux is required", "State", "Next", "Exit code 1"):
+            self.assertIn(phrase, text)
+        self.assertNotIn("pod-install:", text)
+        self.assertFalse(self.receipt.exists())
+
+    def test_tty_invalid_preferences_and_ready_path_are_explicit(self):
+        self.config.parent.mkdir(parents=True)
+        invalid = b"schema: [\n"
+        self.config.write_bytes(invalid)
+        env = {**self.env, "PATH": str(self.launcher.parent) + ":" + self.env["PATH"],
+               "TERM": "xterm-256color"}
+        code, raw = run_install_pty(env)
+        self.assertEqual(code, 0)
+        text = self._plain_screen(raw)
+        self.assertIn("Preferences  needs attention", text)
+        self.assertIn("PATH  ready", text)
+        self.assertIn("pod config edit", text)
+        self.assertEqual(self.config.read_bytes(), invalid)
+        self.assertNotIn("pod-install:", text)
+
+    def test_tty_partial_copy_reports_exit_three_and_recovery(self):
+        self.installed()
+        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n<!-- changed -->\n"
+        newer = archive_tree(self.root / "tty-partial.tar.gz", changes={"skills/pod/SKILL.md": changed})
+        env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri(),
+               "POD_TEST_NPX_MODE": "partial_fail", "TERM": "xterm-256color"}
+        env.pop("NO_COLOR")
+        code, raw = run_install_pty(env)
+        self.assertEqual(code, 3)
+        text = self._plain_screen(raw)
+        for phrase in ("Install stopped", "State", "Skill copy may be incomplete",
+                       "receipt remains installing", "Next", "Exit code 3"):
+            self.assertIn(phrase, text)
+        self.assertNotIn("pod-install:", text)
+
     def test_fresh_rerun_placements_receipt_and_untouched_agent_configs(self):
         codex = self.home / "codex/config.toml"
         claude = self.home / "claude/settings.json"
         codex.parent.mkdir(parents=True); claude.parent.mkdir(parents=True)
         codex.write_bytes(b"agent setting\n"); claude.write_bytes(b'{"private":true}\n')
         first = self.installed()
+        self.assertIn("pod-install: Preflight ready", first.stdout)
+        self.assertIn("pod-install: Installed Codex skill:", first.stdout)
         from pod.bundle import BUNDLE_FILES
         from pod.catalog import IDS
         from pod.installer import bundle_digest

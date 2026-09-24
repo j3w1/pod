@@ -31,6 +31,7 @@ def fixture():
         path.mkdir()
         homes = {"HOME": str(base / "home"),
                  "XDG_CONFIG_HOME": str(base / "config-home"),
+                 "XDG_DATA_HOME": str(base / "data-home"),
                  "XDG_STATE_HOME": str(base / "state-home"),
                  "CODEX_HOME": str(base / "codex-home"),
                  "CLAUDE_CONFIG_DIR": str(base / "claude-home")}

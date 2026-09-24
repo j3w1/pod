@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import http.server
+import fcntl
 import json
+import os
 from pathlib import Path
+import pty
+import select
+import signal
+import struct
 import subprocess
 import sys
 import tarfile
+import termios
 import threading
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +139,47 @@ def run_pod(env: dict[str, str], *args: str) -> subprocess.CompletedProcess:
     launcher = Path(env["HOME"]) / ".local/bin/pod"
     return subprocess.run([str(launcher), *args], env=env, cwd=Path(env["HOME"]).parent / "work",
                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=40)
+
+
+def run_install_pty(env: dict[str, str], *, timeout: float = 90) -> tuple[int, bytes]:
+    """Run the real shell entrypoint in a disposable 80x24 terminal."""
+    work = Path(env["HOME"]).parent / "work"
+    pid, master = pty.fork()
+    if pid == 0:
+        fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        os.chdir(work)
+        os.execve("/bin/sh", ["sh", str(ROOT / "install.sh")], env)
+    output = bytearray()
+    deadline = time.monotonic() + timeout
+    status = None
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], .1)
+            if ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                output.extend(data)
+            done, observed = os.waitpid(pid, os.WNOHANG)
+            if done:
+                status = observed
+                if not ready:
+                    break
+        else:
+            os.killpg(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            raise TimeoutError("Installer PTY timed out")
+        if status is None:
+            try:
+                _, status = os.waitpid(pid, 0)
+            except ChildProcessError:
+                status = 0
+        return os.waitstatus_to_exitcode(status), bytes(output)
+    finally:
+        os.close(master)
 
 
 @contextmanager
