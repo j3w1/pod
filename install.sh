@@ -1,4 +1,4 @@
-#!/bin/sh
+{
 # Pod one-shot bootstrap. The complete function must parse before any action runs.
 main() {
     pod_fail() {
@@ -76,3 +76,4 @@ PY
     return $?
 }
 main "$@"
+}

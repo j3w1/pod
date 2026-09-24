@@ -421,6 +421,22 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(failed.returncode, 1)
         self.assertIn("Python 3.13+", failed.stderr)
 
+    def test_truncated_pipe_prefixes_cannot_report_success_or_install(self):
+        script=(ROOT/'install.sh').read_bytes()
+        self.assertEqual((script[:1],script[-1:]),(b'{',b'}'))
+        length=len(script)
+        prefixes=sorted(set(range(1,min(80,length)))
+                        | set(range(80,length,max(1,length//160)))
+                        | set(range(max(1,length-256),length)))
+        for count in prefixes:
+            with self.subTest(prefix=count):
+                result=subprocess.run(['/bin/sh'],input=script[:count],env=self.env,
+                                      cwd=self.root/'work',capture_output=True,timeout=3)
+                self.assertNotEqual(result.returncode,0)
+                self.assertFalse(self.receipt.exists())
+                self.assertFalse(self.launcher.exists())
+                self.assertFalse(self.canonical.exists())
+
     def test_partial_copy_returns_three_and_integrity_gate_is_json(self):
         self.installed()
         changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n<!-- changed -->\n"
