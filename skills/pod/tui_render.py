@@ -261,7 +261,7 @@ def frame(state: State, cols: int, rows: int, caps: Capabilities, now: datetime)
     if width < 100:
         foot = "Space change state  s sort: " + SORTS[state.sort_index] + "  f filter  r pool  ? help  q quit"
     if width < 65:
-        foot = "Space state  PgDn more  s sort  r pool  ? help"
+        foot = "Space state  PgDn more  ? help  q quit"
     foot = _fit(foot,width,caps)
     result = [Line(title,"title"), Line(_fit(controls,width,caps),"label")]
     visible = visible_ids(state)

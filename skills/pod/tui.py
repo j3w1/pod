@@ -294,7 +294,20 @@ def run(project: Path | None = None) -> int:
     except locale.Error:
         locale.setlocale(locale.LC_ALL, "C")
     curses.set_escdelay(25)
+    original_term = os.environ.get("TERM")
+    mono_term = False
+    if "NO_COLOR" in os.environ and (original_term or "").startswith("xterm"):
+        try:
+            curses.setupterm("xterm-mono", fd=1)
+        except curses.error:
+            pass
+        else:
+            os.environ["TERM"] = "xterm-mono"
+            mono_term = True
     try:
         return curses.wrapper(_screen, project, document)
     except KeyboardInterrupt:
         return 0
+    finally:
+        if mono_term and original_term is not None:
+            os.environ["TERM"] = original_term
