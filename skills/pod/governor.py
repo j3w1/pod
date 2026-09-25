@@ -24,6 +24,7 @@ import yaml
 
 from .config import GOVERNED_KINDS, effective, validate_effects
 from .errors import PodError
+from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
 from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact
 
@@ -55,7 +56,7 @@ MAX_WORKFLOWS = 32
 _UNIT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
-_GIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_GIT_ID = gitio.OBJECT_ID
 NEXT_ACTIONS = {
     "authorization_missing": "supply the owner authorization record naming this candidate, tree and scope",
     "unit_unknown": "prepare the delivery unit's candidate with the governor-prepare helper",
@@ -200,7 +201,7 @@ def _compact(journal: dict) -> None:
 
 AUTHORIZATION_SCHEMA = "pod-authorization/v1"
 AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
-_GIT_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_GIT_OBJECT_ID = gitio.OBJECT_ID
 _UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\Z")
 
 
@@ -1044,11 +1045,10 @@ def record_correction(project: Path, objective: str, *, owner: str, unit: str, c
 # --------------------------------------------------------------------------- candidates
 
 def _git(project: Path, argv: list[str]) -> subprocess.CompletedProcess:
-    try:
-        return subprocess.run(["git", "-C", str(project), *argv], capture_output=True, text=True,
-                              timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise PodError("git_unavailable", "Git could not observe the candidate") from exc
+    result = gitio.read(project, argv)
+    if result is None:
+        raise PodError("git_unavailable", "Git could not observe the candidate")
+    return result
 
 
 def _bounded_mapping(value: object, *, name: str, limit: int = 16) -> dict:

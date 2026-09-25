@@ -16,11 +16,12 @@ import shutil
 import subprocess
 
 from .errors import PodError
+from .gitio import OBJECT_ID as _GIT_ID
 
 MAX_OUTPUT = 2_000_000
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
-_GIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+# Command authorization remains local even though the object-id syntax is shared.
 _RUN_ID = re.compile(r"[0-9]{1,20}\Z")
 _INPUT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}=[^\n\r\x00]{0,512}\Z")
 RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName"
