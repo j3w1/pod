@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.governor import (_check_authority, _empty_journal, _record_path, _write_journal,
+from pod.governor import (_check_authority, _check_unresolved, _empty_journal, _record_path, _write_journal,
                           validate_authorization)
 from pod.governance import require_governance_current
 from pod.ledger import _authorization_granted, read
@@ -258,6 +258,30 @@ class VerifiedDeliveryTests(KernelCase):
         with self.assertRaises(PodError) as stale:
             require_governance_current(self.project, delivered)
         self.assertEqual(stale.exception.code, "governance_changed")
+
+
+class ReviewOverlapTests(KernelCase):
+    def verdict(self, *, purpose: str, role: str, candidate: str) -> list[str]:
+        projection = {"outstanding": [{"task": "review-task", "role": role, "candidate": candidate}]}
+        unit = {"name": "delivery", "tasks": ["review-task"]}
+        state = {"admissions": {}, "interventions": {}, "checkpoint": {}}
+        reasons, warnings = [], []
+        _check_unresolved({"unit": "delivery"}, {"actions": []}, "key", "candidate-id", state, unit,
+                          "candidate-id", projection, True, purpose,
+                          "workflow_dispatch" if purpose == "validation" else "merge",
+                          self.project, {"commit": self.base}, reasons, warnings)
+        return [reason["code"] for reason in reasons]
+
+    def test_same_candidate_review_can_overlap_validation_but_holds_release(self):
+        self.assertEqual(self.verdict(purpose="validation", role="review", candidate=self.base), [])
+        self.assertEqual(self.verdict(purpose="release", role="review", candidate=self.base),
+                         ["integration_unsettled"])
+
+    def test_other_candidate_review_and_implementation_still_hold_validation(self):
+        self.assertEqual(self.verdict(purpose="validation", role="review", candidate="0" * 40),
+                         ["integration_unsettled"])
+        self.assertEqual(self.verdict(purpose="validation", role="implement", candidate=self.base),
+                         ["integration_unsettled"])
 
 
 if __name__ == "__main__":

@@ -746,7 +746,8 @@ def logical_projection(project: Path, native: dict, *, objective: str,
             continue
         outstanding.append({**admission["request"], "objective": objective,
                             "admission_id": admission_id, "task": task,
-                            "state": admission["state"]})
+                            "state": admission["state"], "role": admission["role"],
+                            "candidate": admission["candidate"]})
     return {"schema": "pod-logical-projection/v1", "runtime": native["runtime"],
             "authoritative": native.get("authoritative") is True,
             "owner": native.get("owner") if native.get("authoritative") is True else None,

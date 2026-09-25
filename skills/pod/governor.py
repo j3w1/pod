@@ -360,7 +360,8 @@ def _unit_tasks(unit: dict | None) -> list[str] | None:
     return None if unit is None else list(unit.get("tasks", []))
 
 
-def _active(native_projection: dict | None, tasks: list[str] | None = None) -> list[str]:
+def _active(native_projection: dict | None, tasks: list[str] | None = None, *,
+            project: Path | None = None, ignore_review_commit: str | None = None) -> list[str]:
     """Objective-local logical assignments supplied at the governor boundary."""
     if not isinstance(native_projection, dict):
         return []
@@ -374,6 +375,11 @@ def _active(native_projection: dict | None, tasks: list[str] | None = None) -> l
         task = row.get("task")
         if tasks is not None and task is not None and task not in tasks:
             continue
+        if (project is not None and ignore_review_commit is not None and row.get("role") == "review"
+                and isinstance(row.get("candidate"), str)):
+            from .governance import _resolve_commit
+            if _resolve_commit(project, row["candidate"]) == ignore_review_commit:
+                continue
         active.append(str(index) + ":" + str(task or "unbound"))
     return active
 
@@ -435,13 +441,15 @@ def _inputs(state: dict) -> str:
 
 
 def _phase(state: dict, actions: list[dict], unit: dict | None, candidate: str | None,
-           native_projection: dict | None = None) -> str:
+           native_projection: dict | None = None, *, project: Path | None = None,
+           ignore_review_commit: str | None = None, all_outstanding: bool = False) -> str:
     checkpoint = _checkpoint(state)
     if native_projection is None and state.get("admissions"):
         raise PodError("native_assignment_unverified",
                        "Governor needs exact objective assignment evidence for native-bound work")
-    tasks = _unit_tasks(unit)
-    if not candidate or _active(native_projection, tasks):
+    tasks = None if all_outstanding else _unit_tasks(unit)
+    if not candidate or _active(native_projection, tasks, project=project,
+                                ignore_review_commit=ignore_review_commit):
         return "working"
     name = unit["name"] if unit else None
     if _pending_interventions(state, name, tasks):
@@ -588,6 +596,7 @@ def _check_equivalent(action: dict, latest: dict | None, starting: list[dict],
 def _check_unresolved(action: dict, journal: dict, logical_key: str,
                       candidate_id: str | None, state: dict, unit: dict | None, current: str | None,
                       native_projection: dict | None, validates: bool, purpose: str, kind: str,
+                      project: Path | None, binding: dict | None,
                       reasons: list[dict], warnings: list[dict]) -> tuple[list[str], str]:
     # 4. Supersedence and unresolved prior effects in this unit.
     for row in journal["actions"]:
@@ -604,7 +613,10 @@ def _check_unresolved(action: dict, journal: dict, logical_key: str,
     if stale_pending:
         _warn(warnings, "superseded_validation_pending",
               f"{len(stale_pending)} validation run(s) for a superseded candidate are still pending")
-    phase = _phase(state, journal["actions"], unit, current, native_projection)
+    phase = _phase(state, journal["actions"], unit, current, native_projection,
+                   project=project,
+                   ignore_review_commit=binding["commit"] if purpose == "validation" and binding else None,
+                   all_outstanding=purpose == "release")
     if (validates or purpose == "release") and kind != "remote_diagnostic" and phase in ("working", "converging"):
         pending = _pending_interventions(state, action["unit"], _unit_tasks(unit))
         if phase == "converging" and "unit:" + action["unit"] in pending:
@@ -688,7 +700,8 @@ def _check_failure(latest: dict | None, reuse: dict | None, superseded: bool,
 
 
 def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
-              managed: bool = False, native_projection: dict | None = None) -> dict:
+              managed: bool = False, native_projection: dict | None = None,
+              project: Path | None = None) -> dict:
     """Apply the decision order and return reasons, warnings, reuse and bindings."""
     reasons: list[dict] = []
     warnings: list[dict] = []
@@ -745,8 +758,8 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
                               superseded, binding, reasons, warnings)
 
     stale_pending, phase = _check_unresolved(action, journal, logical_key, candidate_id, state,
-                                               unit, current, native_projection, validates, purpose,
-                                               kind, reasons, warnings)
+                                              unit, current, native_projection, validates, purpose,
+                                              kind, project, binding, reasons, warnings)
 
     _check_readiness(checkpoint, unit, candidate_id, binding, purpose, governor_policy,
                      reasons, warnings)
@@ -819,7 +832,7 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         require_governance_current(project, map_of(state))
         journal = _read_journal(record_path)
         verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
-                            native_projection=native_projection)
+                            native_projection=native_projection, project=project)
         exception_record = _exception_grant(governor_policy, supplied, action=proposal, objective=objective,
                                             candidate_ids=verdict["candidate_ids"], now=now)
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
