@@ -936,8 +936,8 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(recovered['admission']['error']['code'],'native_attempt_absent')
         self.assertEqual(len(self.port.starts),0)
 
-    def unknown_native_start(self,request=REQUEST):
-        error={'code':'future_native_refusal','message':'Native rejected this exact request',
+    def unknown_native_start(self,request=REQUEST,message='Native rejected this exact request'):
+        error={'code':'future_native_refusal','message':message,
                'data':{'taskId':'task','runId':'run'}}
         if request: error['data']['orchestrationRequestId']=request
         raw=json.dumps({'ok':False,'error':error,'_meta':{'runtimeId':'runtime'}}).encode()
@@ -951,7 +951,8 @@ class AdmissionTests(unittest.TestCase):
             admission=self.start()['admission']
         self.assertEqual(start.call_count,1)
         self.assertEqual((admission['state'],admission['request_uuid']),('unresolved',request))
-        self.assertEqual(admission['error'],{'code':'native_effect_uncertain','detail':error})
+        self.assertEqual(admission['error'],{'code':'native_effect_uncertain',
+                         'detail':{'code':error['code'],'message':error['message'][:2048]}})
         ref=admission['recovery']['start_observations'][0]
         path=objective_root(self.project,'objective')/'native-start'/(ref+'.json')
         self.assertEqual(base64.b64decode(json.loads(path.read_text())['observation']['stdout']['base64']),raw)
@@ -977,6 +978,63 @@ class AdmissionTests(unittest.TestCase):
         self.assertIsNone(recovered['admission']['request_uuid'])
         self.assertEqual(path.read_bytes(),before)
         self.assertEqual(self.port.starts,[])
+
+    def test_large_error_keeps_uuid_with_compact_diagnostic_and_exact_evidence(self):
+        admission,path=self.unknown_native_start(message='x'*600000)
+        self.assertEqual(admission['request_uuid'],REQUEST)
+        self.assertLess(len(json.dumps(admission['error'])),4096)
+        raw=base64.b64decode(json.loads(path.read_text())['observation']['stdout']['base64'])
+        self.assertEqual(len(json.loads(raw)['error']['message']),600000)
+        self.port.state='absent'
+        with patch.object(self.port,'request_show',wraps=self.port.request_show) as shown:
+            self.recover(admission)
+        shown.assert_called_once_with(REQUEST)
+
+    def test_native_contact_loss_cannot_prevent_recording_returned_start_facts(self):
+        from pod import ledger
+        from pod.operations import _observe_start
+        authority=ledger.require_authority;original_run=subprocess.run;down=False
+        partial=json.dumps({'ok':False,'error':{'code':'unknown',
+                          'data':{'orchestrationRequestId':REQUEST}},'_meta':{'runtimeId':'runtime'}}).encode()
+        def require(*args,**kwargs):
+            if down:raise PodError('native_authority_unverified','runtime unavailable')
+            return authority(*args,**kwargs)
+        def run(argv,**kwargs):
+            nonlocal down
+            if argv[0]=='/fixture/orca':
+                down=True
+                raise subprocess.TimeoutExpired(argv,1,output=partial)
+            return original_run(argv,**kwargs)
+        with patch('pod.ledger.require_authority',side_effect=require), \
+             patch.object(self.port,'start_worker',side_effect=OrcaPort().start_worker), \
+             patch('pod.orca.executable',return_value=Path('/fixture/orca')), \
+             patch('pod.orca.subprocess.run',side_effect=run):
+            with self.assertRaises(PodError):self.start()
+        admission=next(iter(read(self.project,'objective')['admissions'].values()))
+        self.assertEqual((admission['state'],admission['request_uuid']),('reserved',REQUEST))
+        ref=admission['recovery']['start_observations'][0]
+        path=objective_root(self.project,'objective')/'native-start'/(ref+'.json')
+        self.assertEqual(base64.b64decode(json.loads(path.read_text())['observation']['stdout']['base64']),partial)
+        with patch.object(self.port,'read_native',return_value={'authoritative':False}), \
+             patch.object(self.port,'start_worker') as start:
+            with self.assertRaises(PodError) as caught:self.recover(admission)
+        self.assertEqual(caught.exception.code,'native_authority_unverified');start.assert_not_called()
+        before=read(self.project,'objective')
+        with self.assertRaises(PodError) as caught:
+            _observe_start(self.project,'objective',owner='other',admission_id=admission['admission_id'],
+                           observation={},retry_request=None,reference={})
+        self.assertEqual(caught.exception.code,'unknown_admission')
+        self.assertEqual(read(self.project,'objective'),before)
+
+    def test_archive_write_failure_keeps_uuid_and_reports_missing_evidence(self):
+        with patch('pod.operations.atomic_json',side_effect=OSError('archive write failed')):
+            with self.assertRaises(OSError):self.start()
+        admission=next(iter(read(self.project,'objective')['admissions'].values()))
+        self.assertEqual((admission['state'],admission['request_uuid']),('unresolved',REQUEST))
+        self.assertEqual(len(admission['recovery']['start_observations']),1)
+        with self.assertRaises(PodError) as caught:self.recover(admission)
+        self.assertEqual(caught.exception.code,'native_evidence_unavailable')
+        self.assertEqual(len(self.port.starts),1)
 
     def test_corrupt_or_missing_start_evidence_blocks_native_recovery(self):
         admission,path=self.unknown_native_start();before=path.read_bytes()

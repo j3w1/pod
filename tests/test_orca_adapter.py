@@ -148,6 +148,7 @@ class OrcaAdapterTests(unittest.TestCase):
                ('timeout',subprocess.TimeoutExpired([],1,output=response,stderr=b'detail'),response,request),
                ('malformed',subprocess.CompletedProcess([],1,b'{invalid',b'detail'),b'{invalid',None),
                ('invalid_encoding',subprocess.CompletedProcess([],1,b'\xff',b'detail'),b'\xff',None),
+               ('deep_json',subprocess.CompletedProcess([],1,b'['*200000,b'detail'),b'['*200000,None),
                ('malformed_result',subprocess.CompletedProcess([],1,
                     response.replace(b'"ok": false',b'"result": [], "ok": false'),b'detail'),
                     response.replace(b'"ok": false',b'"result": [], "ok": false'),request)]

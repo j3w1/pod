@@ -175,7 +175,12 @@ or ambiguous native attempt holds. Effect-free native refusals defer without a
 blind replacement; uncertain errors remain unresolved until readback. Native start
 responses, including unknown refusals, malformed output, timeouts and unexpected
 exit statuses, retain immutable private evidence. Recovery checks its integrity;
-no test or new recording can reconstruct unavailable earlier responses.
+no test or new recording can reconstruct unavailable earlier responses. A native
+contact failure cannot prevent recording facts for the existing owned reservation.
+If the archive write fails but the journal remains writable, retain the observed
+UUID and report the missing evidence. A storage failure never grants effect
+authority. The evidence bound counts distinct observations, not retries; Pod
+adds no retry counter or automatic retry.
 
 The Governor's deterministic local kernel keeps ALLOW/REUSE/DEFER, candidate
 binding, preflight, CI reuse, bounded failure classification and safe

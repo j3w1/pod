@@ -101,7 +101,7 @@ def _mutation_envelope(stdout: str | bytes) -> dict:
     """Decode native response fields; refusal classification belongs to admission."""
     try:
         value = json.loads(stdout)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise PodError("native_effect_uncertain", "Native response is not valid JSON") from exc
     if not isinstance(value, dict):
         raise PodError("native_effect_uncertain", "Native response is malformed")
@@ -281,7 +281,7 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
         exc.native_observation = observation
         try:
             value = json.loads(stdout) if observation["stdout"]["bytes"] <= MAX_OUTPUT else None
-        except (ValueError, TypeError, UnicodeError):
+        except (ValueError, TypeError, UnicodeError, RecursionError):
             value = None
         if isinstance(value, dict):
             meta = value.get("_meta")

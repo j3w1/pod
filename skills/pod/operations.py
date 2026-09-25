@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import re
@@ -10,7 +11,7 @@ from uuid import UUID
 
 from .errors import PodError
 from .ledger import (admission_identity, binding_valid, objective_root, read, reserve,
-                     update_admission, _native_assignment_settled)
+                     update_admission, _lock, _path, _read, _write, _native_assignment_settled)
 from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, contract, current_run, mutate_command, read_command,
                    worker_rows, worker_show, worktree_identity, worktree_selector)
 from .util import atomic_json, bounded_json, bounded_text, digest
@@ -384,24 +385,45 @@ def _start_observations(project: Path, objective: str, admission: dict) -> list[
 
 
 def _observe_start(project: Path, objective: str, *, owner: str, admission_id: str,
-                   observation: dict, retry_request: str | None) -> None:
-    def apply(row: dict) -> None:
+                   observation: dict, retry_request: str | None, reference: dict) -> dict:
+    # The reservation already authorized this call. Recording its returned facts must
+    # survive native contact loss. This cannot change state, routes or effect authority;
+    # classification and every subsequent native call still require current authority.
+    journal = _path(project, objective)
+    with _lock(journal):
+        state = _read(journal)
+        row = state["admissions"].get(admission_id)
+        if state["owner"] != owner or row is None or row["owner"] != owner:
+            raise PodError("unknown_admission", "No owned reservation for this native observation")
         refs = _start_observations(project, objective, row)
         value = {"admission_id": admission_id, "run": row["run_id"], "task": row["task_id"],
                  "runtime": row["runtime"], "retry_request": retry_request, "observation": observation}
         ref = digest(value)
         if ref in refs:
-            return
+            return row
         if len(refs) >= MAX_START_OBSERVATIONS:
             raise PodError("native_evidence_full", "Native start evidence limit reached")
         path = objective_root(project, objective) / "native-start" / (ref + ".json")
-        if path.exists() or path.is_symlink():
-            if bounded_json(path, limit=START_OBSERVATION_LIMIT) != value:
-                raise PodError("native_evidence_unavailable", "Native start evidence changed")
-        else:
-            atomic_json(path, value, limit=START_OBSERVATION_LIMIT)
         row["recovery"] = {**row.get("recovery", {}), "start_observations": [*refs, ref]}
-    update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
+        if reference.get("runtime") == row["runtime"]:
+            request, valid = _refusal_request_reference(reference)
+            if (not valid or reference.get("_request_conflict") or _known_request_conflict(row)
+                    or (row["request_uuid"] is not None and request not in (None, row["request_uuid"]))):
+                row["recovery"]["request_conflict"] = "unresolved"
+            elif request is not None:
+                row["request_uuid"] = request
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            if path.exists() or path.is_symlink():
+                if bounded_json(path, limit=START_OBSERVATION_LIMIT) != value:
+                    raise PodError("native_evidence_unavailable", "Native start evidence changed")
+            else:
+                atomic_json(path, value, limit=START_OBSERVATION_LIMIT)
+        finally:
+            # Even if the separate archive cannot be written, keep the observed UUID
+            # and missing-evidence reference whenever the compact journal remains writable.
+            _write(journal, state)
+        return row
 
 
 def _start_observed(project: Path, objective: str, *, admission_id: str,
@@ -415,24 +437,18 @@ def _start_observed(project: Path, objective: str, *, admission_id: str,
     except Exception as exc:
         observation = getattr(exc, "native_observation", {"transport": type(exc).__name__,
                                                          "response": "unavailable"})
-        _observe_start(project, objective, owner=owner, admission_id=admission_id,
-                       observation=observation, retry_request=retry)
         reference = getattr(exc, "native_reference", {})
-        request = admission.get("request_uuid")
-        conflict = reference.get("_request_conflict", False)
-        if reference.get("runtime") == admission["runtime"]:
-            observed, valid = _refusal_request_reference(reference)
-            conflict = conflict or not valid or (request is not None and observed not in (None, request))
-            if not conflict and observed is not None:
-                request = observed
+        recorded = _observe_start(project, objective, owner=owner, admission_id=admission_id,
+                                  observation=observation, retry_request=retry, reference=reference)
         _hold(project, objective, owner=owner, admission_id=admission_id,
-              request_uuid=request, code=exc.code if isinstance(exc, PodError) else type(exc).__name__,
-              detail=str(exc), request_conflict=conflict)
+              request_uuid=recorded["request_uuid"],
+              code=exc.code if isinstance(exc, PodError) else type(exc).__name__,
+              detail=str(exc), request_conflict=_known_request_conflict(recorded))
         raise
     observation = receipt.pop("native_observation", None)
     _observe_start(project, objective, owner=owner, admission_id=admission_id,
                    observation=observation if observation is not None else {"receipt": receipt},
-                   retry_request=retry)
+                   retry_request=retry, reference=receipt)
     return receipt
 
 
@@ -574,18 +590,25 @@ def _refusal_result(project: Path, objective: str, *, owner: str,
         # request, Dispatch and worker is the only path out of this hold.
         return _hold(project, objective, owner=owner, admission_id=admission_id,
                      request_uuid=available_request, code="native_runtime_error",
-                     detail=error)
+                     detail=_error_summary(error))
     classification = _preflight_refusal_classification(
         receipt, admission, request_uuid=request_uuid)
     if classification is None:
         return _hold(project, objective, owner=owner, admission_id=admission_id,
-                     request_uuid=available_request, code="native_effect_uncertain", detail=error)
+                     request_uuid=available_request, code="native_effect_uncertain", detail=_error_summary(error))
     if classification == "authoritative":
         return _defer_refusal(project, objective, owner=owner, admission_id=admission_id,
                               receipt=receipt, request_uuid=available_request)
     return _hold(project, objective, owner=owner, admission_id=admission_id,
                  request_uuid=available_request, code="native_refusal_unverified",
                  detail=f"{error.get('code')} did not prove an admission-bound no-start result")
+
+
+def _error_summary(error: dict) -> dict:
+    """Small current diagnostic; complete native bytes belong to immutable evidence."""
+    code, message = error.get("code"), error.get("message")
+    return {"code": code if isinstance(code, str) and len(code) <= 256 else None,
+            "message": message[:2048] if isinstance(message, str) else None}
 
 
 def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -602,7 +625,7 @@ def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: s
         row["state"] = "deferred"
         row["request_uuid"] = request_uuid
         row["native_binding"] = None
-        row["error"] = {"code": error.get("code"), "detail": error}
+        row["error"] = {"code": error.get("code"), "detail": _error_summary(error)}
         row["recovery"] = {**recovery,
                            "preflight_refusal": "authoritative",
                            "native_start_state": "refused",
