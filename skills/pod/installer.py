@@ -27,6 +27,80 @@ REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.
 LAUNCHER_MARKER = "# pod-launcher/v1"
 PATH_START = "# >>> pod path >>>"
 PATH_END = "# <<< pod path <<<"
+# The objective-state contracts this bundle reads. 0.6.0 is a hard cutover: a record on
+# another schema is listed and blocked, never converted. The ledger imports these, so the
+# installer's read-only notice and doctor/status agree without a second list.
+STATE_SCHEMAS = {"context": "pod-context/v4", "checkpoint": "pod-checkpoint/v3",
+                 "admission": "pod-admission/v4"}
+MAX_STATE_SCAN = 256
+
+
+def superseded_schemas(value: object) -> list[str]:
+    """The superseded schema names one objective record carries; empty when current."""
+    if not isinstance(value, dict):
+        return ["unknown"]
+    found = set()
+    if value.get("schema") != STATE_SCHEMAS["context"]:
+        found.add(str(value.get("schema"))[:64])
+    checkpoint = value.get("checkpoint")
+    if isinstance(checkpoint, dict) and checkpoint.get("schema") != STATE_SCHEMAS["checkpoint"]:
+        found.add(str(checkpoint.get("schema"))[:64])
+    admissions = value.get("admissions")
+    if isinstance(admissions, dict):
+        for row in list(admissions.values())[:MAX_STATE_SCAN]:
+            if isinstance(row, dict) and row.get("schema") != STATE_SCHEMAS["admission"]:
+                found.add(str(row.get("schema"))[:64])
+    return sorted(found)
+
+
+def superseded_objectives(state_root: Path) -> list[dict]:
+    """Read-only list of objective records on superseded schemas. It changes nothing."""
+    rows: list[dict] = []
+    try:
+        if not state_root.is_dir() or state_root.is_symlink():
+            return rows
+        candidates = sorted(state_root.glob("*/context.json"))[:MAX_STATE_SCAN]
+    except OSError:
+        return rows
+    for path in candidates:
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+                rows.append({"record": path.parent.name, "objective": None, "schemas": ["unreadable"]})
+                continue
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            rows.append({"record": path.parent.name, "objective": None, "schemas": ["unreadable"]})
+            continue
+        schemas = superseded_schemas(value)
+        if schemas:
+            checkpoint = value.get("checkpoint") if isinstance(value, dict) else None
+            objective = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
+            rows.append({"record": path.parent.name,
+                         "objective": objective if isinstance(objective, str) else None,
+                         "schemas": schemas})
+    return rows
+
+
+def _state_root(paths: dict[str, Path]) -> Path:
+    override = os.environ.get("POD_STATE_HOME")
+    if override and Path(override).is_absolute():
+        return Path(override)
+    return paths["state"].resolve(strict=False) / "pod"
+
+
+def _cutover_notice(paths: dict[str, Path]) -> None:
+    """Name objectives this version will not continue; read-only, nothing is converted."""
+    rows = superseded_objectives(_state_root(paths))
+    if not rows:
+        return
+    prefix = "  " if sys.stdout.isatty() else "pod-install: "
+    lines = [f"Notice: {len(rows)} objective record(s) use superseded state schemas and are blocked; "
+             "nothing was converted. Settle their workers through Orca and start a new objective."]
+    lines += [f"  {row['objective'] or row['record']}: {', '.join(row['schemas'])}" for row in rows[:16]]
+    for line in lines:
+        print(prefix + _clean(line), flush=True)
+
+
 BANNER = ("         /\\                       /\\           /\\",
           "  ______/  \\___          ______/  \\_      __/ \\_",
           "_/#### (o)    \\__      _/### (o)    \\_    /# (o) \\",
@@ -694,6 +768,7 @@ def install(stage: Path) -> int:
                    detail=_path_label(path_status, notes), plain="PATH: " + path_status)
             for note in notes:
                 _say(note)
+            _cutover_notice(paths)
             _print_summary(paths, prefs, path_status, _duplicates(paths), None, notes)
             return 0
         previous = ({"version": _version(canonical), "digest": current}
@@ -750,6 +825,7 @@ def install(stage: Path) -> int:
         for child in paths["data"].glob("venv-*-preserved"):
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
+        _cutover_notice(paths)
         _print_summary(paths, prefs, path_status, duplicates, preserved, notes)
         return 0
 

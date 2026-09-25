@@ -15,7 +15,9 @@ from tests.common import fixture
 
 
 def packet_body():
-    return {"schema": "pod-packet/v2", "objective": "make change", "criteria": ["works"],
+    return {"schema": "pod-packet/v3", "objective": "make change", "criteria": ["works"],
+            "serves": ["O1"], "role": "implement", "boundary": {"paths": ["src"], "surfaces": []},
+            "map_revision": 1,
             "responsibility": "writer", "scope": ["src/a.py"], "actions": ["edit"],
             "candidate": "abc", "context": [{"kind": "instruction", "path": "AGENTS.md", "sha256": "a" * 64}], "dependencies": [],
             "route": {"agent": "codex", "model": "gpt-6-sol", "effort": "medium", "context": "native_default", "reason": "bounded work", "preference_revision": "p"}, "policy_revision": "p", "plan_revision": "plan",
@@ -215,6 +217,29 @@ class RecordTests(unittest.TestCase):
             acceptance(["works"], [row], candidate="new", policy_revision="p",
                        sources=[], dependencies=[], environment="fixture",
                        review_required=True, hosted_required=True)
+
+    def test_review_label_is_derived_from_the_map_never_from_a_review_row(self):
+        base = {"schema": "pod-evidence/v1", "criterion": "works", "candidate": "c",
+                "sources": [], "policy_revision": "p", "dependencies": [], "environment": "fixture",
+                "check": "unit", "command": "python -m unittest", "result": "observed",
+                "timestamp": "2026-09-20T00:00:00Z", "status": "PASS", "reference": "artifact"}
+        asserted = {**base, "criterion": "gate:review", "check": "review", "reference": "approved"}
+        owner = {"schema": "pod-acceptance-authorization/v1", "candidate": "c", "policy_revision": "p",
+                 "utc": "2026-09-20T00:00:00Z", "accepted_by": "owner"}
+        arguments = dict(candidate="c", policy_revision="p", sources=[], dependencies=[],
+                         environment="fixture", review_required=True, hosted_required=False,
+                         owner_acceptance=owner)
+        withheld = acceptance(["works"], [base, asserted], **arguments)
+        self.assertEqual(withheld["independently_reviewed"], "WITHHELD")
+        self.assertEqual(withheld["assurance_unbound"], [{"obligation": None, "gap": "none_recorded"}])
+        self.assertFalse(withheld["accepted"])
+        qualified = acceptance(["works"], [base], label={"label": "QUALIFIED", "assurance_unbound": [],
+                                                         "withdrawn": []}, **arguments)
+        self.assertEqual((qualified["independently_reviewed"], qualified["accepted"]), ("QUALIFIED", True))
+        unbound = {"label": "WITHHELD", "assurance_unbound": [{"obligation": "A", "gap": "unbound"}],
+                   "withdrawn": []}
+        self.assertEqual(acceptance(["works"], [base], label=unbound, **arguments)["assurance_unbound"],
+                         unbound["assurance_unbound"])
 
     def test_failed_required_check_blocks_even_with_pass_and_review_is_contextual(self):
         base = {"schema": "pod-evidence/v1", "criterion": "works", "candidate": "c",

@@ -18,13 +18,16 @@ import re
 
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 
+PACKET_SCHEMA = "pod-packet/v3"
 PACKET_FIELDS = {"schema", "objective", "criteria", "responsibility", "scope", "actions",
                  "candidate", "context", "dependencies", "route", "policy_revision",
                  "plan_revision", "report_contract", "sources", "objective_source", "worktree",
-                 "placement"}
-PACKET_REQUIRED = PACKET_FIELDS - {"objective_source", "worktree", "placement"}
+                 "placement", "serves", "role", "boundary", "map_revision", "resolves",
+                 "stop_condition", "delta_from"}
+PACKET_REQUIRED = PACKET_FIELDS - {"objective_source", "worktree", "placement", "resolves",
+                                   "stop_condition", "delta_from"}
 REPORT_FIELDS = {"schema", "assignment", "attempt", "candidate", "outcome", "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"}
-EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt"}
+EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt", "definition"}
 
 
 def _list(value: Any, name: str, limit: int = 64) -> list:
@@ -80,8 +83,10 @@ def _sha256(value: Any) -> bool:
 
 def packet(value: Any) -> dict:
     p = exact(value, PACKET_FIELDS, PACKET_REQUIRED, name="packet")
-    if p["schema"] != "pod-packet/v2":
-        raise PodError("invalid_packet", "Unsupported packet schema")
+    if p["schema"] != PACKET_SCHEMA:
+        raise PodError("invalid_packet", f"Packet schema must be {PACKET_SCHEMA}")
+    from .obligations import packet_binding
+    packet_binding(p)
     for key in ("objective", "responsibility", "candidate", "policy_revision", "plan_revision", "report_contract"):
         bounded_text(p[key], name=key)
     for key in ("criteria", "actions", "dependencies"):
@@ -114,20 +119,8 @@ def packet(value: Any) -> dict:
         from .github import validate_issue_binding
         validate_issue_binding(p["objective_source"])
     for field in ("worktree", "placement"):
-        if field not in p:
-            continue
-        worktree = exact(p[field], {"repository", "repo_key", "path", "branch"},
-                         {"repository", "repo_key", "path", "branch"}, name="worktree_binding")
-        if ((worktree["repository"] is not None
-             and (not isinstance(worktree["repository"], str)
-                  or worktree["repository"].count("/") != 1))
-                or not _sha256(worktree["repo_key"])
-                or not isinstance(worktree["path"], str) or not Path(worktree["path"]).is_absolute()
-                or len(worktree["path"]) > 4096
-                or (worktree["branch"] is not None
-                    and (not isinstance(worktree["branch"], str) or not worktree["branch"]
-                         or len(worktree["branch"]) > 256))):
-            raise PodError("invalid_worktree_binding", "Packet worktree identity is malformed")
+        if field in p:
+            worktree_binding(p[field])
     route_value = p["route"]
     route = exact(route_value, {"agent", "model", "effort", "context", "reason", "preference_revision"},
                   {"agent"} if isinstance(route_value, dict) and route_value.get("agent") == "direct" else
@@ -139,6 +132,23 @@ def packet(value: Any) -> dict:
     if len(str(p)) > 65536:
         raise PodError("invalid_packet", "Packet is too large")
     return {"packet_id": digest(p), "body": p}
+
+
+def worktree_binding(value: Any) -> dict:
+    """Exact Git repository, key, worktree path and branch of an objective or placement."""
+    worktree = exact(value, {"repository", "repo_key", "path", "branch"},
+                     {"repository", "repo_key", "path", "branch"}, name="worktree_binding")
+    if ((worktree["repository"] is not None
+         and (not isinstance(worktree["repository"], str)
+              or worktree["repository"].count("/") != 1))
+            or not _sha256(worktree["repo_key"])
+            or not isinstance(worktree["path"], str) or not Path(worktree["path"]).is_absolute()
+            or len(worktree["path"]) > 4096
+            or (worktree["branch"] is not None
+                and (not isinstance(worktree["branch"], str) or not worktree["branch"]
+                     or len(worktree["branch"]) > 256))):
+        raise PodError("invalid_worktree_binding", "Packet worktree identity is malformed")
+    return worktree
 
 
 def report(value: Any, frozen: dict, native_binding: dict) -> dict:
@@ -171,10 +181,25 @@ def report(value: Any, frozen: dict, native_binding: dict) -> dict:
     return {"status": "validated_observation", "observation": r, "native_binding": binding}
 
 
+def evidence_record(value: Any) -> dict:
+    """Canonical detailed receipt shape, shared by acceptance and obligation maps.
+
+    Map receipts additionally require a definition fingerprint; standalone acceptance
+    has no obligation definition to join. A reference identifies one immutable receipt
+    within its obligation, so a new observation needs a new reference.
+    """
+    e = exact(value, EVIDENCE_FIELDS, EVIDENCE_FIELDS - {"reviewer_attempt", "definition"}, name="evidence")
+    if e["schema"] != "pod-evidence/v1" or e["status"] not in ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+        raise PodError("invalid_evidence", "Invalid evidence schema or status")
+    if "definition" in e and not _sha256(e["definition"]):
+        raise PodError("invalid_evidence", "Evidence definition is a SHA256 fingerprint")
+    return e
+
+
 def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str,
              sources: list | None = None, dependencies: list | None = None,
              environment: str | None = None) -> dict:
-    e = exact(value, EVIDENCE_FIELDS, EVIDENCE_FIELDS - {"reviewer_attempt"}, name="evidence")
+    e = evidence_record(value)
     if e["schema"] != "pod-evidence/v1" or e["criterion"] != criterion or e["candidate"] != candidate or e["policy_revision"] != policy_revision:
         raise PodError("stale_evidence", "Evidence does not bind current criterion, candidate and policy")
     if (sources is not None and e["sources"] != sources or
@@ -291,13 +316,15 @@ def integration_observation(project: Path, candidate: str, *, base_ref: str = "o
 def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str, policy_revision: str,
                sources: list, dependencies: list, environment: str,
                review_required: bool, hosted_required: bool,
-               owner_acceptance: dict | None = None, integration: dict | None = None) -> dict:
+               owner_acceptance: dict | None = None, integration: dict | None = None,
+               label: dict | None = None, route_holds: list[dict] | None = None) -> dict:
     """Project-criteria projection.
 
-    Caller records never confer a check result. Two facts are deliberately not derived from
-    them: whether the owner accepted the candidate, which arrives as an explicit
-    authorization record, and whether it is merged or released, which is read from Git by
-    `integration_observation` rather than asserted.
+    Caller records never confer a check result. Three facts are deliberately not derived
+    from them: whether the owner accepted the candidate, which arrives as an explicit
+    authorization record; whether it is merged or released, which is read from Git by
+    `integration_observation`; and whether it is independently reviewed, which is the
+    obligation map's label qualification (R88) and never a caller's review row.
     """
     checks = {}
     for criterion in criteria:
@@ -306,19 +333,22 @@ def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str
                                       policy_revision=policy_revision, sources=sources,
                                       dependencies=dependencies, environment=environment)["status"] for e in rows]
     checks_pass = bool(criteria) and all("PASS" in checks[c] and "FAILED" not in checks[c] for c in criteria)
-    review = "NOT_REQUIRED" if not review_required else "NOT_RUN"
+    qualification = label if isinstance(label, dict) else {
+        "label": "WITHHELD", "assurance_unbound": [{"obligation": None, "gap": "none_recorded"}], "withdrawn": []}
+    # A caller may add a review requirement but never waive one the bound map records.
+    required = bool(review_required or qualification.get("required"))
+    if qualification.get("label") == "QUALIFIED":
+        review = "QUALIFIED"
+    else:
+        review = "WITHHELD" if required else "NOT_REQUIRED"
     hosted = "NOT_REQUIRED" if not hosted_required else "NOT_RUN"
-    for kind in ("review", "hosted"):
-        row = [e for e in evidence_rows if e.get("criterion") == f"gate:{kind}"]
-        if row:
-            statuses = [evidence(e, criterion=f"gate:{kind}", candidate=candidate,
-                                 policy_revision=policy_revision, sources=sources,
-                                 dependencies=dependencies, environment=environment)["status"] for e in row]
-            state = "RECORDED_PASS_UNVERIFIED" if "PASS" in statuses and "FAILED" not in statuses else "BLOCKED"
-            if kind == "review" and review_required:
-                review = state
-            if kind == "hosted" and hosted_required:
-                hosted = state
+    row = [e for e in evidence_rows if e.get("criterion") == "gate:hosted"]
+    if row:
+        statuses = [evidence(e, criterion="gate:hosted", candidate=candidate,
+                             policy_revision=policy_revision, sources=sources,
+                             dependencies=dependencies, environment=environment)["status"] for e in row]
+        if hosted_required:
+            hosted = "RECORDED_PASS_UNVERIFIED" if "PASS" in statuses and "FAILED" not in statuses else "BLOCKED"
     granted = None
     if owner_acceptance is not None:
         granted = exact(owner_acceptance, {"schema", "candidate", "policy_revision", "utc", "accepted_by"},
@@ -337,11 +367,15 @@ def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str
         if observed["schema"] != "pod-integration-observation/v1" or observed["candidate"] != candidate:
             raise PodError("invalid_integration", "Integration observation does not bind this candidate")
     accepted = bool(checks_pass and granted is not None
-                    and review in ("NOT_REQUIRED", "RECORDED_PASS_UNVERIFIED")
-                    and hosted in ("NOT_REQUIRED", "RECORDED_PASS_UNVERIFIED"))
+                    and review in ("NOT_REQUIRED", "QUALIFIED")
+                    and hosted in ("NOT_REQUIRED", "RECORDED_PASS_UNVERIFIED")
+                    and not route_holds)
     return {"implemented": "unassessed", "required_checks_pass": checks_pass,
-            "independently_reviewed": review, "hosted_proof_complete": hosted,
+            "independently_reviewed": review,
+            "assurance_unbound": [] if review == "QUALIFIED" else qualification.get("assurance_unbound", []),
+            "hosted_proof_complete": hosted,
             "accepted": accepted,
+            "route_holds": list(route_holds or []),
             "merged": bool(observed and observed.get("ancestor_of_base") is True),
             "released": bool(observed and observed.get("tags")),
             "criteria": checks, "project_assessment_required": granted is None}

@@ -35,6 +35,10 @@ report findings and do not repair. Consolidate corrections and preserve prior fi
 Worker success, local verification, hosted CI, independent review and external project
 acceptance are distinct facts and are reported separately.
 
+A change to Pod's own admission, assurance or closure rules is reviewed and merged under
+the mechanism installed before the change. Evidence the new mechanism produces about
+itself is recorded separately as self-hosting evidence and never substitutes for that review.
+
 Run focused tests during development and the gates in `docs/validation.md` at milestone
 boundaries. Missing live Orca, model or provider evidence must remain unavailable or
 NOT_RUN. Do not weaken a check or fabricate compatibility. Removing a requirement removes

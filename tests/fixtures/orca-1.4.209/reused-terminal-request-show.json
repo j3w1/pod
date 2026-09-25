@@ -1,0 +1,44 @@
+{
+  "ok": true,
+  "result": {
+    "requestId": "33333333-3333-4333-8333-333333333333",
+    "state": "completed",
+    "method": "orchestration.workerStart",
+    "receipt": {
+      "runId": "run",
+      "taskId": "task2",
+      "dispatchId": "dispatch-2",
+      "state": "ready",
+      "stage": "input_accepted",
+      "turnStart": "observed",
+      "launch": {
+        "requested": {
+          "agent": null,
+          "model": null,
+          "effort": null
+        },
+        "effective": {
+          "agent": null,
+          "model": null,
+          "effort": null
+        }
+      },
+      "effects": [
+        {
+          "kind": "terminal",
+          "role": "agent",
+          "action": "reused",
+          "id": "term-dispatch-1"
+        }
+      ],
+      "residualResources": [],
+      "mutation": {
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "replayed": false
+      }
+    }
+  },
+  "_meta": {
+    "runtimeId": "runtime"
+  }
+}

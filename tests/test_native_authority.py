@@ -14,7 +14,7 @@ from pod.ledger import (check_bound_sources, checkpoint, constraints_update,
                         intervention, objective_root, read, route_failure, update_admission)
 from pod.operations import guarded_start
 from pod.records import packet
-from tests.common import fixture
+from tests.common import fixture, kernel_binding, kernel_map
 from tests.test_governor import observation
 from tests.test_operations import FakePort, ROUTE
 
@@ -29,10 +29,10 @@ class NativeAuthorityTests(unittest.TestCase):
         self.temp=fixture(); self.root=self.temp.__enter__(); self.addCleanup(self.temp.__exit__,None,None,None)
         self.project=self.root/'project';self.project.mkdir()
         write_defaults(self.root.parent/'config-home'/'pod'/'config.yaml')
-        self.value={'schema':'pod-checkpoint/v2','criteria':['works'],'plan_revision':'plan',
+        self.value={'schema':'pod-checkpoint/v3','criteria':['works'],'plan_revision':'plan',
                     'candidate':'candidate','policy_revision':effective(self.project)['revision'],
                     'native_refs':[],'assignments':[],'questions':[],
-                    'verification_gaps':[],'next_safe_action':'inspect'}
+                    'verification_gaps':[],'next_safe_action':'inspect',**kernel_map()}
 
     @contextmanager
     def native(self, *, first=None, second=None, bootstrap=None, owner='owner'):
@@ -108,7 +108,7 @@ class NativeAuthorityTests(unittest.TestCase):
     def test_foreign_run_admission_refuses_before_native_call_or_write(self):
         self.establish()
         snapshot=load_config(self.project)
-        frozen=packet({'schema':'pod-packet/v2','objective':'objective','criteria':['works'],
+        frozen=packet({'schema':'pod-packet/v3','objective':'objective','criteria':['works'],**kernel_binding(),
                        'responsibility':'writer','scope':['notes.txt'],'actions':['edit'],
                        'candidate':'candidate','context':[],'dependencies':[],
                        'route':{**ROUTE,'preference_revision':snapshot['revision']},
@@ -144,7 +144,7 @@ class NativeAuthorityTests(unittest.TestCase):
     def test_attempt_and_intervention_mutations_reject_unbound_caller(self):
         self.establish()
         snapshot=load_config(self.project)
-        frozen=packet({'schema':'pod-packet/v2','objective':'objective','criteria':['works'],
+        frozen=packet({'schema':'pod-packet/v3','objective':'objective','criteria':['works'],**kernel_binding(),
                        'responsibility':'writer','scope':['notes.txt'],'actions':['edit'],
                        'candidate':'candidate','context':[],'dependencies':[],
                        'route':{**ROUTE,'preference_revision':snapshot['revision']},

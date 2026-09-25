@@ -262,6 +262,10 @@ def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
     return binding
 
 
+def _observed_value(value: object) -> str:
+    return value if isinstance(value, str) and value.strip() and len(value) <= 256 else "unknown"
+
+
 def _effective_evidence(receipt: dict, shown: dict, admission: dict) -> tuple[dict, bool]:
     result = shown["result"]
     worker = result["worker"]
@@ -272,23 +276,36 @@ def _effective_evidence(receipt: dict, shown: dict, admission: dict) -> tuple[di
     claimed = receipt_launch.get("effective") if isinstance(receipt_launch, dict) else None
     observed_requested = launch.get("requested") if isinstance(launch, dict) else None
     claimed_requested = receipt_launch.get("requested") if isinstance(receipt_launch, dict) else None
-    if (observed is not None and claimed is not None and observed != claimed
-            or observed_requested is not None and claimed_requested is not None
-            and observed_requested != claimed_requested):
-        mismatch = True
-    else:
-        mismatch = False
-    effective = {key: observed.get(key, "unknown") if isinstance(observed, dict) else "unknown"
-                 for key in ("agent", "model", "effort")}
+    fields = ("agent", "model", "effort")
+    def known_conflict(left: object, right: object) -> bool:
+        return (isinstance(left, dict) and isinstance(right, dict)
+                and any(_observed_value(left.get(key)) != "unknown"
+                        and _observed_value(right.get(key)) != "unknown"
+                        and _observed_value(left.get(key)) != _observed_value(right.get(key))
+                        for key in fields))
+
+    # Receipt and worker-show can represent the same unknown field as absent or null.
+    # Only two known, relevant values can contradict one another.
+    mismatch = (known_conflict(observed, claimed)
+                or known_conflict(observed_requested, claimed_requested))
+    # Orca reports null launch fields for a reused terminal, which sends no model or effort
+    # flag. Absent, null or malformed effective values are unknown, never observed settings.
+    effective = {key: _observed_value(observed.get(key)) if isinstance(observed, dict) else "unknown"
+                 for key in fields}
     effective["context"] = "native_default"
     requested = admission["request"]
-    for key in ("agent", "model", "effort"):
+    for key in fields:
         expected = requested[key]
         if expected != "native_default" and (
-                isinstance(observed_requested, dict) and observed_requested.get(key) not in (None, expected)
-                or isinstance(claimed_requested, dict) and claimed_requested.get(key) not in (None, expected)):
+                isinstance(observed_requested, dict)
+                and _observed_value(observed_requested.get(key)) not in ("unknown", expected)
+                or isinstance(claimed_requested, dict)
+                and _observed_value(claimed_requested.get(key)) not in ("unknown", expected)):
             mismatch = True
         if effective[key] != "unknown" and requested[key] != "native_default" and effective[key] != requested[key]:
+            mismatch = True
+        if (isinstance(claimed, dict) and requested[key] != "native_default"
+                and _observed_value(claimed.get(key)) not in ("unknown", requested[key])):
             mismatch = True
     return effective, mismatch
 
@@ -674,7 +691,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
 def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
                   plan_revision: str, frozen_packet: dict, worktree: str = "current",
                   reuse_of: str | None = None, port: NativePort | None = None,
-                  issue_port=None) -> dict:
+                  issue_port=None, accompanying: dict | None = None) -> dict:
     """Packet, recovery, issue, placement, serialized boundary, then one native start."""
     from .records import packet
     bounded_text(owner, name="owner")
@@ -723,7 +740,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                         run_id=run, task_id=task, plan_revision=plan_revision,
                         packet_id=validated["packet_id"], worktree=worktree,
                         frozen_packet=validated, expected_runtime=capability["runtime"],
-                        placement_binding=placement_binding, reuse_of=reuse_of)
+                        placement_binding=placement_binding, reuse_of=reuse_of,
+                        accompanying=accompanying)
     if admission["existing"]:
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
                                       worktree=worktree, port=native_port, issue_port=issue_port)

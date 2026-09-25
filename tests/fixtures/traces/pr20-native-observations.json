@@ -1,0 +1,147 @@
+{
+  "source": "recorded PR 20 native observations",
+  "sanitized": true,
+  "limitations": [
+    "No 0.6 obligation maps or boundary decisions exist in these 0.5 observations.",
+    "Native starts are not proof of Pod admission records.",
+    "Absent timing or settlement fields remain unknown."
+  ],
+  "observations": [
+    {
+      "assignment": "assignment-001",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T15:15:11Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-002",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T17:24:10Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-003",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T18:27:29Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-004",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T18:34:46Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-005",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T18:40:59Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-006",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T18:45:48Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-007",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T17:53:32Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-008",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T16:49:49Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-009",
+      "start_observed": true,
+      "settlement_observed": false,
+      "started_at": "2026-09-24 12:58:01",
+      "observed_dispatch_status": "dispatched",
+      "observed_projection_outcome": "in_progress"
+    },
+    {
+      "assignment": "assignment-010",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T14:03:28Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-011",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T14:40:46Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-012",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T16:24:21Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-013",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T15:40:03Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-014",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T14:18:51Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-015",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T16:33:12Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-016",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T17:36:10Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-017",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T18:00:39Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-018",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T16:32:13Z",
+      "reported_outcome": "succeeded"
+    },
+    {
+      "assignment": "assignment-019",
+      "start_observed": true,
+      "settlement_observed": true,
+      "completed_at": "2026-09-24T16:51:21Z",
+      "reported_outcome": "succeeded"
+    }
+  ],
+  "native_dispatch_count": 19,
+  "pod_admission_count": null
+}

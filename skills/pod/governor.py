@@ -411,7 +411,9 @@ def _require_version(state: dict) -> None:
 
 
 def _assert_authority(project: Path, objective: str, owner: str, state: dict) -> None:
-    from .ledger import require_authority
+    """The common seam of every Governor mutation: open objective, then native authority."""
+    from .ledger import _require_open, require_authority
+    _require_open(state)
     require_authority(project, objective, owner=owner, state=state)
 
 
@@ -753,6 +755,8 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         _assert_authority(project, objective, owner, state)
+        from .ledger import map_of, require_governance_current
+        require_governance_current(project, map_of(state))
         journal = _read_journal(record_path)
         verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
                             native_projection=native_projection)

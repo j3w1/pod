@@ -14,7 +14,8 @@ from pod.ledger import (admission_identity, checkpoint, constraints_update, read
 from pod.operations import (_assignment_evidence, _preflight_refusal_classification,
                             guarded_start, recover_admission, OrcaPort)
 from pod.records import packet, source_identity
-from tests.common import fixture, modified_bundle, receipt
+from tests.common import (fake_authority, fixture, kernel_binding, kernel_map, modified_bundle, receipt,
+                          restated_map, stored_map)
 
 REQUEST='11111111-1111-4111-8111-111111111111'
 OTHER='22222222-2222-4222-8222-222222222222'
@@ -112,8 +113,8 @@ class AdmissionTests(unittest.TestCase):
         self.env=patch.dict(os.environ,{'XDG_STATE_HOME':str(self.root/'state'),
                                      'XDG_CONFIG_HOME':str(self.root/'config')})
         self.env.__enter__(); self.addCleanup(self.env.__exit__,None,None,None)
-        authority=patch('pod.ledger.require_authority',return_value={
-            'runtime':'runtime','run_id':'run','references':{'run':'runtime'}})
+        authority=patch('pod.ledger.require_authority',
+                        side_effect=lambda *args,**kwargs:fake_authority(self.port)(*args,**kwargs))
         authority.start(); self.addCleanup(authority.stop)
         self.project=self.root/'project'; self.project.mkdir()
         self.personal=self.root/'config'/'pod'/'config.yaml'; write_defaults(self.personal)
@@ -124,25 +125,41 @@ class AdmissionTests(unittest.TestCase):
 
     def checkpoint(self):
         from pod.config import effective
-        value={'schema':'pod-checkpoint/v2','criteria':['works'],'plan_revision':'plan',
+        state=read(self.project,'objective')
+        mapped=stored_map(state) if state and state.get('checkpoint') else kernel_map(['works'])
+        value={'schema':'pod-checkpoint/v3','criteria':['works'],'plan_revision':'plan',
                'candidate':'candidate','policy_revision':effective(self.project)['revision'],
                'native_refs':[],'assignments':[],'questions':[],
-               'verification_gaps':['works'],'next_safe_action':'inspect'}
+               'verification_gaps':['works'],'next_safe_action':'inspect',**mapped}
         return checkpoint(self.project,'objective',owner='owner',value=value,native={'runtime':'runtime'})
 
-    def frozen(self,route=None,sources=None,context=None):
+    def frozen(self,route=None,sources=None,context=None,task='task'):
         pref=load_config(self.project)
-        return packet({'schema':'pod-packet/v2','objective':'objective','criteria':['works'],
+        return packet({'schema':'pod-packet/v3','objective':'objective','criteria':['works'],
                        'responsibility':'writer','scope':['notes.txt'],'actions':['edit'],
                        'candidate':'candidate','context':context or [],'dependencies':[],
                        'route':{**(route or ROUTE),'preference_revision':pref['revision']},
                        'policy_revision':pref['policy_revision'],
-                       'plan_revision':'plan','report_contract':'checks','sources':sources or []})
+                       'plan_revision':'plan','report_contract':'checks','sources':sources or [],
+                       **kernel_binding(task)})
+
+    def restated(self,objective='objective'):
+        return restated_map(self.project,objective,self.port)
+
+    def discard(self,admission,reason='a fresh attempt replaces this settled result'):
+        """0.6: a settled result takes a disposition before its replacement serves the obligation."""
+        state=read(self.project,'objective')
+        core={key:value for key,value in state['checkpoint'].items()
+              if key not in ('pod_version','bundle_digest','seq')}
+        value={**core,**(self.restated() or stored_map(state)),
+               'dispositions':[{'admission':admission['admission_id'],'discarded':True,'reason':reason}]}
+        return checkpoint(self.project,'objective',owner='owner',value=value,native={'runtime':'runtime'})
 
     def start(self,task='task',frozen=None,reuse_of=None):
         return guarded_start(self.project,'objective',owner='owner',run='run',task=task,
-                             plan_revision='plan',frozen_packet=frozen or self.frozen(),
-                             worktree='current',port=self.port,reuse_of=reuse_of)
+                             plan_revision='plan',frozen_packet=frozen or self.frozen(task=task),
+                             worktree='current',port=self.port,reuse_of=reuse_of,
+                             accompanying=self.restated())
 
     def recovery_case(self):
         first=self.start()['admission']
@@ -204,19 +221,19 @@ class AdmissionTests(unittest.TestCase):
 
     def test_boundary_distinguishes_stale_revision_from_current_ineligibility(self):
         set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
-        disabled_packet=self.frozen()
+        disabled_packet=self.frozen(task='disabled-now')
         with self.assertRaises(PodError) as disabled:
             self.start(task='disabled-now',frozen=disabled_packet)
         self.assertEqual(disabled.exception.code,'model_ineligible')
         self.assertFalse(read(self.project,'objective')['admissions'])
         set_model(self.personal,'gpt-6-sol','available',displayed=load_config(self.project))
-        permitted_packet=self.frozen()
+        permitted_packet=self.frozen(task='other-edit')
         set_model(self.personal,'gpt-6-luna','disabled',displayed=load_config(self.project))
         with self.assertRaises(PodError) as stale:
             self.start(task='other-edit',frozen=permitted_packet)
         self.assertEqual(stale.exception.code,'preference_revision_stale')
         self.assertFalse(read(self.project,'objective')['admissions'])
-        unsupported=self.frozen(route={**ROUTE,'effort':'ultra'})
+        unsupported=self.frozen(route={**ROUTE,'effort':'ultra'},task='bad-effort')
         with self.assertRaises(PodError) as effort:
             self.start(task='bad-effort',frozen=unsupported)
         self.assertEqual(effort.exception.code,'effort_unsupported')
@@ -235,6 +252,7 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught: self.start('task3')
         self.assertEqual(caught.exception.code,'logical_capacity_full')
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.discard(first,reason='the first result is set aside before another implementation')
         self.assertEqual(self.start('task3')['status'],'bound')
         self.assertEqual(len(self.port.starts),3)
 
@@ -247,7 +265,7 @@ class AdmissionTests(unittest.TestCase):
         sonnet={**ROUTE,'agent':'claude','model':'claude-sonnet-5'}
         first=self.start(frozen=self.frozen(route=sonnet))['admission']
         with self.assertRaises(PodError) as full:
-            self.start('replacement-task',frozen=self.frozen(route=sonnet))
+            self.start('replacement-task',frozen=self.frozen(route=sonnet,task='replacement-task'))
         self.assertEqual(full.exception.code,'logical_capacity_full')
         with self.assertRaises(PodError) as still_running:
             self.record_failure(first,kind='unavailable')
@@ -260,25 +278,26 @@ class AdmissionTests(unittest.TestCase):
         with patch.object(self.port,'show_worker',side_effect=show):
             stopped['result']['dispatch'].pop('status')
             with self.assertRaises(PodError) as stage_only:
-                self.start('replacement-task',frozen=self.frozen(route=ROUTE))
+                self.start('replacement-task',frozen=self.frozen(route=ROUTE,task='replacement-task'))
             self.assertEqual(stage_only.exception.code,'logical_capacity_full')
             stopped['result']['projection']['stage'].pop('dispatch')
             with self.assertRaises(PodError) as unknown:
-                self.start('replacement-task',frozen=self.frozen(route=ROUTE))
+                self.start('replacement-task',frozen=self.frozen(route=ROUTE,task='replacement-task'))
             self.assertEqual(unknown.exception.code,'logical_capacity_full')
             stopped=deepcopy(proven)
             stopped['result']['dispatch']['status']='abandoned'
             stopped['result']['projection']['stage']['dispatch']='abandoned'
             stopped['result']['projection']['outcome']='abandoned'
             with self.assertRaises(PodError) as abandoned:
-                self.start('replacement-task',frozen=self.frozen(route=ROUTE))
+                self.start('replacement-task',frozen=self.frozen(route=ROUTE,task='replacement-task'))
             self.assertEqual(abandoned.exception.code,'logical_capacity_full')
             stopped=proven
             native=self.port.read_native('owner',authority_runs=('run',),assignments=(first,))
             self.assertTrue(native['assignments'][0]['settled'])
             self.assertEqual(logical_projection(self.project,native,objective='objective')['outstanding'],[])
             self.record_failure(first,kind='unavailable')
-            replacement=self.start('replacement-task',frozen=self.frozen(route=ROUTE))
+            self.discard(first,reason='the stopped attempt has no implementation result to integrate')
+            replacement=self.start('replacement-task',frozen=self.frozen(route=ROUTE,task='replacement-task'))
         self.assertEqual(replacement['status'],'bound')
         self.assertEqual(len(self.port.starts),2)
 
@@ -301,12 +320,15 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(PodError) as unverified:
                 guarded_start(self.project,'objective',owner='owner',run='another-run',
                               task='shared-task',plan_revision='plan',
-                              frozen_packet=self.frozen(),worktree='current',port=self.port)
+                              frozen_packet=self.frozen(task='shared-task'),worktree='current',port=self.port,
+                              accompanying=self.restated())
             self.assertEqual(unverified.exception.code,'unresolved_prior_attempt')
             stopped['result']['dispatch']['status']='failed'
+            self.discard(first)
             replacement=guarded_start(self.project,'objective',owner='owner',run='another-run',
                                       task='shared-task',plan_revision='plan',
-                                      frozen_packet=self.frozen(),worktree='current',port=self.port)
+                                      frozen_packet=self.frozen(task='shared-task'),worktree='current',
+                                      port=self.port,accompanying=self.restated())
         self.assertEqual(replacement['status'],'bound')
         self.assertEqual(len(self.port.starts),2)
 
@@ -489,6 +511,72 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(recover_admission(self.project,'objective',owner='owner',
                          admission_id=first['admission_id'],worktree='current',port=self.port)['status'],'unresolved')
 
+    def test_reused_terminal_null_launch_receipt_is_unknown_not_an_observed_mismatch(self):
+        from pod.operations import _effective_evidence, _receipt_from_request_show
+        from tests.common import envelope
+        admission={'request':dict(ROUTE)}
+        status,native=_receipt_from_request_show(envelope('reused-terminal-request-show'),
+                                                 '33333333-3333-4333-8333-333333333333')
+        self.assertEqual(status,'completed')
+        shown=envelope('reused-terminal-worker-show')
+        effective,mismatch=_effective_evidence(native,shown,admission)
+        self.assertEqual(effective,{'agent':'unknown','model':'unknown','effort':'unknown',
+                                    'context':'native_default'})
+        self.assertFalse(mismatch)
+        self.assertEqual(admission['request'],ROUTE)
+        observed=deepcopy(shown)
+        observed['result']['worker']['startOptions']['launch']['effective']={
+            'agent':'codex','model':'gpt-6-luna','effort':'medium'}
+        self.assertTrue(_effective_evidence({},observed,admission)[1])
+        partial=deepcopy(shown)
+        partial['result']['worker']['startOptions']['launch']['effective']={'agent':'codex','model':'','effort':7}
+        effective,mismatch=_effective_evidence({},partial,admission)
+        self.assertEqual((effective['agent'],effective['model'],effective['effort'],mismatch),
+                         ('codex','unknown','unknown',False))
+        # Known-null effective values on a real reuse bind as unknown, which still blocks acceptance.
+        first=self.start()['admission']
+        self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.port.effective={'agent':None,'model':None,'effort':None}
+        self.discard(first,reason='the first implementation is set aside before reuse')
+        original=self.port.start_worker
+        def reuse(**kwargs):
+            receipt=original(**kwargs)
+            receipt['launch']={'requested':{'agent':None,'model':None,'effort':None},
+                               'effective':{'agent':None,'model':None,'effort':None}}
+            return receipt
+        shown_before=self.port.show_worker
+        def show(dispatch):
+            shown=shown_before(dispatch)
+            if dispatch!=first['native_binding']['dispatchId']:
+                shown['result']['worker']['startOptions']['launch']['requested']={
+                    'agent':None,'model':None,'effort':None}
+            return shown
+        with patch.object(self.port,'start_worker',side_effect=reuse), \
+             patch.object(self.port,'show_worker',side_effect=show):
+            reused=self.start('task2',reuse_of=first['admission_id'])['admission']
+        self.assertFalse(reused['route_decision']['route_mismatch'])
+        self.assertTrue(reused['route_decision']['effective_unknown'])
+        self.assertEqual(reused['effective_evidence']['requested']['model'],ROUTE['model'])
+
+    def test_partial_launch_shapes_compare_only_known_relevant_fields(self):
+        from pod.operations import _effective_evidence
+        from tests.common import envelope
+        shown=envelope('reused-terminal-worker-show')
+        shown['result']['worker']['startOptions']['launch']={
+            'effective':{},'requested':{'agent':'codex','model':'gpt-6-sol'},'extra':'ignored'}
+        receipt={'launch':{'effective':{'agent':None,'model':None,'effort':None,'extra':'ignored'},
+                           'requested':{'agent':'codex','model':'gpt-6-sol','effort':None,
+                                        'extra':'different'}}}
+        effective,mismatch=_effective_evidence(receipt,shown,{'request':dict(ROUTE)})
+        self.assertEqual([effective[key] for key in ('agent','model','effort')],['unknown']*3)
+        self.assertFalse(mismatch)
+        shown['result']['worker']['startOptions']['launch']['effective']['model']='gpt-6-luna'
+        receipt['launch']['effective']['model']='gpt-6-sol'
+        self.assertTrue(_effective_evidence(receipt,shown,{'request':dict(ROUTE)})[1])
+        shown['result']['worker']['startOptions']['launch']['effective'].clear()
+        receipt['launch']['effective']['model']='gpt-6-luna'
+        self.assertTrue(_effective_evidence(receipt,shown,{'request':dict(ROUTE)})[1])
+
     def test_effective_unknown_and_mismatch_bind_without_acceptance(self):
         self.port.effective={'agent':'codex','model':'gpt-6-luna','effort':'medium'}
         row=self.start()['admission']
@@ -546,6 +634,7 @@ class AdmissionTests(unittest.TestCase):
         first=self.start()['admission']; identity=first['admission_id']
         with self.assertRaises(PodError): self.start('task2',reuse_of=identity)
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.discard(first,reason='the first implementation is set aside before reuse')
         second=self.start('task2',reuse_of=identity)['admission']
         self.assertEqual(self.port.starts[-1]['terminal'],first['native_binding']['terminalHandle'])
         self.assertEqual(second['reuse_of'],identity)
@@ -563,6 +652,7 @@ class AdmissionTests(unittest.TestCase):
                 self.start('task2',reuse_of=identity)
             self.assertEqual(blocked.exception.code,'reuse_unavailable')
         self.assertEqual(len(self.port.starts),1)
+        self.discard(first,reason='the first implementation is set aside before reuse')
         def show_without_stage_status(dispatch):
             shown=original(dispatch)
             shown['result']['projection']['stage'].pop('dispatch')
@@ -597,6 +687,7 @@ class AdmissionTests(unittest.TestCase):
         self.record_failure(first,kind='rate_limited',retry_after='2099-01-01T00:00:00Z')
         with self.assertRaises(PodError): self.start('task2')
         self.record_failure(first,kind='rate_limited',clear=True,cleared_by='runtime_change')
+        self.discard(first,reason='the failed first attempt has no result to integrate')
         self.assertEqual(self.start('task2')['status'],'bound')
 
     def test_source_and_instruction_changes_reject_before_start(self):
@@ -856,13 +947,14 @@ class AdmissionTests(unittest.TestCase):
                              'retry_after':None,'cleared_at':None}))
         alternate={**ROUTE,'model':'gpt-6-luna','reason':'available alternative'}
         with self.assertRaises(PodError) as blocked:
-            self.start('task2',frozen=self.frozen(route=alternate))
+            self.start('task2',frozen=self.frozen(route=alternate,task='task2'))
         self.assertEqual(blocked.exception.code,'failed_attempt_unsettled')
         update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
                          update=lambda row:row['failures'].clear())
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='failed'
         self.record_failure(first,kind='unavailable')
-        self.assertEqual(self.start('task2',frozen=self.frozen(route=alternate))['status'],'bound')
+        self.discard(first,reason='the failed attempt has no result to integrate')
+        self.assertEqual(self.start('task2',frozen=self.frozen(route=alternate,task='task2'))['status'],'bound')
 
     def test_safety_refusal_bars_same_task_on_another_run(self):
         first=self.start()['admission']
@@ -879,7 +971,7 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught:
             guarded_start(self.project,'objective',owner='owner',run='run2',task='task',
                           plan_revision='plan',frozen_packet=self.frozen(route=alternate),
-                          worktree='current',port=self.port)
+                          worktree='current',port=self.port,accompanying=self.restated())
         self.assertEqual(caught.exception.code,'safety_refusal')
 
     def test_live_bound_task_on_another_run_blocks_replacement_until_settled(self):
@@ -893,12 +985,14 @@ class AdmissionTests(unittest.TestCase):
         def replacement():
             return guarded_start(self.project,'objective',owner='owner',run='another-run',
                                  task='shared-task',plan_revision='plan',
-                                 frozen_packet=self.frozen(),worktree='current',port=self.port)
+                                 frozen_packet=self.frozen(task='shared-task'),worktree='current',
+                                 port=self.port,accompanying=self.restated())
         with self.assertRaises(PodError) as blocked:
             replacement()
         self.assertEqual(blocked.exception.code,'unresolved_prior_attempt')
         self.assertEqual(len(self.port.starts),1)
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.discard(first)
         self.assertEqual(replacement()['status'],'bound')
         self.assertEqual(len(self.port.starts),2)
 
@@ -1027,12 +1121,13 @@ class AdmissionTests(unittest.TestCase):
         first=self.start()['admission']
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='failed'
         self.record_failure(first,kind='unavailable')
+        self.discard(first,reason='the failed attempt has no result to integrate')
         alternative={**ROUTE,'model':'gpt-6-luna','reason':'failed original route'}
-        frozen=self.frozen(route=alternative)
+        frozen=self.frozen(route=alternative,task='task2')
         set_model(self.personal,'gpt-6-luna','disabled',displayed=load_config(self.project))
         with self.assertRaises(PodError) as caught: self.start('task2',frozen=frozen)
         self.assertEqual(caught.exception.code,'preference_changed')
-        with self.assertRaises(PodError) as caught: self.start('task2',frozen=self.frozen(route=alternative))
+        with self.assertRaises(PodError) as caught: self.start('task2',frozen=self.frozen(route=alternative,task='task2'))
         self.assertEqual(caught.exception.code,'model_ineligible')
         self.assertEqual(len(self.port.starts),1)
 
@@ -1043,7 +1138,7 @@ class AdmissionTests(unittest.TestCase):
         checkpoint_value=read(self.project,'objective')['checkpoint']
         checkpoint(self.project,'objective',owner='owner',
                    value={key:value for key,value in {**checkpoint_value,'objective_source':source}.items()
-                      if key not in ('pod_version','bundle_digest')},native={'runtime':'runtime'})
+                      if key not in ('pod_version','bundle_digest','seq')},native={'runtime':'runtime'})
         frozen=packet({**self.frozen()['body'],'objective_source':source})
         with patch('pod.github.issue_recheck',return_value={'status':'current'}):
             first=self.start(frozen=frozen)['admission']
@@ -1095,13 +1190,14 @@ class AdmissionTests(unittest.TestCase):
                 with self.subTest(kind=kind,change=change):
                     path=self.project/f'{kind}-{change}.txt';path.write_text('one')
                     bound=source_identity(self.project,path.name)
-                    frozen=self.frozen(context=[{'kind':kind,'path':path.name,'sha256':bound['sha256']}])
+                    frozen=self.frozen(context=[{'kind':kind,'path':path.name,'sha256':bound['sha256']}],
+                                       task=f'{kind}-{change}')
                     path.write_text('two') if change=='changed' else path.unlink()
                     with self.assertRaises(PodError) as blocked:
                         self.start(task=f'{kind}-{change}',frozen=frozen)
                     self.assertEqual(blocked.exception.code,code)
         self.assertEqual(self.port.starts,[])
-        unavailable=self.frozen(sources=[{'path':'unavailable.txt','state':'unavailable'}])
+        unavailable=self.frozen(sources=[{'path':'unavailable.txt','state':'unavailable'}],task='unavailable')
         with self.assertRaises(PodError) as blocked:
             self.start(task='unavailable',frozen=unavailable)
         self.assertEqual(blocked.exception.code,'source_unbound')
@@ -1109,7 +1205,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_new_output_file_is_not_a_bound_source_and_refusal_names_next_action(self):
         output='trial/t3-install-notes.md'
-        frozen=self.frozen(sources=[{'path':output,'state':'present','sha256':'a'*64}])
+        frozen=self.frozen(sources=[{'path':output,'state':'present','sha256':'a'*64}],task='future-output')
         with self.assertRaises(PodError) as blocked:
             self.start(task='future-output',frozen=frozen)
         self.assertEqual(blocked.exception.code,'source_absent')
@@ -1128,7 +1224,7 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(PodError) as full:
             self.start('third')
         self.assertEqual(full.exception.code,'logical_capacity_full')
-        second_packet=packet({**self.frozen()['body'],'objective':'second'})
+        second_packet=packet({**self.frozen(task='other')['body'],'objective':'second'})
         other=guarded_start(self.project,'second',owner='owner',run='run',task='other',
                             plan_revision='plan',frozen_packet=second_packet,port=self.port)
         self.assertEqual(other['status'],'bound')

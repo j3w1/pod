@@ -1,24 +1,25 @@
 # Verification and reporting
 
-Bind results to criterion, candidate, source identity, Governor policy revision,
-dependencies, environment, command, time and reviewer attempt. Changed bindings
-invalidate affected proof; project rules decide which unaffected evidence may
-be reused. A model preference edit alone does not open a new Governor candidate.
+Bind checks to obligation, candidate, source, Governor policy, dependencies,
+environment, command, time and reviewer attempt. Invalid inputs reopen affected
+proof; unchanged evidence needs explicit candidate REUSE with the Git delta.
+Project rules govern reuse. Model preference edits alone do not change the
+Governor candidate.
 
-Run project checks and review requirements. For substantial or high-risk work,
-give an independent reviewer the exact candidate and reproducible evidence
-without presupposing approval. Worker success, local checks, independent
-review, hosted CI and live adapter validation establish different facts.
+Run project checks. Substantial or risky work and project rules create
+assurance obligations with scope, question, candidate, existing proof and its
+insufficiency. Give independent reviewers exact candidate evidence without
+priming. Triage findings as required corrections or advisory proposals;
+downgraded blocker or major findings need reasons. Corrections affecting scope,
+assumptions, dependencies or governance, or with unknown impact, reopen affected
+scope for delta review. Repeat review of valid bindings is refused. Zero or
+all-withdrawn assurance withholds the independent-review label.
 
-The acceptance helper evaluates recorded evidence; it cannot manufacture
-missing proof or grant project acceptance. Synthetic fixtures cannot certify
-live behavior. The Governor reports technical readiness separately from the
-owner authorization for a governed project's merge, release or deployment.
-
-Report objective, achieved or blocked criteria, candidate/check evidence,
-material route exceptions, uncertainty and remaining gates. Unobserved usage
-and cost stay unknown. Name unresolved native references and the next safe
-action without copying Orca lifecycle into Pod records.
-
-Use [the Governor](governor.md) for candidate preparation, remote validation,
-evidence reuse and action recovery. Project governance retains acceptance.
+Report satisfied and withdrawn obligations, provenance, external blocks,
+proposals, boundary exceedances, triage downgrades, checks, uncertainty,
+remaining gates and unresolved native references. Quiescence means an incomplete
+interim report; closure needs terminal obligations and a report. Only direct
+user revision reopens closure. Keep worker success, local checks, independent
+review, hosted CI, live proof and project acceptance separate. Synthetic
+proof never certifies live behavior; unobserved usage and cost stay unknown.
+See [the Governor](governor.md) for remote decisions.

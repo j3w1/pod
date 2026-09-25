@@ -109,10 +109,18 @@ class CopiedBundleTests(unittest.TestCase):
             skill=copy_bundle(root/'installed'); home=root/'home'; work=root/'unrelated'
             home.mkdir(); work.mkdir()
             request=work/'brief.json'
-            request.write_text(json.dumps({'criteria':['works'],'coverage':[{'criterion':'works','check':'unit'}]}))
+            brief={'criteria':['works'],'coverage':[{'criterion':'works','check':'unit'}]}
+            request.write_text(json.dumps(brief))
+            unmapped=run(skill,['internal','brief','--input',str(request)],home=home,cwd=work)
+            self.assertEqual(unmapped.returncode,1,unmapped.stderr)
+            self.assertEqual(json.loads(unmapped.stdout)['error']['code'],'obligation_unaccounted')
+            request.write_text(json.dumps({**brief,'map':{'governance':{'base_ref':None},'obligations':[
+                {'id':'O1','kind':'criterion','provenance':'objective','source':{'ref':'works'},
+                 'check':'unit passes','state':'active','executor':'coordinator'}]}}))
             got=run(skill,['internal','brief','--input',str(request)],home=home,cwd=work)
             self.assertEqual(got.returncode,0,got.stderr)
             self.assertEqual(json.loads(got.stdout)['schema'],'pod-cli/v4')
+            self.assertEqual(json.loads(got.stdout)['result']['map']['persisted'],False)
             self.assertNotIn('\x1b',got.stdout)
             self.assertNotEqual(run(skill,['internal-preview'],home=home,cwd=work).returncode,0)
 

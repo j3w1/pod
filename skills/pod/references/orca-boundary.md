@@ -6,14 +6,14 @@ request recovery and cleanup. Pod supplies no alternate lifecycle journal.
 
 ## Pod admission
 
-The `admission` helper serializes an objective's logical reservations before a
-native start. It validates coordinator authority, immutable packet, placement,
-sources, installed version, current model eligibility, explicit constraints,
-agent, effort, context support and the personal worker ceiling. The final
-preference read occurs under the objective lock, immediately before recording
-the row; the lock is released before `worker-start`. A changed choice refuses
-`preference_changed` without a write. An edit after the row is written affects
-later starts, not the submitted attempt. The skill reselects at most twice.
+Admission serializes logical reservations. A mapped packet serves current
+unsatisfied obligations with role and boundary; its row atomically activates
+them and refuses overlapping ownership. It validates coordinator authority,
+packet, placement, sources, version, eligibility, constraints, route and
+ceiling. Read preferences under the objective lock before recording the row;
+release the lock before `worker-start`. A changed choice refuses
+`preference_changed` without a write. Later edits affect later starts.
+Reselect at most twice.
 
 A bound assignment frees a logical slot after exact native settlement, even
 when its terminal is retained. Reserved and unresolved requests remain
@@ -48,11 +48,12 @@ write provider settings, automate provider prompts or wrap direct APIs.
 
 ## Private state
 
-`pod-context/v4` stores compact `pod-admission/v3` reservations (`reserved`,
+`pod-context/v4` stores compact `pod-admission/v4` reservations (`reserved`,
 `bound`, `unresolved`, `closed`, `deferred`), checkpoints, source rejections and
-interventions. `pod-packet/v2`, `pod-checkpoint/v2` and `pod-cli/v4` identify
+interventions. `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` identify
 changed shapes. A record in another schema blocks only its objective and is
-reported, never converted. Native state remains Orca's authority.
+reported, never converted. Status and doctor list older objectives; native
+workers remain Orca's authority.
 
 New admissions and Governor mutations refuse `installed_version_changed`
 until skill reload and a fresh Pod-stamped checkpoint. Recovery is exempt.

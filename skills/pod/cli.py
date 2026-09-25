@@ -183,13 +183,19 @@ def _status(project: Path, run: str | None) -> dict:
     except PodError as exc:
         native_error = exc.code
         workers = {"workers": [], "scope": None, "complete": False}
-    from .ledger import _read
+    from .ledger import _read, kernel_view, superseded_for_run
     try:
         context_root = context_root_for_run(run)
         state = _read(context_root / "context.json") if context_root else None
+        superseded = superseded_for_run(run) if context_root is None else []
     except PodError as exc:
         result.update({"status": "blocked", "blocker": exc.code,
                        "next_safe_action": "inspect the objective state"})
+        return result
+    if superseded:
+        result.update({"status": "blocked", "blocker": "objective_superseded", "superseded": superseded,
+                       "next_safe_action": ("settle its workers through Orca and start a new objective; "
+                                            "the record is not converted")})
         return result
     checkpoint = state.get("checkpoint") if state else None
     recorded = checkpoint_identity(checkpoint) if checkpoint else None
@@ -236,6 +242,21 @@ def _status(project: Path, run: str | None) -> dict:
                               else native_error or checkpoint.get("blocker") if checkpoint else native_error,
                    "next_safe_action": checkpoint.get("next_safe_action", "inspect native Run")
                                        if checkpoint else "inspect native Run"})
+    objective = checkpoint.get("objective") if checkpoint else None
+    if isinstance(objective, str) and checkpoint.get("obligations") is not None:
+        try:
+            view = kernel_view(project_for_state(checkpoint, project), objective, state=state)
+            result["obligations"] = view["status"]["map"]
+            result["obligation_lines"] = view["status"]["lines"]
+            result["native_settlement"] = view["settlement"]
+            result["report"] = view["report"]
+            if checkpoint.get("closure"):
+                result["blocker"] = result["blocker"] or "objective_closed"
+            elif (checkpoint.get("quiescence") or {}).get("state") == "quiescent":
+                result["blocker"] = result["blocker"] or "quiescent"
+                result["next_safe_action"] = checkpoint["quiescence"]["interim_report"]
+        except PodError as exc:
+            result["obligations"] = {"error": exc.code}
     if result["installed_version_drift"]:
         result["blocker"] = "installed_version_changed"
         result["next_safe_action"] = RELOAD_ACTION
@@ -243,6 +264,13 @@ def _status(project: Path, run: str | None) -> dict:
         result["blocker"] = "preferences_unavailable"
         result["next_safe_action"] = "inspect and correct the personal preference file"
     return result
+
+
+def project_for_state(checkpoint: dict, project: Path) -> Path:
+    """The objective's bound worktree when recorded, else the current directory."""
+    worktree = checkpoint.get("worktree") if isinstance(checkpoint, dict) else None
+    path = worktree.get("path") if isinstance(worktree, dict) else None
+    return Path(path) if isinstance(path, str) and Path(path).is_dir() else project
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
@@ -320,6 +348,9 @@ def main(argv: list[str] | None = None) -> int:
         if result["preferences"]["not_set"]:
             print("Not set (not eligible): " + ", ".join(result["preferences"]["not_set"]))
         print(f"Orca: {result['orca']['status']}")
+        for row in result["state"].get("superseded", []):
+            print(f"Superseded objective {row['objective'] or row['record']}: "
+                  f"{', '.join(row['schemas'])} (blocked, not converted)")
     elif args.command == "status":
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
         identity = result["bundle_identity"]
@@ -329,6 +360,10 @@ def main(argv: list[str] | None = None) -> int:
         for ref in result.get("native_references", []):
             print(f"  Task {ref['task']} | Dispatch {ref['dispatch'] or 'pending'} | "
                   f"worker {ref['worker'] or 'unknown'} | terminal {ref['terminal'] or 'none'} | {ref['state']}")
+        for line in result.get("obligation_lines", []):
+            print(line)
+        for row in result.get("superseded", []):
+            print(f"Superseded {row['objective'] or row['record']}: {', '.join(row['schemas'])} (blocked, not converted)")
         print(f"Blocker: {result.get('blocker') or 'none'}; next: {result['next_safe_action']}")
     else:
         print(f"pod: {result['status']}")
