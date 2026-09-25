@@ -13,7 +13,7 @@ import sys
 
 from .bundle import (RELOAD_ACTION, bundle_root, checkpoint_identity, identity_drift_message,
                      identity_label, identity_matches, running_identity, version)
-from .catalog import age, by_id, load as load_catalog, ranks, reference_rows
+from .catalog import age, by_id, guide_projection, load as load_catalog, ranks, reference_rows
 from .config import load as load_config, personal_path, read_yaml, write_defaults
 from .errors import PodError
 from .ledger import context_root_for_run, state_inventory
@@ -33,6 +33,7 @@ def parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="read-only installation and capability diagnostics")
     doctor.add_argument("--json", action="store_true")
     status = sub.add_parser("status", help="read-only objective and native work status")
+    status.add_argument("--objective")
     status.add_argument("--run")
     status.add_argument("--json", action="store_true")
     sub.add_parser("update", help="update the installed bundle")
@@ -76,9 +77,7 @@ def _config(project: Path, *, edit: bool) -> dict:
                    "not_set_meaning": "not set (not eligible)",
                    "max_active": snapshot["max_active"],
                    "policy_revision": snapshot["policy_revision"], "errors": snapshot["errors"],
-                   "catalog": [{"id": row["id"], "name": row["name"], "agent": row["agent"],
-                                "efforts": [effort for effort in row["efforts"] if effort != "ultra"],
-                                "guidance": row["guidance"]} for row in document["models"]]})
+                   "catalog": guide_projection(document)})
     if snapshot["errors"]:
         result["status"] = "invalid"
     return result
@@ -165,7 +164,8 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
     if args.command == "doctor":
         return _doctor(project)
     if args.command == "status":
-        return _status(project, args.run, current_run_fn=current_run, worker_rows_fn=worker_rows)
+        return _status(project, args.run, objective=args.objective,
+                       current_run_fn=current_run, worker_rows_fn=worker_rows)
     if args.command == "update":
         raise PodError("update_route", "Update must run through the installer entrypoint")
     raise PodError("unknown_command", "Unsupported public command")

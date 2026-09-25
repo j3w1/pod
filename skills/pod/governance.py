@@ -29,6 +29,172 @@ def user_direct_revision(value: object) -> bool:
     return isinstance(value, dict) and value.get("provenance") == "user_direct"
 
 
+def canonical_bound_ref(project: Path, bound_ref: str | None, proposed: str | None,
+                        *, branch: dict | None = None) -> str:
+    """Accept an alias only when Git or the configured remote proves the same ref identity."""
+    if bound_ref is None:
+        return proposed or "origin/main"
+    if isinstance(branch, dict):
+        remote, base = branch.get("remote"), branch.get("base")
+        if not isinstance(remote, str) or not isinstance(base, str):
+            raise PodError("target_mismatch", "The prepared remote/base is not the bound governance target")
+        target = f"refs/remotes/{remote}/{base}"
+        configured = _git(project, ["config", "--get", f"remote.{remote}.url"])
+        if (target != bound_ref or configured is None or configured.returncode != 0 or not configured.stdout.strip()
+                or _resolve_commit(project, target) is None):
+            raise PodError("target_mismatch", "The prepared remote/base is not the bound governance target")
+    if proposed is None or proposed == bound_ref:
+        return bound_ref
+    if not isinstance(proposed, str) or not _BASE_REF.fullmatch(proposed) or ".." in proposed:
+        raise PodError("target_mismatch", "Target alias is not a plain Git ref")
+    named = _git(project, ["rev-parse", "--symbolic-full-name", "--verify", "--quiet",
+                           "--end-of-options", proposed])
+    if named is None or named.returncode != 0 or named.stdout.strip() != bound_ref:
+        raise PodError("target_mismatch", "Target alias does not name the bound governance ref")
+    return bound_ref
+
+
+DELIVERY_FIELDS = {"seq", "record", "target_ref", "base", "result", "candidate", "tree",
+                   "method", "authorization_reference", "provider"}
+
+
+def _delivery_refusal(subcode: str, message: str, next_action: str, **referent) -> PodError:
+    return PodError("delivery_unverified", f"{message}. Next: {next_action}",
+                    {"detail": subcode, "next_action": next_action, "referent": referent})
+
+
+def validate_delivery_record(value: object) -> dict:
+    if (not isinstance(value, dict) or set(value) != DELIVERY_FIELDS
+            or type(value.get("seq")) is not int or value["seq"] < 1
+            or any(not isinstance(value.get(key), str) or not value[key]
+                   for key in DELIVERY_FIELDS - {"seq", "provider"})
+            or not isinstance(value.get("provider"), dict)):
+        raise PodError("state_unsupported", "Verified delivery record is malformed")
+    return value
+
+
+def _delivery_object(project: Path, argv: list[str], *, subcode: str) -> str:
+    found = _git(project, argv)
+    value = found.stdout.strip() if found is not None and found.returncode == 0 else ""
+    if not _OBJECT.fullmatch(value):
+        raise _delivery_refusal(subcode, "The delivery Git object cannot be read",
+                                "restore the target and candidate commits, then retry the delivery record")
+    return value
+
+
+def verify_delivery(project: Path, objective: str, map_state: dict, record_id: str, *, seq: int) -> dict:
+    """Bind a Governor merge PASS to one exact target result without moving policy authority."""
+    from .governor import _read_journal, _record_path, validate_authorization
+    if not isinstance(record_id, str) or not 1 <= len(record_id) <= 128:
+        raise _delivery_refusal("record_missing", "A bounded Governor record id is required",
+                                "name the allowed merge PASS record from this objective")
+    prior = map_state.get("delivery")
+    if prior is not None:
+        validate_delivery_record(prior)
+        if prior["record"] != record_id:
+            raise PodError("delivery_recorded", "This objective already has a different verified delivery record",
+                           {"detail": "delivery_recorded", "record": prior["record"],
+                            "next_action": "keep the existing delivery or obtain a new objective decision"})
+        return dict(prior)
+    journal = _read_journal(_record_path(project, objective))
+    matches = [row for row in journal["actions"] if row.get("record_id") == record_id]
+    if len(matches) != 1:
+        raise _delivery_refusal("record_missing", "The merge record is absent from this objective",
+                                "record the exact Governor merge outcome first", record=record_id)
+    row = matches[0]
+    if (row.get("decision") != "ALLOW" or row.get("outcome") != "PASS"
+            or (row.get("action") or {}).get("kind") != "merge"):
+        raise _delivery_refusal("record_not_merge_pass", "The record is not an allowed merge PASS",
+                                "settle the exact governed merge before recording delivery", record=record_id)
+    unit = journal["units"].get(row["action"].get("unit"))
+    candidate = unit.get("candidate") if isinstance(unit, dict) else None
+    if (not isinstance(candidate, dict) or not isinstance(candidate.get("commit"), str)
+            or not isinstance(candidate.get("tree"), str)
+            or not _OBJECT.fullmatch(candidate["commit"]) or not _OBJECT.fullmatch(candidate["tree"])
+            or len(candidate["commit"]) != len(candidate["tree"])
+            or row.get("candidate_id") != candidate.get("id")
+            or row.get("commit") != candidate.get("commit")
+            or row["action"].get("candidate") not in (candidate.get("id"), candidate.get("commit"))):
+        raise _delivery_refusal("candidate_mismatch", "The merge row does not bind the prepared candidate",
+                                "prepare and authorize the exact current candidate", record=record_id)
+    try:
+        authorization = validate_authorization(row["action"].get("authorization"),
+                                               candidate=candidate["commit"], tree=candidate["tree"], kind="merge")
+    except PodError:
+        authorization = None
+    if authorization is None:
+        raise _delivery_refusal("authorization_invalid", "The merge authorization does not bind commit and tree",
+                                "obtain the owner's merge decision for this exact candidate", record=record_id)
+    candidate_tree = _delivery_object(project, ["rev-parse", "--verify", "--quiet",
+                                                candidate["commit"] + "^{tree}"], subcode="candidate_unavailable")
+    if candidate_tree != candidate["tree"]:
+        raise _delivery_refusal("candidate_mismatch", "The prepared candidate tree differs from Git",
+                                "prepare the candidate from a current Git observation", record=record_id)
+    branch = unit.get("branch")
+    governance = map_state["governance"]
+    if not isinstance(branch, dict) or any(not isinstance(branch.get(key), str) for key in ("remote", "base")):
+        raise _delivery_refusal("target_identity", "The delivery unit has no exact remote and base",
+                                "prepare the unit on the bound governance target")
+    target_ref = f"refs/remotes/{branch['remote']}/{branch['base']}"
+    if target_ref != governance.get("base_ref"):
+        raise _delivery_refusal("target_identity", "The merge target differs from bound governance",
+                                "obtain a direct user decision for the intended target", target=target_ref)
+    configured = _git(project, ["config", "--get", f"remote.{branch['remote']}.url"])
+    current = _resolve_commit(project, target_ref)
+    if (configured is None or configured.returncode != 0 or not configured.stdout.strip()
+            or current is None):
+        raise _delivery_refusal("target_unavailable", "The configured remote target cannot be observed",
+                                "restore the remote URL and tracking ref, then retry delivery", target=target_ref)
+    provider = row["receipt"].get("provider") or {}
+    if not isinstance(provider, dict):
+        raise _delivery_refusal("readback_mismatch", "Provider merge readback is malformed",
+                                "reconcile the exact merge provider receipt")
+    readback = provider.get("merge_commit")
+    if readback is not None and (not isinstance(readback, str) or not _OBJECT.fullmatch(readback)):
+        raise _delivery_refusal("readback_mismatch", "Provider merge readback is not a full commit id",
+                                "record the exact provider merge commit")
+    result = readback or current
+    resolved = _resolve_commit(project, result)
+    if resolved is None or resolved != result:
+        raise _delivery_refusal("result_unavailable", "The delivered result commit is unavailable",
+                                "restore the provider result commit and retry delivery", result=result)
+    if readback is not None and current != result:
+        from . import gitio
+        if gitio.is_ancestor(project, result, current, resolve=_resolve_commit) is not True:
+            raise _delivery_refusal("readback_mismatch", "The observed target does not contain provider readback",
+                                    "inspect the merge readback and target ref", result=result, current=current)
+    parents_read = _git(project, ["rev-list", "--parents", "-n", "1", result])
+    words = parents_read.stdout.split() if parents_read is not None and parents_read.returncode == 0 else []
+    if not words or words[0] != result or any(not _OBJECT.fullmatch(item) for item in words):
+        raise _delivery_refusal("result_unavailable", "The result parents cannot be observed",
+                                "restore the exact result commit and retry delivery", result=result)
+    base, head = governance["base"], candidate["commit"]
+    parents = words[1:]
+    if result == head:
+        from . import gitio
+        method = "fast-forward" if gitio.is_ancestor(project, base, head, resolve=_resolve_commit) is True else None
+    elif parents == [base, head]:
+        method = "merge"
+    elif parents == [base]:
+        method = "squash"
+    else:
+        method = None
+    if method is None:
+        raise _delivery_refusal("result_not_exact", "The result is not an exact merge, squash or fast-forward",
+                                "obtain a direct user decision for the exact new target snapshot", result=result)
+    tree = _delivery_object(project, ["rev-parse", "--verify", "--quiet", result + "^{tree}"],
+                            subcode="tree_unavailable")
+    if tree != candidate["tree"]:
+        raise _delivery_refusal("tree_mismatch", "The delivered tree differs from the authorized tree",
+                                "inspect the merge result and authorize its exact tree", result=result)
+    if provider.get("method") is not None and provider["method"] != method:
+        raise _delivery_refusal("method_mismatch", "Provider merge method differs from the verified result",
+                                "reconcile the provider merge readback", method=method)
+    return {"seq": seq, "record": record_id, "target_ref": target_ref, "base": base,
+            "result": result, "candidate": head, "tree": tree, "method": method,
+            "authorization_reference": authorization["reference"], "provider": dict(provider)}
+
+
 def _resolve_commit(root: Path, ref: str) -> str | None:
     if not isinstance(ref, str) or not _BASE_REF.fullmatch(ref) or ".." in ref:
         return None
@@ -290,6 +456,14 @@ def require_governance_current(project: Path, map_state: dict | None) -> None:
     if current is None:
         raise refuse("governance_unavailable", "governance_unavailable",
                      "the governance base cannot be resolved; new work holds", base_ref=governance["base_ref"])
+    delivery = map_state.get("delivery")
+    if delivery is not None:
+        validate_delivery_record(delivery)
+        if current != delivery["result"]:
+            raise refuse("governance_changed", "governance_changed",
+                         "the target moved after the recorded delivery; obtain a direct user decision "
+                         "for the new snapshot", recorded=delivery["result"][:12], current=current[:12])
+        return
     if current != governance["base"]:
         raise refuse("governance_changed", "governance_changed",
                      "the target branch moved since governance was bound", bound=governance["base"][:12],

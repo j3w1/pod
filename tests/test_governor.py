@@ -76,7 +76,18 @@ class GovernorCase(unittest.TestCase):
                              check=check, status=status, now=NOW)
 
     def decide(self, request, **extra):
-        return decide(self.project, "objective", owner="owner", action=request, now=NOW, **extra)
+        return decide(self.project, "objective", owner="owner",
+                      action=self.with_publish_authorization(request), now=NOW, **extra)
+
+    def with_publish_authorization(self, request):
+        if request["kind"] not in ("push", "pr_update") or "authorization" in request:
+            return request
+        from pod.governor import _read_journal, _record_path
+        unit = _read_journal(_record_path(self.project, "objective"))["units"].get(request["unit"])
+        binding = unit.get("candidate") if unit else None
+        return {**request, "authorization": authorization(
+            candidate=binding["commit"] if binding else request["candidate"],
+            tree=binding["tree"] if binding else "c" * len(request["candidate"]), scope=("publish",))}
 
     def codes(self, result):
         return [reason["code"] for reason in result["reasons"]]
@@ -403,7 +414,7 @@ class DecisionTests(GovernorCase):
         held = self.decide(action(candidate=binding["id"], effects=["deploy:preview"]))
         self.assertEqual((held["purpose"], self.codes(held)), ("release", ["authorization_missing"]))
         allowed = self.decide(action(candidate=binding["id"], effects=["deploy:preview"],
-                                     authorization=authorization(scope=("deploy",))))
+                                     authorization=authorization(scope=("publish", "deploy"))))
         self.assertEqual(allowed["decision"], "ALLOW")
 
     def test_unrelated_work_does_not_block_an_independent_unit(self):
@@ -713,7 +724,8 @@ class ExecutorTests(GovernorCase):
         return binding, remote
 
     def execute(self, request, port, **extra):
-        return execute(self.project, "objective", owner="owner", action=request, port=port, now=NOW, **extra)
+        return execute(self.project, "objective", owner="owner",
+                       action=self.with_publish_authorization(request), port=port, now=NOW, **extra)
 
     def test_execution_targets_the_bound_commit_and_reuses_the_pull_request(self):
         binding, port = self.published()
@@ -976,10 +988,11 @@ class RecoveryTests(GovernorCase):
         binding = self.prepared()["candidate"]
         self.preflight(binding["id"])
         for broken in ({**authorization(), "candidate": "short"},
-                       {**authorization(), "utc": "2026-09-21T00:00:00+00:00"},
-                       {**authorization(), "scope": ["publish"]}):
+                       {**authorization(), "utc": "2026-09-21T00:00:00"},
+                       {**authorization(), "scope": ["unsupported"]}):
             with self.subTest(broken=str(broken["scope"])):
                 with self.assertRaises(PodError):
                     validate_authorization(broken, candidate=COMMIT, tree=TREE)
-                with self.assertRaises(PodError):
-                    self.decide(action(kind="merge", target="main", candidate=binding["id"], authorization=broken))
+                result = self.decide(action(kind="merge", target="main", candidate=binding["id"],
+                                            authorization=broken))
+                self.assertIn("authorization_missing", self.codes(result))

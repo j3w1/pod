@@ -18,8 +18,8 @@ from pod.governor import (classify_failure, decide, execute, prepare_candidate, 
                           record_preflight, status)
 from pod.ledger import checkpoint
 from tests.common import fixture
-from tests.kernel_support import (BRANCH, GovernorFakePort as FakePort, action, body, correction,
-                                  diagnostic, dispatch, observation)
+from tests.kernel_support import (BRANCH, GovernorFakePort as FakePort, action, authorization,
+                                  body, correction, diagnostic, dispatch, observation)
 
 NOW = datetime(2026, 9, 21, tzinfo=timezone.utc)
 CONFIG = """schema: pod/v1
@@ -54,7 +54,9 @@ class RepeatedPullRequestCycle(unittest.TestCase):
 
             def push(candidate):
                 return execute(project, "objective", owner="owner", port=port, now=NOW,
-                               action=action(kind="pr_update", unit="release-boundary", candidate=candidate["id"]))
+                               action=action(kind="pr_update", unit="release-boundary", candidate=candidate["id"],
+                                             authorization=authorization(candidate=candidate["commit"],
+                                                                         tree=candidate["tree"], scope=("publish",))))
 
             def ci_row(candidate):
                 rows = [row for row in status(project, "objective")["units"]["release-boundary"]["active_validation"]

@@ -17,6 +17,13 @@ START=['orchestration','worker-start','--task','task','--run','run','--worktree'
 
 
 class OrcaAdapterTests(unittest.TestCase):
+    def test_cleanup_terminal_inventory_is_an_exact_read_shape(self):
+        from pod.orca import _read_allowed
+        self.assertTrue(_read_allowed(["terminal", "list", "--worktree", "path:/fixture/work", "--json"]))
+        self.assertTrue(_read_allowed(["worktree", "show", "--worktree", "path:/fixture/work", "--json"]))
+        self.assertFalse(_read_allowed(["terminal", "list", "--worktree", "new-child", "--json"]))
+        self.assertFalse(_read_allowed(["terminal", "close", "--worktree", "path:/fixture/work", "--json"]))
+
     def test_real_capture_shapes_parse_after_sanitization(self):
         root=Path(__file__).parent/'fixtures'/'orca-1.4.209'
         start=json.loads((root/'worker-start.json').read_text())

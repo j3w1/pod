@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import tempfile
@@ -13,6 +15,22 @@ from typing import Any
 from .errors import PodError
 
 MAX_RECORD = 128 * 1024
+_ZONED_TIMESTAMP = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})\Z")
+
+
+def normalize_timestamp(value: object, *, field: str, code: str) -> str:
+    """Accept a bounded zoned timestamp and store one UTC representation."""
+    example = "2026-09-25T20:01:22Z"
+    if not isinstance(value, str) or _ZONED_TIMESTAMP.fullmatch(value) is None:
+        raise PodError(code, f"{field} needs a timezone, for example {example}")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.utcoffset() is None:
+            raise ValueError("naive timestamp")
+    except ValueError as exc:
+        raise PodError(code, f"{field} needs a valid timezone, for example {example}") from exc
+    return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds" if parsed.microsecond else "seconds").replace("+00:00", "Z")
 
 
 def explicit_home(name: str) -> Path | None:
@@ -154,5 +172,9 @@ def route_summary(rows: list[dict], *, unknown_states: tuple[str, ...] | None = 
 
 def bounded_text(value: Any, *, name: str, limit: int = 4096) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit or "\x00" in value:
-        raise PodError("invalid_" + name, f"{name} must be bounded, nonempty text")
+        code_name = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
+        length = len(value) if isinstance(value, str) else None
+        raise PodError("invalid_" + code_name,
+                       f"{name} must be bounded, nonempty text (limit {limit}, length {length})",
+                       {"field": name, "limit": limit, "length": length})
     return value

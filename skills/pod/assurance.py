@@ -30,7 +30,7 @@ def _dependencies(value: Any, name: str) -> list[str]:
     return [_text(item, "dependency", limit=512) for item in value]
 
 
-def _evidence_record(ob: dict, raw: Any) -> dict:
+def _evidence_record(ob: dict, raw: Any, ctx: dict) -> dict:
     """The detailed pod-evidence/v1 record, structurally joined to this obligation (R41).
 
     The record's `criterion` names the obligation id; its check text may differ from the
@@ -38,8 +38,22 @@ def _evidence_record(ob: dict, raw: Any) -> dict:
     keeps is the binding: candidate, sources, effective Governor policy, dependencies,
     environment and the command and result that produced the status.
     """
-    from .obligations import _text, refuse
+    from datetime import datetime, timezone
+    from .obligations import _text, definition_id, refuse
     from .records import evidence_record
+    if isinstance(raw, dict) and "schema" not in raw:
+        fields = {"check", "command", "result", "reference", "status", "sources",
+                  "dependencies", "environment", "timestamp"}
+        required = {"check", "command", "result", "reference"}
+        if set(raw) - fields or required - set(raw):
+            raise refuse("obligation_invalid", "malformed", "short evidence needs check, command, result and reference",
+                         obligation=ob["id"])
+        verification = ctx.get("verification") or {}
+        raw = {"schema": "pod-evidence/v1", "criterion": ob["id"],
+               "candidate": ctx.get("candidate"), "policy_revision": ctx.get("policy_revision"),
+               "sources": [], "dependencies": list(verification.get("dependencies", [])),
+               "environment": verification.get("environment"), "timestamp": datetime.now(timezone.utc).isoformat(),
+               "status": "PASS", "definition": definition_id(ob), **raw}
     try:
         row = evidence_record({k: v for k, v in raw.items() if k != "governance"}
                               if isinstance(raw, dict) else raw)
@@ -99,7 +113,7 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
                     "binding": deepcopy(admission.get("binding")),
                     "definition": (admission.get("binding") or {}).get("definitions", {}).get(ob["id"])}
         else:
-            base = _evidence_record(ob, raw)
+            base = _evidence_record(ob, raw, ctx)
         key = base[identity]
         previous = receipts.get(key)
         if previous and base != {k: v for k, v in previous["evidence"].items() if k != "governance"}:
@@ -247,7 +261,9 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     Returns the map value, finding-owned obligation ids, and the consumed review
     marker. Only this report boundary can supply those records to `accept_write`.
     """
-    from .obligations import MAX_FINDINGS, PROPOSAL_SOURCES, SEVERITIES, TRIAGE, _admissions, _exact, _ident, _text, refuse
+    from .obligations import (MAX_FINDINGS, PROPOSAL_SOURCES, SEVERITIES, TRIAGE, _admissions,
+                              _exact, _ident, _text, expand_update, refuse)
+    value = expand_update(state, value)
     base = {key: value[key] for key in value if key in ("seq", "obligations", "proposals")}
     obligations = [dict(row) for row in base.get("obligations", state["obligations"])]
     listed = [dict(row) for row in base.get("proposals", state.get("proposals", []))]
@@ -258,6 +274,12 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         raise refuse("obligation_invalid", "malformed", "only a review attempt is triaged", admission=admission_id)
     rows = {row.get("id"): row for row in obligations}
     assurance_id = (admission.get("serves") or [None])[0]
+    if (admission.get("role") == "review" and admission.get("serves") == [assurance_id]
+            and review_completed(admission)):
+        served = rows.get(assurance_id)
+        if (isinstance(served, dict) and served.get("kind") == "assurance"
+                and served.get("state") == "satisfied" and not served.get("evidence")):
+            served["evidence"] = [{"attempt": admission_id}]
     prior_ids = {ob["id"] for ob in state["obligations"]}
     stored = next((ob.get("findings", []) for ob in state["obligations"] if ob["id"] == assurance_id), [])
     written: set[str | tuple[str, str]] = set()

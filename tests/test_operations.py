@@ -111,7 +111,7 @@ class AdmissionTests(unittest.TestCase):
     def test_missing_benchmark_row_cannot_block_admission(self):
         from pod.catalog import load as load_catalog
         document=deepcopy(load_catalog())
-        del document['reference_benchmark']['models']['gpt-6-luna']
+        del document['benchmarks']['models']['gpt-6-luna']
         with patch('pod.catalog.load',return_value=document):
             result=self.start()
         self.assertEqual(result['status'],'bound')

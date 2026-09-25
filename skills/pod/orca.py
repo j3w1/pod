@@ -57,6 +57,10 @@ def _read_allowed(argv: list[str]) -> bool:
     if (len(argv) == 5 and argv[:3] == ["worktree", "show", "--worktree"]
             and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
         return True
+    if (len(argv) == 5 and argv[:3] == ["terminal", "list", "--worktree"]
+            and isinstance(argv[3], str) and argv[3].startswith("path:")
+            and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
+        return True
     if argv[:4] == ["orchestration", "worker-list", "--include-remote", "--json"]:
         return _worker_list_tail(argv[4:])
     return False

@@ -174,6 +174,9 @@ def _validate_context(value: object) -> dict:
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict) and "governance_history" in checkpoint_value:
         _governance_history(checkpoint_value)
+    if isinstance(checkpoint_value, dict) and "delivery" in checkpoint_value:
+        from .governance import validate_delivery_record
+        validate_delivery_record(checkpoint_value["delivery"])
     return state
 
 
@@ -252,10 +255,11 @@ def require_authority(project: Path, objective: str, *, owner: str,
             "native": native, "references": refs}
 
 
-def context_root_for_run(run_id: str) -> Path | None:
+def contexts_for_run(run_id: str) -> list[tuple[Path, dict]]:
+    """Read every objective bound to one Run without choosing among them."""
     root = state_root()
     if not root.exists():
-        return None
+        return []
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
     matches = []
@@ -270,10 +274,15 @@ def context_root_for_run(run_id: str) -> Path | None:
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
         admission_match = any(row.get("run_id") == run_id for row in state["admissions"].values())
         if admission_match or any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs):
-            matches.append(path.parent)
+            matches.append((path.parent, state))
+    return matches
+
+
+def context_root_for_run(run_id: str) -> Path | None:
+    matches = contexts_for_run(run_id)
     if len(matches) > 1:
         raise PodError("ambiguous_context", "Multiple local contexts bind this Run")
-    return matches[0] if matches else None
+    return matches[0][0] if matches else None
 
 
 def context_for_run(run_id: str) -> dict | None:
@@ -433,13 +442,17 @@ def _governor_pending(project: Path, objective: str) -> bool:
 
 def _authorization_granted(project: Path, objective: str):
     def granted(scope: str, candidate: str) -> bool:
-        from .governor import _read_journal, _record_path
+        from .governor import _read_journal, _record_path, validate_authorization
         try:
             journal = _read_journal(_record_path(project, objective))
         except PodError:
             return False
-        return any(row["decision"] == "ALLOW" and row["action"]["kind"] == scope
+        kinds = ("push", "pr_update") if scope == "publish" else (scope,)
+        return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
                    and candidate in (row["action"]["candidate"], row.get("commit"), row.get("candidate_id"))
+                   and validate_authorization(row["action"].get("authorization"),
+                                              candidate=row.get("commit") or row["action"]["candidate"],
+                                              kind=scope) is not None
                    for row in journal["actions"])
     return granted
 
@@ -465,6 +478,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
     from .config import effective, load
     from .records import source_identity
     from .selection import worker_ceiling
+    from .governor import objective_delivery_reporting
     checkpoint_value = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
     snapshot = load(project)
     ceiling = worker_ceiling(snapshot, state.get("constraints", [])) if not snapshot["errors"] else 0
@@ -503,6 +517,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "verification": verification if verification is not None else checkpoint_value.get("verification"),
             "authorization_granted": _authorization_granted(project, objective),
             "governor_pending": _governor_pending(project, objective),
+            "governor_delivery": objective_delivery_reporting(project, objective),
             "git_delta": lambda source, target: git_delta(project, source, target),
             "is_ancestor": lambda commit, target: git_is_ancestor(project, commit, target)}
 
@@ -537,6 +552,64 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
     return view
 
 
+def map_read(project: Path, objective: str) -> dict:
+    """Read one restatable map and its exact objective-local attempt evidence."""
+    from .assurance import evidence_valid, review_completed
+    from .obligations import governance_digest, restatable_rows, undispositioned
+    view = kernel_view(project, objective)
+    state, map_state, ctx = view["state"], view["map"], view["ctx"]
+    if state is None or map_state is None:
+        raise PodError("map_unavailable", "This objective has no recorded obligation map")
+    outstanding_ids = set(ctx["outstanding"])
+    outstanding = []
+    settled_attempts = {ob["id"]: [] for ob in map_state["obligations"]}
+    for key, row in state["admissions"].items():
+        binding = row.get("native_binding") or {}
+        if key in outstanding_ids:
+            outstanding.append({"admission": key, "role": row["role"], "serves": list(row["serves"]),
+                                "state": row["state"], "dispatch": binding.get("dispatchId")})
+        elif row["role"] == "review" and review_completed(row):
+            for served in row["serves"]:
+                if served in settled_attempts:
+                    settled_attempts[served].append(key)
+    pending = []
+    for key, row in undispositioned(ctx).items():
+        result = row.get("result") or {}
+        pending.append({"admission": key, "serves": list(row.get("serves") or []),
+                        "head": result.get("head"),
+                        "paths_complete": (row.get("changed_paths") is not None
+                                           and result.get("paths_status") != "over_limit")})
+    gov = governance_digest(map_state["governance_sources"])
+    eligibility = {}
+    for ob in map_state["obligations"]:
+        if ob["kind"] != "assurance":
+            continue
+        if map_state.get("closure") or ob["state"] == "withdrawn":
+            status = "terminal"
+        elif ob["state"] == "satisfied" and evidence_valid(ob, ctx, gov):
+            status = "bound"
+        elif any(ob["id"] in row["serves"] for row in outstanding):
+            status = "busy"
+        else:
+            status = "eligible"
+        eligibility[ob["id"]] = status
+    actions = [f"record a disposition for admission {row['admission']}" for row in pending]
+    for ob in map_state["obligations"]:
+        if ob["state"] == "active":
+            actions.append(f"continue {ob['id']} with {ob['executor']}")
+        elif ob["state"] == "waiting":
+            actions.append(f"resolve {ob['id']} wait: {ob['wait']['class']} on {ob['wait']['referent']}")
+        elif ob["state"] == "blocked_external":
+            actions.append(f"wait for {ob['external']['party']}: {ob['external']['need']}")
+    return {"schema": "pod-map-view/v1", "seq": map_state["seq"], "next_seq": map_state["seq"] + 1,
+            "revision": map_state["revision"], "candidate": state["checkpoint"].get("candidate"),
+            "governance": map_state["governance"], "delivery": map_state.get("delivery"),
+            "closure": map_state.get("closure"), "obligations": restatable_rows(map_state),
+            "outstanding": outstanding, "settled_attempts": settled_attempts,
+            "undispositioned": pending, "review_eligibility": eligibility,
+            "next_actions": actions[:MAX_RECORD // 128], "native_settlement": view["settlement"]}
+
+
 def _require_open(state: dict) -> None:
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
@@ -545,13 +618,28 @@ def _require_open(state: dict) -> None:
                      closure_revision=map_state["closure"]["revision"])
 
 
+def _map_refusal_context(exc: PodError, state: dict) -> PodError:
+    prior = map_of(state) or {}
+    detail = dict(exc.detail) if isinstance(exc.detail, dict) else {}
+    detail.setdefault("current_seq", prior.get("seq", 0))
+    detail.setdefault("revision", prior.get("revision", 0))
+    exc.detail = detail
+    return exc
+
+
 def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
-                      native: dict) -> tuple[dict, dict, list]:
+                      native: dict, previous: dict | None = None) -> tuple[dict, dict, list]:
     from .config import effective
     from .obligations import MAP_INPUT, MAP_STORED, refuse
     bounded_text(owner, name="owner")
     # A coordinator may round-trip the stored map; Pod recomputes every stamped field.
     value = {key: item for key, item in value.items() if key not in MAP_STORED - MAP_INPUT}
+    if previous:
+        carried = ("criteria", "plan_revision", "candidate", "assignments", "questions",
+                   "verification_gaps", "next_safe_action", "worktree", "objective_source", "verification")
+        value = {**{key: previous[key] for key in carried if key in previous}, **value}
+        value.setdefault("native_refs", [])
+        value.setdefault("policy_revision", effective(project)["revision"])
     allowed = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
                "assignments", "questions", "verification_gaps", "next_safe_action",
                "route_decisions", "objective", "objective_source", "worktree", "blocker",
@@ -591,9 +679,20 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     prior_map = map_of(state)
     map_state: dict = {}
     ctx = None
+    has_delivery = "delivery" in proposed
+    delivery_request = proposed.pop("delivery", None)
     if proposed or prior_map is not None:
         refresh = proposed.get("governance_refresh") is True
-        if prior_map is not None and not refresh:
+        verified_delivery = None
+        if has_delivery:
+            from .governance import verify_delivery
+            if prior_map is None:
+                raise PodError("delivery_unverified", "A delivery needs a bound obligation map",
+                               {"detail": "map_missing", "next_action": "checkpoint the objective map first"})
+            record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
+            verified_delivery = verify_delivery(project, objective, prior_map, record_id,
+                                                seq=prior_map["seq"] + 1)
+        if prior_map is not None and not refresh and verified_delivery is None:
             require_governance_current(project, prior_map)
         if prior_map is None:
             declared = proposed.get("governance")
@@ -639,6 +738,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
                              verification=core.get("verification"))
+        ctx["governance_refresh"] = refresh
         if dispositions:
             if prior_map is None:
                 raise refuse("obligation_unaccounted", "disposition_invalid",
@@ -654,6 +754,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                  "a disposition names a recorded admission")
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
         map_state = accept_write(prior_map, proposed, ctx)
+        if verified_delivery is not None:
+            map_state["delivery"] = verified_delivery
         _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,
                                    snapshot_authorized=snapshot_authorized)
     return map_state, ctx
@@ -663,10 +765,17 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
     """Persist one validated checkpoint; while a map exists, every write is a map transition."""
     from .bundle import running_identity
     from .obligations import report_projection
-    core, proposed, dispositions = _checkpoint_input(project, objective, owner, value, native)
+    if not isinstance(value, dict) or value.get("schema") != CHECKPOINT_SCHEMA:
+        raise PodError("invalid_checkpoint", f"Checkpoint needs {CHECKPOINT_SCHEMA} and current native runtime readback")
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
+        previous = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
+        try:
+            core, proposed, dispositions = _checkpoint_input(project, objective, owner, value, native, previous)
+        except PodError as exc:
+            _map_refusal_context(exc, state)
+            raise
         if state["owner"] not in (None, owner):
             raise PodError("coordinator_conflict", "Another coordinator owns this objective")
         authority = require_authority(project, objective, owner=owner, state=state)
@@ -682,12 +791,15 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             raise PodError("native_authority_unverified", "Checkpoint cannot invent or drop Run references")
         core = {**core, "native_refs": [{"runId": run, "runtime": runtime}
                                          for run, runtime in sorted(authority["references"].items())]}
-        previous = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
         if "verification" not in core and "verification" in previous:
             # Like the map, the verification context carries forward until it is restated.
             core["verification"] = previous["verification"]
-        map_state, ctx = _checkpoint_map_transition(
-            project, objective, state, authority, core, previous, proposed, dispositions, native)
+        try:
+            map_state, ctx = _checkpoint_map_transition(
+                project, objective, state, authority, core, previous, proposed, dispositions, native)
+        except PodError as exc:
+            _map_refusal_context(exc, state)
+            raise
         state["owner"] = owner
         identity = running_identity()
         if identity["bundle_digest"] is None:
@@ -726,7 +838,8 @@ def logical_projection(project: Path, native: dict, *, objective: str,
             continue
         outstanding.append({**admission["request"], "objective": objective,
                             "admission_id": admission_id, "task": task,
-                            "state": admission["state"]})
+                            "state": admission["state"], "role": admission["role"],
+                            "candidate": admission["candidate"]})
     return {"schema": "pod-logical-projection/v1", "runtime": native["runtime"],
             "authoritative": native.get("authoritative") is True,
             "owner": native.get("owner") if native.get("authoritative") is True else None,
@@ -1054,9 +1167,13 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                              "observation_digest": report_identity, "result_commit": result_commit,
                              "consumed_at": datetime.now(timezone.utc).isoformat()}
             row["updated_at"] = row["report"]["consumed_at"]
-        value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
-                                admission_id=admission_id)
-        new_map = accept_write(map_state, value, ctx, triaged=triaged)
+        try:
+            value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
+                                    admission_id=admission_id)
+            new_map = accept_write(map_state, value, ctx, triaged=triaged)
+        except PodError as exc:
+            _map_refusal_context(exc, state)
+            raise
         state["checkpoint"] = {**state["checkpoint"], **new_map}
         _write(path, state)
         return {"ingestion": ingestion, "settled": settled,
@@ -1219,12 +1336,8 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
     if kind == "safety_refusal" and retry_after is not None:
         raise PodError("invalid_route_failure", "Safety refusal has no timed retry")
     if retry_after is not None:
-        try:
-            parsed = datetime.fromisoformat(retry_after.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise PodError("invalid_route_failure", "Retry-after must be an ISO timestamp") from exc
-        if parsed.tzinfo is None:
-            raise PodError("invalid_route_failure", "Retry-after needs a timezone")
+        from .util import normalize_timestamp
+        retry_after = normalize_timestamp(retry_after, field="Retry-after", code="invalid_route_failure")
     def apply(row: dict) -> None:
         if clear:
             if cleared_by not in ("user", "runtime_change"):

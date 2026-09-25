@@ -26,11 +26,13 @@ from .config import GOVERNED_KINDS, effective, validate_effects
 from .errors import PodError
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
-from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact, route_summary
+from .util import (MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact,
+                   normalize_timestamp, route_summary)
 
 SCHEMA = "pod-governor/v2"
 KINDS = GOVERNED_KINDS
 AUTHORIZED_KINDS = ("merge", "release", "deploy")
+AUTHORIZATION_SCOPES = ("publish", *AUTHORIZED_KINDS)
 VALIDATION_KINDS = ("workflow_dispatch", "validation_rerun")
 PUBLICATION_KINDS = ("push", "pr_update")
 DISPATCH_KINDS = ("workflow_dispatch", "remote_diagnostic")
@@ -58,7 +60,7 @@ _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
 _GIT_ID = gitio.OBJECT_ID
 NEXT_ACTIONS = {
-    "authorization_missing": "supply the owner authorization record naming this candidate, tree and scope",
+    "authorization_missing": "obtain the owner's delivery decision (merge remotely / keep local / defer) for this exact candidate",
     "unit_unknown": "prepare the delivery unit's candidate with the governor-prepare helper",
     "unit_unbound": "prepare the delivery unit's candidate and branch with the governor-prepare helper",
     "candidate_unbound": "checkpoint a candidate, or prepare one for the delivery unit",
@@ -202,19 +204,6 @@ def _compact(journal: dict) -> None:
 AUTHORIZATION_SCHEMA = "pod-authorization/v1"
 AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
 _GIT_OBJECT_ID = gitio.OBJECT_ID
-_UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\Z")
-
-
-def _utc_timestamp(value: object) -> bool:
-    if not isinstance(value, str) or _UTC_TIMESTAMP.fullmatch(value) is None:
-        return False
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError:
-        return False
-    return parsed.utcoffset() is not None and parsed.utcoffset().total_seconds() == 0
-
-
 def validate_authorization(value: object, *, candidate: str | None = None, tree: str | None = None,
                            kind: str | None = None) -> dict | None:
     """Accept only a complete owner authorization for a governed merge, release or deploy.
@@ -233,11 +222,10 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
                 for key in ("candidate", "tree"))
             or len(record["candidate"]) != len(record["tree"])):
         raise PodError("invalid_authorization", "Authorization candidate and tree must be Git object ids")
-    if not _utc_timestamp(record["utc"]):
-        raise PodError("invalid_authorization", "Authorization timestamp must be canonical UTC")
+    utc = normalize_timestamp(record["utc"], field="Authorization timestamp", code="invalid_authorization")
     scope = record["scope"]
     if (not isinstance(scope, list) or not scope or len(scope) > 8
-            or any(item not in AUTHORIZED_KINDS for item in scope)):
+            or any(item not in AUTHORIZATION_SCOPES for item in scope)):
         raise PodError("invalid_authorization", "Authorization scope is unsupported")
     if candidate is not None and record["candidate"] != candidate:
         return None
@@ -245,7 +233,7 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
         return None
     if kind is not None and kind not in record["scope"]:
         return None
-    return record
+    return {**record, "utc": utc}
 
 
 def _validate_diagnostic(value: object) -> dict:
@@ -372,7 +360,8 @@ def _unit_tasks(unit: dict | None) -> list[str] | None:
     return None if unit is None else list(unit.get("tasks", []))
 
 
-def _active(native_projection: dict | None, tasks: list[str] | None = None) -> list[str]:
+def _active(native_projection: dict | None, tasks: list[str] | None = None, *,
+            project: Path | None = None, ignore_review_commit: str | None = None) -> list[str]:
     """Objective-local logical assignments supplied at the governor boundary."""
     if not isinstance(native_projection, dict):
         return []
@@ -386,6 +375,11 @@ def _active(native_projection: dict | None, tasks: list[str] | None = None) -> l
         task = row.get("task")
         if tasks is not None and task is not None and task not in tasks:
             continue
+        if (project is not None and ignore_review_commit is not None and row.get("role") == "review"
+                and isinstance(row.get("candidate"), str)):
+            from .governance import _resolve_commit
+            if _resolve_commit(project, row["candidate"]) == ignore_review_commit:
+                continue
         active.append(str(index) + ":" + str(task or "unbound"))
     return active
 
@@ -447,13 +441,15 @@ def _inputs(state: dict) -> str:
 
 
 def _phase(state: dict, actions: list[dict], unit: dict | None, candidate: str | None,
-           native_projection: dict | None = None) -> str:
+           native_projection: dict | None = None, *, project: Path | None = None,
+           ignore_review_commit: str | None = None, all_outstanding: bool = False) -> str:
     checkpoint = _checkpoint(state)
     if native_projection is None and state.get("admissions"):
         raise PodError("native_assignment_unverified",
                        "Governor needs exact objective assignment evidence for native-bound work")
-    tasks = _unit_tasks(unit)
-    if not candidate or _active(native_projection, tasks):
+    tasks = None if all_outstanding else _unit_tasks(unit)
+    if not candidate or _active(native_projection, tasks, project=project,
+                                ignore_review_commit=ignore_review_commit):
         return "working"
     name = unit["name"] if unit else None
     if _pending_interventions(state, name, tasks):
@@ -495,17 +491,26 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
     scopes = set()
     if kind in AUTHORIZED_KINDS:
         scopes.add(kind)
+    if kind in PUBLICATION_KINDS:
+        scopes.add("publish")
     if deploys:
         scopes.add("deploy")
     if releases:
         scopes.add("release")
     for scope in sorted(scopes):
-        authorized = validate_authorization(action.get("authorization"),
-                                            candidate=binding["commit"] if binding else action["candidate"],
-                                            tree=binding["tree"] if binding else None, kind=scope)
+        candidate = binding["commit"] if binding else action["candidate"]
+        tree = binding["tree"] if binding else None
+        try:
+            authorized = validate_authorization(action.get("authorization"),
+                                                candidate=candidate, tree=tree, kind=scope)
+        except PodError:
+            authorized = None
         if authorized is None:
             _reason(reasons, "authorization", "authorization_missing",
-                    f"{scope} needs an owner authorization record naming this candidate, tree and scope")
+                    f"{scope} authorization for candidate {candidate}, tree {tree or 'unbound'} is missing; "
+                    f"{NEXT_ACTIONS['authorization_missing']}")
+        else:
+            action["authorization"] = authorized
 
 
 
@@ -591,6 +596,7 @@ def _check_equivalent(action: dict, latest: dict | None, starting: list[dict],
 def _check_unresolved(action: dict, journal: dict, logical_key: str,
                       candidate_id: str | None, state: dict, unit: dict | None, current: str | None,
                       native_projection: dict | None, validates: bool, purpose: str, kind: str,
+                      project: Path | None, binding: dict | None,
                       reasons: list[dict], warnings: list[dict]) -> tuple[list[str], str]:
     # 4. Supersedence and unresolved prior effects in this unit.
     for row in journal["actions"]:
@@ -607,7 +613,10 @@ def _check_unresolved(action: dict, journal: dict, logical_key: str,
     if stale_pending:
         _warn(warnings, "superseded_validation_pending",
               f"{len(stale_pending)} validation run(s) for a superseded candidate are still pending")
-    phase = _phase(state, journal["actions"], unit, current, native_projection)
+    phase = _phase(state, journal["actions"], unit, current, native_projection,
+                   project=project,
+                   ignore_review_commit=binding["commit"] if purpose == "validation" and binding else None,
+                   all_outstanding=purpose == "release")
     if (validates or purpose == "release") and kind != "remote_diagnostic" and phase in ("working", "converging"):
         pending = _pending_interventions(state, action["unit"], _unit_tasks(unit))
         if phase == "converging" and "unit:" + action["unit"] in pending:
@@ -691,7 +700,8 @@ def _check_failure(latest: dict | None, reuse: dict | None, superseded: bool,
 
 
 def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
-              managed: bool = False, native_projection: dict | None = None) -> dict:
+              managed: bool = False, native_projection: dict | None = None,
+              project: Path | None = None) -> dict:
     """Apply the decision order and return reasons, warnings, reuse and bindings."""
     reasons: list[dict] = []
     warnings: list[dict] = []
@@ -748,8 +758,8 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
                               superseded, binding, reasons, warnings)
 
     stale_pending, phase = _check_unresolved(action, journal, logical_key, candidate_id, state,
-                                               unit, current, native_projection, validates, purpose,
-                                               kind, reasons, warnings)
+                                              unit, current, native_projection, validates, purpose,
+                                              kind, project, binding, reasons, warnings)
 
     _check_readiness(checkpoint, unit, candidate_id, binding, purpose, governor_policy,
                      reasons, warnings)
@@ -822,12 +832,16 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         require_governance_current(project, map_of(state))
         journal = _read_journal(record_path)
         verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
-                            native_projection=native_projection)
+                            native_projection=native_projection, project=project)
         exception_record = _exception_grant(governor_policy, supplied, action=proposal, objective=objective,
                                             candidate_ids=verdict["candidate_ids"], now=now)
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
         codes = [reason["code"] for reason in verdict["reasons"]]
         next_action = next((NEXT_ACTIONS[code] for code in codes if code in NEXT_ACTIONS), None)
+        missing = next((reason for reason in verdict["reasons"]
+                        if reason["code"] == "authorization_missing"), None)
+        if missing is not None:
+            next_action = missing["detail"]
         record_id = digest({"action": proposal, "at": moment, "revision": journal["revision"]})
         counters = journal["counters"]
         _count(counters["decisions"], decision)
@@ -912,6 +926,10 @@ def _validate_provider(value: object, *, nested: bool = True) -> dict | None:
     for key, item in value.items():
         if not isinstance(key, str) or len(key) > 64:
             raise PodError("invalid_provider", "Provider receipt keys are short names")
+        if key == "merge_commit" and (not isinstance(item, str) or not _GIT_OBJECT_ID.fullmatch(item)):
+            raise PodError("invalid_provider", "Provider merge_commit is a full Git commit id")
+        if key == "method" and item not in ("merge", "squash", "fast-forward"):
+            raise PodError("invalid_provider", "Provider merge method is merge, squash or fast-forward")
         if isinstance(item, dict) and nested:
             _validate_provider(item, nested=key == "triggered")
         elif not (item is None or isinstance(item, (str, int, bool))) or (isinstance(item, str) and len(item) > 512):
@@ -1400,6 +1418,36 @@ def discover_triggers(project: Path) -> dict:
     return proposal
 
 
+def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
+    """Whether this unit's current candidate holds publish/merge consent, and its hosted-check state.
+
+    Consent counts only when an ALLOW row for the exact prepared commit carries an authorization that still
+    validates for that commit, tree and scope; hosted checks are what the journal recorded, never inferred.
+    """
+    binding = unit.get("candidate")
+    authorization = {}
+    for scope, kinds in (("publish", PUBLICATION_KINDS), ("merge", ("merge",))):
+        granted = False
+        if isinstance(binding, dict) and binding.get("commit") and binding.get("tree"):
+            for row in rows:
+                if row["action"]["kind"] not in kinds or row.get("commit") != binding["commit"]:
+                    continue
+                try:
+                    granted = validate_authorization(row["action"].get("authorization"),
+                                                     candidate=binding["commit"], tree=binding["tree"],
+                                                     kind=scope) is not None
+                except PodError:
+                    granted = False
+                if granted:
+                    break
+        authorization[scope] = "RECORDED" if granted else "MISSING"
+    validations = [row for row in rows if row["action"]["kind"] in VALIDATION_KINDS]
+    hosted = ("RECORDED_PASS_UNVERIFIED" if any(row["outcome"] == "PASS" for row in validations)
+              else "PENDING" if any(row["outcome"] in ("pending", "UNKNOWN") for row in validations)
+              else "NOT_RUN" if not validations else "FAILED")
+    return {"authorization": authorization, "hosted_checks": hosted}
+
+
 def _unit_projection(unit: dict, actions: list[dict]) -> dict:
     binding = unit.get("candidate")
     rows = [row for row in actions if row["action"]["unit"] == unit["name"] and row["decision"] == "ALLOW"]
@@ -1407,6 +1455,7 @@ def _unit_projection(unit: dict, actions: list[dict]) -> dict:
                "provider": row["receipt"].get("provider")} for row in rows if row["outcome"] == "pending"]
     unresolved = [row["record_id"] for row in rows if row["outcome"] == "UNKNOWN"]
     last = unit.get("last_decision")
+    delivery = _unit_delivery(unit, rows)
     return {"generation": unit["generation"], "branch": unit.get("branch"), "tasks": unit.get("tasks", []),
             "candidate": ({key: binding[key] for key in ("id", "commit", "tree", "dirty_paths", "prepared_at",
                                                           "policy_revision")}
@@ -1418,7 +1467,25 @@ def _unit_projection(unit: dict, actions: list[dict]) -> dict:
             "last_decision": last,
             "blocker": (last.get("codes") or None) if last and last.get("decision") == "DEFER" else None,
             "next_action": last.get("next_action") if last else None,
-            "active_validation": active, "unresolved": unresolved}
+            "active_validation": active, "unresolved": unresolved, **delivery}
+
+
+def objective_delivery_reporting(project: Path, objective: str) -> dict:
+    """Read only exact Governor evidence for the obligation report."""
+    try:
+        journal = _read_journal(_record_path(project, objective))
+    except PodError:
+        return {"units": {}, "hosted_checks": "UNAVAILABLE"}
+    units = {}
+    for name, unit in journal["units"].items():
+        rows = [row for row in journal["actions"] if row["action"]["unit"] == unit.get("name", name)
+                and row["decision"] == "ALLOW"]
+        units[name] = _unit_delivery(unit, rows)
+    statuses = [unit["hosted_checks"] for unit in units.values()]
+    hosted = ("RECORDED_PASS_UNVERIFIED" if "RECORDED_PASS_UNVERIFIED" in statuses
+              else "PENDING" if "PENDING" in statuses else "FAILED" if "FAILED" in statuses
+              else "NOT_RUN")
+    return {"units": {name: unit["authorization"] for name, unit in units.items()}, "hosted_checks": hosted}
 
 
 def status_at(root: Path, *, project: Path | None = None,
