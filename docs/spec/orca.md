@@ -82,9 +82,9 @@ Before implementation select or create the exact Orca-managed objective worktree
 
 ### R67 — Normal delegated workers use native worker-start
 
-Type: B,H · Scenarios: [A107](#a107), [A108](#a108), [A109](#a109)
+Type: B,H · Scenarios: [A107](#a107), [A108](#a108), [A109](#a109), [A170](delivery.md#a170), [A171](delivery.md#a171)
 
-Normal delegated workers use native worker-start and Orca's new-agent-tab setting. Status exposes exact native Dispatch/Task/worktree and available terminal/tab identities, placement surfaces and discoverability warnings. Terminal allocation and native tab discovery do not prove rendered UI visibility or focus; absence alone does not prove no worker/tab. Diagnose missing tabs through the existing worker. Invent no visibility override, change no tab preference and focus only on explicit user request. After consuming and preserving an exact report, follow native Delivery acknowledgment and worker-release ordering promptly; reuse only for an immediate supported follow-up. Final cleanup checks exact objective workers only and retains uncertainty/protected resources. Pod adds no lifecycle/cleanup helper.
+Normal delegated workers use native worker-start and Orca's new-agent-tab setting. Status exposes exact native Dispatch/Task/worktree and observed terminal/tab identities, placement surfaces and discoverability warnings without claiming rendered visibility or focus. Diagnose missing tabs through the existing worker; focus only on explicit user request. After an exact preserved report, follow native Delivery acknowledgment and worker-release order promptly; reuse only for an immediate supported follow-up. Objective cleanup is planned read-only and executed through native/host operations with scoped consent; uncertain or protected resources remain.
 
 ### R68 — Discover Orca progressively from its installed
 
@@ -124,7 +124,7 @@ Type: B,H · Scenarios: [A161](#a161)
 - <a id="a106"></a>**A106** — Canonical private project policy remains effective in a linked objective worktree and worktree/task policy can only narrow it, without copying the private file.
 - <a id="a107"></a>**A107** — Normal worker-start uses the native Orca tab path and user setting. Exact native placement references and discoverability warnings, including a background surface, are exposed without asserting UI rendering or focus. Missing terminal/tab evidence remains unverified and does not trigger another worker.
 - <a id="a108"></a>**A108** — After exact report consumption/preservation, native Delivery acknowledgment and worker release occur promptly in guide order; reuse requires an immediate supported follow-up.
-- <a id="a109"></a>**A109** — Final cleanup checks exact objective workers only, protects uncertainty/foreign resources and removes a worktree only after integration, preservation and cleanliness.
+- <a id="a109"></a>**A109** — Final cleanup reads this objective only, protects uncertain and foreign resources, and removes a worktree only after scoped consent, integration or verified archive, and a fresh guarded plan.
 - <a id="a110"></a>**A110** — Installed Orca guidance is loaded progressively and missing delegation controls do not block safe direct work or diagnostics; no wrapper/shared-setting workaround appears.
 - <a id="a126"></a>**A126** — Missing runtime metadata stays unknown without account probes or inferred native capability.
 - <a id="a129"></a>**A129** — Supported effort is used or omitted as native default; context is omitted without native control and effective metadata remains honest. Null, absent and irrelevant extra launch fields do not create a mismatch, while known contradictions do. Objective-bound acceptance holds a recorded route mismatch or unknown effective route despite passing caller checks and owner authorization; a known matching route can pass.

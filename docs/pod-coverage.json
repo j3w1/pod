@@ -1,6 +1,6 @@
 {
   "schema": "pod-scenario-coverage/v1",
-  "authority": "docs/pod-spec.md",
+  "authority": "docs/pod-spec.md and docs/spec/*.md",
   "note": "One row per current scenario in order. Evidence labels distinguish unit, PTY/subprocess, installed bundle, hosted CI, live native and independent review. A test path names an existing offline slice only; NOT_RUN remains until that evidence is recorded.",
   "scenarios": [
     {
@@ -1456,6 +1456,142 @@
         "unit"
       ],
       "offline_test": "tests.test_kernel_boundaries.LifecycleTests.test_trivial_work_stays_map_free_and_the_first_delegation_needs_a_map",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A164",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A165",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A166",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A167",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A168",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A169",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A170",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A171",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A172",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A173",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A174",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A175",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A176",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A177",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A178",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A179",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A180",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": null,
       "status": "NOT_RUN"
     }
   ]

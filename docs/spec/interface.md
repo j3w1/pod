@@ -16,9 +16,9 @@ Maintain one canonical inline skill policy with generated host metadata and rele
 
 ### R48 — Read-only status and doctor report preferences
 
-Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models.md#a49), [A71](#a71), [A133](#a133)
+Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models.md#a49), [A71](#a71), [A133](#a133), [A175](#a175)
 
-Read-only status and doctor report preferences, resolved paths, current native work, constraints, decisions, mismatches, installed bundle identity drift, catalog/benchmark age, blockers and next actions. Reads do not repair, dispatch, run models or alter preferences.
+Read-only status and doctor report preferences, resolved paths, current native work, constraints, decisions, mismatches, installed bundle identity drift, catalog/benchmark age, blockers and next actions. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
 
 ### R49 — The one-shot installer places both agent
 
@@ -94,27 +94,27 @@ README is the practical install and session guide: one-shot command, open/auth/i
 
 ### R71 — Keep SKILL at most 750 words
 
-Type: B,H · Scenarios: [A114](#a114), [A115](#a115)
+Type: B,H · Scenarios: [A114](#a114), [A115](#a115), [A180](#a180)
 
-Keep SKILL at most 750 words, each conditional reference at most 700 and combined references at most 2200. Load the issue reference only when relevant; workers receive bounded criteria/source references. Human status shows objective/source, worktree, relevant native work, blocker/next action and remaining gates while JSON retains detail.
+Keep SKILL at most 750 words, each conditional reference at most 700 words and all references together at most 2200 words. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle; repository docs provide the detailed contracts.
 
 ### R73 — The TUI shows all six models
 
-Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140)
+Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140), [A178](models.md#a178)
 
-The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed guidance, Pod examples, native/default details and dated AA reference metrics. State edits save immediately; `r` reversibly toggles All models and My selection without erasing saved choices.
+The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed provider guidance, Pod guide examples and effort ladder, native/default details and dated AA reference records. State edits save immediately; `r` reversibly toggles All models and My selection without erasing saved choices. Suggested-use and guide-profile columns adapt to width; AA is informational.
 
 ### R74 — The TUI works on ordinary Linux
 
-Type: B,H · Scenarios: [A139](#a139), [A140](#a140)
+Type: B,H · Scenarios: [A139](#a139), [A140](#a140), [A178](models.md#a178)
 
-The TUI works on ordinary Linux terminals and over SSH: arrow focus, Space state cycle, search, model/intelligence/price/latency sorts, provider display filter, help, expansion, quit, resize, monochrome, ASCII and non-TTY summary. Focus is a model id across sort/filter/reload; no-results and tiny terminals stay usable. Reading and navigation do not write.
+The TUI works on ordinary Linux terminals and over SSH: arrow focus, Space state cycle, search, recommended/model/intelligence/benchmark-cost/first-response sorts, provider filter, help, expansion, quit, resize, monochrome, ASCII and non-TTY summary. All six rows remain visible at supported sizes; 40×12 pages Details. Focus is a model id across sort/filter/reload; no-results and tiny terminals stay usable. Reading and navigation do not write.
 
 ### R75 — Each focused model's Details panel is
 
-Type: B,H · Scenarios: [A122](models.md#a122), [A139](#a139)
+Type: B,H · Scenarios: [A122](models.md#a122), [A139](#a139), [A178](models.md#a178)
 
-Each focused model's Details panel is always visible without Enter, with 35–65 words of attributed purpose guidance, distinct Pod examples, exact id, native/default capability and dated reference profile. Rank scope is six supported base models; AA variant metrics stay paired and informational, with source URL and age visible.
+Each focused model has an always-present Details guide with 35–55 words of attributed purpose guidance, distinct Pod examples, a four-stage effort ladder, exact id, native/default capability and dated AA records. Expanded detail shows all variant records and caveats. Rank scope is six supported base models; AA records stay paired and informational, with source and age visible. First response is not task duration.
 
 ### R76 — Preference edits save immediately with lock
 
@@ -130,6 +130,8 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 
 ## Acceptance scenarios
 
+- <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
+- <a id="a175"></a>**A175** — Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments, gates, progress and next action without writes or invented telemetry.
 - <a id="a32"></a>**A32** — Global/local coexistence preserves project policy and diagnoses duplicate/shadowed/mismatched skills.
 - <a id="a33"></a>**A33** — Repeated installer runs and update preserve user files and do not create duplicate active bundles.
 - <a id="a34"></a>**A34** — Config/status/doctor and internal validation reads call no models, hooks or dispatch and perform no hidden repair.
@@ -152,7 +154,7 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 - <a id="a112"></a>**A112** — Public code and guidance require no external metadata service; AGENTS keeps only the short upstream ownership notice and introduces no competing writer.
 - <a id="a113"></a>**A113** — README covers the one-shot installer, normal session journey, TUI, limits, update and removal with linked detailed guidance.
 - <a id="a114"></a>**A114** — SKILL remains at most 750 words, each conditional reference at most 700 and their combined total at most 2200; Execution Spec loads only for issue/spec work.
-- <a id="a115"></a>**A115** — Human status shows objective/source, selected worktree, relevant native work, blocker/next action and remaining gates; JSON retains detailed evidence without side effects.
+- <a id="a115"></a>**A115** — Human status names selected objective/source, worktree, relevant native work, blocker, next action, assignments, retained terminals and remaining gates; JSON retains detailed derived evidence without side effects.
 - <a id="a117"></a>**A117** — Focus updates the always-visible Details panel; model edits save immediately and the All models toggle restores saved states.
 - <a id="a118"></a>**A118** — The root `VERSION` holds one MAJOR.MINOR.PATCH line and is the only authored version; the bundle's `VERSION` links to it, an installed copy carries it as a file, `doctor` reports it, and no other file declares a version.
 - <a id="a119"></a>**A119** — Public commands and JSON/private output match the small launcher contract, with no accidental installer or artwork output in machine reads.
@@ -161,8 +163,8 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 - <a id="a135"></a>**A135** — Unit, PTY/subprocess, installed-bundle, hosted, live and review evidence are recorded separately.
 - <a id="a136"></a>**A136** — Root VERSION is the only authored version and installed skills and launcher report it consistently.
 - <a id="a137"></a>**A137** — A truncated download or interrupted dependency/skill copy yields no false success, and rerun repairs an incomplete installation.
-- <a id="a139"></a>**A139** — The six focus-driven Details summaries, labels, AA metrics and age stay visible at ordinary terminal sizes and adapt accessibly.
-- <a id="a140"></a>**A140** — State changes save immediately, and All models toggles back to exact saved choices across restarts and external edits.
+- <a id="a139"></a>**A139** — The six model rows and guide-profile labels remain readable from wide to 40×12 terminals; Details is always present, pages at 40×12 and exposes dated AA records and source caveats.
+- <a id="a140"></a>**A140** — State edits save immediately, All models toggles back to saved choices across restarts/external edits, and browsing, sorting, filtering and paging never write.
 - <a id="a142"></a>**A142** — A new install and explicit update leave ordinary agent sessions and running workers unchanged; coordinators reload before new starts.
 
 
@@ -175,7 +177,7 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod` | Opens the model TUI on a TTY; otherwise prints a concise plain summary. |
 | `pod config [--json]` | Read personal path, byte revision, mode, saved/effective states, eligible ids, worker ceiling and compact catalog guidance. |
 | `pod config edit` | Opens the personal YAML in `$VISUAL` or `$EDITOR`, validates afterward, retains invalid edits and reports them. |
-| `pod status [--run] [--json]` | Objective/source, worktree, constraints, workers, route decisions, drift, blocker and next action. |
+| `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments, gates, progress, blockers and next action. Shared Runs require explicit selection. |
 | `pod doctor [--json]` | Read-only installation, catalog, preference, runtime capability and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
 | `pod --version` | Reports the installed root `VERSION` before dependency checks. |

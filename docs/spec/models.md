@@ -34,13 +34,13 @@ Project, issue, repository and worker material cannot widen the personal model p
 
 ### R14 — Maintain exactly six base model identities
 
-Type: B · Scenarios: [A10](#a10), [A45](#a45), [A48](#a48), [A116](#a116), [A122](#a122)
+Type: B · Scenarios: [A10](#a10), [A45](#a45), [A48](#a48), [A116](#a116), [A122](#a122), [A178](#a178)
 
-Maintain exactly six base model identities in one bundled catalog. Official attributed guidance and dated reference benchmarks inform judgment; neither proves native access, invocation settings or billing. Missing optional benchmark rows/scores show unknown metrics and never block a supported model. Effort variants are detail, not selectable models.
+Maintain the six base model identities in the bundled v2 catalog. Attributed provider guidance, Pod guide profiles, effort ladders and examples support judgment; dated AA records are informational. A missing optional measurement is unknown and never blocks eligibility. Effort variants remain detail, not selectable models. The catalog supplies `suggested_use` and `ladder` to dispatch-free config reads.
 
 ### R15 — The coordinator selects a suitable eligible
 
-Type: B,H · Scenarios: [A05](coordination.md#a05), [A06](coordination.md#a06), [A07](#a07), [A36](#a36), [A123](#a123)
+Type: B,H · Scenarios: [A05](coordination.md#a05), [A06](coordination.md#a06), [A07](#a07), [A36](#a36), [A123](#a123), [A179](#a179)
 
 The coordinator selects a suitable eligible agent/model/effort/context for each assignment and records a short reason. A deterministic boundary validates eligibility, constraint, effort, agent and native context support without reranking or another model call. An attempt keeps its route; safe replacement needs a fresh decision. Safety refusal bars rerouting the same Task.
 
@@ -52,9 +52,9 @@ Read current preferences before selection and at the serialized final admission 
 
 ### R17 — Expose a dispatch-free current preference/catalog view
 
-Type: B · Scenarios: [A34](interface.md#a34), [A50](#a50), [A125](#a125)
+Type: B · Scenarios: [A34](interface.md#a34), [A50](#a50), [A125](#a125), [A178](#a178)
 
-Expose a dispatch-free current preference/catalog view and validate coordinator-proposed choices deterministically. Sorting and benchmark ranks never become routing inputs or trigger model calls.
+Expose a dispatch-free current preference/catalog view, including guide `suggested_use` and `ladder`, and validate coordinator-proposed choices deterministically. Guide order, sorting and benchmark ranks never become routing inputs or trigger model calls.
 
 ### R19 — Keep actual rate-limit, unavailable and authentication
 
@@ -100,6 +100,8 @@ Reactive failure records are attempt-local. Honor native retry-after, require se
 
 ## Acceptance scenarios
 
+- <a id="a179"></a>**A179** — A suitable non-Preferred worker assignment records a brief task-specific reason; a stricter repository model restriction is recorded with `repository` provenance and its source, while the running coordinator is unchanged.
+- <a id="a178"></a>**A178** — The v2 catalog validates six ids and paired AA records; config JSON supplies `suggested_use` and `ladder`, while the TUI shows guide-profile data and adaptive Details from 160×45 through 40×12 without sending a model call or dispatch.
 - <a id="a07"></a>**A07** — An explicit model restriction produces no silent substitution.
 - <a id="a09"></a>**A09** — Project, issue and worker input cannot expand the personal model pool or change host/project permissions.
 - <a id="a10"></a>**A10** — Catalog discovery alone cannot enable a model or prove installed capability.

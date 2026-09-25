@@ -34,9 +34,9 @@ Keep the coordinator conversation, model, effort and host settings unchanged. Pr
 
 ### R26 — workers.max_active bounds concurrently reserved logical assignments
 
-Type: H · Scenarios: [A18](#a18), [A19](#a19), [A130](#a130), [A143](#a143)
+Type: H · Scenarios: [A18](#a18), [A19](#a19), [A130](#a130), [A143](#a143), [A177](#a177)
 
-`workers.max_active` bounds concurrently reserved logical assignments per objective. It is personal, 0–8, default two, and a direct constraint may narrow it. Every investigator, reviewer and authorized descendant counts, and zero workers is valid. It is a ceiling, never a target: a free reservation admits nothing by itself, and a capacity wait is valid only at the ceiling. Native settlement frees a slot even when a terminal is retained; never infer physical occupancy.
+`workers.max_active` bounds concurrently reserved logical assignments per objective. It is personal, 0–8, default two, and a direct constraint may narrow it. Investigators, reviewers and authorized descendants count. Zero workers is valid. The ceiling is never a utilization target: dispatch only ready distinct work that saves time toward a verified result. A free reservation admits nothing by itself, and a capacity wait is valid only at the ceiling. Native settlement frees a slot even when a terminal is retained; never infer physical occupancy.
 
 ### R27 — Only the coordinator delegates unless direct
 
@@ -46,9 +46,9 @@ Only the coordinator delegates unless direct user intent explicitly permits a de
 
 ### R30 — Parallelize only independent responsibilities/editing boundaries; begin
 
-Type: H · Scenarios: [A24](#a24), [A42](#a42), [A61](#a61)
+Type: H · Scenarios: [A24](#a24), [A42](#a42), [A61](#a61), [A176](#a176), [A177](#a177)
 
-Parallelize only independent responsibilities/editing boundaries; begin with one writer when contracts are unsettled. Use project/host-supported isolation. Preserve unrelated changes; never silently stash/reset/clean or execute unauthorized setup hooks.
+Parallelize ready independent responsibilities with distinct editing boundaries when doing so saves time to a verified result. Begin with one writer while a shared contract is unsettled; this is not a one-worker policy. Re-evaluate at transitions. Use project/host-supported isolation, preserve unrelated changes, and never silently stash/reset/clean or execute unauthorized setup hooks.
 
 ### R31 — Use bounded versioned packets carrying objective/criteria
 
@@ -132,10 +132,26 @@ An objective is quiescent when nothing is active and every unfinished dependency
 
 Type: B,I · Scenarios: [A150](#a150), [A162](#a162)
 
-Boundary refusals and properties P1–P6 are deterministic and generative tests. Coordination behaviour is evaluated on recorded, sanitized traces by scripted record checks: the efficiency triangle (slot filling refused; serialization flagged when an independent, dependency-free, non-overlapping obligation stays `sequenced` across two accepted map writes with free capacity and positively available delegation, without a bounded rationale and revisit condition bound to current inputs; amplification refused when a review repeats a valid binding), churn flagged at three settled admissions on one obligation without satisfaction, and scope inflation refused. Wall time and admission counts are recorded observations, never gates. There are no automatic paid runs.
+Boundary refusals and properties P1–P6 are deterministic and generative tests. Coordination behaviour is evaluated on recorded, sanitized traces by scripted record checks: the efficiency triangle (slot filling refused; serialization flagged when an independent, dependency-free, non-overlapping obligation stays `sequenced` across two accepted map writes with free capacity and positively available delegation, when parallel work would shorten the verified path and no bounded rationale and revisit condition is bound to current inputs; amplification refused when a review repeats a valid binding), churn flagged at three settled admissions on one obligation without satisfaction, and scope inflation refused. Wall time and admission counts are recorded observations, never gates. There are no automatic paid runs.
+
+### R95 — Bookkeeping interfaces
+
+Type: B,I · Scenarios: [A173](#a173), [A174](#a174)
+
+`internal map` reads the current restatable obligation map, seq, revision, candidate, governance, delivery, closure, outstanding work, settled attempts, undispositioned results, review eligibility and next actions. Checkpoint and report-map writes accept a validated `update` patch with required `seq`; carried-forward core fields avoid restatement. Short non-assurance evidence expands to the canonical receipt, and a settled served assurance report can use its attempt. Refusals identify current seq, revision and a concrete correction. Ref aliases require proven identity.
+
+### R96 — Critical-path coordination
+
+Type: B · Scenarios: [A176](#a176), [A177](#a177)
+
+Optimize time to a verified result, not utilization or worker count. Re-evaluate at transitions; dispatch only ready, distinct, time-saving work. Once a candidate is frozen, run local gates and same-candidate read-only review concurrently when useful; acceptance requires both. Governor validation may overlap that review, while release waits. Waiting is valid; spare capacity creates no duty to dispatch, and lean is never a one-worker rule.
 
 ## Acceptance scenarios
 
+- <a id="a177"></a>**A177** — A free reservation with no ready distinct time-saving assignment leaves the coordinator waiting; a later transition triggers reassessment. A ready independent assignment can run even when the plan is lean, subject to ownership and authority.
+- <a id="a176"></a>**A176** — For a frozen candidate, local gates and read-only review proceed concurrently, Governor validation admits alongside that same-candidate review, and merge/release waits until both results are valid.
+- <a id="a174"></a>**A174** — A short non-assurance receipt expands with current bindings and timestamp; a settled served assurance can record its attempt automatically. A changed state drops the prior state record, and specific refusals name valid restatements or missing evidence.
+- <a id="a173"></a>**A173** — `internal map` returns restatable rows and objective evidence; an `update` patch with the next seq validates as a full map, while stale seq refuses with current seq and a re-read action.
 - <a id="a02"></a>**A02** — Trivial mechanical work uses tools/current session with zero unnecessary workers or milestone ceremony.
 - <a id="a03"></a>**A03** — Plan-only permits appropriate investigation but no implementation worker or product edit.
 - <a id="a04"></a>**A04** — Plan-then-execute proceeds without redundant approval; real scope/authority changes stop dependent actions.
@@ -167,7 +183,7 @@ Boundary refusals and properties P1–P6 are deterministic and generative tests.
 - <a id="a147"></a>**A147** — A review requirement cited from `AGENTS.md` at the independently selected target base revision lands as a `project_policy` obligation. The same text from the issue body, another repository file, fetched documentation or a candidate edit outside an explicitly trusted target snapshot stays a proposal. The canonical default target comes from symbolic `origin/HEAD`, including its genuine checked-out local alias. A new nondefault or missing-default target needs scoped direct-user selection, which establishes the exact initial trusted snapshot even when candidate equals base. Initial default equality also works. After intake, candidate-only policy cannot gain authority through equal bytes, an existing target ref or plain refresh. A target update sharing known objective candidate or result ancestry beyond the old base needs a fresh direct-user decision for that exact new snapshot, including intermediate commits and older checkpoint candidates. Generic, mismatched or stale authorization is refused. Candidate history and exact user decisions persist through subsequent map writes and cannot be erased by caller round-trip; bounds fail closed. Missing old objects hold unless that exact new snapshot is authorized, without deleting the retained records. Independent target updates refresh normally. `HEAD` cannot be a governance source. `project_policy` cannot withdraw an objective criterion. At a changed target base, unchanged or moved exact cited text remains authoritative; genuinely gone text permits justified withdrawal of that policy obligation only. A changed target identity requires direct-user revision. Unavailable declared sources hold new work.
 - <a id="a148"></a>**A148** — A write that omits a state, gives two states, leaves `unassigned` past its introducing checkpoint, marks `satisfied` without passing evidence, keeps `satisfied` after its evidence is invalidated, or keeps a worker `active` after its admission settles is refused `obligation_unaccounted`.                                                                                             
 - <a id="a149"></a>**A149** — An unclassified wait, a wait on an unknown or resolved referent, a dependency cycle, `sequenced` with no coordinator-held obligation, `capacity` below the ceiling, or `ownership` without overlap is refused `wait_invalid`. A wait whose only stated reason is "another worker is active" has no class and is refused.                                                                             
-- <a id="a150"></a>**A150** — **Serialization.** Two accepted map writes show an independent, dependency-free, non-overlapping obligation remaining `waiting: sequenced`, with free capacity and positively available delegation. Flag the wait unless a bounded rationale and revisit condition are bound to current inputs; validate their presence and binding, not their truth. No worker configuration or parallelism is required. `capacity` below the ceiling is `wait_invalid`. Suppress the flag when the ceiling is zero or delegation is unavailable or unknown. Counts and durations remain observations.
+- <a id="a150"></a>**A150** — Across accepted map writes, an independent ready obligation left `sequenced` despite free capacity and positively available delegation is flagged unless a bounded, input-bound rationale and revisit condition explain why parallel work would not shorten the verified path. No worker-count target is imposed.
 - <a id="a151"></a>**A151** — A second coordinator-held `active` obligation is refused. A coordinator-held boundary that overlaps an outstanding admission is refused. A worker packet that overlaps the coordinator-held boundary is refused `ownership_conflict`, and the coordinator records an `ownership` wait.                                                                                            
 - <a id="a152"></a>**A152** — A second admission for an obligation that already has an outstanding admission is refused `unbound_assignment`. One correction packet serving several related correction obligations admits.                                                                                                                                                                                  
 - <a id="a153"></a>**A153** — An implementation packet is refused `integration_pending` while an undispositioned settled result has unknown, unavailable or over-limit changed paths; a non-overlapping packet admits only when changed paths are complete. `integrated_into` is validated by ancestry. A result that exceeded its boundary is recorded as `boundary_exceeded` and needs a reason before integration. With 1,024 in-scope changed paths plus one outside, result ingestion records an over-limit hold; integration cannot waive missing complete evidence. The owner obligation cannot be satisfied while the disposition is missing.       
