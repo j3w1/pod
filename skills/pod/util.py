@@ -131,8 +131,11 @@ def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD) -> None:
             os.unlink(name)
 
 
-def exact(value: Any, fields: set[str], required: set[str] | None = None, *, name: str = "record") -> dict:
+def exact(value: Any, fields: set[str], required: set[str] | None = None, *,
+          name: str = "record", error=None) -> dict:
     if not isinstance(value, dict) or set(value) - fields or (required or set()) - set(value):
+        if error is not None:
+            raise error(name)
         raise PodError("invalid_" + name, f"{name} has missing or unsupported fields")
     return value
 
