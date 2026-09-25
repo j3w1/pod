@@ -594,6 +594,42 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(reused['error']['code'],'route_mismatch')
         self.assertEqual(reused['effective_evidence']['inherited']['fields'],['effort'])
 
+    def reuse_evidence(self, *, worker_effective=None, worker_requested=None,
+                       receipt_effective=None, receipt_requested=None):
+        from pod.operations import _reuse_effective_evidence
+        binding={'runId':'run','taskId':'task','dispatchId':'dispatch','workerId':'worker',
+                 'worktreeId':'worktree','terminalHandle':'terminal'}
+        prior={'state':'bound','native_binding':binding,
+               'route_decision':{'effective':{'agent':'codex','model':'gpt-6-sol',
+                                              'effort':'native_default'}}}
+        admission={'request':{**ROUTE,'effort':'native_default'},'reuse_of':'prior'}
+        shown={'result':{'worker':{'agentTerminalHandle':'terminal','worktreeId':'worktree',
+                                   'startOptions':{'launch':{
+                                       'effective':worker_effective or {},
+                                       'requested':worker_requested or {}}}}}}
+        receipt={'launch':{'effective':receipt_effective or {},
+                           'requested':receipt_requested or {}}}
+        return _reuse_effective_evidence(receipt,shown,admission,prior)
+
+    def test_reuse_receipt_effective_conflicts_with_prior_native_default(self):
+        effective,mismatch,provenance=self.reuse_evidence(
+            worker_effective={'effort':None},receipt_effective={'effort':'high'})
+        self.assertTrue(mismatch)
+        self.assertEqual(effective['effort'],'native_default')
+        self.assertEqual(provenance['fields'],['agent','model','effort'])
+
+    def test_reuse_matching_receipt_effective_is_not_mismatch(self):
+        _,mismatch,_=self.reuse_evidence(receipt_effective={'effort':'native_default'})
+        self.assertFalse(mismatch)
+        _,mismatch,_=self.reuse_evidence(receipt_effective={'effort':'high'})
+        self.assertTrue(mismatch)
+
+    def test_reuse_known_requested_conflict_with_prior_is_mismatch(self):
+        for source in ('worker_requested','receipt_requested'):
+            with self.subTest(source=source):
+                _,mismatch,_=self.reuse_evidence(**{source:{'effort':'high'}})
+                self.assertTrue(mismatch)
+
     def test_report_consumes_inherited_reuse_without_route_mismatch(self):
         _,reused,frozen=self.reuse_with_launch()
         binding=reused['native_binding']

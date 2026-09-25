@@ -365,13 +365,20 @@ def _reuse_effective_evidence(receipt: dict, shown: dict, admission: dict,
             or worker.get("agentTerminalHandle") != binding["terminalHandle"]
             or worker.get("worktreeId") != binding["worktreeId"]):
         return effective, mismatch, None
+    start_options = worker.get("startOptions")
+    shown_launch = start_options.get("launch") if isinstance(start_options, dict) else None
+    receipt_launch = receipt.get("launch") if isinstance(receipt, dict) else None
+    observations = [values for launch in (shown_launch, receipt_launch) if isinstance(launch, dict)
+                    for values in (launch.get("effective"), launch.get("requested"))
+                    if isinstance(values, dict)]
     inherited = []
     for key in ("agent", "model", "effort"):
+        if any(_observed_value(values.get(key)) not in ("unknown", previous[key])
+               for values in observations):
+            mismatch = True
         if effective[key] == "unknown":
             effective[key] = previous[key]
             inherited.append(key)
-        elif effective[key] != previous[key]:
-            mismatch = True
     provenance = {"admission": admission["reuse_of"], "dispatch": binding["dispatchId"],
                   "terminal": binding["terminalHandle"], "fields": inherited}
     return effective, mismatch, provenance
