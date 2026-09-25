@@ -1299,6 +1299,16 @@ def admission_binding(body: dict, ctx: dict, state: dict) -> dict:
                             if ob["id"] in body["serves"]}}
 
 
+def reserved_admission_shape(body: dict, ctx: dict, state: dict) -> dict:
+    """Fields shared by the map's admission preview and the persisted reservation."""
+    binding = packet_binding(body)
+    return {"serves": binding["serves"], "role": binding["role"],
+            "boundary": binding["boundary"], "state": "reserved",
+            "disposition": None, "changed_paths": None,
+            "candidate": ctx.get("candidate"), "report": None,
+            "binding": admission_binding(body, ctx, state)}
+
+
 def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying: dict | None = None) -> dict:
     """The map write that accompanies an admission row: served obligations become active."""
     binding = admission_refusal(state, body, ctx, admission_id=admission_id)
@@ -1315,11 +1325,7 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
     value = {"obligations": obligations, "proposals": base.get("proposals", state.get("proposals", []))}
     if "seq" in base:
         value["seq"] = base["seq"]
-    admissions = {**_admissions(ctx), admission_id: {"serves": binding["serves"], "role": binding["role"],
-                                                      "boundary": binding["boundary"], "state": "reserved",
-                                                      "disposition": None, "changed_paths": None,
-                                                      "candidate": ctx.get("candidate"), "report": None,
-                                                      "binding": admission_binding(body, ctx, state)}}
+    admissions = {**_admissions(ctx), admission_id: reserved_admission_shape(body, ctx, state)}
     outstanding = list(dict.fromkeys([*_outstanding(ctx), admission_id]))
     return accept_write(state, value, {**ctx, "admissions": admissions, "outstanding": outstanding})
 
