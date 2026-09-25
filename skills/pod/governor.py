@@ -476,36 +476,9 @@ def _warn(warnings: list[dict], code: str, detail: str) -> None:
     warnings.append({"code": code, "detail": detail})
 
 
-def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
-              managed: bool = False, native_projection: dict | None = None) -> dict:
-    """Apply the decision order and return reasons, warnings, reuse and bindings."""
-    reasons: list[dict] = []
-    warnings: list[dict] = []
+def _check_authority(action: dict, binding: dict | None, deploys: bool, releases: bool,
+                     reasons: list[dict]) -> None:
     kind = action["kind"]
-    unit = journal["units"].get(action["unit"])
-    binding = unit.get("candidate") if unit else None
-    if managed and (unit is None or (kind != "cancel_validation"
-                                     and (binding is None or unit.get("branch") is None))):
-        _reason(reasons, "correctness", "unit_unbound",
-                "managed execution needs the unit's prepared candidate and its remote, branch and base")
-    checkpoint = _checkpoint(state)
-    if any(row.get("route_decision", {}).get("route_mismatch")
-           for row in state.get("admissions", {}).values()):
-        _reason(reasons, "correctness", "route_mismatch", "a bound worker used a different route")
-    elif any(row.get("route_decision", {}).get("effective_unknown")
-             for row in state.get("admissions", {}).values() if row.get("state") in ("bound", "closed")):
-        _reason(reasons, "correctness", "effective_unknown", "worker launch readback lacks effective values")
-    effects, source = _effects(action, governor_policy)
-    validates = kind in VALIDATION_KINDS or bool(effects and any(e.startswith("workflow:") for e in effects))
-    deploys = kind == "deploy" or bool(effects and any(e.startswith("deploy:") for e in effects))
-    releases = kind == "release" or bool(effects and any(e.startswith("release:") for e in effects))
-    purpose = _purpose(kind, validates=validates, deploys=deploys, releases=releases)
-    if action.get("purpose") not in (None, purpose):
-        raise PodError("invalid_action", f"This action's triggers make its purpose {purpose}")
-    names_current = binding is not None and action["candidate"] in (binding["id"], binding["commit"])
-    candidate_id = binding["id"] if names_current else None
-    candidate_ids = {action["candidate"]} | ({binding["id"], binding["commit"]} if names_current else set())
-
     # 1. Authority and project requirements.
     scopes = set()
     if kind in AUTHORIZED_KINDS:
@@ -522,6 +495,12 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
             _reason(reasons, "authorization", "authorization_missing",
                     f"{scope} needs an owner authorization record naming this candidate, tree and scope")
 
+
+
+def _check_binding(action: dict, unit: dict | None, binding: dict | None, checkpoint: dict,
+                   effects: list[str] | None, validates: bool, purpose: str, kind: str,
+                   journal: dict, candidate_id: str | None, reasons: list[dict],
+                   warnings: list[dict]) -> tuple[bool, str | None, list[dict]]:
     # 2. Bind the request to the current candidate and its context.
     if action["unit"] != DEFAULT_UNIT and unit is None:
         _reason(reasons, "correctness", "unit_unknown", f"no delivery unit named {action['unit']} is prepared")
@@ -557,24 +536,13 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
             _reason(reasons, "correctness", "candidate_unpublished",
                     f"{key} does not carry the candidate commit according to recorded pushes")
 
-    logical_key = _logical_key(action, candidate_id)
-    same = [row for row in journal["actions"] if row["logical_key"] == logical_key and row["decision"] == "ALLOW"]
-    latest = same[-1] if same else None
+    return superseded, current, starting
+
+
+def _check_equivalent(action: dict, latest: dict | None, starting: list[dict],
+                      candidate_id: str | None, kind: str, purpose: str, superseded: bool,
+                      binding: dict | None, reasons: list[dict], warnings: list[dict]) -> dict | None:
     reuse = None
-
-    def verdict(phase: str, stale_pending: list[str]) -> dict:
-        return {"reasons": reasons, "warnings": warnings, "reuse": reuse, "phase": phase,
-                "logical_key": logical_key, "candidate_id": candidate_id, "candidate_ids": candidate_ids,
-                "commit": binding["commit"] if names_current else None,
-                "effects": effects, "effect_source": source, "purpose": purpose,
-                "cancel_safe": purpose in ("validation", "diagnostic") and not deploys and not releases,
-                "attempt": (latest["attempt"] + 1) if latest is not None else 1,
-                "unit": unit, "binding": binding, "stale_pending": stale_pending}
-
-    if superseded and kind != "remote_diagnostic":
-        # Nothing after the binding step is about this request; it names the wrong candidate.
-        return verdict(_phase(state, journal["actions"], unit, current, native_projection), [])
-
     # 3. An equivalent action already running, or valid evidence already recorded.
     if latest is None and kind in VALIDATION_KINDS and candidate_id is not None:
         # A push or pull-request update that triggers this workflow journals a derived
@@ -605,6 +573,13 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
             _reason(reasons, "correctness", "effect_unresolved",
                     f"attempt {latest['attempt']} of this action has no known outcome")
 
+    return reuse
+
+
+def _check_unresolved(action: dict, journal: dict, logical_key: str,
+                      candidate_id: str | None, state: dict, unit: dict | None, current: str | None,
+                      native_projection: dict | None, validates: bool, purpose: str, kind: str,
+                      reasons: list[dict], warnings: list[dict]) -> tuple[list[str], str]:
     # 4. Supersedence and unresolved prior effects in this unit.
     for row in journal["actions"]:
         if (row["action"]["unit"] == action["unit"] and row["decision"] == "ALLOW"
@@ -631,6 +606,12 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
                     "objective assignments are still outstanding" if phase == "working"
                     else "corrections are still unsettled")
 
+    return stale_pending, phase
+
+
+def _check_readiness(checkpoint: dict, unit: dict | None, candidate_id: str | None,
+                     binding: dict | None, purpose: str, governor_policy: dict,
+                     reasons: list[dict], warnings: list[dict]) -> None:
     # 5. Readiness, or the diagnostic exception.
     if purpose == "validation" or purpose == "release":
         configured = list(governor_policy.get("preflight", []))
@@ -657,6 +638,11 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         else:
             _warn(warnings, "verification_gaps", f"{len(gaps)} verification gap(s) remain in the checkpoint")
 
+
+
+def _check_failure(latest: dict | None, reuse: dict | None, superseded: bool,
+                   state: dict, kind: str, governor_policy: dict, same: list[dict],
+                   reasons: list[dict], warnings: list[dict]) -> None:
     # 6. Repeated failure.
     if latest is not None and latest["outcome"] == "FAILED" and reuse is None and not superseded:
         classification = latest.get("classification")
@@ -689,6 +675,74 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         pass
     elif kind == "remote_diagnostic" and latest is None:
         _warn(warnings, "early_diagnostic", "supplies information unavailable locally")
+
+
+
+def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
+              managed: bool = False, native_projection: dict | None = None) -> dict:
+    """Apply the decision order and return reasons, warnings, reuse and bindings."""
+    reasons: list[dict] = []
+    warnings: list[dict] = []
+    kind = action["kind"]
+    unit = journal["units"].get(action["unit"])
+    binding = unit.get("candidate") if unit else None
+    if managed and (unit is None or (kind != "cancel_validation"
+                                     and (binding is None or unit.get("branch") is None))):
+        _reason(reasons, "correctness", "unit_unbound",
+                "managed execution needs the unit's prepared candidate and its remote, branch and base")
+    checkpoint = _checkpoint(state)
+    if any(row.get("route_decision", {}).get("route_mismatch")
+           for row in state.get("admissions", {}).values()):
+        _reason(reasons, "correctness", "route_mismatch", "a bound worker used a different route")
+    elif any(row.get("route_decision", {}).get("effective_unknown")
+             for row in state.get("admissions", {}).values() if row.get("state") in ("bound", "closed")):
+        _reason(reasons, "correctness", "effective_unknown", "worker launch readback lacks effective values")
+    effects, source = _effects(action, governor_policy)
+    validates = kind in VALIDATION_KINDS or bool(effects and any(e.startswith("workflow:") for e in effects))
+    deploys = kind == "deploy" or bool(effects and any(e.startswith("deploy:") for e in effects))
+    releases = kind == "release" or bool(effects and any(e.startswith("release:") for e in effects))
+    purpose = _purpose(kind, validates=validates, deploys=deploys, releases=releases)
+    if action.get("purpose") not in (None, purpose):
+        raise PodError("invalid_action", f"This action's triggers make its purpose {purpose}")
+    names_current = binding is not None and action["candidate"] in (binding["id"], binding["commit"])
+    candidate_id = binding["id"] if names_current else None
+    candidate_ids = {action["candidate"]} | ({binding["id"], binding["commit"]} if names_current else set())
+
+    _check_authority(action, binding, deploys, releases, reasons)
+
+    superseded, current, starting = _check_binding(action, unit, binding, checkpoint, effects,
+                                                    validates, purpose, kind, journal, candidate_id,
+                                                    reasons, warnings)
+
+    logical_key = _logical_key(action, candidate_id)
+    same = [row for row in journal["actions"] if row["logical_key"] == logical_key and row["decision"] == "ALLOW"]
+    latest = same[-1] if same else None
+    reuse = None
+
+    def verdict(phase: str, stale_pending: list[str]) -> dict:
+        return {"reasons": reasons, "warnings": warnings, "reuse": reuse, "phase": phase,
+                "logical_key": logical_key, "candidate_id": candidate_id, "candidate_ids": candidate_ids,
+                "commit": binding["commit"] if names_current else None,
+                "effects": effects, "effect_source": source, "purpose": purpose,
+                "cancel_safe": purpose in ("validation", "diagnostic") and not deploys and not releases,
+                "attempt": (latest["attempt"] + 1) if latest is not None else 1,
+                "unit": unit, "binding": binding, "stale_pending": stale_pending}
+
+    if superseded and kind != "remote_diagnostic":
+        # Nothing after the binding step is about this request; it names the wrong candidate.
+        return verdict(_phase(state, journal["actions"], unit, current, native_projection), [])
+
+    reuse = _check_equivalent(action, latest, starting, candidate_id, kind, purpose,
+                              superseded, binding, reasons, warnings)
+
+    stale_pending, phase = _check_unresolved(action, journal, logical_key, candidate_id, state,
+                                               unit, current, native_projection, validates, purpose,
+                                               kind, reasons, warnings)
+
+    _check_readiness(checkpoint, unit, candidate_id, binding, purpose, governor_policy,
+                     reasons, warnings)
+
+    _check_failure(latest, reuse, superseded, state, kind, governor_policy, same, reasons, warnings)
 
     return verdict(phase, stale_pending)
 
