@@ -491,7 +491,18 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_no_uuid_recovery_holds_zero_or_several_exact_workers",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_no_uuid_recovery_holds_zero_or_several_exact_workers",
+        "tests.test_orca_adapter.OrcaAdapterTests.test_uncertain_outcomes_preserve_raw_provenance_and_available_request",
+        "tests.test_operations.AdmissionTests.test_unknown_refusal_retains_provenance_through_exact_recovery",
+        "tests.test_operations.AdmissionTests.test_unknown_refusal_without_uuid_never_becomes_absence_proof",
+        "tests.test_operations.AdmissionTests.test_corrupt_or_missing_start_evidence_blocks_native_recovery",
+        "tests.test_operations.AdmissionTests.test_pending_timeout_keeps_original_uuid_and_both_native_observations",
+        "tests.test_operations.AdmissionTests.test_observation_limit_blocks_before_another_native_effect",
+        "tests.test_operations.AdmissionTests.test_large_error_keeps_uuid_with_compact_diagnostic_and_exact_evidence",
+        "tests.test_operations.AdmissionTests.test_native_contact_loss_cannot_prevent_recording_returned_start_facts",
+        "tests.test_operations.AdmissionTests.test_archive_write_failure_keeps_uuid_and_reports_missing_evidence"
+      ],
       "status": "NOT_RUN"
     },
     {

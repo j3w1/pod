@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 from pathlib import Path
+import re
 from typing import Protocol
 from uuid import UUID
 
 from .errors import PodError
-from .ledger import (admission_identity, binding_valid, read, reserve,
-                     update_admission, _native_assignment_settled)
-from .orca import (PREFLIGHT_REFUSALS, contract, current_run, mutate_command, read_command,
+from .ledger import (admission_identity, binding_valid, objective_root, read, reserve,
+                     update_admission, _lock, _path, _read, _write, _native_assignment_settled)
+from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, contract, current_run, mutate_command, read_command,
                    worker_rows, worker_show, worktree_identity, worktree_selector)
-from .util import bounded_text
+from .util import atomic_json, bounded_json, bounded_text, digest
 
 STARTED_STATES = ("ready", "running", "succeeded", "failed", "stopped")
+MAX_START_OBSERVATIONS = 16
+START_OBSERVATION_LIMIT = 3 * MAX_OUTPUT
 
 
 def _check_objective_source(project: Path, binding: dict | None, *, issue_port=None) -> None:
@@ -220,7 +224,8 @@ class OrcaPort:
             argv += ["--retry-request", retry_request]
         receipt = mutate_command(argv + ["--json"], accept_exit=(0, 1))
         return {"runtime": receipt["runtime"], "exit": receipt["exit"],
-                "request_uuid": receipt.get("request_uuid"), **receipt["result"]}
+                "request_uuid": receipt.get("request_uuid"), **receipt["result"],
+                "native_observation": receipt.get("native_observation")}
 
     def request_show(self, request_uuid: str) -> dict:
         _valid_request_uuid(request_uuid)
@@ -390,6 +395,92 @@ def _hold(project: Path, objective: str, *, owner: str, admission_id: str,
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
 
 
+def _start_observations(project: Path, objective: str, admission: dict) -> list[str]:
+    """Validate immutable native evidence before recovery or another same-request call."""
+    refs = admission.get("recovery", {}).get("start_observations", [])
+    try:
+        if not isinstance(refs, list) or len(refs) > MAX_START_OBSERVATIONS:
+            raise ValueError("invalid references")
+        for ref in refs:
+            if not isinstance(ref, str) or not re.fullmatch(r"[a-f0-9]{64}", ref):
+                raise ValueError("invalid reference")
+            value = bounded_json(objective_root(project, objective) / "native-start" / (ref + ".json"),
+                                 limit=START_OBSERVATION_LIMIT)
+            if digest(value) != ref or value.get("admission_id") != admission["admission_id"]:
+                raise ValueError("changed evidence")
+    except (OSError, ValueError, PodError) as exc:
+        raise PodError("native_evidence_unavailable", "Native start evidence is missing or corrupt") from exc
+    return refs
+
+
+def _observe_start(project: Path, objective: str, *, owner: str, admission_id: str,
+                   observation: dict, retry_request: str | None, reference: dict) -> dict:
+    # The reservation already authorized this call. Recording its returned facts must
+    # survive native contact loss. This cannot change state, routes or effect authority;
+    # classification and every subsequent native call still require current authority.
+    journal = _path(project, objective)
+    with _lock(journal):
+        state = _read(journal)
+        row = state["admissions"].get(admission_id)
+        if state["owner"] != owner or row is None or row["owner"] != owner:
+            raise PodError("unknown_admission", "No owned reservation for this native observation")
+        refs = _start_observations(project, objective, row)
+        value = {"admission_id": admission_id, "run": row["run_id"], "task": row["task_id"],
+                 "runtime": row["runtime"], "retry_request": retry_request, "observation": observation}
+        ref = digest(value)
+        if ref in refs:
+            return row
+        if len(refs) >= MAX_START_OBSERVATIONS:
+            raise PodError("native_evidence_full", "Native start evidence limit reached")
+        path = objective_root(project, objective) / "native-start" / (ref + ".json")
+        row["recovery"] = {**row.get("recovery", {}), "start_observations": [*refs, ref]}
+        if reference.get("runtime") == row["runtime"]:
+            request, valid = _refusal_request_reference(reference)
+            if (not valid or reference.get("_request_conflict") or _known_request_conflict(row)
+                    or (row["request_uuid"] is not None and request not in (None, row["request_uuid"]))):
+                row["recovery"]["request_conflict"] = "unresolved"
+            elif request is not None:
+                row["request_uuid"] = request
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            if path.exists() or path.is_symlink():
+                if bounded_json(path, limit=START_OBSERVATION_LIMIT) != value:
+                    raise PodError("native_evidence_unavailable", "Native start evidence changed")
+            else:
+                atomic_json(path, value, limit=START_OBSERVATION_LIMIT)
+        finally:
+            # Even if the separate archive cannot be written, keep the observed UUID
+            # and missing-evidence reference whenever the compact journal remains writable.
+            _write(journal, state)
+        return row
+
+
+def _start_observed(project: Path, objective: str, *, admission_id: str,
+                    port: NativePort, **kwargs) -> dict:
+    admission = read(project, objective)["admissions"][admission_id]
+    if len(_start_observations(project, objective, admission)) >= MAX_START_OBSERVATIONS:
+        raise PodError("native_evidence_full", "Native start evidence limit reached before execution")
+    owner, retry = kwargs["owner"], kwargs.get("retry_request")
+    try:
+        receipt = port.start_worker(**kwargs)
+    except Exception as exc:
+        observation = getattr(exc, "native_observation", {"transport": type(exc).__name__,
+                                                         "response": "unavailable"})
+        reference = getattr(exc, "native_reference", {})
+        recorded = _observe_start(project, objective, owner=owner, admission_id=admission_id,
+                                  observation=observation, retry_request=retry, reference=reference)
+        _hold(project, objective, owner=owner, admission_id=admission_id,
+              request_uuid=recorded["request_uuid"],
+              code=exc.code if isinstance(exc, PodError) else type(exc).__name__,
+              detail=str(exc), request_conflict=_known_request_conflict(recorded))
+        raise
+    observation = receipt.pop("native_observation", None)
+    _observe_start(project, objective, owner=owner, admission_id=admission_id,
+                   observation=observation if observation is not None else {"receipt": receipt},
+                   retry_request=retry, reference=receipt)
+    return receipt
+
+
 def _request_conflict_result(project: Path, objective: str, *, owner: str,
                              admission_id: str, receipt: dict,
                              request_uuid: str | None) -> dict | None:
@@ -515,6 +606,10 @@ def _refusal_result(project: Path, objective: str, *, owner: str,
     error = receipt.get("error") if isinstance(receipt, dict) else None
     if not isinstance(error, dict):
         return None
+    if receipt.get("runtime") != admission["runtime"]:
+        return _hold(project, objective, owner=owner, admission_id=admission_id,
+                     request_uuid=request_uuid, code="native_refusal_unverified",
+                     detail="Native refusal runtime differs from admission", request_conflict=True)
     available_request = request_uuid
     if available_request is None:
         observed_request, request_valid = _refusal_request_reference(receipt)
@@ -524,17 +619,25 @@ def _refusal_result(project: Path, objective: str, *, owner: str,
         # request, Dispatch and worker is the only path out of this hold.
         return _hold(project, objective, owner=owner, admission_id=admission_id,
                      request_uuid=available_request, code="native_runtime_error",
-                     detail=error)
+                     detail=_error_summary(error))
     classification = _preflight_refusal_classification(
         receipt, admission, request_uuid=request_uuid)
     if classification is None:
-        return None
+        return _hold(project, objective, owner=owner, admission_id=admission_id,
+                     request_uuid=available_request, code="native_effect_uncertain", detail=_error_summary(error))
     if classification == "authoritative":
         return _defer_refusal(project, objective, owner=owner, admission_id=admission_id,
                               receipt=receipt, request_uuid=available_request)
     return _hold(project, objective, owner=owner, admission_id=admission_id,
                  request_uuid=available_request, code="native_refusal_unverified",
                  detail=f"{error.get('code')} did not prove an admission-bound no-start result")
+
+
+def _error_summary(error: dict) -> dict:
+    """Small current diagnostic; complete native bytes belong to immutable evidence."""
+    code, message = error.get("code"), error.get("message")
+    return {"code": code if isinstance(code, str) and len(code) <= 256 else None,
+            "message": message[:2048] if isinstance(message, str) else None}
 
 
 def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -551,7 +654,7 @@ def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: s
         row["state"] = "deferred"
         row["request_uuid"] = request_uuid
         row["native_binding"] = None
-        row["error"] = {"code": error.get("code"), "detail": error}
+        row["error"] = {"code": error.get("code"), "detail": _error_summary(error)}
         row["recovery"] = {**recovery,
                            "preflight_refusal": "authoritative",
                            "native_start_state": "refused",
@@ -626,6 +729,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         raise PodError("unknown_admission", "No owned admission identity")
     if worktree != admission["worktree"]:
         raise PodError("admission_conflict", "Recovery changed original worktree")
+    _start_observations(project, objective, admission)
     if admission["state"] in ("bound", "closed", "deferred"):
         action = "defer" if admission["state"] == "deferred" else "reuse"
         return {"status": admission["state"], "admission": admission, "action": action}
@@ -693,7 +797,8 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
             terminal = previous["native_binding"]["terminalHandle"] if previous else None
             if not isinstance(terminal, str) or not terminal:
                 raise PodError("reuse_unavailable", "Pending terminal reuse lost its binding")
-        receipt = native_port.start_worker(run=admission["run_id"], task=admission["task_id"],
+        receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
+                                           run=admission["run_id"], task=admission["task_id"],
                                            owner=owner, route=admission["request"], worktree=worktree,
                                            retry_request=request_uuid, terminal=terminal)
         row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
@@ -780,7 +885,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         prior = read(project, objective)["admissions"][reuse_of]
         terminal = prior["native_binding"]["terminalHandle"]
     try:
-        receipt = native_port.start_worker(run=run, task=task, owner=owner, route=proposed,
+        receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
+                                           run=run, task=task, owner=owner, route=proposed,
                                            worktree=worktree, terminal=terminal)
         row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
                                        receipt=receipt, request_uuid=None)
