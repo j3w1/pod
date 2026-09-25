@@ -82,10 +82,11 @@ def _op_brief(request: dict) -> dict:
     base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
     if "project" in request:
         from .ledger import governance_observation
+        from .governance import user_direct_revision
         authority = request.get("map", {}).get("revision_authority") if isinstance(request.get("map"), dict) else None
         observed = governance_observation(
             Path(request["project"]), base_ref,
-            user_direct=isinstance(authority, dict) and authority.get("provenance") == "user_direct")
+            user_direct=user_direct_revision(authority))
     else:
         observed = {"status": "no_repository"} if base_ref is None else {"status": "unavailable"}
     brief["map"] = brief_map(request["criteria"], request.get("map"),

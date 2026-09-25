@@ -323,7 +323,7 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
 # Governance policy and currency live in the dedicated module.
 from .governance import (MAX_GOVERNANCE_HISTORY, _governance_history, _governance_target,
                          _independent_governance, _resolve_commit, _retain_governance_history,
-                         governance_observation, require_governance_current)
+                         governance_observation, require_governance_current, user_direct_revision)
 
 _OBJECT = gitio.OBJECT_ID
 _git = gitio.read
@@ -592,8 +592,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
             observed = governance_observation(
                 project, base_ref,
-                user_direct=isinstance(proposed.get("revision_authority"), dict)
-                and proposed["revision_authority"].get("provenance") == "user_direct")
+                user_direct=user_direct_revision(proposed.get("revision_authority")))
         else:
             base_ref = prior_map["governance"]["base_ref"]
             declared = proposed.get("governance")
@@ -609,8 +608,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                     change = False
             if change and refresh:
                 observed = governance_observation(
-                    project, declared["base_ref"], user_direct=isinstance(proposed.get("revision_authority"), dict)
-                    and proposed["revision_authority"].get("provenance") == "user_direct")
+                        project, declared["base_ref"],
+                        user_direct=user_direct_revision(proposed.get("revision_authority")))
             else:
                 at = None if refresh else prior_map["governance"]["base"]
                 observed = (governance_observation(project, base_ref, at=at, bound_ref=base_ref,
@@ -619,8 +618,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                         else governance_observation(project, None))
         history = _governance_history(prior_map)
         snapshot_authorized = (refresh
-            and isinstance(proposed.get("revision_authority"), dict)
-            and proposed["revision_authority"].get("provenance") == "user_direct"
+            and user_direct_revision(proposed.get("revision_authority"))
             and isinstance(declared, dict)
             and declared.get("base_ref") == observed.get("target_ref")
             and declared.get("base") == observed.get("commit"))

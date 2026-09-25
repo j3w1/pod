@@ -183,15 +183,12 @@ def _triggered_runs(port: GitHubPort, row: dict, commit: str) -> dict:
 
 def _record_execution(project: Path, objective: str, *, owner: str, record_id: str, outcome: str,
                       provider: dict | None, detail: str | None, now: datetime) -> dict:
-    from .governor import _assert_authority, _count, _find_row, _read_journal, _record_path, _settle, _write_journal
+    from .governor import _owned_state, _count, _find_row, _read_journal, _record_path, _settle, _write_journal
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
     moment = now.isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if outcome == "pending":
@@ -292,15 +289,12 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
 def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port: GitHubPort | None = None,
               now: datetime | None = None) -> dict:
     """Settle an UNKNOWN or pending row from provider readback only; never resubmit."""
-    from .governor import DISPATCH_KINDS, PUBLICATION_KINDS, _assert_authority, _find_row, _read_journal, _record_path
+    from .governor import DISPATCH_KINDS, PUBLICATION_KINDS, _owned_state, _find_row, _read_journal, _record_path
     bounded_text(owner, name="owner")
     bounded_text(record_id, name="record_id", limit=128)
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
-    state = _read(context_path)
-    if state["owner"] not in (None, owner):
-        raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-    _assert_authority(project, objective, owner, state)
+    state = _owned_state(project, objective, owner, context_path)
     journal = _read_journal(record_path)
     row = _find_row(journal, record_id)
     if row["outcome"] not in ("UNKNOWN", "pending"):

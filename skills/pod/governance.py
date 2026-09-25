@@ -25,6 +25,10 @@ _BASE_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _OBJECT = gitio.OBJECT_ID
 
 
+def user_direct_revision(value: object) -> bool:
+    return isinstance(value, dict) and value.get("provenance") == "user_direct"
+
+
 def _resolve_commit(root: Path, ref: str) -> str | None:
     if not isinstance(ref, str) or not _BASE_REF.fullmatch(ref) or ".." in ref:
         return None
@@ -290,4 +294,3 @@ def require_governance_current(project: Path, map_state: dict | None) -> None:
         raise refuse("governance_changed", "governance_changed",
                      "the target branch moved since governance was bound", bound=governance["base"][:12],
                      current=current[:12])
-

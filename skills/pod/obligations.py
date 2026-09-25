@@ -22,6 +22,7 @@ import re
 from typing import Any, Callable
 
 from .errors import PodError
+from .gitio import OBJECT_ID
 from .util import digest, exact
 
 KINDS = ("criterion", "delivery", "assurance", "correction", "steer", "subgoal")
@@ -51,7 +52,7 @@ CHURN_THRESHOLD = 3
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _SURFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 _LINES = re.compile(r"([1-9][0-9]{0,6})(?:-([1-9][0-9]{0,6}))?\Z")
-_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_COMMIT = OBJECT_ID
 
 NEXT_ACTIONS = {
     "unbound_assignment": "admit only a packet that serves unsatisfied obligations of the current map revision",
@@ -518,51 +519,10 @@ def _write_proposals(prior_map: dict | None, value: dict) -> dict:
     return proposals
 
 
-def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
-    """Validate one proposed map write against the prior accepted map and current facts.
-
-    Returns the map fields to persist. Every refusal names its code, detail, referent and
-    next safe action. `prior` is the previously accepted map (or None); `value` holds the
-    caller's proposed fields from MAP_INPUT. Review findings are Pod's record: only the
-    report boundary's triage (`triaged`) may add them.
-    """
-    prior_map = prior if isinstance(prior, dict) and prior.get("obligations") is not None else None
-    # Dispositions change admission rows, so the ledger applies them before this write.
-    unknown = set(value) - (MAP_INPUT - {"dispositions"})
-    if unknown:
-        raise refuse("obligation_invalid", "malformed", "unsupported map fields: " + ", ".join(sorted(unknown)))
-    closed = bool(prior_map and prior_map.get("closure"))
-    authority = _authority(value.get("revision_authority"))
-    user = authority is not None
-    reopen = value.get("reopen") is True
-    if closed and not (user and reopen):
-        raise refuse("objective_closed", "objective_closed", "the objective is closed",
-                     closure_revision=prior_map["closure"]["revision"])
-    if prior_map is not None and "obligations" not in value:
-        # A checkpoint that leaves the map unchanged still revalidates it against current facts.
-        value = {**value, "obligations": deepcopy(prior_map["obligations"])}
-    if value.get("obligations") is None:
-        if prior_map is not None:
-            raise refuse("obligation_unaccounted", "missing_state", "an obligation map cannot be removed")
-        if set(value) - {"seq"}:
-            raise refuse("obligation_invalid", "malformed", "map fields need an obligation list")
-        return {}
-    if "reopen" in value and (value["reopen"] is not True or not closed):
-        raise refuse("obligation_invalid", "malformed", "reopen applies only to a closed objective")
-    seq = prior_map["seq"] + 1 if prior_map else 1
-    if "seq" in value and value["seq"] != seq:
-        raise refuse("map_stale", "map_stale", "the proposed map is not the next write", expected=seq)
-    refresh = value.get("governance_refresh") is True
-    if "governance_refresh" in value and not refresh:
-        raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present")
-    if refresh and prior_map is None:
-        raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed")
-    revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
-
-    observed, governance, sources, gov, rebind = _write_governance(prior_map, value, ctx, user, refresh)
-
-    proposals = _write_proposals(prior_map, value)
-
+def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
+                       user: bool, triaged: frozenset, refresh: bool,
+                       observed: dict | None, sources: list[dict], gov: str,
+                       proposals: dict) -> tuple[list, dict, dict, list]:
     # Obligations: structure, stable identity, authority.
     raw_obligations = value["obligations"]
     if not isinstance(raw_obligations, list) or len(raw_obligations) > MAX_OBLIGATIONS:
@@ -652,13 +612,11 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
                                  "an overlapping assurance on the same candidate names the risk it adds",
                                  obligation=ob["id"], overlaps=other["id"])
 
-    # Coverage: every original criterion has an objective obligation (R39).
-    covered = _covered(rows)
-    for criterion in criteria:
-        if criterion not in covered:
-            raise refuse("obligation_unaccounted", "criterion_uncovered",
-                         "every original criterion needs an objective obligation", criterion=criterion)
+    return raw_obligations, prior_rows, rows, criteria
 
+
+def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: frozenset,
+                    ctx: dict, gov: str, user: bool, authority: dict | None, seq: int) -> None:
     # Withdrawals and evidence stamping.
     for ob in rows.values():
         earlier = prior_rows.get(ob["id"])
@@ -695,6 +653,65 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     if missing_rebind:
         raise refuse("obligation_invalid", "malformed", "rebind names unknown obligations",
                      obligation=missing_rebind[0])
+
+
+
+def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
+    """Validate one proposed map write against the prior accepted map and current facts.
+
+    Returns the map fields to persist. Every refusal names its code, detail, referent and
+    next safe action. `prior` is the previously accepted map (or None); `value` holds the
+    caller's proposed fields from MAP_INPUT. Review findings are Pod's record: only the
+    report boundary's triage (`triaged`) may add them.
+    """
+    prior_map = prior if isinstance(prior, dict) and prior.get("obligations") is not None else None
+    # Dispositions change admission rows, so the ledger applies them before this write.
+    unknown = set(value) - (MAP_INPUT - {"dispositions"})
+    if unknown:
+        raise refuse("obligation_invalid", "malformed", "unsupported map fields: " + ", ".join(sorted(unknown)))
+    closed = bool(prior_map and prior_map.get("closure"))
+    authority = _authority(value.get("revision_authority"))
+    user = authority is not None
+    reopen = value.get("reopen") is True
+    if closed and not (user and reopen):
+        raise refuse("objective_closed", "objective_closed", "the objective is closed",
+                     closure_revision=prior_map["closure"]["revision"])
+    if prior_map is not None and "obligations" not in value:
+        # A checkpoint that leaves the map unchanged still revalidates it against current facts.
+        value = {**value, "obligations": deepcopy(prior_map["obligations"])}
+    if value.get("obligations") is None:
+        if prior_map is not None:
+            raise refuse("obligation_unaccounted", "missing_state", "an obligation map cannot be removed")
+        if set(value) - {"seq"}:
+            raise refuse("obligation_invalid", "malformed", "map fields need an obligation list")
+        return {}
+    if "reopen" in value and (value["reopen"] is not True or not closed):
+        raise refuse("obligation_invalid", "malformed", "reopen applies only to a closed objective")
+    seq = prior_map["seq"] + 1 if prior_map else 1
+    if "seq" in value and value["seq"] != seq:
+        raise refuse("map_stale", "map_stale", "the proposed map is not the next write", expected=seq)
+    refresh = value.get("governance_refresh") is True
+    if "governance_refresh" in value and not refresh:
+        raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present")
+    if refresh and prior_map is None:
+        raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed")
+    revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
+
+    observed, governance, sources, gov, rebind = _write_governance(prior_map, value, ctx, user, refresh)
+
+    proposals = _write_proposals(prior_map, value)
+
+    raw_obligations, prior_rows, rows, criteria = _write_obligations(
+        prior_map, value, ctx, seq, user, triaged, refresh, observed, sources, gov, proposals)
+
+    # Coverage: every original criterion has an objective obligation (R39).
+    covered = _covered(rows)
+    for criterion in criteria:
+        if criterion not in covered:
+            raise refuse("obligation_unaccounted", "criterion_uncovered",
+                         "every original criterion needs an objective obligation", criterion=criterion)
+
+    _write_evidence(rows, prior_rows, rebind, triaged, ctx, gov, user, authority, seq)
 
     state = {"seq": seq, "revision": revision, "governance": governance, "governance_sources": sources,
              "obligations": [rows[key] for key in [row["id"] for row in raw_obligations]],
@@ -919,6 +936,117 @@ def _wait_record(ob: dict) -> dict:
     return record
 
 
+def _validate_wait(ob: dict, rows: dict[str, dict], ctx: dict, outstanding: set[str],
+                   admissions: dict, held: list[dict], pending: dict) -> str | None:
+    wait = _wait_record(ob)
+    cls, referent = wait["class"], wait["referent"]
+    name = ob["id"]
+    if cls in ("dependency", "contract_unsettled"):
+        target = rows.get(referent) if isinstance(referent, str) else None
+        if target is None or target is ob or cls == "contract_unsettled" and target["kind"] != "subgoal":
+            raise refuse("wait_invalid", "unknown_referent", f"{cls} names another obligation"
+                         + (" that is a subgoal" if cls == "contract_unsettled" else ""), obligation=name)
+        if target["state"] in TERMINAL:
+            raise refuse("wait_invalid", "resolved_referent", "the waited-on obligation is settled",
+                         obligation=name, referent=referent)
+        return referent
+    elif cls == "sequenced":
+        if not held:
+            raise refuse("wait_invalid", "sequenced_without_active",
+                         "sequenced waits on the coordinator-held active obligation", obligation=name)
+        if referent != held[0]["id"]:
+            raise refuse("wait_invalid", "unknown_referent", "sequenced names the coordinator-held obligation",
+                         obligation=name, expected=held[0]["id"])
+    elif cls == "ownership":
+        if isinstance(referent, str) and referent in admissions:
+            if referent not in outstanding:
+                raise refuse("wait_invalid", "resolved_referent", "the overlapping admission has settled",
+                             obligation=name, referent=referent)
+            other = _admission_boundary(admissions[referent])
+        elif isinstance(referent, str) and referent in rows:
+            if not (rows[referent]["state"] == "active" and rows[referent]["executor"] == "coordinator"):
+                raise refuse("wait_invalid", "resolved_referent", "the obligation is no longer coordinator-held",
+                             obligation=name, referent=referent)
+            other = rows[referent]["boundary"]
+        else:
+            raise refuse("wait_invalid", "unknown_referent",
+                         "ownership names an outstanding admission or the coordinator-held obligation",
+                         obligation=name)
+        if not overlaps(ob["boundary"], other):
+            raise refuse("wait_invalid", "ownership_without_overlap", "the declared boundaries do not overlap",
+                         obligation=name, referent=referent)
+    elif cls == "capacity":
+        ceiling = ctx.get("ceiling", 0)
+        if (not isinstance(referent, list) or len(referent) > 8
+                or any(not isinstance(item, str) for item in referent)):
+            raise refuse("wait_invalid", "unknown_referent", "capacity names the reservations holding the ceiling",
+                         obligation=name)
+        if len(outstanding) < ceiling:
+            raise refuse("wait_invalid", "capacity_below_ceiling",
+                         "a capacity wait is valid only at the ceiling", obligation=name,
+                         reserved=len(outstanding), ceiling=ceiling)
+        if set(referent) != outstanding:
+            raise refuse("wait_invalid", "unknown_referent", "capacity names exactly the outstanding reservations",
+                         obligation=name)
+    elif cls == "integration_pending":
+        if not isinstance(referent, str) or referent not in admissions:
+            raise refuse("wait_invalid", "unknown_referent", "integration_pending names a settled result",
+                         obligation=name)
+        if referent not in pending:
+            raise refuse("wait_invalid", "resolved_referent", "the result has a disposition or is not settled",
+                         obligation=name, referent=referent)
+        if not overlaps(ob["boundary"], _admission_boundary(admissions[referent])):
+            raise refuse("wait_invalid", "ownership_without_overlap", "the result does not overlap this boundary",
+                         obligation=name, referent=referent)
+    elif cls == "input_unavailable":
+        reader = ctx.get("source_state")
+        if not isinstance(referent, str) or not referent:
+            raise refuse("wait_invalid", "unknown_referent", "input_unavailable names a source binding path",
+                         obligation=name)
+        if reader is None or reader(referent) != "unavailable":
+            raise refuse("wait_invalid", "resolved_referent", "the source binding is readable now",
+                         obligation=name, referent=referent)
+    elif cls == "authority":
+        record = _exact(referent, {"kind", "scope", "candidate", "need"}, {"kind"}, "authority referent",
+                        code="wait_invalid")
+        if record["kind"] == "authorization":
+            if record.get("scope") not in AUTHORIZED_SCOPES or not isinstance(record.get("candidate"), str):
+                raise refuse("wait_invalid", "unknown_referent",
+                             "a missing authorization names its scope and candidate", obligation=name)
+            granted = ctx.get("authorization_granted")
+            if granted is not None and granted(record["scope"], record["candidate"]):
+                raise refuse("wait_invalid", "resolved_referent", "the authorization is recorded",
+                             obligation=name)
+        elif record["kind"] in ("native_authority", "permission"):
+            _text(record.get("need"), "need", code="wait_invalid", detail="unknown_referent")
+        else:
+            raise refuse("wait_invalid", "unknown_referent", "authority names an authorization or blocked authority",
+                         obligation=name)
+    elif cls == "user_hold":
+        constraints = [row for row in ctx.get("constraints", []) if row.get("id") == referent]
+        if not constraints or constraints[0].get("provenance") != "user_direct":
+            raise refuse("wait_invalid", "unknown_referent", "user_hold names a user_direct constraint",
+                         obligation=name)
+        if constraints[0].get("active", True) is False:
+            raise refuse("wait_invalid", "resolved_referent", "the user constraint is no longer in force",
+                         obligation=name, referent=referent)
+    return None
+
+
+def _check_wait_cycles(edges: dict[str, str]) -> None:
+    for start in edges:
+        seen = [start]
+        cursor = start
+        while cursor in edges:
+            cursor = edges[cursor]
+            if cursor in seen:
+                raise refuse("wait_invalid", "cycle", "dependency and contract waits are acyclic",
+                             obligations=",".join(seen))
+            seen.append(cursor)
+
+
+
+
 def _waits(state: dict, rows: dict[str, dict], ctx: dict) -> None:
     """R84: one controlling reason, valid for its class and current referent."""
     outstanding = set(_outstanding(ctx))
@@ -929,107 +1057,10 @@ def _waits(state: dict, rows: dict[str, dict], ctx: dict) -> None:
     for ob in rows.values():
         if ob["state"] != "waiting":
             continue
-        wait = _wait_record(ob)
-        cls, referent = wait["class"], wait["referent"]
-        name = ob["id"]
-        if cls in ("dependency", "contract_unsettled"):
-            target = rows.get(referent) if isinstance(referent, str) else None
-            if target is None or target is ob or cls == "contract_unsettled" and target["kind"] != "subgoal":
-                raise refuse("wait_invalid", "unknown_referent", f"{cls} names another obligation"
-                             + (" that is a subgoal" if cls == "contract_unsettled" else ""), obligation=name)
-            if target["state"] in TERMINAL:
-                raise refuse("wait_invalid", "resolved_referent", "the waited-on obligation is settled",
-                             obligation=name, referent=referent)
-            edges[name] = referent
-        elif cls == "sequenced":
-            if not held:
-                raise refuse("wait_invalid", "sequenced_without_active",
-                             "sequenced waits on the coordinator-held active obligation", obligation=name)
-            if referent != held[0]["id"]:
-                raise refuse("wait_invalid", "unknown_referent", "sequenced names the coordinator-held obligation",
-                             obligation=name, expected=held[0]["id"])
-        elif cls == "ownership":
-            if isinstance(referent, str) and referent in admissions:
-                if referent not in outstanding:
-                    raise refuse("wait_invalid", "resolved_referent", "the overlapping admission has settled",
-                                 obligation=name, referent=referent)
-                other = _admission_boundary(admissions[referent])
-            elif isinstance(referent, str) and referent in rows:
-                if not (rows[referent]["state"] == "active" and rows[referent]["executor"] == "coordinator"):
-                    raise refuse("wait_invalid", "resolved_referent", "the obligation is no longer coordinator-held",
-                                 obligation=name, referent=referent)
-                other = rows[referent]["boundary"]
-            else:
-                raise refuse("wait_invalid", "unknown_referent",
-                             "ownership names an outstanding admission or the coordinator-held obligation",
-                             obligation=name)
-            if not overlaps(ob["boundary"], other):
-                raise refuse("wait_invalid", "ownership_without_overlap", "the declared boundaries do not overlap",
-                             obligation=name, referent=referent)
-        elif cls == "capacity":
-            ceiling = ctx.get("ceiling", 0)
-            if (not isinstance(referent, list) or len(referent) > 8
-                    or any(not isinstance(item, str) for item in referent)):
-                raise refuse("wait_invalid", "unknown_referent", "capacity names the reservations holding the ceiling",
-                             obligation=name)
-            if len(outstanding) < ceiling:
-                raise refuse("wait_invalid", "capacity_below_ceiling",
-                             "a capacity wait is valid only at the ceiling", obligation=name,
-                             reserved=len(outstanding), ceiling=ceiling)
-            if set(referent) != outstanding:
-                raise refuse("wait_invalid", "unknown_referent", "capacity names exactly the outstanding reservations",
-                             obligation=name)
-        elif cls == "integration_pending":
-            if not isinstance(referent, str) or referent not in admissions:
-                raise refuse("wait_invalid", "unknown_referent", "integration_pending names a settled result",
-                             obligation=name)
-            if referent not in pending:
-                raise refuse("wait_invalid", "resolved_referent", "the result has a disposition or is not settled",
-                             obligation=name, referent=referent)
-            if not overlaps(ob["boundary"], _admission_boundary(admissions[referent])):
-                raise refuse("wait_invalid", "ownership_without_overlap", "the result does not overlap this boundary",
-                             obligation=name, referent=referent)
-        elif cls == "input_unavailable":
-            reader = ctx.get("source_state")
-            if not isinstance(referent, str) or not referent:
-                raise refuse("wait_invalid", "unknown_referent", "input_unavailable names a source binding path",
-                             obligation=name)
-            if reader is None or reader(referent) != "unavailable":
-                raise refuse("wait_invalid", "resolved_referent", "the source binding is readable now",
-                             obligation=name, referent=referent)
-        elif cls == "authority":
-            record = _exact(referent, {"kind", "scope", "candidate", "need"}, {"kind"}, "authority referent",
-                            code="wait_invalid")
-            if record["kind"] == "authorization":
-                if record.get("scope") not in AUTHORIZED_SCOPES or not isinstance(record.get("candidate"), str):
-                    raise refuse("wait_invalid", "unknown_referent",
-                                 "a missing authorization names its scope and candidate", obligation=name)
-                granted = ctx.get("authorization_granted")
-                if granted is not None and granted(record["scope"], record["candidate"]):
-                    raise refuse("wait_invalid", "resolved_referent", "the authorization is recorded",
-                                 obligation=name)
-            elif record["kind"] in ("native_authority", "permission"):
-                _text(record.get("need"), "need", code="wait_invalid", detail="unknown_referent")
-            else:
-                raise refuse("wait_invalid", "unknown_referent", "authority names an authorization or blocked authority",
-                             obligation=name)
-        elif cls == "user_hold":
-            constraints = [row for row in ctx.get("constraints", []) if row.get("id") == referent]
-            if not constraints or constraints[0].get("provenance") != "user_direct":
-                raise refuse("wait_invalid", "unknown_referent", "user_hold names a user_direct constraint",
-                             obligation=name)
-            if constraints[0].get("active", True) is False:
-                raise refuse("wait_invalid", "resolved_referent", "the user constraint is no longer in force",
-                             obligation=name, referent=referent)
-    for start in edges:
-        seen = [start]
-        cursor = start
-        while cursor in edges:
-            cursor = edges[cursor]
-            if cursor in seen:
-                raise refuse("wait_invalid", "cycle", "dependency and contract waits are acyclic",
-                             obligations=",".join(seen))
-            seen.append(cursor)
+        edge = _validate_wait(ob, rows, ctx, outstanding, admissions, held, pending)
+        if edge is not None:
+            edges[ob["id"]] = edge
+    _check_wait_cycles(edges)
 
 
 # --------------------------------------------------------------------------- properties

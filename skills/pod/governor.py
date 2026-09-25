@@ -418,6 +418,18 @@ def _assert_authority(project: Path, objective: str, owner: str, state: dict) ->
     require_authority(project, objective, owner=owner, state=state)
 
 
+def _owned_state(project: Path, objective: str, owner: str, context_path: Path,
+                 *, version: bool = False) -> dict:
+    """Read and join ownership inside the caller's existing lock when it holds one."""
+    state = _read(context_path)
+    if version:
+        _require_version(state)
+    if state["owner"] not in (None, owner):
+        raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+    _assert_authority(project, objective, owner, state)
+    return state
+
+
 def _checkpoint(state: dict) -> dict:
     value = state.get("checkpoint")
     return value if isinstance(value, dict) else {}
@@ -805,11 +817,7 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
     record_path = _record_path(project, objective)
     moment = now.isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         from .ledger import map_of, require_governance_current
         require_governance_current(project, map_of(state))
         journal = _read_journal(record_path)
@@ -999,10 +1007,7 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if row["decision"] != "ALLOW":
@@ -1042,11 +1047,7 @@ def classify_failure(project: Path, objective: str, *, owner: str, record_id: st
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if row["outcome"] != "FAILED":
@@ -1085,11 +1086,7 @@ def record_correction(project: Path, objective: str, *, owner: str, unit: str, c
         raise PodError("invalid_unit", "Delivery unit names are bounded identifiers")
     context_path = _path(project, objective)
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         result = _intervention_locked(project, objective, state, task=None, unit=unit,
                                       correction=correction, diagnosis=diagnosis)
         _write(context_path, state)
@@ -1245,11 +1242,7 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         journal = _read_journal(record_path)
         existing = journal["units"].get(unit)
         if existing is None:
@@ -1309,11 +1302,7 @@ def record_preflight(project: Path, objective: str, *, owner: str, unit: str, ca
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         journal = _read_journal(record_path)
         record = journal["units"].get(unit)
         binding = record.get("candidate") if record else None
