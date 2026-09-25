@@ -33,19 +33,19 @@ class OptionalCatalogPtyTests(unittest.TestCase):
                             ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
             catalog_path=copied/'catalog.json'
             document=json.loads(catalog_path.read_text())
-            del document['reference_benchmark']['models']['gpt-6-luna']
+            del document['benchmarks']['models']['gpt-6-luna']
             catalog_path.write_text(json.dumps(document))
             launcher=copied/'scripts/pod.py'
             with PtySession(home=home,cwd=work,launcher=launcher) as screen:
                 screen.wait_for('Details',timeout=4)
                 screen.send('/Luna\n')
-                screen.wait_for(lambda session: 'Details  · GPT-6 Luna' in session.text()
-                                and 'AA Unknown' in session.text(),timeout=2)
+                screen.wait_for(lambda session: 'Details  GPT-6 Luna' in session.text()
+                                and 'unknown' in session.text(),timeout=2)
                 screen.settle()
-                self.assertIn('AA Unknown',screen.text())
-                self.assertIn('—',screen.text())
+                self.assertIn('unknown',screen.text())
+                self.assertIn('BENCHMARK SOURCE',screen.text())
                 screen.send('\n')
-                screen.wait_for('Unknown: score —')
+                screen.wait_for('Details  GPT-6 Luna [expanded]')
             result=subprocess.run([sys.executable,'-I',str(launcher),'config','--json'],
                                   cwd=work,env=environment(home),capture_output=True,text=True,timeout=10)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)

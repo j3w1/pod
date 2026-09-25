@@ -1,26 +1,35 @@
-"""Pure, width-aware model TUI frames and a plain non-TTY summary."""
+"""Pure model-pool frames with labelled AA profiles and semantic spans."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 
-from .catalog import age, by_id, ranks, reference_entry, reference_rows
+from .catalog import age, by_id, format_latency, format_usd, ranks, record, records, reference_rows
 from .term import Capabilities, clean, clip, display_width, elide_middle, glyph, pad, safe_text, wrap
 from .tui_state import FILTERS, SORTS, State, visible_ids
 
-AA_CLARIFICATION = ("AA metrics show each model's selected reference benchmark profile and are "
-                    "informational only. Pod chooses effort/context independently for real work.")
 AA_URL = "https://artificialanalysis.ai/leaderboards/models"
-SESSION_LINE = "Runs through your connected Codex / Claude Code sessions."
+DISCLAIMER = ("AA $/task is AA benchmark cost, not your subscription cost, Pod-run invoice or quota use. "
+              "First response is not total task duration.")
+SHORT_DISCLAIMER = "AA $/task: benchmark, not bill/quota; first response is not total task time."
+
+
+@dataclass(frozen=True)
+class Span:
+    text: str
+    role: str = "body"
 
 
 @dataclass(frozen=True)
 class Line:
     text: str
-    role: str = "normal"
-    state: str | None = None
-    state_width: int = 0
+    role: str = "body"
+    spans: tuple[Span, ...] = ()
+
+    @property
+    def styled(self) -> tuple[Span, ...]:
+        return self.spans or (Span(self.text, self.role),)
 
 
 @dataclass(frozen=True)
@@ -34,303 +43,261 @@ class Frame:
         return "\n".join(line.text for line in self.lines)
 
 
+def _line(*parts: tuple[str, str]) -> Line:
+    spans = tuple(Span(text, role) for text, role in parts if text)
+    return Line("".join(span.text for span in spans), spans=spans)
+
+
 def _fit(value: object, width: int, caps: Capabilities) -> str:
     return clip(safe_text(value, caps), width, ellipsis=True, ascii_only=caps.ascii_only)
 
 
-def _rule(title: str, width: int, caps: Capabilities) -> Line:
-    name = _fit(title, width, caps)
-    leftover = max(0, width - display_width(name) - 1)
-    return Line(name + (" " + glyph(caps, "rule") * leftover if leftover else ""), "heading")
+def _wrapped(value: object, width: int, caps: Capabilities, role: str = "body") -> list[Line]:
+    return [Line(row, role) for row in wrap(safe_text(value, caps), width)]
+
+
+def _section(title: str, caps: Capabilities) -> Line:
+    return Line(safe_text(title, caps), "heading")
+
+
+def _age(state: State, now: datetime) -> str:
+    days = age(state.catalog, today=now.date())
+    return "unknown age" if days is None else "today" if days == 0 else "1 day old" if days == 1 else f"{days} days old"
 
 
 def _columns(width: int) -> list[tuple[str, int]]:
-    # Width includes the common one-cell focus marker at the start of each row.
-    fields = [("state", 11), ("model", 17), ("agent", 6), ("rank", 5),
-              ("score", 3), ("usd", 8), ("first", 9), ("runtime", 11)]
-    while 1 + sum(size for _, size in fields) + len(fields) - 1 > width:
-        for drop in ("runtime", "first", "usd", "rank"):
-            if any(name == drop for name, _ in fields):
-                fields = [(name, size) for name, size in fields if name != drop]
-                break
-        else:
-            break
-    if 1 + sum(size for _, size in fields) + len(fields) - 1 > width:
-        fields = [("state", 11), ("model", 12), ("agent", 6), ("score", 5)]
-    return fields
-
-
-def _cells(values: dict[str, str], fields: list[tuple[str, int]], caps: Capabilities) -> str:
-    numbers = {"rank", "score", "usd", "first"}
-    cells = []
-    for name, size in fields:
-        value = _fit(values[name], size, caps)
-        if name in numbers:
-            cells.append(" " * max(0, size - display_width(value)) + value)
-        else:
-            cells.append(pad(value, size, ascii_only=caps.ascii_only))
-    return " ".join(cells)
-
-
-def _table_line(state: State, model_id: str, caps: Capabilities,
-                fields: list[tuple[str, int]], width: int) -> Line:
-    model = by_id(state.catalog)[model_id]
-    metrics = reference_rows(state.catalog)[model_id]
-    saved = state.preferences["effective"].get(model_id)
-    label = saved.capitalize() if saved in ("preferred", "available", "disabled") else "Not set"
-    symbol = glyph(caps, saved) if saved in ("preferred", "available", "disabled") else "?"
-    rank = ranks(state.catalog)[model_id]
-    tied = rank is not None and sum(value == rank for value in ranks(state.catalog).values()) > 1
-    values = {"state": f"{symbol} {label}", "model": model["name"],
-              "agent": "Claude" if model["agent"] == "claude" else "Codex",
-              "rank": glyph(caps, "dash") if rank is None else f"{rank}{'=' if tied else ''}/6",
-              "score": _metric(metrics["intelligence"], caps=caps),
-              "usd": glyph(caps, "dash") if metrics["usd_per_task"] is None else f"${metrics['usd_per_task']:g}",
-              "first": glyph(caps, "dash") if metrics["first_chunk_s"] is None else f"{metrics['first_chunk_s']:g}s",
-              "runtime": state.runtime}
-    focused = state.focus_id == model_id
-    content = (glyph(caps, "focus") if focused else " ") + _cells(values, fields, caps)
-    return Line(_fit(content, width, caps), "focus" if focused else "normal", saved or "unknown", fields[0][1])
+    """Keep a complete profile label whenever AA numbers are visible."""
+    if width >= 108:
+        return [("state", 12), ("model", 17), ("use", 19), ("profile", 18),
+                ("index", 8), ("cost", 9), ("first", 18)]
+    if width >= 93:
+        return [("state", 12), ("model", 17), ("use", 10), ("profile", 18),
+                ("index", 8), ("cost", 8), ("first", 13)]
+    if width >= 77:
+        return [("state", 12), ("model", 17), ("use", 9), ("profile", 18),
+                ("index", 8), ("cost", 8)]
+    if width >= 59:
+        return [("state", 12), ("model", 17), ("profile", 18), ("index", 8)]
+    return [("state", 12), ("model", max(12, width - 14))]
 
 
 def _table_header(fields: list[tuple[str, int]], caps: Capabilities) -> Line:
-    labels = {"state": "State", "model": "Model", "agent": "Agent", "rank": "Rank",
-              "score": "AA", "usd": "USD/task", "first": "1st chunk", "runtime": "Runtime"}
-    return Line(" " + _cells(labels, fields, caps), "header")
+    labels = {"state": "State", "model": "Model", "use": "Suggested use", "profile": "Guide profile",
+              "index": "AA index", "cost": "AA $/task", "first": "AA first response"}
+    return _line((" ", "body"), *((pad(labels[key], size, ascii_only=caps.ascii_only), "label")
+                   if index == len(fields)-1 else (pad(labels[key], size, ascii_only=caps.ascii_only)+" ", "label")
+                   for index, (key, size) in enumerate(fields)))
 
 
-def _metric(value: float | int | None, *, prefix: str = "", suffix: str = "", caps: Capabilities) -> str:
-    return glyph(caps, "dash") if value is None else f"{prefix}{value:g}{suffix}"
+def _table_row(state: State, model_id: str, fields: list[tuple[str, int]], caps: Capabilities) -> Line:
+    model = by_id(state.catalog)[model_id]
+    row = reference_rows(state.catalog)[model_id]
+    value = state.preferences["effective"].get(model_id)
+    badge = value.capitalize() if value in ("available", "preferred", "disabled") else "Not set"
+    symbol = glyph(caps, value) if value in ("available", "preferred", "disabled") else "?"
+    vals = {"state": f"{symbol} {badge}", "model": model["name"],
+            "use": model["guide"]["suggested_use"], "profile": row["profile"],
+            "index": "unknown" if row["intelligence"] is None else str(row["intelligence"]),
+            "cost": format_usd(row["usd_per_task"]), "first": format_latency(row["first_chunk_s"])}
+    focused = state.focus_id == model_id
+    segments = [(glyph(caps, "focus") if focused else " ", "focus" if focused else "body")]
+    for index, (key, size) in enumerate(fields):
+        role = ("badge_" + (value or "unset")) if key == "state" else "metric" if key in ("index", "cost", "first") else "value" if key == "profile" else "body"
+        text = pad(vals[key], size, ascii_only=caps.ascii_only)
+        segments.append((text + (" " if index < len(fields)-1 else ""), role))
+    return _line(*segments)
 
 
-def _age_label(state: State, now: datetime) -> str:
-    days = age(state.catalog, today=now.date())
-    if days is None:
-        return "—"
-    return "today" if days == 0 else "1 day" if days == 1 else f"{days} days"
+def _pref(state: State, model_id: str) -> str:
+    saved = state.preferences["saved"].get(model_id)
+    if saved is None:
+        return "Not set (not eligible) in My selection; All models makes it available."
+    return {"preferred": "Preferred: a small tie-breaker among otherwise suitable eligible models; no default or quota.",
+            "available": "Available: eligible for new starts.",
+            "disabled": "Disabled: not eligible for new starts."}[saved]
 
 
-def _rank_detail(state: State, model_id: str, caps: Capabilities) -> str:
-    rank = ranks(state.catalog)[model_id]
-    if rank is None:
-        return safe_text("— of 6 — benchmark rank is unknown until six scores are present", caps)
-    tied = sum(value == rank for value in ranks(state.catalog).values()) > 1
-    suffix = " (tied)" if tied else ""
-    return safe_text(f"{rank} of 6{suffix} — among Pod's six supported models, not AA's overall rank", caps)
-
-
-def _help_rows(state: State, width: int, caps: Capabilities, now: datetime) -> list[str]:
-    benchmark = state.catalog.get("reference_benchmark")
-    benchmark = benchmark if isinstance(benchmark, dict) else {}
-    path_label = "Preferences: "
-    path = elide_middle(safe_text(state.preferences["path"], caps),
-                        max(1, width - display_width(path_label)), ascii_only=caps.ascii_only)
-    items = [
-        "Help: ↑/↓ or j/k move focus; Space cycles saved Available > Preferred > Disabled.",
-        "r switches My selection and All models; your choices are saved.",
-        "/ searches by model, id or agent; Esc clears; s sorts; f filters providers.",
-        "Enter expands Details; Page Down/Up scrolls; Esc closes; ? toggles help; q quits.",
-        AA_CLARIFICATION, AA_URL, SESSION_LINE,
-        f"Benchmark reference {glyph(caps, 'dot')}{benchmark.get('captured') or glyph(caps, 'dash')}{glyph(caps, 'dot')}{_age_label(state, now)}",
-        path_label + path,
-    ]
-    return [line for item in items for line in wrap(safe_text(item, caps), width)]
-
-
-def _bounded(lines: list[Line], budget: int, width: int, caps: Capabilities,
-             *, scroll: int = 0) -> list[Line]:
-    if budget <= 0:
-        return []
-    page = lines[max(0, scroll):max(0, scroll) + budget]
-    if len(lines) > max(0, scroll) + budget and page:
-        mark = "..." if caps.ascii_only else "…"
-        last = page[-1]
-        # Remove a whole trailing word before the overflow mark.
-        words = last.text.split()
-        while words and display_width(" ".join(words) + mark) > width:
-            words.pop()
-        page[-1] = Line((" ".join(words) + mark) if words else mark, last.role)
-    return page
-
-
-def _details(state: State, width: int, budget: int, caps: Capabilities,
-             now: datetime) -> list[Line]:
-    if budget <= 0:
-        return []
+def _details(state: State, width: int, caps: Capabilities, now: datetime, *, compact: bool = True) -> list[Line]:
     visible = visible_ids(state)
     if state.help_open:
-        return _bounded([Line(row, "footer") for row in _help_rows(state, width, caps, now)],
-                        budget, width, caps, scroll=state.help_scroll)
+        path = elide_middle(safe_text(state.preferences["path"], caps), max(1, width-13), ascii_only=caps.ascii_only)
+        messages = ["Help: model pool preferences", "Up/Down or j/k move focus; Space change state and save immediately.",
+                    "r switches My selection and All models; saved choices return.",
+                    "/ search model or id; Esc clear; f filter provider; s sort.",
+                    "Enter expands details; Page Up/Down scroll; Esc closes; ? help; q quit.",
+                    "Sorting, filtering, search, expansion and help do not save.",
+                    "AA metrics are informational for the labelled guide profile.",
+                    DISCLAIMER, "Benchmark source: " + AA_URL, "Preferences: " + path]
+        return [line for message in messages for line in _wrapped(message, width, caps, "heading" if message.startswith("Help:") else "body")]
     if state.preferences["errors"]:
         error = state.preferences["errors"][0]
         reason = error.get("message") or error.get("code") or "Invalid preferences"
-        missing = error.get("code") == "config_missing"
-        action = "Rerun the one-shot installer to create defaults" if missing else "Run pod config edit"
-        content = ["Preferences unavailable — read-only", "Reason: " + safe_text(reason, caps),
-                   "Preferences: " + elide_middle(safe_text(state.preferences["path"], caps),
-                                                   max(1, width - len("Preferences: ")),
-                                                   ascii_only=caps.ascii_only),
-                   "Next: " + action]
-        return _bounded([Line(line, "notice") for item in content for line in wrap(item, width)],
-                        budget, width, caps)
+        action = "Rerun the one-shot installer to create defaults" if error.get("code") == "config_missing" else "Run pod config edit"
+        return [_section("PREFERENCES UNAVAILABLE — READ-ONLY", caps),
+                *_wrapped("Reason: " + str(reason), width, caps, "error"),
+                *_wrapped("Next: " + action, width, caps, "error"),
+                *_wrapped("Preferences: " + elide_middle(state.preferences["path"], max(1,width-13),ascii_only=caps.ascii_only), width,caps)]
     if not visible:
-        return [Line("No model focused while search has no results", "notice")]
+        return [_section("NO MODELS MATCH", caps), Line("Esc clears the search or filter.", "advisory")]
     model_id = state.focus_id if state.focus_id in visible else visible[0]
     model = by_id(state.catalog)[model_id]
-    metrics = reference_rows(state.catalog)[model_id]
-    reference = reference_entry(state.catalog, model_id)
-    benchmark = state.catalog.get("reference_benchmark")
-    captured = benchmark.get("captured") if isinstance(benchmark, dict) else None
-    captured = captured if isinstance(captured, str) else glyph(caps, "dash")
-    join = glyph(caps, "dot")
-    effort = "native default"
-    identity = f"ID {model_id}{join}effort auto{join}context {effort}{join}Runtime {state.runtime}"
-    aa = (f"AA {reference['reference_variant']}{join}{_metric(metrics['intelligence'], caps=caps)}"
-          f"{join}{_metric(metrics['usd_per_task'], prefix='$', suffix='/task', caps=caps)}"
-          f"{join}{_metric(metrics['first_chunk_s'], suffix='s', caps=caps)}"
-          f"{join}{captured}")
-    examples = "Pod example: " + model["examples"][0]
-    if state.preferences["saved"].get(model_id) is None and state.preferences["mode"] != "all":
-        examples = "Not set (not eligible) | " + examples
-    if width < 50 and budget <= 7 and not state.expanded:
-        _, suited, purpose = model["guidance"].partition("Suited to ")
-        purpose = purpose if suited else model["guidance"]
-        context_runtime = f"context native default; Runtime {state.runtime}"
-        if display_width(context_runtime) > width:
-            context_runtime = f"ctx native default; Runtime {state.runtime}"
-        compact = [
-            "Purpose: " + purpose.split(".", 1)[0],
-            examples,
-            f"ID {model_id}; effort auto",
-            context_runtime,
-            f"AA {reference['reference_variant']} {_metric(metrics['intelligence'], caps=caps)} "
-            f"{captured}",
-        ]
-        return [Line(_fit(item, width, caps)) for item in compact[:budget]]
+    guide = model["guide"]
+    selected = record(state.catalog, model_id, guide["profile"])
     if state.expanded:
         context = model["documented_context_tokens"]
-        guidance = [Line(row) for row in wrap(safe_text(model["guidance"], caps), width)]
-        items = [
-            examples, identity, aa,
-            "Documented context: " + (f"{context:,} tokens" if context else "not stated") + "; worker uses native default.",
-            "AA score index; USD/task and first-chunk seconds are reference metrics.",
-            "Official source: " + model["sources"][0]["url"],
-            "AA source: " + AA_URL,
+        expanded = [_section("PROVIDER DESCRIPTION", caps)]
+        expanded.extend(_wrapped(model["guidance"], width, caps))
+        expanded.append(_section("MODEL DETAILS", caps))
+        expanded.extend(_wrapped("Full id: " + model_id + "; native default effort: " + model["native_default"] +
+                                 "; documented context: " + (f"{context:,} tokens" if context else "not stated") +
+                                 "; worker context: native default.", width, caps))
+        rank = ranks(state.catalog)[model_id]
+        expanded.append(_section("AA RANK SCOPE", caps))
+        expanded.extend(_wrapped("AA index rank among Pod's six at guide profiles: " +
+                                 (f"{rank}/6" if rank is not None else "unknown") +
+                                 "; small differences are not meaningful.", width, caps, "advisory"))
+        expanded.append(_section("ALL AA BENCHMARK RECORDS", caps))
+        for row in records(state.catalog, model_id):
+            info = (f"{row['profile']} [{row['effort']}]: AA index {row['intelligence'] if row['intelligence'] is not None else 'unknown'}; "
+                    f"{format_usd(row['usd_per_task'])}/task; first {format_latency(row['first_chunk_s'])}; "
+                    f"total {format_latency(row['total_response_s'])}")
+            expanded.extend(_wrapped(info, width, caps, "metric"))
+            if row.get("note"):
+                expanded.extend(_wrapped(row["note"], width, caps, "advisory"))
+        for source in model["sources"]:
+            expanded.extend(_wrapped("Provider source: " + source["url"] + " (checked " + source["checked"] + ")", width, caps))
+        expanded.extend(_wrapped("AA source: " + AA_URL, width, caps))
+        expanded.append(_section("BENCHMARK CAVEAT", caps))
+        expanded.extend(_wrapped(DISCLAIMER, width, caps, "advisory"))
+        return expanded
+    if not state.expanded and compact and width < 120:
+        def compact_line(title: str, body: str, role: str = "body") -> Line:
+            label = title + "  "
+            return _line((label, "heading"), (_fit(body, max(0, width-display_width(label)), caps), role))
+        compact = [
+            compact_line("BEST FOR", guide["best_for"]),
+            compact_line("USE WHEN", guide["use_when"]),
+            Line("QUICK / NORMAL / HARD / ESCALATION", "heading"),
         ]
-        if ranks(state.catalog)[model_id] is None:
-            items.insert(3, _rank_detail(state, model_id, caps))
-        items.extend(f"{variant['profile']}: score {_metric(variant['intelligence'], caps=caps)}, "
-                     f"{_metric(variant['usd_per_task'], prefix='$', suffix='/task', caps=caps)}, "
-                     f"{_metric(variant['first_chunk_s'], suffix='s first', caps=caps)}"
-                     for variant in reference["variants"])
-        lines = guidance + [Line(row) for item in items for row in wrap(safe_text(item, caps), width)]
-        return _bounded(lines, budget, width, caps, scroll=state.detail_scroll)
-    mandatory_items = [examples, identity, aa]
-    if width >= 50:
-        mandatory_items.append(_rank_detail(state, model_id, caps))
-    mandatory = [Line(row) for item in mandatory_items
-                 for row in wrap(safe_text(item, caps), width)]
-    guidance = [Line(row) for row in wrap(safe_text(model["guidance"], caps), width)]
-    space = max(0, budget - len(mandatory))
-    if space < len(guidance):
-        guidance = _bounded(guidance, space, width, caps)
-    return (guidance + mandatory)[:budget]
+        for stage, effort in guide["ladder"].items():
+            metric = record(state.catalog, model_id, effort)
+            mark = " *" if effort == guide["profile"] else ""
+            compact.append(Line(_fit(f"{stage:<10} {effort:<6} AA {metric['intelligence'] if metric['intelligence'] is not None else 'unknown'}  {format_usd(metric['usd_per_task'])}/task  first {format_latency(metric['first_chunk_s'])}{mark}",width,caps), "metric"))
+        compact.extend([
+            compact_line("TRADE-OFF", guide["limitations"], "advisory"),
+            compact_line("EXAMPLE", guide["examples"][0]["effort"] + ": " + guide["examples"][0]["text"]),
+            compact_line("YOUR PREFERENCE", {"preferred":"Preferred: tie-breaker, no default/quota; running coordinator unchanged.","available":"Available: eligible; running coordinator unchanged.","disabled":"Disabled: no new starts; running coordinator unchanged."}.get(state.preferences["saved"].get(model_id), "Not set: not eligible in My selection; coordinator unchanged.")),
+            compact_line("RUNTIME / ACCESS", "Orca worker launch: " + {"Not checked":"supported","Unsupported":"not advertised","Offline":"Orca offline","Unknown":"unknown"}.get(state.runtime,"unknown") + "; access unverified."),
+            compact_line("BENCHMARK SOURCE", "AA " + str((state.catalog.get("benchmarks") or {}).get("captured") or "unknown") + " (" + _age(state,now) + "); guide profile " + selected["profile"] + "; informational.", "advisory"),
+            Line(_fit(SHORT_DISCLAIMER,width,caps), "advisory"),
+        ])
+        return compact
+    out: list[Line] = []
+    def block(title: str, body: str, role: str = "body") -> None:
+        out.append(_section(title, caps))
+        out.extend(_wrapped(body, width, caps, role))
+    block("BEST FOR", guide["best_for"])
+    block("USE WHEN", guide["use_when"])
+    out.append(_section("QUICK / NORMAL / HARD / ESCALATION", caps))
+    out.append(Line(_fit("Stage       Effort  AA index  AA $/task  First response", width, caps), "label"))
+    for stage, effort in guide["ladder"].items():
+        metric = record(state.catalog, model_id, effort)
+        mark = "*" if effort == guide["profile"] else " "
+        out.append(Line(_fit(f"{stage.capitalize():<10} {effort:<6} AA {metric['intelligence'] if metric['intelligence'] is not None else 'unknown'}  {format_usd(metric['usd_per_task'])}  {format_latency(metric['first_chunk_s'])}{mark}", width, caps), "metric"))
+    out.append(Line("* guide profile", "advisory"))
+    block("TRADE-OFF", guide["trade_off"] + " " + guide["limitations"], "advisory")
+    out.append(_section("EXAMPLE", caps))
+    for example in guide["examples"]:
+        out.extend(_wrapped(example["effort"] + ": " + example["text"], width, caps))
+    block("YOUR PREFERENCE", _pref(state, model_id) + " The pool never changes the running coordinator's model.")
+    status = {"Not checked": "supported", "Unsupported": "not advertised", "Offline": "Orca offline", "Unknown": "unknown"}.get(state.runtime, "unknown")
+    block("RUNTIME / ACCESS", "Orca worker launch: " + status + ". Model access: not verified by Pod.")
+    benchmark = state.catalog.get("benchmarks") or {}
+    block("BENCHMARK SOURCE", "AA, captured " + str(benchmark.get("captured") or "unknown") + " (" + _age(state, now) + "). " + DISCLAIMER, "advisory")
+    return out
 
 
-def _footer(state: State, width: int, rows: int, caps: Capabilities, now: datetime) -> list[Line]:
-    benchmark = state.catalog.get("reference_benchmark")
-    benchmark = benchmark if isinstance(benchmark, dict) else {}
-    indicator = (f"Benchmark reference{glyph(caps, 'dot')}{benchmark.get('captured') or glyph(caps, 'dash')}"
-                 f"{glyph(caps, 'dot')}{_age_label(state, now)}")
-    keys = safe_text("↑/↓ Space / s f r Enter ? q", caps)
-    on_rule = display_width(indicator) + display_width(keys) + 2 <= width
-    heading = f"{indicator}  {keys}" if on_rule else indicator
-    if state.expanded or state.help_open:
-        entries = [heading] if on_rule else [heading, keys]
-    elif rows >= 24:
-        entries = [heading, *wrap(safe_text(AA_CLARIFICATION, caps), width), AA_URL, SESSION_LINE]
-        if not on_rule:
-            entries.append(keys)
-    elif rows >= 20:
-        entries = [heading] if on_rule else [heading, keys]
-    else:
-        entries = [keys]
-    return [_rule(entries[0], width, caps)] + [Line(row, "footer") for item in entries[1:]
-                                               for row in wrap(safe_text(item, caps), width)]
+def _crop(lines: list[Line], count: int, width: int, caps: Capabilities, scroll: int = 0) -> list[Line]:
+    if count <= 0:
+        return []
+    page = lines[max(0,scroll):max(0,scroll)+count]
+    if len(lines) > max(0,scroll)+count and page:
+        last = page[-1]
+        page[-1] = Line(_fit(last.text, max(1,width-2), caps) + ("..." if caps.ascii_only else "…"), "advisory")
+    return page
+
+
+def _join(left: Line, right: Line, left_width: int, caps: Capabilities) -> Line:
+    ltext = pad(left.text, left_width, ascii_only=caps.ascii_only)
+    lspans = left.styled
+    used = display_width(left.text)
+    return _line(*[(span.text, span.role) for span in lspans], (" " * max(0,left_width-used), "body"), (" │ " if not caps.ascii_only else " | ", "label"),
+                 *[(span.text, span.role) for span in right.styled])
 
 
 def frame(state: State, cols: int, rows: int, caps: Capabilities, now: datetime) -> Frame:
-    if rows <= 0 or cols <= 0:
+    if cols <= 0 or rows <= 0:
         return Frame((), cols, rows)
-    width = max(1, cols - 1)  # curses never writes the bottom-right cell
+    width = cols-1
     if cols < 40 or rows < 12:
-        tiny = [Line("Terminal too small", "heading"), Line("Resize, or press q to quit", "footer")]
-        return Frame(tuple(Line(_fit(item.text, width, caps), item.role) for item in tiny[:rows]), cols, rows)
+        return Frame((Line(_fit("Terminal too small",width,caps),"error"),
+                      Line(_fit("Resize or press q to quit",width,caps))),cols,rows)
     mode = "All models" if state.preferences["mode"] == "all" else "My selection"
     if state.preferences["errors"]:
-        mode = "Preferences unavailable — read-only"
-    title = (f"{'~' if caps.ascii_only else '≋'} Pod  {mode}  "
-             f"{len(state.preferences['eligible'])} eligible")
+        mode = "READ-ONLY"
+    title = f"Pod  {mode}  {len(state.preferences['eligible'])} eligible"
     if state.notice:
-        notice = ("no change saved" if state.notice.endswith("; no change saved")
-                  else state.notice)
-        remaining = width - display_width(title) - 3
-        if remaining > 0:
-            title += "  · " + _fit(notice, remaining, caps)
+        title += "  · " + state.notice
     elif state.preferences["mode"] == "all":
-        title += " — your choices are saved (r restores)"
-    elif not state.preferences["errors"] and not state.preferences["eligible"]:
-        title = (f"{'~' if caps.ascii_only else '≋'} Pod  0 eligible  "
-                 "Delegation disabled — coordinator work remains available")
-    title = _fit(title, width, caps)
-    fields = _columns(width)
-    footer = _footer(state, width, rows, caps, now)
-    if state.expanded or state.help_open:
-        table_height = 1
-    elif rows >= 24:
-        table_height = 6
-    elif rows >= 20:
-        table_height = 3
-    else:
-        table_height = 1
-    detail_budget = max(0, rows - 3 - table_height - 1 - len(footer))
-    visible = visible_ids(state)
-    model_id = state.focus_id if state.focus_id in visible else (visible[0] if visible else None)
-    detail_name = by_id(state.catalog)[model_id]["name"] if model_id else "None"
-    section = "Help" if state.help_open else f"Details {glyph(caps, 'dot')}{detail_name}"
-    if state.expanded and not state.help_open:
-        section += " [expanded]"
-    controls = f"Models · Sort {SORTS[state.sort_index]} · Filter {FILTERS[state.filter_index]}"
-    if not state.preferences["errors"] and not state.preferences["eligible"]:
-        controls += f" · {mode}"
+        title += "  · your choices are saved (r restores)"
+    title = _fit(title,width,caps)
+    controls = f"Sort {SORTS[state.sort_index]}  ·  Filter {FILTERS[state.filter_index]}"
     if state.query:
-        controls += f" · Search {state.query}"
-    result = [Line(title, "title"), _rule(controls, width, caps), _table_header(fields, caps)]
-    if not visible:
-        message = f"No models match {state.query!r} — Esc clears" if state.query else "No models match this filter — Esc clears"
-        result.append(Line(_fit(message, width, caps), "notice"))
-    elif state.help_open:
-        result.append(Line(""))
-    elif state.expanded:
-        result.append(_table_line(state, model_id, caps, fields, width))
-        if table_height > 1:
-            result.append(Line(safe_text(f"{max(0, len(visible) - 1)} more models · Esc returns to table", caps), "footer"))
+        controls += "  ·  Search " + state.query
+    focused = state.focus_id if state.focus_id in visible_ids(state) else (visible_ids(state)[0] if visible_ids(state) else None)
+    name = by_id(state.catalog)[focused]["name"] if focused else "None"
+    detail_heading = "Help" if state.help_open else "Details  " + name + (" [expanded]" if state.expanded else "")
+    foot = "Space change state  ·  s sort: " + SORTS[state.sort_index] + "  ·  f filter  ·  r pool  ·  / search  ·  Enter details  ·  ? help  ·  q quit"
+    if width < 100:
+        foot = "Space change state  s sort: " + SORTS[state.sort_index] + "  f filter  r pool  ? help  q quit"
+    if width < 65:
+        foot = "Space state  PgDn more  ? help  q quit"
+    foot = _fit(foot,width,caps)
+    result = [Line(title,"title"), Line(_fit(controls,width,caps),"label")]
+    visible = visible_ids(state)
+    if cols >= 120 and not (state.expanded or state.help_open):
+        left_width = 110 if width >= 151 else 93
+        right_width = max(1,width-left_width-3)
+        fields = _columns(left_width)
+        left = [_table_header(fields,caps)]
+        left.extend(_table_row(state,model_id,fields,caps) for model_id in visible)
+        if not visible:
+            left.append(Line("No models match; Esc clears", "advisory"))
+        left.append(Line("AA metrics: labelled guide profile; informational", "advisory"))
+        right = [Line(_fit(detail_heading,right_width,caps),"title")]
+        right.extend(_details(state,right_width,caps,now,compact=False))
+        body_count = rows-4
+        for i in range(body_count):
+            result.append(_join(left[i] if i<len(left) else Line(""),right[i] if i<len(right) else Line(""),left_width,caps))
     else:
-        index = visible.index(model_id)
-        start = min(max(0, index - table_height + 1), max(0, len(visible) - table_height))
-        result.extend(_table_line(state, row, caps, fields, width)
-                      for row in visible[start:start + table_height])
-    while len(result) < 3 + table_height:
-        result.append(Line(""))
-    result.append(_rule(section, width, caps))
-    details = _details(state, width, detail_budget, caps, now)
-    result.extend(details)
-    result.extend(Line("") for _ in range(max(0, detail_budget - len(details))))
-    result.extend(footer)
+        fields = _columns(width)
+        result.append(_table_header(fields,caps))
+        display_ids = visible if not (state.expanded or state.help_open) else ([focused] if focused else [])
+        for model_id in display_ids:
+            result.append(_table_row(state,model_id,fields,caps))
+        if not visible:
+            result.append(Line("No models match; Esc clears", "advisory"))
+        if rows > 24:
+            result.append(Line(_fit("AA metrics: labelled guide profile; informational",width,caps),"advisory"))
+        result.append(Line(_fit(detail_heading,width,caps),"title"))
+        remaining = rows-len(result)-1
+        detail = _details(state,width,caps,now)
+        result.extend(_crop(detail,remaining,width,caps,state.help_scroll if state.help_open else state.detail_scroll))
+    result.extend(Line("") for _ in range(max(0,rows-1-len(result))))
+    result.append(Line(foot,"key"))
     result = result[:rows]
-    result.extend(Line("") for _ in range(rows - len(result)))
-    assert all(display_width(line.text) <= width for line in result), "TUI line exceeds drawable width"
-    return Frame(tuple(result), cols, rows)
+    assert all(display_width(line.text) <= width for line in result), [(display_width(line.text), line.text) for line in result if display_width(line.text)>width]
+    return Frame(tuple(result),cols,rows)
 
 
 def summary(preferences: dict) -> str:

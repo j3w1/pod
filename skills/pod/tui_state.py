@@ -7,7 +7,7 @@ from datetime import datetime
 
 from .catalog import IDS, reference_rows
 
-SORTS = ("Model", "Intelligence", "Price", "Latency")
+SORTS = ("Recommended", "Model", "Intelligence", "Benchmark cost", "First response")
 FILTERS = ("All", "Claude", "Codex")
 NEXT_STATE = {"available": "preferred", "preferred": "disabled", "disabled": "available"}
 
@@ -57,12 +57,14 @@ def visible_ids(state: State) -> list[str]:
                        or query in entries[model_id]["agent"].casefold())]
     rows = reference_rows(state.catalog)
     if state.sort_index == 0:
-        return sorted(candidates, key=lambda model_id: (entries[model_id]["name"].casefold(), IDS.index(model_id)))
+        return sorted(candidates, key=lambda model_id: (entries[model_id]["guide"]["coding_order"], IDS.index(model_id)))
     if state.sort_index == 1:
+        return sorted(candidates, key=lambda model_id: (entries[model_id]["name"].casefold(), IDS.index(model_id)))
+    if state.sort_index == 2:
         return sorted(candidates, key=lambda model_id: (rows[model_id]["intelligence"] is None,
                                                         -(rows[model_id]["intelligence"] or 0),
                                                         IDS.index(model_id)))
-    key = "usd_per_task" if state.sort_index == 2 else "first_chunk_s"
+    key = "usd_per_task" if state.sort_index == 3 else "first_chunk_s"
     return sorted(candidates, key=lambda model_id: (rows[model_id][key] is None,
                                                     rows[model_id][key] if rows[model_id][key] is not None else 0,
                                                     IDS.index(model_id)))
@@ -127,7 +129,7 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         return replace(state, searching=True, query=""), None
     if key == "ENTER":
         return replace(state, expanded=True, detail_scroll=0), None
-    if state.expanded and key in ("PAGE_DOWN", "PAGE_UP"):
+    if key in ("PAGE_DOWN", "PAGE_UP"):
         return replace(state, detail_scroll=max(0, state.detail_scroll + (8 if key == "PAGE_DOWN" else -8))), None
     if key == "s":
         return replace(state, sort_index=(state.sort_index + 1) % len(SORTS)), None
@@ -142,13 +144,13 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         index = (index + direction) % len(visible)
         return replace(state, focus_id=visible[index], hidden_focus_id=None), None
     if key in ("SPACE", "r"):
-        if not visible_ids(state):
-            return replace(state, notice="No models match — Esc clears; no change saved"), None
         if state.preferences["errors"]:
             return replace(state, notice="Preferences unavailable — read-only; no change saved"), None
         if key == "r":
             target = "custom" if state.preferences["mode"] == "all" else "all"
             return state, Effect("set_mode", value=target)
+        if not visible_ids(state):
+            return replace(state, notice="No models match — Esc clears; no change saved"), None
         if state.focus_id not in visible_ids(state):
             return replace(state, notice="Choose a visible model; no change saved"), None
         focused = state.focus_id

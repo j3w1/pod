@@ -11,6 +11,7 @@ import unicodedata
 class Capabilities:
     ascii_only: bool
     color: bool
+    light_background: bool = False
 
 
 def capabilities(env: dict[str, str] | None = None, *, has_colors: bool = False) -> Capabilities:
@@ -19,8 +20,11 @@ def capabilities(env: dict[str, str] | None = None, *, has_colors: bool = False)
     base = locale.split("@", 1)[0].upper()
     term = values.get("TERM", "").lower()
     ascii_only = base in ("C", "POSIX") or term == "dumb" or term == "linux" or term.startswith("vt")
+    background = values.get("COLORFGBG", "").split(";")[-1]
+    light = background.isdigit() and int(background) in (7, 15)
     return Capabilities(ascii_only=ascii_only,
-                        color=bool(has_colors and "NO_COLOR" not in values and term != "dumb"))
+                        color=bool(has_colors and "NO_COLOR" not in values and term != "dumb"),
+                        light_background=light)
 
 
 def clean(value: object) -> str:
