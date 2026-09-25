@@ -144,13 +144,13 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         index = (index + direction) % len(visible)
         return replace(state, focus_id=visible[index], hidden_focus_id=None), None
     if key in ("SPACE", "r"):
-        if not visible_ids(state):
-            return replace(state, notice="No models match — Esc clears; no change saved"), None
         if state.preferences["errors"]:
             return replace(state, notice="Preferences unavailable — read-only; no change saved"), None
         if key == "r":
             target = "custom" if state.preferences["mode"] == "all" else "all"
             return state, Effect("set_mode", value=target)
+        if not visible_ids(state):
+            return replace(state, notice="No models match — Esc clears; no change saved"), None
         if state.focus_id not in visible_ids(state):
             return replace(state, notice="Choose a visible model; no change saved"), None
         focused = state.focus_id
