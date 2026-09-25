@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import subprocess
+from typing import Callable
 
 
 OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -28,10 +29,11 @@ def resolve_commit(root: Path, ref: str) -> str | None:
     return value if OBJECT_ID.fullmatch(value) else None
 
 
-def is_ancestor(root: Path, commit: str, candidate: str) -> bool | None:
+def is_ancestor(root: Path, commit: str, candidate: str, *,
+                resolve: Callable[[Path, str], str | None] = resolve_commit) -> bool | None:
     if not isinstance(commit, str) or not OBJECT_ID.fullmatch(commit):
         return None
-    target = resolve_commit(root, candidate)
+    target = resolve(root, candidate)
     if target is None:
         return None
     completed = read(root, ["merge-base", "--is-ancestor", commit, target])

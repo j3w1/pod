@@ -375,7 +375,7 @@ def git_head(worktree: str | None) -> str | None:
 
 
 def git_is_ancestor(project: Path, commit: str, candidate: str) -> bool | None:
-    return gitio.is_ancestor(project, commit, candidate)
+    return gitio.is_ancestor(project, commit, candidate, resolve=_resolve_commit)
 
 
 def git_delta(project: Path, source: str, target: str) -> list[str] | None:
