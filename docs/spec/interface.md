@@ -2,127 +2,127 @@
 
 ## Requirements
 
-### R03 — Requirement R03
+### R03 — Expose pod, pod status, pod doctor
 
 Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119)
 
 Expose `pod`, `pod status`, `pod doctor`, `pod update`, `pod config`/`config edit`, and `pod --version`. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
 
-### R04 — Requirement R04
+### R04 — Maintain one canonical inline skill policy
 
 Type: B · Scenarios: [A01](../pod-spec.md#a01), [A32](#a32), [A41](#a41)
 
 Maintain one canonical inline skill policy with generated host metadata and relevant-on-demand references. Invocation preserves the conversation and must not set coordinator model/effort or use Claude context: fork.
 
-### R48 — Requirement R48
+### R48 — Read-only status and doctor report preferences
 
 Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models.md#a49), [A71](#a71), [A133](#a133)
 
 Read-only status and doctor report preferences, resolved paths, current native work, constraints, decisions, mismatches, installed bundle identity drift, catalog/benchmark age, blockers and next actions. Reads do not repair, dispatch, run models or alter preferences.
 
-### R49 — Requirement R49
+### R49 — The one-shot installer places both agent
 
 Type: B,H · Scenarios: [A32](#a32), [A33](#a33), [A72](#a72), [A134](#a134)
 
 The one-shot installer places both agent skills, dependencies and a user-local launcher from one validated bundle. Reinstall and update preserve edited preferences and foreign files; diagnose duplicate/shadowing copies and interrupted installs.
 
-### R50 — Requirement R50
+### R50 — Follow registered host paths/worktree mechanisms/native profiles/admin
 
 Type: H · Scenarios: [A73](#a73)
 
 Follow registered host paths/worktree mechanisms/native profiles/admin boundaries. Canonical pod registration/relocation uses owner-managed mechanism. Coding must not change global policy, weaken protections/gates or perform unauthorized deployment/provider/publication actions.
 
-### R52 — Requirement R52
+### R52 — Use Python 3.13+ on Linux, one
 
 Type: I · Scenarios: [A75](#a75), [A135](#a135)
 
 Use Python 3.13+ on Linux, one bundle-as-package and standard-library facilities where practical. Run unit, incident, PTY/subprocess, installed-bundle, source-audit and hosted checks as specified, with independent review and separate live evidence.
 
-### R53 — Requirement R53
+### R53 — Keep README approachable, implemented-only and linked
 
 Type: B,I · Scenarios: [A38](../pod-spec.md#a38), [A75](#a75)
 
 Keep README approachable, implemented-only and linked to detailed contracts. Maintain one skill policy source and references. Document capability limits and actual evidence.
 
-### R55 — Requirement R55
+### R55 — Distribute from main through the one-shot
 
 Type: B,I · Scenarios: [A77](#a77), [A118](#a118), [A136](#a136)
 
 Distribute from `main` through the one-shot installer, which uses the skills CLI for the single `skills/pod` bundle and places a user-local `pod` launcher. Root `VERSION` is the sole authored version, linked by the bundle. There are no packages, releases or tags.
 
-### R56 — Requirement R56
+### R56 — The installer stages and validates the
 
 Type: B,H · Scenarios: [A77](#a77), [A78](#a78), [A137](#a137)
 
 The installer stages and validates the bundle, isolated dependency environment, launcher, receipt, preferences and minimal owned PATH block. It refuses foreign launchers, preserves user edits, and recovers interrupted installs. A copied installed bundle runs outside the checkout.
 
-### R60 — Requirement R60
+### R60 — Keep host integration optional. Pod works
 
 Type: B,H · Scenarios: [A78](#a78)
 
 Keep host integration optional. Pod works on a suitable Linux environment without the owner's host tooling, paths, accounts or evidence, detecting and respecting host policies when present.
 
-### R62 — Requirement R62
+### R62 — Keep one conditional execution-spec.md as the
 
 Type: B · Scenarios: [A97](#a97), [A98](#a98)
 
 Keep one conditional `execution-spec.md` as the authoring and interpretation source for human-readable Pod Execution Specs, numbered Proof of Done items and explicit delivery endpoints. Equivalent clear Markdown is valid; there is no parser, DSL, required frontmatter or second template.
 
-### R63 — Requirement R63
+### R63 — Accept a direct objective or a
 
 Type: B,H · Scenarios: [A99](#a99), [A100](#a100), [A101](#a101)
 
 Accept a direct objective or a canonical GitHub issue URL through one workflow. Retrieve the complete issue with authorized host access, validate returned identity and target against the actual checkout, treat issue content as scope rather than authority, block inaccessible/incomplete/mismatched sources, and reconcile a closed issue with user intent before repeated work.
 
-### R64 — Requirement R64
+### R64 — Bind issue identity, canonical locator, body
 
 Type: B,H · Scenarios: [A102](#a102), [A103](#a103)
 
 Bind issue identity, canonical locator, body digest and relevant amendment references into checkpoints, packets and final verification without copying the issue body into state. Recheck at intake, continuation, affected admission and final verification. Body change requires reconciliation; metadata alone does not. Preserve unaffected proof and never replace an admitted uncertain native request with a revised packet.
 
-### R69 — Requirement R69
+### R69 — Keep the public product independent of
 
 Type: B,H · Scenarios: [A111](#a111), [A112](#a112)
 
 Keep the public product independent of owner services and machine-local state. Maintain a small generic tracked-source/artifact hygiene audit that reports safe path/category/location without echoing matched credentials and permits product identity, public links and sanitized fixtures. The upstream metadata service remains external governance with only a short contributor notice and no Pod integration or competing writer.
 
-### R70 — Requirement R70
+### R70 — README is the practical install and
 
 Type: B · Scenarios: [A113](#a113)
 
 README is the practical install and session guide: one-shot command, open/auth/invoke, direct and issue objectives, Plan Mode, worktrees, visible workers, verification, limits, update/removal and linked installation details. Describe implemented behavior only.
 
-### R71 — Requirement R71
+### R71 — Keep SKILL at most 750 words
 
 Type: B,H · Scenarios: [A114](#a114), [A115](#a115)
 
 Keep SKILL at most 750 words, each conditional reference at most 700 and combined references at most 2200. Load the issue reference only when relevant; workers receive bounded criteria/source references. Human status shows objective/source, worktree, relevant native work, blocker/next action and remaining gates while JSON retains detail.
 
-### R73 — Requirement R73
+### R73 — The TUI shows all six models
 
 Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140)
 
 The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed guidance, Pod examples, native/default details and dated AA reference metrics. State edits save immediately; `r` reversibly toggles All models and My selection without erasing saved choices.
 
-### R74 — Requirement R74
+### R74 — The TUI works on ordinary Linux
 
 Type: B,H · Scenarios: [A139](#a139), [A140](#a140)
 
 The TUI works on ordinary Linux terminals and over SSH: arrow focus, Space state cycle, search, model/intelligence/price/latency sorts, provider display filter, help, expansion, quit, resize, monochrome, ASCII and non-TTY summary. Focus is a model id across sort/filter/reload; no-results and tiny terminals stay usable. Reading and navigation do not write.
 
-### R75 — Requirement R75
+### R75 — Each focused model's Details panel is
 
 Type: B,H · Scenarios: [A122](models.md#a122), [A139](#a139)
 
 Each focused model's Details panel is always visible without Enter, with 35–65 words of attributed purpose guidance, distinct Pod examples, exact id, native/default capability and dated reference profile. Rank scope is six supported base models; AA variant metrics stay paired and informational, with source URL and age visible.
 
-### R76 — Requirement R76
+### R76 — Preference edits save immediately with lock
 
 Type: B,H · Scenarios: [A128](models.md#a128), [A140](#a140)
 
 Preference edits save immediately with lock, targeted compare-and-swap, validation, atomic replacement and honest success/failure feedback. Open TUIs reload external changes promptly without blocking keys on runtime reads; a conflict never overwrites another editor's targeted value.
 
-### R79 — Requirement R79
+### R79 — The one-shot installer and explicit update
 
 Type: B,I · Scenarios: [A134](#a134), [A136](#a136), [A137](#a137), [A142](#a142)
 

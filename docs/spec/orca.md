@@ -2,103 +2,103 @@
 
 ## Requirements
 
-### R18 — Requirement R18
+### R18 — Read only installed native capability and
 
 Type: B,H · Scenarios: [A08](#a08), [A51](#a51), [A126](#a126)
 
 Read only installed native capability and exact request/worker evidence needed for a start. Missing or unsupported fields stay unknown; do not scrape credential stores, infer model access from catalog data or call providers to probe a route.
 
-### R23 — Requirement R23
+### R23 — Resolve the applicable Orca runtime through
 
 Type: I,H · Scenarios: [A08](#a08), [A56](#a56), [A94](../pod-spec.md#a94)
 
 Resolve the applicable Orca runtime through installed discovery and guide. Validate worker-start launch-preferences capability, exact read/start/request contracts and optional terminal identity. Do not substitute a runtime, host or direct provider API.
 
-### R24 — Requirement R24
+### R24 — Before a new start validate current
 
 Type: H · Scenarios: [A08](#a08), [A20](#a20), [A57](#a57), [A124](models.md#a124), [A129](#a129)
 
 Before a new start validate current authority, placement, logical ceiling, packet/source bindings, version and selected route. Record requested and observed effective model/effort/context separately; absent and null launch fields stay unknown, except verified same-terminal reuse binds the prior settled attempt's known effective route as inherited evidence with provenance. Known relevant disagreements are mismatches. Objective-bound acceptance holds recorded route mismatches and unknown effective routes; caller claims cannot supply route proof. Pending replay retains its admitted request and does not become a new preference decision.
 
-### R25 — Requirement R25
+### R25 — Treat accepted input, started reasoning, native
 
 Type: B · Scenarios: [A22](models.md#a22), [A58](#a58), [A95](#a95)
 
 Treat accepted input, started reasoning, native settlement and accepted output as different native observations. Silence/lost responses do not prove failure, justify resending input or authorize replacement work. Recover the same immutable admission through Orca request-show: record a completed receipt, join a pending request with Orca's UUID, or inspect exact Run/Task/Dispatch identity after an absent result or when no UUID was recorded. Missing, ambiguous or contradictory evidence holds and never starts fresh; a later incomplete observation cannot erase a known request-identity conflict. Preserve native start responses before classification in immutable admission-bound private evidence, including unknown refusal codes, observed request references, malformed output and transport outcomes. Recording returned facts uses the existing owned reservation even if native contact is lost; it cannot change admission state, routes or effect authority. Classification and subsequent effects still require current native authority. Evidence reads verify integrity; unavailable earlier values are never backfilled.
 
-### R28 — Requirement R28
+### R28 — Serialize admission under the objective lock
 
 Type: H · Scenarios: [A18](coordination.md#a18), [A21](coordination.md#a21), [A22](models.md#a22), [A59](#a59), [A96](#a96)
 
 Serialize admission under the objective lock, recording one logical reservation before each worker start. Reserved and unresolved attempts remain outstanding; an exact Run/Task/Dispatch readback with settled outcome and terminal Dispatch status frees a bound slot, including a failed stopped attempt. Do not census other objectives or reconstruct physical occupancy. Documented effect-free Orca refusals defer; uncertain errors require exact request and worker readback.
 
-### R29 — Requirement R29
+### R29 — Establish one authoritative coordinator per objective
 
 Type: H · Scenarios: [A21](coordination.md#a21), [A31](coordination.md#a31), [A60](#a60)
 
 Establish one authoritative coordinator per objective. Adoption reconciles pending effects/native authority before dispatch. Before Governor preparation, admission, execution or any journal mutation, join the caller's stable native current-Run binding (Run, coordinator handle and consumer generation) to that objective's exact native references, runtime and existing Pod owner. Terminal self-identity alone is not authority; a missing, unrelated, changed, worker-only or takeover binding blocks. Failed authority still permits read-only diagnosis/status and safe direct work. A local lock is not distributed fencing; never manufacture a replacement controller or silently create/adopt a Run.
 
-### R35 — Requirement R35
+### R35 — Use Orca-native messaging/events and blocking waits
 
 Type: B · Scenarios: [A23](assurance.md#a23), [A59](#a59), [A94](../pod-spec.md#a94)
 
 Use Orca-native messaging/events and blocking waits directly. Pod freezes packets and joins reports to a fresh worker-show of the exact runtime/Run/Task/Dispatch/worker identity, but keeps no parallel Delivery receipt or acknowledgment state machine.
 
-### R36 — Requirement R36
+### R36 — Orca owns worker reuse and request
 
 Type: B · Scenarios: [A26](#a26), [A95](#a95), [A131](#a131)
 
 Orca owns worker reuse and request recovery. A new assignment or changed route requires a fresh selection. Verified same-terminal and worktree reuse binds the prior settled attempt’s known effective route with provenance and rechecks model eligibility; known Orca disagreement is a mismatch. No model or effort flag accompanies `--terminal`. Pending replay joins only its original request UUID.
 
-### R38 — Requirement R38
+### R38 — Worker reuse, retention, release and terminal/resource
 
 Type: B,H · Scenarios: [A22](models.md#a22), [A26](#a26), [A96](#a96)
 
 Worker reuse, retention, release and terminal/resource disposition are explicit Orca operations outside Pod's mutation adapter. Pod records no cleanup state and never infers or initiates release. Exact assignment settlement, not terminal release, frees the objective's logical slot. Never kill work or delete uncommitted work/evidence.
 
-### R44 — Requirement R44
+### R44 — Persist compact pod-context/v4 policy and evidence
 
 Type: I,H · Scenarios: [A31](coordination.md#a31), [A35](coordination.md#a35), [A39](../pod-spec.md#a39), [A69](#a69), [A96](#a96), [A132](#a132), [A161](#a161)
 
 Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`, `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` contracts. Another schema is reported and blocks only its objective (R90); nothing converts it. Keep native ids as references, never copied lifecycle state, and keep private data out of Git.                                                                                  
 
-### R45 — Requirement R45
+### R45 — Recovery selects the objective and reads
 
 Type: B · Scenarios: [A22](models.md#a22), [A31](coordination.md#a31), [A60](#a60), [A69](#a69), [A95](#a95)
 
 Recovery selects the objective and reads native state before action. Native request-show governs completed/pending/absent request recovery; exact Run/Task/Dispatch readback may bind only one matching attempt. Missing, ambiguous or unresolved own evidence keeps its logical reservation outstanding and never justifies relaunch. There is no Pod retry, release or lifecycle loop and no daemon.
 
-### R57 — Requirement R57
+### R57 — Use installed Orca guidance and operation-specific
 
 Type: B,H · Scenarios: [A79](#a79), [A80](#a80), [A94](../pod-spec.md#a94), [A95](#a95), [A138](#a138)
 
 Use installed Orca guidance and operation-specific capabilities. Native launch preferences are required for delegation; missing optional context control uses `native_default` with no context flag. Requested versus effective evidence is honest, and missing delegation capability leaves direct work available.
 
-### R66 — Requirement R66
+### R66 — Before implementation select or create the
 
 Type: B,H · Scenarios: [A105](#a105), [A106](#a106)
 
 Before implementation select or create the exact Orca-managed objective worktree. A new objective worktree explicitly requests branch `orca/<task-slug>` from the host or native creation mechanism instead of accepting its default; a reused objective worktree keeps its branch, and assignment isolation follows Orca placement. Bind actual Git repository/common-dir, branch and path separately from display labels; reuse only the same objective; preserve dirty/colliding work. Resolve every native start/replay selector to the frozen objective or separately authorized assignment-isolation placement before effect. Resolve state across linked worktrees and apply canonical private project policy plus worktree restrictions restrictively without copying private files. Native/host mechanisms own creation/removal.
 
-### R67 — Requirement R67
+### R67 — Normal delegated workers use native worker-start
 
 Type: B,H · Scenarios: [A107](#a107), [A108](#a108), [A109](#a109)
 
 Normal delegated workers use native worker-start and Orca's new-agent-tab setting. Status exposes exact native Dispatch/Task/worktree and available terminal/tab identities, placement surfaces and discoverability warnings. Terminal allocation and native tab discovery do not prove rendered UI visibility or focus; absence alone does not prove no worker/tab. Diagnose missing tabs through the existing worker. Invent no visibility override, change no tab preference and focus only on explicit user request. After consuming and preserving an exact report, follow native Delivery acknowledgment and worker-release ordering promptly; reuse only for an immediate supported follow-up. Final cleanup checks exact objective workers only and retains uncertainty/protected resources. Pod adds no lifecycle/cleanup helper.
 
-### R68 — Requirement R68
+### R68 — Discover Orca progressively from its installed
 
 Type: B,H · Scenarios: [A110](#a110)
 
 Discover Orca progressively from its installed guide and operation-specific capabilities. Missing delegation support blocks only delegation. Do not mirror native account state, automate provider UI, invent receipt fields, wrap providers or alter shared settings.
 
-### R80 — Requirement R80
+### R80 — Stamp the running {version, bundle_digest} in
 
 Type: H · Scenarios: [A124](models.md#a124), [A132](#a132), [A142](interface.md#a142)
 
 Stamp the running `{version, bundle_digest}` in each checkpoint and refuse a new admission or Governor mutation if either differs, including a checkpoint missing the digest. Reload the skill and write a fresh checkpoint; existing native request recovery remains available. Record preference and Governor policy revisions separately so a model edit does not supersede candidate proof.
 
-### R90 — Requirement R90
+### R90 — 0.6.0 is a hard objective-state cutover
 
 Type: B,H · Scenarios: [A161](#a161)
 

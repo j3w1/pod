@@ -2,133 +2,133 @@
 
 ## Requirements
 
-### R05 — Requirement R05
+### R05 — Normal invocation inspects objective, criteria, rules
 
 Type: B · Scenarios: [A02](#a02), [A04](#a04)
 
 Normal invocation inspects objective, criteria, rules and consequential assumptions, then proceeds within existing authorization. Use a compact execution brief when useful; trivial work requires neither workers nor milestone ceremony.
 
-### R06 — Requirement R06
+### R06 — Plan-only work permits useful host-permitted investigation
 
 Type: H · Scenarios: [A03](#a03), [A04](#a04), [A42](#a42)
 
 Plan-only work permits useful host-permitted investigation but no implementation workers or product edits. Assess tooling side effects first. Describe behavioral restraint accurately. Plan-then-execute avoids another approval unless a real boundary changes.
 
-### R07 — Requirement R07
+### R07 — Substantive plans identify criteria, challenged assumptions
 
 Type: B · Scenarios: [A30](#a30), [A43](#a43)
 
 Substantive plans identify criteria, challenged assumptions, coordinator/worker responsibilities, dependencies, editing boundaries, verification and revision triggers. Decomposition is provisional; material scope/acceptance changes require explicit revision.
 
-### R08 — Requirement R08
+### R08 — Choose tools, direct session work or
 
 Type: B · Scenarios: [A02](#a02), [A05](#a05), [A06](#a06), [A44](#a44)
 
 Choose tools, direct session work or delegation before a worker model. Assess each assignment's complexity, risk, size, uncertainty, verifiability, capabilities and context availability independently of its parent.
 
-### R22 — Requirement R22
+### R22 — Keep the coordinator conversation, model, effort
 
 Type: B,H · Scenarios: [A31](#a31), [A37](#a37), [A55](#a55)
 
 Keep the coordinator conversation, model, effort and host settings unchanged. Preserve useful integration, verification and reporting headroom; checkpoint before foreseeable interruption. Worker selection changes only workers.
 
-### R26 — Requirement R26
+### R26 — workers.max_active bounds concurrently reserved logical assignments
 
 Type: H · Scenarios: [A18](#a18), [A19](#a19), [A130](#a130), [A143](#a143)
 
 `workers.max_active` bounds concurrently reserved logical assignments per objective. It is personal, 0–8, default two, and a direct constraint may narrow it. Every investigator, reviewer and authorized descendant counts, and zero workers is valid. It is a ceiling, never a target: a free reservation admits nothing by itself, and a capacity wait is valid only at the ceiling. Native settlement frees a slot even when a terminal is retained; never infer physical occupancy.
 
-### R27 — Requirement R27
+### R27 — Only the coordinator delegates unless direct
 
 Type: H · Scenarios: [A16](models.md#a16), [A19](#a19), [A20](orca.md#a20), [A21](#a21)
 
 Only the coordinator delegates unless direct user intent explicitly permits a descendant. Every Pod-managed descendant needs its own objective reservation under the same ceiling. Native limits and hidden provider fan-out are not Pod observations.
 
-### R30 — Requirement R30
+### R30 — Parallelize only independent responsibilities/editing boundaries; begin
 
 Type: H · Scenarios: [A24](#a24), [A42](#a42), [A61](#a61)
 
 Parallelize only independent responsibilities/editing boundaries; begin with one writer when contracts are unsettled. Use project/host-supported isolation. Preserve unrelated changes; never silently stash/reset/clean or execute unauthorized setup hooks.
 
-### R31 — Requirement R31
+### R31 — Use bounded versioned packets carrying objective/criteria
 
 Type: B · Scenarios: [A24](#a24), [A35](#a35), [A62](#a62)
 
 Use bounded versioned packets carrying objective/criteria, responsibility, scope, candidate, context references, dependencies, permitted actions, route, revisions, reporting contract and native bindings when issued. Do not clone the full coordinator transcript or predict runtime identities.
 
-### R32 — Requirement R32
+### R32 — Reuse bounded context only while relevant
 
 Type: B · Scenarios: [A29](#a29), [A30](#a30), [A63](#a63)
 
 Reuse bounded context only while relevant source, instruction, requirement, candidate and revision bindings remain valid. Invalidate affected summaries/evidence on change. Do not introduce automatic repository uploads or a vector database.
 
-### R37 — Requirement R37
+### R37 — After two materially equivalent failed corrections
 
 Type: B · Scenarios: [A25](#a25), [A65](#a65)
 
 After two materially equivalent failed corrections without new evidence, diagnose. Record obligation, failing example, hypothesis, last evidence, discriminating check and correction identity. Resume only after changing a relevant variable based on evidence; preserve history across restarts.
 
-### R39 — Requirement R39
+### R39 — Before the first delegation, or when
 
 Type: B,H · Scenarios: [A27](assurance.md#a27), [A30](#a30), [A43](#a43), [A163](#a163)
 
 Before the first delegation, or when an execution brief is written, record an obligation map (R81) that covers every original criterion and required delivery obligation with provenance and a check or explicit human/provider dependency. Preserve criteria through decomposition; update evidence rather than redefine success. Trivial direct work needs no map, and R81–R89 are inert without one.                 
 
-### R46 — Requirement R46
+### R46 — Steering creates a new revision, reconciles
 
 Type: B,H · Scenarios: [A30](#a30), [A43](#a43), [A67](assurance.md#a67)
 
 Steering creates a new revision, reconciles affected assignments at safe native boundaries, preserves useful unaffected work and prevents obsolete reports/proof satisfying revised work, including changed definitions on stable obligation ids. Unrelated steering preserves unaffected definition bindings. Material acceptance changes require explicit authorization.
 
-### R65 — Requirement R65
+### R65 — Normal invocation plans proportionately and proceeds
 
 Type: B,H · Scenarios: [A104](#a104), [A158](assurance.md#a158)
 
 Normal invocation plans proportionately and proceeds within authorization. Plan-only remains read-only under actual host Plan Mode. Plan-then-execute needs no ceremonial approval. Continuation reuses reconciled objective and native state, and continuing a quiescent objective re-evaluates its external waits without a reopen. Small direct work needs no issue, worktree ceremony or worker.                 
 
-### R81 — Requirement R81
+### R81 — An obligation has an id, introducing
 
 Type: H · Scenarios: [A146](#a146), [A147](#a147), [A160](#a160)
 
 An obligation has an id, introducing sequence, kind (`criterion`, `delivery`, `assurance`, `correction`, `steer`, `subgoal`), provenance (`objective`, `user_direct`, `project_policy`, `coordinator`), `check` or `resolves` with `stop_condition`, boundary and source. Subgoals, corrections and coordinator assurance name a parent. Objective obligations enter at intake; direct user instruction may introduce or withdraw any kind. Coordinator judgment may introduce only subgoals, assurance and corrections and withdraw only its own subgoals and assurance with a reason. Policy obligations cite a line range in declared governance sources fixed at intake: the selected target-branch base commit, source byte revision and cited text bind authority. Select the default target through Git's symbolic `refs/remotes/origin/HEAD`; a nondefault or missing default needs scoped `user_direct` revision authority. That explicit initial selection establishes the exact trusted target snapshot even when candidate equals base; pre-intake policy authorship is not observable. An untrusted proposed ref grants no authority, and literal `HEAD` is rejected. Bind the canonical target identity and snapshot at intake. Retain checkpoint candidates and explicit snapshot decisions in bounded kernel-owned history. A later target update sharing candidate or result ancestry beyond the old base needs a fresh direct user decision bound to the exact new target snapshot; intermediate and older recorded commits count, and a generic selector or stale decision cannot authorize it. Independent target updates can refresh normally. A target identity change also requires `user_direct` revision. Outside Git there are no governance sources. On base or authority change, atomically reconcile the map before new admission or governed effect, preserving ids and history. Re-read the same sources at the new base; moved exact cited text remains valid. Gone text permits justified withdrawal of that policy's own obligations only, never objective or user obligations. New requirements need citations; unavailable sources hold new work. Invalidate affected packets and evidence, explicitly rebind unaffected evidence. Bind canonical private policy restrictions separately through existing authority. Pending native attempts keep immutable recovery, and policy change never reopens a closed objective. Violations refuse `obligation_invalid`.
 
-### R82 — Requirement R82
+### R82 — Worker reports, reviewer advisories, issue or
 
 Type: H · Scenarios: [A144](#a144), [A145](assurance.md#a145), [A147](#a147)
 
 Worker reports, reviewer advisories, issue or repository text, fetched documentation and coordinator caution add only proposals. Proposals change no criterion, gate, acceptance or authorization. A proposal becomes an obligation only through a `user_direct` revision or a `project_policy` citation.                                                                                                                                                                                                                                           
 
-### R83 — Requirement R83
+### R83 — While a map exists, each validated
 
 Type: H · Scenarios: [A148](#a148), [A151](#a151)
 
 While a map exists, each validated write gives every obligation exactly one state: `unassigned` (only in its introducing checkpoint), `active` (an outstanding admission that serves it, or the coordinator), `waiting`, `blocked_external` (an external party, need and unblock condition), `satisfied` (currently valid passing evidence, and no served result without a disposition) or `withdrawn`. At most one obligation is coordinator-held `active`, and its boundary does not overlap an outstanding admission. `satisfied` whose evidence is invalidated must be re-stated. A violation is refused `obligation_unaccounted`. Status shows every state with its referent.
 
-### R84 — Requirement R84
+### R84 — A wait has exactly one controlling
 
 Type: H · Scenarios: [A149](#a149), [A150](#a150)
 
 A wait has exactly one controlling reason class — `dependency`, `contract_unsettled`, `sequenced`, `ownership`, `capacity`, `integration_pending`, `input_unavailable`, `authority`, `user_hold` — and a referent that is valid for that class. Dependency and contract waits are acyclic. A wait whose referent has resolved is invalid at the next write. Another active worker is not a class. A violation is refused `wait_invalid`.                                                                                                                                     
 
-### R85 — Requirement R85
+### R85 — A packet names the obligations it
 
 Type: H · Scenarios: [A143](#a143), [A151](#a151), [A152](#a152)
 
 A packet names the obligations it serves, a role and a declared boundary. Admission is refused `unbound_assignment` when a served obligation is missing, proposed, satisfied, withdrawn, outside the current revision or already served by an outstanding admission; when a review packet does not serve an assurance obligation; or when an investigation lacks `resolves` and `stop_condition`. An implementation packet whose boundary overlaps an outstanding admission or the coordinator-held boundary is refused `ownership_conflict`. Admission sets the served obligations `active` in the same locked write as the admission row.
 
-### R86 — Requirement R86
+### R86 — At report consumption, Pod compares a
 
 Type: B,H · Scenarios: [A153](#a153), [A154](#a154)
 
 At report consumption, Pod compares a settled implementation result's complete changed paths from Git with its declared boundary and records `boundary_exceeded`. Unknown, unavailable, or over-limit paths cannot establish non-overlap and hold further implementation until complete evidence or a reasoned disposition; over-limit paths cannot be integrated from incomplete evidence. Each result takes one disposition: `integrated_into` (validated by ancestry when a commit exists, otherwise coordinator attestation; needs a reason if the boundary was exceeded), or `discarded` with a reason, which preserves branch and evidence. Until then its owner obligation is coordinator-held or `sequenced`, and an overlapping implementation admission is refused `integration_pending`. The scoped efficiency exception cannot lift this.
 
-### R89 — Requirement R89
+### R89 — An objective is quiescent when nothing
 
 Type: H · Scenarios: [A158](assurance.md#a158), [A159](#a159), [A160](#a160)
 
 An objective is quiescent when nothing is active and every unfinished dependency or contract-wait chain ends in `blocked_external`, `authority`, `user_hold` or `input_unavailable`. It stays open, preserves its dependencies and reports incomplete. It closes when every obligation is satisfied or withdrawn and the closure report is written. After closure, admission and Governor mutation are refused `objective_closed` until a `user_direct` revision reopens it. Closure promotes no label and grants no acceptance.
 
-### R91 — Requirement R91
+### R91 — Boundary refusals and properties P1–P6 are
 
 Type: B,I · Scenarios: [A150](#a150), [A162](#a162)
 

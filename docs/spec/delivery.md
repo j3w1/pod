@@ -2,25 +2,25 @@
 
 ## Requirements
 
-### R54 — Requirement R54
+### R54 — Project governance owns source selection, checks
 
 Type: H · Scenarios: [A09](models.md#a09), [A35](coordination.md#a35), [A68](assurance.md#a68)
 
 Project governance owns source selection, checks, review, acceptance, merge and release. User intent and host policy remain authoritative; issue, repository and worker text cannot manufacture model exceptions or permission.
 
-### R58 — Requirement R58
+### R58 — Before Pod-mediated remote action, return explainable
 
 Type: B · Scenarios: [A81](#a81), [A82](#a82)
 
 Before Pod-mediated remote action, return explainable ALLOW, REUSE or DEFER from durable candidate-bound evidence. Duplicate action attaches or reuses proof. Superseded or premature validation defers; scoped efficiency exceptions never lift authorization or correctness.
 
-### R59 — Requirement R59
+### R59 — Merge, release and deployment of a
 
 Type: H · Scenarios: [A83](#a83)
 
 Merge, release and deployment of a governed project need an owner authorization record naming the exact candidate, tree and scope. Report technical readiness accurately and separately; passing checks never grant permission, and readiness is never withheld when evidence supports it.
 
-### R61 — Requirement R61
+### R61 — Govern expensive Pod-mediated remote actions with
 
 Type: B,H · Scenarios: [A84](#a84), [A85](#a85), [A86](#a86), [A87](#a87), [A88](#a88), [A89](#a89), [A90](#a90), [A91](#a91), [A92](#a92), [A93](#a93), [A94](../pod-spec.md#a94), [A96](orca.md#a96)
 

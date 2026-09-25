@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import subprocess
 import unittest
+from urllib.parse import unquote
 
 from pod.errors import PodError
 from pod.skill_validation import validate_skill
@@ -72,6 +73,14 @@ def spec_inventory(root: Path):
     return requirements, scenarios
 
 
+def markdown_anchors(text: str) -> set[str]:
+    anchors = set(re.findall(r'<a id="([^"]+)"', text))
+    for heading in re.findall(r"^#{1,6} (.+)$", text, flags=re.M):
+        slug = re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+        anchors.add(slug)
+    return anchors
+
+
 class InventoryIntegrityTests(unittest.TestCase):
     def test_offline_test_pointer_form_accepts_multiple_unique_existing_references(self):
         root = Path(__file__).resolve().parents[1]
@@ -133,6 +142,20 @@ class InventoryIntegrityTests(unittest.TestCase):
                     self.assertIn(ref, scenarios)
                     referenced.add(ref)
         self.assertEqual(referenced, scenarios)
+
+    def test_relative_document_links_and_anchors_resolve(self):
+        root = Path(__file__).resolve().parents[1]
+        for source in (root / "docs").rglob("*.md"):
+            text = source.read_text()
+            for destination in re.findall(r"(?<!!)\[[^]]+\]\(([^)]+)\)", text):
+                if re.match(r"[a-z]+://|mailto:", destination):
+                    continue
+                path, _, fragment = unquote(destination).partition("#")
+                target = (source.parent / path).resolve() if path else source
+                with self.subTest(source=source.relative_to(root), link=destination):
+                    self.assertTrue(target.is_file(), f"missing link target: {destination}")
+                    if fragment:
+                        self.assertIn(fragment, markdown_anchors(target.read_text()))
 
     def test_evidence_kinds_are_exact(self):
         root = Path(__file__).resolve().parents[1]

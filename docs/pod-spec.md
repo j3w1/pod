@@ -1,56 +1,29 @@
 # Pod specification
 
-Status: the product requirements for the version the root `VERSION` file declares on the
-same commit. It is not a claim of implementation or verification; a completed test cannot
-silently revise a requirement, and a changed requirement is revised here explicitly with
-its scenario and coverage row.
+Status: requirements for the version in the root `VERSION` on the same commit. A test result does not revise a requirement; a behavior change updates its requirement, scenario and coverage row.
 
-Pod is an adaptive coordination policy for Orca. It turns the coding session already in
-use into the coordinator, choosing tools, agents, models and effort for each part of a
-task and adapting the plan until the objective is verified. Requirement types: B =
-behavior, H = hard authorization, I = implementation.
+Pod coordinates the current coding conversation toward a verified objective. The coordinator skill makes task decisions; bounded Python helpers validate admission and evidence. Orca remains authoritative for Runs, Tasks, Dispatches, placement and worker lifecycle. The kernel keeps objective obligations, a serialized admission boundary, exact native references and Governor decisions. One personal YAML file controls the eligible worker pool and logical ceiling; the bundled catalog supplies attributed model guidance and informational benchmarks. Host rules, direct user authorization and project governance keep their own authority.
 
-## Scope and ownership
+Requirements use **B** for behavior, **H** for hard authorization and **I** for implementation. A requirement links to observable acceptance scenarios; scenario text is the expected result, not proof. `docs/pod-coverage.json` maps scenarios to unit, PTY, installed bundle, hosted CI, live native or independent review evidence. `NOT_RUN` remains unavailable evidence.
 
-Orca is the single source of truth for Runs, Tasks, Dispatches, request recovery, worker
-lifecycle, messaging, placement and terminal/resource disposition. Pod is a thin
-selection, admission and evidence layer: it keeps a serialized admission seam and exact native
-references, but it does not copy native lifecycle status or implement Delivery, cleanup,
-liveness, terminal, release or retry state machines. The installed, version-matched Orca
-orchestration guide and its recovery reference govern native mutation semantics. Orca mints
-request UUIDs; Pod only records and reuses them for the same immutable admission. Host
-policy, explicit user authorization and project governance retain their own authority.
+## Domains
 
-Pod decides desired fan-out, not physical occupancy: one logical reservation per Pod
-assignment, freed by exact native assignment settlement regardless of retained terminals.
-Settlement requires the exact Run/Task/Dispatch join, a settled projection outcome,
-and the Dispatch's own terminal status; a projected stage status, if present,
-must agree. A failed stopped attempt qualifies even when its
-stage detail is `process_stopped`; an active, unverifiable or undocumented
-abandoned attempt does not. Resource release alone proves nothing.
-Independent objectives do not census each other, and Pod never queries, infers or claims
-physical capacity. Orca's documented effect-free preflight refusals (`task_not_found`,
-`task_not_startable`, `inject_rejected`) create a durable deferred admission with no binding
-and no blind retry. `runtime_error` proves nothing about effects and stays unresolved until
-request and worker readback settle it; unknown, malformed, lost or partial-effect responses
-remain unresolved.
-
-Pod is developed against Orca 1.4.209. Capabilities are discovered from the installed
-runtime per operation through its advertised contracts and help; no minimum version is
-enforced, and a missing delegation capability blocks only delegation.
-
-Pod Execution Spec is the recommended persistent objective input while direct objectives
-remain first-class. Issue and worktree source bindings create no issue or worktree managers.
+- [Coordination and obligations](spec/coordination.md)
+- [Models and preferences](spec/models.md)
+- [Orca integration and recovery](spec/orca.md)
+- [Assurance and evidence](spec/assurance.md)
+- [Delivery and cleanup](spec/delivery.md)
+- [Interfaces and installation](spec/interface.md)
 
 ## Requirements
 
-### R01 — Requirement R01
+### R01 — Maintain this requirement/scenario inventory as product
 
 Type: B · Scenarios: [A38](#a38)
 
 Maintain this requirement/scenario inventory as product authority. Explicitly revise changed requirements; implementation results cannot silently redefine them.
 
-### R02 — Requirement R02
+### R02 — Keep the current conversation as coordinator
 
 Type: B · Scenarios: [A01](#a01), [A39](#a39), [A94](#a94)
 

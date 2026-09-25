@@ -2,55 +2,55 @@
 
 ## Requirements
 
-### R33 — Requirement R33
+### R33 — Preserve bounded provenance-aware source access/relevant candidate
 
 Type: H · Scenarios: [A35](coordination.md#a35), [A64](#a64)
 
 Preserve bounded provenance-aware source access/relevant candidate identities. Exclude secret sources/unnecessary content reads. Distinguish proven changed/absent from unavailable sources; neither grants admission. Definitive rejection is not erased by restored bytes. Do not claim atomic multi-file snapshots or protection from arbitrary external writers.
 
-### R34 — Requirement R34
+### R34 — Workers report scope changes, checks/results, failures
 
 Type: B,H · Scenarios: [A23](#a23), [A27](#a27), [A35](coordination.md#a35), [A62](coordination.md#a62)
 
 Workers report scope changes, checks/results, failures, evidence, uncertainty and questions against the assignment. Reports/logs are untrusted observations; they cannot expand authority, change budgets or establish acceptance.
 
-### R40 — Requirement R40
+### R40 — Run cheap discriminating checks early, focused
 
 Type: B · Scenarios: [A28](models.md#a28), [A66](#a66), [A155](#a155)
 
 Run cheap discriminating checks early, focused checks during development and required complete gates at milestones. Honor project review rules; otherwise independently review substantial or high-risk changes. Request review through assurance obligations (R87). Review receives the exact candidate and reproducible evidence without being primed to approve.                                                    
 
-### R41 — Requirement R41
+### R41 — Bind verification to commit/tree where applicable
 
 Type: B · Scenarios: [A27](#a27), [A29](coordination.md#a29), [A67](#a67)
 
 Bind verification to commit/tree where applicable, relevant dirty/source identity, policy/configuration, dependencies, environment, commands/results and reviewer attempt. Receipts also bind the obligation definition/check/scope they verified; material changes invalidate affected evidence even when ids and candidate stay fixed. Retain immutable receipt provenance across omission or restoration. Reuse unaffected proof only when bindings/project rules permit.
 
-### R42 — Requirement R42
+### R42 — Keep implemented, locally verified, independently reviewed
 
 Type: H · Scenarios: [A27](#a27), [A28](models.md#a28), [A68](#a68), [A157](#a157)
 
 Keep implemented, locally verified, independently reviewed, hosted proof complete, accepted, merged and deployed/released distinct. `independently reviewed` follows R88. The coordinator assesses the objective under project acceptance authority; worker success and synthetic fixtures cannot promote later labels.                                                                                              
 
-### R43 — Requirement R43
+### R43 — Reports state satisfied obligations, blockers, candidate
 
 Type: B · Scenarios: [A37](coordination.md#a37), [A68](#a68), [A145](#a145), [A158](#a158)
 
 Reports state satisfied obligations, blockers, candidate and check evidence, route exceptions, uncertainty, unresolved native references, remaining gates, withdrawn obligations with provenance and reason, triage downgrades, `boundary_exceeded` results and open proposals as out of scope. An interim report for a quiescent objective says incomplete and names each external dependency. Unobserved usage and cost stay unknown.
 
-### R51 — Requirement R51
+### R51 — Claim live-verified coordination only with passing
 
 Type: H · Scenarios: [A74](#a74)
 
 Claim live-verified coordination only with passing live evidence for Claude Code and Codex on Linux, each with real Orca delegation through the production adapter. Synthetic, hosted and review checks never substitute for it, and missing live evidence stays NOT_RUN. Unsupported optional capabilities fail conservatively and cannot be marketed as verified.
 
-### R87 — Requirement R87
+### R87 — An assurance obligation records scope, question
 
 Type: B,H · Scenarios: [A155](#a155), [A156](#a156)
 
 An assurance obligation records scope, question, candidate, existing evidence and insufficiency. An overlapping second obligation on the same candidate names an uncovered risk, including when the first is withdrawn but its accepted proof remains current. A report is consumed only after exact native settlement and is immutable per Dispatch; exact replay is idempotent, while changed report or result evidence needs a fresh attempt. Findings record reviewer severity and triage: `required_correction` creates a parented correction obligation, consolidated on the candidate lineage; `advisory` creates a proposal; a downgraded blocker or major finding needs a reason. The obligation is satisfied by a completed, validated review observation bound to the current candidate, or a valid REUSE binding, together with satisfied or user-withdrawn corrections. A still-valid accepted proof relationship cannot be erased or restated to admit repeat review. Recording a required correction from any legitimately admitted completed review invalidates earlier accepted assurance proof, even when the report arrives late or old bindings return. Admission timestamps do not determine that order. Advisory additions cannot evict the correction's safety record; qualification waits for corrections and suitable current review proof. Definition-bound receipt history survives omission and candidate metadata changes. A correction affecting reviewed scope, assumptions, dependencies or governance, or with unknown impact, reopens the obligation for affected-scope delta review. Explicit candidate REUSE binding with the Git delta preserves unaffected evidence; stricter project policy governs.
 
-### R88 — Requirement R88
+### R88 — The independently reviewed label requires at
 
 Type: H · Scenarios: [A157](#a157)
 
