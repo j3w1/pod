@@ -458,7 +458,12 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
         return
     history = _governance_history(prior)
     # Resolve aliases now, before a later checkout or ref movement changes their meaning.
-    identity = _resolve_commit(project, candidate) or candidate
+    identity = _resolve_commit(project, candidate)
+    if identity is None:
+        raise PodError("invalid_checkpoint",
+                       "A mapped Git checkpoint candidate must resolve to a commit. "
+                       "Next: name the current available candidate commit before writing the checkpoint",
+                       {"detail": "candidate_identity_unavailable", "candidate": candidate})
     bounded_text(identity, name="candidate history", limit=512)
     if identity not in history["candidates"]:
         history["candidates"].append(identity)

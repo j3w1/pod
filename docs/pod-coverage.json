@@ -1267,7 +1267,8 @@
         "tests.test_governance_history.GovernanceHistoryTests.test_pruned_discarded_result_requires_exact_consent_without_losing_history",
         "tests.test_governance_history.GovernanceHistoryTests.test_decisions_persist_through_admission_report_and_attempted_replacement",
         "tests.test_governance_history.GovernanceHistoryTests.test_candidate_history_limit_preserves_the_previous_checkpoint",
-        "tests.test_governance_history.GovernanceHistoryTests.test_malformed_shared_ancestry_observation_cannot_approve_refresh"
+        "tests.test_governance_history.GovernanceHistoryTests.test_malformed_shared_ancestry_observation_cannot_approve_refresh",
+        "tests.test_governance_history.GovernanceHistoryTests.test_unresolvable_candidate_is_refused_before_intake_or_history_mutation"
       ],
       "status": "NOT_RUN"
     },

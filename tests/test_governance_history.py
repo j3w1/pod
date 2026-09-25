@@ -106,6 +106,27 @@ class GovernanceHistoryTests(boundaries.KernelCase):
             self.assertEqual(caught.exception.detail["detail"], "governance_history_full")
             self.assertEqual(read(self.project, "objective"), before)
 
+    def test_unresolvable_candidate_is_refused_before_intake_or_history_mutation(self):
+        self.candidate = "pending-candidate"
+        with self.assertRaises(PodError) as initial:
+            self.intake()
+        self.assertEqual(initial.exception.code, "invalid_checkpoint")
+        self.assertIsNone(read(self.project, "objective"))
+        self.candidate = self.base
+        self.intake()
+        before = read(self.project, "objective")
+        self.candidate = "pending-candidate"
+        with self.assertRaises(PodError) as later:
+            self.write(self.stored())
+        self.assertEqual(later.exception.detail["detail"], "candidate_identity_unavailable")
+        self.assertEqual(read(self.project, "objective"), before)
+        self.candidate = self.base
+        target = self.commit("README.md", "independent target\n", "target")
+        boundaries.git(self.project, "update-ref", "refs/remotes/origin/target", target)
+        state = self.write(self.stored(), governance_refresh=True)["checkpoint"]
+        self.assertEqual(state["governance"]["base"], target)
+        self.assertNotIn("pending-candidate", state["governance_history"]["candidates"])
+
     def test_malformed_shared_ancestry_observation_cannot_approve_refresh(self):
         self.intake()
         self.candidate = self.commit("README.md", "candidate\n", "work")

@@ -32,7 +32,8 @@ The 0.6 kernel has focused boundary tests for R81–R91 and A143–A163:
 provenance, independently selected target governance and base-revision refresh;
 trusted initial target selection, guarded candidate-containing base updates,
 exact-snapshot user authorization, retained candidate/decision history, shared
-intermediate ancestry and direct-user target retarget refusal;
+intermediate ancestry, unresolved candidate refusal before a write, and direct-user
+target retarget refusal;
 all obligation states and
 wait referents; one coordinator slot and boundary ownership; Git-derived
 result paths including over-limit refusal before boundary decisions, ancestry or
