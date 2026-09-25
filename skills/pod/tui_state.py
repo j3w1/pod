@@ -170,6 +170,6 @@ def with_notice(state: State, message: str, *, save_at: datetime | None = None) 
 
 
 def with_runtime(state: State, label: str) -> State:
-    if label not in ("Unknown", "Offline", "Unsupported", "Not checked"):
+    if label not in ("Unknown", "Offline", "Unsupported", "Supported"):
         raise ValueError("Unsupported runtime label")
     return replace(state, runtime=label)

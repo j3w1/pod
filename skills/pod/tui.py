@@ -78,7 +78,7 @@ def _probe_runtime(results: queue.SimpleQueue[str]) -> None:
             results.put("Unsupported")
             return
         supported = "orchestration.worker-launch-preferences.v1" in advertised
-        results.put("Not checked" if supported else "Unsupported")
+        results.put("Supported" if supported else "Unsupported")
     except (OSError, ValueError, AttributeError, PodError):
         results.put("Offline")
 

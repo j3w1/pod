@@ -6,10 +6,14 @@ import tempfile
 import unittest
 
 from pod.catalog import IDS, by_id, format_latency, format_usd, load, record
-from pod.config import DEFAULT, load as preferences, set_model
+from pod.config import DEFAULT, load as preferences
 from pod.term import capabilities, display_width
-from pod.tui_render import frame, summary
+from pod.tui_render import SPLIT_COLUMNS, frame, summary
 from pod.tui_state import initial, reduce, refresh, visible_ids, with_notice
+
+SECTIONS = ('BEST FOR', 'USE WHEN', 'TRADE-OFF', 'EXAMPLE', 'YOUR PREFERENCE', 'RUNTIME / ACCESS',
+            'BENCHMARK SOURCE')
+STAGES = ('QUICK', 'NORMAL', 'HARD', 'ESCALATION')
 
 
 class TuiRenderTests(unittest.TestCase):
@@ -25,23 +29,59 @@ class TuiRenderTests(unittest.TestCase):
         self.caps = capabilities({'LANG': 'C.UTF-8', 'TERM': 'xterm-256color'}, has_colors=True)
 
     def picture(self, state=None, size=(80, 24), caps=None):
-        return frame(state or self.state, *size, caps or self.caps, self.now)
+        return frame(state or self.state, *size, caps or self.caps, self.now, strict=True)
+
+    def table_line(self, picture, name):
+        """The table half of the line naming a model (the split layout adds Details on the right)."""
+        for line in picture.plain.splitlines():
+            left = line.split('│')[0]
+            if name in left and ('Available' in left or 'Preferred' in left or 'Disabled' in left):
+                return left
+        self.fail(f'no table row for {name}')
 
     def test_profile_consistency_table_effort_and_expanded(self):
         for model_id in IDS:
             model = by_id(self.catalog)[model_id]
             guide = model['guide']
             selected = record(self.catalog, model_id, guide['profile'])
-            picture = self.picture(replace(self.state, focus_id=model_id), (160,45)).plain
-            row = next(line for line in picture.splitlines() if model['name'] in line and 'Available' in line)
+            row = self.table_line(self.picture(replace(self.state, focus_id=model_id), (160, 45)), model['name'])
             self.assertIn(selected['profile'], row)
             self.assertIn(str(selected['intelligence']), row)
             self.assertIn(format_usd(selected['usd_per_task']), row)
             self.assertIn(format_latency(selected['first_chunk_s']), row)
-            expanded = self.picture(replace(self.state, focus_id=model_id, expanded=True), (100,30)).plain
+            details = self.picture(replace(self.state, focus_id=model_id), (100, 30)).plain
             for effort in guide['ladder'].values():
                 metric = record(self.catalog, model_id, effort)
-                self.assertIn(format_usd(metric['usd_per_task']), expanded)
+                ladder = next(line for line in details.splitlines()
+                              if line.split()[1:2] == [effort] and line.split()[0] in STAGES)
+                self.assertIn(f"AA {metric['intelligence']}", ladder)
+                self.assertIn(format_usd(metric['usd_per_task']) + '/task', ladder)
+                self.assertIn(format_latency(metric['first_chunk_s']), ladder)
+            expanded = self.picture(replace(self.state, focus_id=model_id, expanded=True), (100, 40)).plain
+            for effort in guide['ladder'].values():
+                self.assertIn(format_usd(record(self.catalog, model_id, effort)['usd_per_task']), expanded)
+
+    def test_every_size_fits_without_overflow(self):
+        """Strict frames prove the layout for every width and height, including the split threshold."""
+        views = [self.state, replace(self.state, expanded=True), replace(self.state, help_open=True),
+                 replace(self.state, query='zzz'), with_notice(self.state, 'Not saved — disk full; file unchanged')]
+        for cols in range(40, 201, 3):
+            for rows in (12, 20, 24, 30, 36, 45):
+                for view in views:
+                    with self.subTest(cols=cols, rows=rows, view=view.expanded or view.help_open or view.query):
+                        picture = self.picture(view, (cols, rows))
+                        self.assertEqual(len(picture.lines), rows)
+        for cols in (119, 120, 121, SPLIT_COLUMNS - 1, SPLIT_COLUMNS):
+            self.picture(size=(cols, 36))
+
+    def test_standard_size_shows_every_section_for_every_model(self):
+        for model_id in IDS:
+            text = self.picture(replace(self.state, focus_id=model_id)).plain
+            with self.subTest(model=model_id):
+                for heading in SECTIONS + STAGES:
+                    self.assertIn(heading, text)
+                self.assertNotIn('more: Page Down', text)
+                self.assertNotIn('…', text.split('Details')[1])
 
     def test_sorts_keep_identity_and_unknown_last(self):
         self.assertEqual(visible_ids(self.state)[0], 'gpt-6-sol')
@@ -49,52 +89,76 @@ class TuiRenderTests(unittest.TestCase):
         self.assertEqual(visible_ids(replace(self.state, sort_index=2))[0], 'claude-opus-5-5')
         self.assertEqual(visible_ids(replace(self.state, sort_index=3))[0], 'gpt-6-luna')
         self.assertEqual(visible_ids(replace(self.state, sort_index=4))[0], 'gpt-6-astra')
-        moved,_ = reduce(self.state, 's')
+        moved, _ = reduce(self.state, 's')
         self.assertEqual(moved.focus_id, self.state.focus_id)
-        filtered,_ = reduce(moved, 'f')
-        self.assertEqual(filtered.hidden_focus_id, 'claude-opus-5-5' if filtered.focus_id != 'claude-opus-5-5' else None)
+        filtered, _ = reduce(moved, 'f')
+        self.assertEqual(filtered.hidden_focus_id,
+                         'claude-opus-5-5' if filtered.focus_id != 'claude-opus-5-5' else None)
 
     def test_browsing_has_no_mutation_effect(self):
-        for key in ('s','f','/','?', 'ENTER', 'ESC', 'PAGE_DOWN'):
+        for key in ('s', 'f', '/', '?', 'ENTER', 'ESC', 'PAGE_DOWN', 'UP', 'DOWN'):
             with self.subTest(key=key):
                 _, effect = reduce(self.state, key)
                 self.assertIsNone(effect)
 
-    def test_all_six_rows_and_widths(self):
-        for size in ((160,45),(100,30),(80,24),(60,20),(40,12)):
+    def test_all_six_rows_and_layouts(self):
+        for size in ((160, 45), (140, 40), (120, 36), (100, 30), (80, 24), (60, 20), (40, 12)):
             with self.subTest(size=size):
                 picture = self.picture(size=size)
-                self.assertEqual(len(picture.lines), size[1])
-                self.assertTrue(all(display_width(line.text) <= size[0]-1 for line in picture.lines))
+                self.assertTrue(all(display_width(line.text) <= size[0] - 1 for line in picture.lines))
                 for model in self.catalog['models']:
                     self.assertIn(model['name'], picture.plain)
                 self.assertIn('Details', picture.plain)
-        self.assertIn('│', self.picture(size=(160,45)).plain)
-        self.assertNotIn('│', self.picture(size=(100,30)).plain)
+                self.assertEqual('│' in picture.plain, size[0] >= SPLIT_COLUMNS)
+        wide = self.picture(size=(160, 45)).plain
+        self.assertIn('POOL', wide)
+        self.assertIn('QUICK / NORMAL / HARD / ESCALATION', wide)
 
     def test_sections_states_and_read_only(self):
-        text = self.picture(size=(160,45)).plain
-        for heading in ('BEST FOR','USE WHEN','QUICK / NORMAL / HARD / ESCALATION','TRADE-OFF',
-                        'EXAMPLE','YOUR PREFERENCE','RUNTIME / ACCESS','BENCHMARK SOURCE'):
-            self.assertIn(heading,text)
-        self.assertIn('Model access: not',text)
-        self.assertIn('verified by Pod',text)
-        self.assertIn('not total task duration',text)
-        bad = refresh(self.state,{**self.state.preferences,'errors':[{'code':'invalid_yaml','message':'Bad YAML'}]})
-        self.assertIn('READ-ONLY',self.picture(bad).plain)
-        self.assertIsNone(reduce(bad,'SPACE')[1])
+        text = ' '.join(self.picture(size=(160, 45)).plain.replace('│', ' ').split())
+        for heading in SECTIONS + ('QUICK / NORMAL / HARD / ESCALATION',):
+            self.assertIn(heading, text)
+        self.assertIn('Model access: not verified by Pod', text)
+        self.assertIn('not your subscription cost', text)
+        self.assertIn("running coordinator's model is unchanged", text)
+        bad = refresh(self.state, {**self.state.preferences, 'errors': [{'code': 'invalid_yaml', 'message': 'Bad YAML'}]})
+        self.assertIn('READ-ONLY', self.picture(bad).plain)
+        self.assertIsNone(reduce(bad, 'SPACE')[1])
 
-    def test_spans_and_ascii(self):
-        picture = self.picture(size=(80,24))
+    def test_spans_ascii_and_focus_marker(self):
+        picture = self.picture(size=(80, 24))
         roles = {span.role for line in picture.lines for span in line.styled}
-        self.assertTrue({'body','heading','label','metric','badge_available','focus'} <= roles)
-        ascii_caps = capabilities({'LC_ALL':'C','TERM':'linux','NO_COLOR':'1'},has_colors=True)
+        self.assertTrue({'body', 'heading', 'label', 'value', 'metric', 'advisory', 'key', 'title',
+                         'badge_available', 'focus'} <= roles)
+        focused = [line for line in picture.lines if line.styled[0].role == 'focus']
+        self.assertEqual(len(focused), 1)
+        self.assertIn('Claude Opus 5.5', focused[0].text)
+        ascii_caps = capabilities({'LC_ALL': 'C', 'TERM': 'linux', 'NO_COLOR': '1'}, has_colors=True)
         self.assertFalse(ascii_caps.color)
-        self.assertTrue(self.picture(caps=ascii_caps).plain.isascii())
+        for size in ((80, 24), (160, 45), (40, 12)):
+            self.assertTrue(self.picture(size=size, caps=ascii_caps).plain.isascii())
+
+    def test_interpreter_coerced_c_locale_stays_ascii(self):
+        """PEP 538 sets LC_CTYPE=C.UTF-8 for a LANG=C session; the terminal still declared C."""
+        coerced = capabilities({'LANG': 'C', 'LC_CTYPE': 'C.UTF-8', 'TERM': 'xterm-256color'})
+        self.assertTrue(coerced.ascii_only)
+        self.assertTrue(capabilities({'LC_CTYPE': 'C.UTF-8', 'TERM': 'xterm-256color'}).ascii_only)
+        self.assertFalse(capabilities({'LANG': 'C.UTF-8', 'LC_CTYPE': 'C.UTF-8', 'TERM': 'xterm'}).ascii_only)
+        self.assertFalse(capabilities({'LC_ALL': 'C.UTF-8', 'LANG': 'C', 'TERM': 'xterm'}).ascii_only)
+        self.assertFalse(capabilities({'LANG': 'en_US.UTF-8', 'TERM': 'xterm'}).ascii_only)
+
+    def test_footer_is_descriptive_and_fits(self):
+        self.assertIn('Space change state', self.picture(size=(100, 30)).lines[-1].text)
+        self.assertIn('s sort: Recommended', self.picture(size=(100, 30)).lines[-1].text)
+        compact = self.picture(size=(40, 12)).lines[-1].text
+        for fragment in ('Space', 'help', 'quit'):
+            self.assertIn(fragment, compact)
 
     def test_save_effect_summary_and_notice(self):
-        _, effect = reduce(self.state,'SPACE')
-        self.assertEqual((effect.kind,effect.model_id,effect.value),('set_model','claude-opus-5-5','preferred'))
-        self.assertEqual(reduce(self.state,'r')[1].value,'all')
-        self.assertIn('6 eligible models',summary(self.state.preferences))
-        self.assertIn('Saved just now',self.picture(with_notice(self.state,'Saved just now')).lines[0].text)
+        _, effect = reduce(self.state, 'SPACE')
+        self.assertEqual((effect.kind, effect.model_id, effect.value), ('set_model', 'claude-opus-5-5', 'preferred'))
+        self.assertEqual(reduce(self.state, 'r')[1].value, 'all')
+        self.assertIn('6 eligible models', summary(self.state.preferences))
+        self.assertIn('Saved just now', self.picture(with_notice(self.state, 'Saved just now')).lines[0].text)
+        failed = self.picture(with_notice(self.state, 'Not saved — busy; file unchanged')).lines[0]
+        self.assertIn('error', {span.role for span in failed.styled})

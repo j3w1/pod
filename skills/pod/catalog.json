@@ -15,7 +15,7 @@
       ],
       "native_default": "medium",
       "documented_context_tokens": 1000000,
-      "guidance": "Anthropic describes Claude Opus 5.5 for long-running agentic coding and knowledge work, and advises starting with it for most workloads when unsure. Anthropic lists medium as its default effort. Broader planning, sustained implementation, and careful review fit that positioning; users should evaluate higher effort on their own work.",
+      "guidance": "Anthropic describes Claude Opus 5.5 for long-running agentic coding and knowledge work and advises starting with it for most workloads when unsure. It calls the model particularly good at long, sprawling jobs such as codebase-wide migrations and audits. Medium is its default effort.",
       "sources": [
         {
           "url": "https://www.anthropic.com/claude-opus-5-5",
@@ -32,27 +32,27 @@
       ],
       "guide": {
         "profile": "high",
-        "suggested_use": "Substantial planning and review",
-        "best_for": "Cross-cutting architecture, sustained implementation planning, and careful review.",
-        "use_when": "The work spans modules or requires sustained judgment; start at medium and raise effort for demanding work.",
+        "suggested_use": "Planning and review",
+        "best_for": "Planning, architecture and substantial code review.",
+        "use_when": "Work spans modules or needs careful, sustained judgment.",
         "ladder": {
           "quick": "low",
           "normal": "medium",
           "hard": "high",
           "escalation": "xhigh"
         },
-        "trade_off": "Higher effort takes more time and AA benchmark cost.",
-        "limitations": "AA fallback is only in its harness; Pod does not enable it.",
+        "trade_off": "Top AA index here from medium up; slower, costlier than Sol.",
         "examples": [
+          {
+            "effort": "high",
+            "text": "Review a cross-cutting design before merge."
+          },
           {
             "effort": "medium",
             "text": "Plan a multi-module migration."
-          },
-          {
-            "effort": "high",
-            "text": "Review a cross-cutting design."
           }
         ],
+        "limitations": "xhigh: ~148 s to first response; max latency unknown.",
         "coding_order": 2
       }
     },
@@ -70,7 +70,7 @@
       ],
       "native_default": "high",
       "documented_context_tokens": 1000000,
-      "guidance": "Anthropic describes Claude Fable 5.1 for demanding reasoning and long-horizon agentic work, or when evaluations on Opus 5.5 at higher effort still fall short. Its documented default is high effort and its latency classification is slower. It offers a depth-oriented option for sustained, difficult tasks.",
+      "guidance": "Anthropic describes Claude Fable 5.1 for demanding reasoning and long-horizon agentic work, and for cases where evaluations on Claude Opus 5.5 at higher effort still fall short. It positions the model for jobs that take hours and span many applications. High is its default effort; its latency is classed as slower.",
       "sources": [
         {
           "url": "https://www.anthropic.com/claude/fable",
@@ -87,23 +87,23 @@
       ],
       "guide": {
         "profile": "high",
-        "suggested_use": "Demanding long-horizon reasoning",
-        "best_for": "Demanding reasoning and long-horizon agentic work.",
-        "use_when": "A difficult sustained task needs depth, or Opus at higher effort falls short on your own evaluation.",
+        "suggested_use": "Long-horizon hard work",
+        "best_for": "The hardest reasoning and long-horizon agentic work.",
+        "use_when": "Opus at higher effort still falls short on the task.",
         "ladder": {
           "quick": "low",
           "normal": "medium",
           "hard": "high",
-          "escalation": "max"
+          "escalation": "xhigh"
         },
-        "trade_off": "Slower and highest AA benchmark cost among these guide profiles.",
-        "limitations": "Its high AA cost and slower response warrant a clear need.",
+        "trade_off": "Highest AA cost here; from medium up its AA index trails Opus.",
         "examples": [
           {
             "effort": "high",
-            "text": "Investigate an intermittent cross-system failure."
+            "text": "Chase an intermittent cross-system failure."
           }
         ],
+        "limitations": "Costliest in AA; justify it with a clear need.",
         "coding_order": 6
       }
     },
@@ -121,7 +121,7 @@
       ],
       "native_default": "high",
       "documented_context_tokens": 1000000,
-      "guidance": "Anthropic calls Claude Sonnet 5 the best combination of speed and intelligence. Its documented default is high effort, while low is suggested for latency-sensitive work and xhigh for the hardest coding and agentic tasks. It offers a responsive choice for bounded features, debugging, and tool use.",
+      "guidance": "Anthropic calls Claude Sonnet 5 the best combination of speed and intelligence and the most agentic Sonnet model yet, able to plan and use tools such as browsers and terminals. High is its default effort; Anthropic suggests low for latency-sensitive work and xhigh for the hardest coding and agentic tasks.",
       "sources": [
         {
           "url": "https://www.anthropic.com/news/claude-sonnet-5",
@@ -138,27 +138,27 @@
       ],
       "guide": {
         "profile": "high",
-        "suggested_use": "Responsive feature and tool work",
-        "best_for": "Bounded features, debugging, and tool-heavy work with responsive feedback.",
-        "use_when": "You want Anthropic’s stated combination of speed and intelligence; low or medium suits latency-sensitive work.",
+        "suggested_use": "Fast agentic work",
+        "best_for": "Responsive tool use, terminal work and bounded features.",
+        "use_when": "Responsiveness matters more than peak reasoning.",
         "ladder": {
           "quick": "low",
           "normal": "medium",
           "hard": "high",
           "escalation": "xhigh"
         },
-        "trade_off": "Higher effort raises time and benchmark cost; compare on your own tasks.",
-        "limitations": "AA Non-reasoning is display-only; higher effort adds latency.",
+        "trade_off": "Fast at low and medium; AA index trails Sol at higher cost.",
         "examples": [
           {
             "effort": "medium",
-            "text": "Implement a bounded UI feature."
+            "text": "Build a bounded UI feature with tests."
           },
           {
-            "effort": "high",
-            "text": "Debug a tool-heavy workflow."
+            "effort": "low",
+            "text": "Draft release notes from a known diff."
           }
         ],
+        "limitations": "max takes about two minutes to first response.",
         "coding_order": 4
       }
     },
@@ -177,7 +177,7 @@
       ],
       "native_default": "medium",
       "documented_context_tokens": null,
-      "guidance": "OpenAI describes GPT-6 Astra as its most capable model for complex work across code, apps, and research, combining advanced reasoning, computer use, and stronger judgment. OpenAI recommends it when a task needs strong capability across multiple steps and tools. This is provider positioning, not an account-access or benchmark guarantee.",
+      "guidance": "OpenAI describes GPT-6 Astra as its most capable model for complex work across code, apps and research, combining advanced reasoning, computer use and stronger judgment. OpenAI suggests it when a task needs the strongest capability across multiple steps and tools.",
       "sources": [
         {
           "url": "https://learn.chatgpt.com/docs/models",
@@ -186,27 +186,27 @@
       ],
       "guide": {
         "profile": "medium",
-        "suggested_use": "Demanding reasoning and tool work",
-        "best_for": "Complex multi-step reasoning, computer use, and judgment across tools.",
-        "use_when": "The assignment has conflicting constraints or subtle correctness questions.",
+        "suggested_use": "Hard reasoning and tools",
+        "best_for": "Multi-step reasoning and judgment across many tools.",
+        "use_when": "A task has conflicting constraints or subtle correctness.",
         "ladder": {
           "quick": "low",
           "normal": "medium",
           "hard": "high",
-          "escalation": "max"
+          "escalation": "xhigh"
         },
-        "trade_off": "AA high has a much slower first response than medium for a one-point index difference; select effort for task needs.",
-        "limitations": "A one-point AA index gap is not a meaningful ranking.",
+        "trade_off": "Medium is fast; high adds ~37 s first response for 1 point.",
         "examples": [
           {
             "effort": "medium",
-            "text": "Untangle an ambiguous tool workflow."
+            "text": "Untangle an ambiguous multi-tool workflow."
           },
           {
             "effort": "high",
-            "text": "Resolve a difficult architecture conflict."
+            "text": "Resolve a hard architecture conflict."
           }
         ],
+        "limitations": "Higher AA cost than Sol at every effort.",
         "coding_order": 3
       }
     },
@@ -225,7 +225,7 @@
       ],
       "native_default": "medium",
       "documented_context_tokens": null,
-      "guidance": "OpenAI describes GPT-6 Sol as built for complex coding and agentic workflows, with stronger factual reliability and clearer communication. OpenAI recommends it for ambiguous, difficult, or high-value tasks needing analysis, judgment, or polish. It is a useful candidate for everyday implementation and bounded difficult engineering.",
+      "guidance": "OpenAI describes GPT-6 Sol as built for complex coding and agentic workflows, with stronger factual reliability and clearer communication. OpenAI suggests it for ambiguous, difficult or high-value tasks that need extra analysis, judgment or polish.",
       "sources": [
         {
           "url": "https://learn.chatgpt.com/docs/models",
@@ -235,22 +235,26 @@
       "guide": {
         "profile": "high",
         "suggested_use": "Everyday implementation",
-        "best_for": "Coding, debugging, and bounded agentic workflows.",
-        "use_when": "An agreed design needs implementation, or a difficult but bounded engineering task needs careful reasoning.",
+        "best_for": "Implementing agreed designs, debugging and tests.",
+        "use_when": "The design is settled and the work is bounded.",
         "ladder": {
           "quick": "low",
           "normal": "medium",
           "hard": "high",
           "escalation": "xhigh"
         },
-        "trade_off": "Higher effort may help difficult work but increases first-response time.",
-        "limitations": "Guide effort is not permanent; higher effort adds latency.",
+        "trade_off": "Fast with low AA cost; lower AA index than Opus or Astra.",
         "examples": [
           {
             "effort": "high",
-            "text": "Implement a selector and verify its tests."
+            "text": "Implement a selector and its tests."
+          },
+          {
+            "effort": "xhigh",
+            "text": "Fix a subtle race in bounded code."
           }
         ],
+        "limitations": "xhigh: ~37 s to first response vs ~10 s at high.",
         "coding_order": 1
       }
     },
@@ -268,7 +272,7 @@
       ],
       "native_default": "medium",
       "documented_context_tokens": null,
-      "guidance": "OpenAI describes GPT-6 Luna as its most efficient model for focused, high-volume work, including summarization, extraction, and focused coding. OpenAI recommends it for specific tasks with clear success conditions. It supports efforts through max, but not ultra; higher effort can serve deeper bounded reasoning when latency is acceptable.",
+      "guidance": "OpenAI describes GPT-6 Luna as its most efficient model for focused, high-volume tasks, including summarization, extraction and focused coding. OpenAI suggests it for specific tasks when you know what a good result looks like. It supports efforts up to max, but not ultra.",
       "sources": [
         {
           "url": "https://learn.chatgpt.com/docs/models",
@@ -277,27 +281,27 @@
       ],
       "guide": {
         "profile": "max",
-        "suggested_use": "Focused tasks; cheap deep reasoning",
-        "best_for": "Small mechanical tasks at low effort and inexpensive deeper reasoning at high or max.",
-        "use_when": "The task has a clear success condition and benchmark cost matters; allow extra latency at max.",
+        "suggested_use": "Small tasks, cheap depth",
+        "best_for": "Focused mechanical tasks with a clear expected result.",
+        "use_when": "Cost matters and a good result is easy to recognize.",
         "ladder": {
           "quick": "low",
           "normal": "medium",
           "hard": "high",
           "escalation": "max"
         },
-        "trade_off": "Max has about 139 seconds to first response in AA, so use low for a fast small task.",
-        "limitations": "No ultra; max takes about 139 s to first response in AA.",
+        "trade_off": "Lowest AA cost of the six; AA index close to Sonnet's.",
         "examples": [
           {
             "effort": "low",
-            "text": "Inventory a few targeted files."
+            "text": "Rename a symbol across a few files."
           },
           {
             "effort": "max",
-            "text": "Reason through a bounded tricky case when latency is acceptable."
+            "text": "Cheap second look at a tricky edge case."
           }
         ],
+        "limitations": "max takes ~139 s to first response; no ultra.",
         "coding_order": 5
       }
     }

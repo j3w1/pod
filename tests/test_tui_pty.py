@@ -47,6 +47,14 @@ class TuiPtyTests(unittest.TestCase):
     def table_line(self, session, name):
         return next((line for line in session.lines() if name in line and 'Available' in line or name in line and 'Preferred' in line), '')
 
+    def cell_at(self, session, text, offset=0):
+        """The styled cell at the first occurrence of text on screen, or None."""
+        for row,line in enumerate(session.lines()):
+            column=line.find(text)
+            if column>=0:
+                return session.cell(row,column+offset)
+        return None
+
     def test_all_six_guidance_panels_change_on_focus(self):
         session=self.open(cols=100,rows=30)
         catalog=load_catalog()
@@ -112,10 +120,12 @@ class TuiPtyTests(unittest.TestCase):
             if cols==160:
                 self.assertIn('│',session.text())
             if cols==80:
-                body=session.cell(10,11)
-                heading=session.cell(10,0)
-                badge=session.cell(3,1)
-                metric=session.cell(13,28)
+                body=self.cell_at(session,'BEST FOR',offset=17)
+                heading=self.cell_at(session,'BEST FOR')
+                badge=self.cell_at(session,'Available')
+                metric=self.cell_at(session,'/task')
+                for cell in (body,heading,badge,metric):
+                    self.assertIsNotNone(cell)
                 self.assertNotEqual(body['fg'],'default')
                 self.assertNotEqual(heading['fg'],body['fg'])
                 self.assertNotEqual(badge['fg'],body['fg'])
@@ -135,7 +145,7 @@ class TuiPtyTests(unittest.TestCase):
         session.wait_for('Preferences:')
         session.send('\x1b')
         session.wait_for('RUNTIME / ACCESS')
-        self.assertIn('Orca worker launch: unknown',session.text())
+        self.assertIn('Orca launch: unknown',session.text())
 
     def test_save_failure_keeps_bytes_and_reports_failure(self):
         session=self.open()
@@ -154,8 +164,8 @@ class TuiPtyTests(unittest.TestCase):
         stub.write_text("#!/bin/sh\nprintf '%s\n' '{\"ok\":true,\"result\":{\"runtime\":{\"capabilities\":[\"orchestration.worker-launch-preferences.v1\"]}},\"_meta\":{\"runtimeId\":\"fixture-runtime\"}}'\n")
         stub.chmod(0o700)
         session=self.open(ORCA_CLI_COMMAND=str(stub))
-        session.wait_for('Orca worker launch: supported',timeout=3)
-        self.assertIn('access unverified',session.text())
+        session.wait_for('Orca launch: supported',timeout=3)
+        self.assertIn('model access not verified',session.text())
 
     def test_snapshot_helper_renders_cell_styling(self):
         from tests.tui_snapshot import render

@@ -17,6 +17,11 @@ class Capabilities:
 def capabilities(env: dict[str, str] | None = None, *, has_colors: bool = False) -> Capabilities:
     values = os.environ if env is None else env
     locale = next((values[key] for key in ("LC_ALL", "LC_CTYPE", "LANG") if values.get(key)), "C")
+    if (not values.get("LC_ALL") and values.get("LC_CTYPE") == "C.UTF-8"
+            and values.get("LANG", "C").split("@", 1)[0].upper() in ("C", "POSIX")):
+        # Python's PEP 538 coercion sets LC_CTYPE=C.UTF-8 for a C-locale session before Pod runs;
+        # the terminal itself still declared C, so keep the conservative ASCII rendering.
+        locale = "C"
     base = locale.split("@", 1)[0].upper()
     term = values.get("TERM", "").lower()
     ascii_only = base in ("C", "POSIX") or term == "dumb" or term == "linux" or term.startswith("vt")

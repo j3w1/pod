@@ -19,6 +19,11 @@ CATALOG_PATH = Path(__file__).with_name("catalog.json")
 REFERENCE_URL = "https://artificialanalysis.ai/leaderboards/models"
 UNKNOWN = {"effort": None, "profile": "Unknown", "intelligence": None,
            "usd_per_task": None, "first_chunk_s": None, "total_response_s": None}
+# Guide prose is sized so every Details section is one line beside its label on an 80-column
+# terminal (79 drawable cells minus a 17-cell label column); "Limit: " prefixes limitations.
+DETAIL_LINE = 62
+GUIDE_LIMITS = {"suggested_use": 24, "best_for": DETAIL_LINE, "use_when": DETAIL_LINE,
+                "trade_off": DETAIL_LINE, "limitations": DETAIL_LINE - len("Limit: ")}
 
 
 def _unique_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -127,8 +132,8 @@ def validate(data: object) -> dict:
         if (agent == "claude" and context != 1_000_000) or (agent == "codex" and context is not None):
             raise PodError("invalid_catalog", "Documented context differs from checked sources")
         guidance = _text(model["guidance"], "guidance")
-        if not 35 <= len(guidance.split()) <= 70 or not guidance.startswith(provider):
-            raise PodError("invalid_catalog", "Guidance needs 35–70 attributed words")
+        if not 20 <= len(guidance.split()) <= 70 or not guidance.startswith(provider):
+            raise PodError("invalid_catalog", "Provider description needs 20–70 words attributed to the provider")
         sources = model["sources"]
         if not isinstance(sources, list) or not sources:
             raise PodError("invalid_catalog", "Model needs an official source")
@@ -144,8 +149,7 @@ def validate(data: object) -> dict:
                                         "trade_off", "examples", "limitations", "coding_order"}, "guide")
         if guide["profile"] not in efforts or guide["profile"] == "ultra":
             raise PodError("invalid_catalog", "Guide profile is not a selectable effort")
-        for key, limit in (("suggested_use", 80), ("best_for", 220), ("use_when", 260),
-                           ("trade_off", 260), ("limitations", 260)):
+        for key, limit in GUIDE_LIMITS.items():
             _text(guide[key], key, limit=limit)
         ladder = _exact(guide["ladder"], {"quick", "normal", "hard", "escalation"}, "ladder")
         if any(value not in efforts or value == "ultra" for value in ladder.values()):
@@ -157,7 +161,8 @@ def validate(data: object) -> dict:
             _exact(example, {"effort", "text"}, "example")
             if example["effort"] not in efforts or example["effort"] == "ultra":
                 raise PodError("invalid_catalog", "Example effort is unsupported")
-            _text(example["text"], "example text", limit=180)
+            if len(example["effort"]) + 2 + len(_text(example["text"], "example text", limit=DETAIL_LINE)) > DETAIL_LINE:
+                raise PodError("invalid_catalog", "Guide example must fit one Details line with its effort")
         order = guide["coding_order"]
         if type(order) is not int or not 1 <= order <= 6:
             raise PodError("invalid_catalog", "Coding order must be 1–6")
