@@ -40,7 +40,7 @@ Terminal reuse requires a settled prior attempt with a known
 terminal, copies its effective route and rechecks eligibility. Native
 `worker-start --terminal` carries no model or effort flag. New model+effort and
 model-with-omitted-effort starts use only Orca's documented launch preferences.
-Delegation requires this capability.
+Only delegation requires this capability.
 
 Requested and effective model/effort evidence is distinct. Missing effective
 fields stay `unknown`; an exact bound attempt with a mismatch is marked

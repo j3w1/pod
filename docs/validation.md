@@ -1,6 +1,6 @@
 # Pod validation
 
-This is the 0.6.1 verification contract. Every result names the exact commit,
+This is the 0.6.2 verification contract. Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
 PTY/subprocess behavior, installed-bundle proof, hosted CI, live native proof,
 visual review and independent review are separate labels. A check not exercised

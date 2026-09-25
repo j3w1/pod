@@ -66,11 +66,11 @@ or count another objective's workers.
 
 ## Supervise and verify
 
-Handle routine Orca questions; escalate new owner intent. Keep the selected
-model after faster-model advisories. Unknown or permission prompts block;
-never blindly send Enter or yes. Normal workers use Orca's agent-tab path
-and setting. Report native placement; rendered visibility and focus require
-separate UI evidence. Preserve an exact completed report, then follow the
+Answer routine worker questions through Orca; escalate new owner intent. Keep
+selected models after faster-model advisories. Unknown or permission prompts
+block; never blindly send Enter or yes. Normal workers use Orca's agent-tab
+path and setting. Report native placement; rendered visibility and focus
+require separate UI evidence. Preserve an exact completed report, then follow
 native Delivery acknowledgment and release order promptly. Reuse requires an
 immediate supported follow-up. Check exact objective workers before final
 reporting. Read [verification](references/verification.md).
