@@ -102,19 +102,19 @@ Keep SKILL at most 750 words, each conditional reference at most 700 words and a
 
 Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140), [A178](models.md#a178)
 
-The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed provider guidance, Pod guide examples and effort ladder, native/default details and dated AA reference records. State edits save immediately; `r` reversibly toggles All models and My selection without erasing saved choices. Suggested-use and guide-profile columns adapt to width; AA is informational.
+The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed provider guidance, Pod guide examples and effort ladder, native/default details and dated AA reference records. State edits save immediately; `r` reversibly toggles All models and My selection without erasing saved choices. Suggested-use and guide-profile columns adapt to width; a split view starts at 140 columns and a POOL legend fills space beneath its table. AA is informational.
 
 ### R74 — The TUI works on ordinary Linux
 
 Type: B,H · Scenarios: [A139](#a139), [A140](#a140), [A178](models.md#a178)
 
-The TUI works on ordinary Linux terminals and over SSH: arrow focus, Space state cycle, search, recommended/model/intelligence/benchmark-cost/first-response sorts, provider filter, help, expansion, quit, resize, monochrome, ASCII and non-TTY summary. All six rows remain visible at supported sizes; 40×12 pages Details. Focus is a model id across sort/filter/reload; no-results and tiny terminals stay usable. Reading and navigation do not write.
+The TUI works on ordinary Linux terminals and over SSH: arrow focus, Space state cycle, search, recommended/model/intelligence/benchmark-cost/first-response sorts, provider filter, help, expansion, quit, resize, monochrome, ASCII and non-TTY summary. All six rows remain visible at supported sizes; stacked views use a label column to fit every Details section at 80×24, while 40×12 pages Details. `LANG=C` with coerced C.UTF-8 renders ASCII. Focus is a model id across sort/filter/reload; no-results and tiny terminals stay usable. Reading and navigation do not write.
 
 ### R75 — Each focused model's Details panel is
 
 Type: B,H · Scenarios: [A122](models.md#a122), [A139](#a139), [A178](models.md#a178)
 
-Each focused model has an always-present Details guide with 35–55 words of attributed purpose guidance, distinct Pod examples, a four-stage effort ladder, exact id, native/default capability and dated AA records. Expanded detail shows all variant records and caveats. Rank scope is six supported base models; AA records stay paired and informational, with source and age visible. First response is not task duration.
+Each focused model has an always-present Details guide with a 20–70 word attributed provider description, separate Pod examples and four-stage effort ladder, exact id, native/default capability and dated AA records. Guide fields fit one 80-column Details line: `suggested_use` ≤24 characters; `best_for`, `use_when` and `trade_off` ≤62; `limitations` ≤55; each effort example ≤62. Runtime labels distinguish “Orca worker launch: supported / not advertised / Orca offline / unknown” from “Model access: not verified by Pod”. Expanded detail shows all variant records and caveats. Rank scope is six supported base models; AA records stay paired and informational, with source and age visible. First response is not task duration.
 
 ### R76 — Preference edits save immediately with lock
 
@@ -130,8 +130,6 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 
 ## Acceptance scenarios
 
-- <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
-- <a id="a175"></a>**A175** — Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments, gates, progress and next action without writes or invented telemetry.
 - <a id="a32"></a>**A32** — Global/local coexistence preserves project policy and diagnoses duplicate/shadowed/mismatched skills.
 - <a id="a33"></a>**A33** — Repeated installer runs and update preserve user files and do not create duplicate active bundles.
 - <a id="a34"></a>**A34** — Config/status/doctor and internal validation reads call no models, hooks or dispatch and perform no hidden repair.
@@ -163,9 +161,11 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 - <a id="a135"></a>**A135** — Unit, PTY/subprocess, installed-bundle, hosted, live and review evidence are recorded separately.
 - <a id="a136"></a>**A136** — Root VERSION is the only authored version and installed skills and launcher report it consistently.
 - <a id="a137"></a>**A137** — A truncated download or interrupted dependency/skill copy yields no false success, and rerun repairs an incomplete installation.
-- <a id="a139"></a>**A139** — The six model rows and guide-profile labels remain readable from wide to 40×12 terminals; Details is always present, pages at 40×12 and exposes dated AA records and source caveats.
+- <a id="a139"></a>**A139** — The six model rows and guide-profile labels remain readable from wide to 40×12 terminals; Details is always present, uses labelled sections at 80×24, pages at 40×12 and exposes dated AA records and source caveats. Strict frames sweep widths 40–200 and height 6 without line overflow; `LANG=C` uses ASCII.
 - <a id="a140"></a>**A140** — State edits save immediately, All models toggles back to saved choices across restarts/external edits, and browsing, sorting, filtering and paging never write.
 - <a id="a142"></a>**A142** — A new install and explicit update leave ordinary agent sessions and running workers unchanged; coordinators reload before new starts.
+- <a id="a175"></a>**A175** — Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments, gates, progress and next action without writes or invented telemetry.
+- <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
 
 
 ## Public interfaces

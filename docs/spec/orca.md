@@ -60,7 +60,7 @@ Worker reuse, retention, release and terminal/resource disposition are explicit 
 
 Type: I,H · Scenarios: [A31](coordination.md#a31), [A35](coordination.md#a35), [A39](../pod-spec.md#a39), [A69](#a69), [A96](#a96), [A132](#a132), [A161](#a161)
 
-Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`, `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` contracts. Another schema is reported and blocks only its objective (R90); nothing converts it. Keep native ids as references, never copied lifecycle state, and keep private data out of Git.                                                                                  
+Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`, `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` contracts. Another schema is reported and blocks only its objective (R90); nothing converts it. Keep native ids as references, never copied lifecycle state, and keep private data out of Git.
 
 ### R45 — Recovery selects the objective and reads
 
@@ -102,7 +102,7 @@ Stamp the running `{version, bundle_digest}` in each checkpoint and refuse a new
 
 Type: B,H · Scenarios: [A161](#a161)
 
-0.6.0 is a hard objective-state cutover. `pod update` prints a read-only notice of objectives on superseded schemas. Status and doctor list them with their schema and block them. Nothing converts them, and in-flight workers are settled through Orca. New objectives are unaffected.                                                                                                                                                                                                                                    
+0.6.0 is a hard objective-state cutover. `pod update` prints a read-only notice of objectives on superseded schemas. Status and doctor list them with their schema and block them. Nothing converts them, and in-flight workers are settled through Orca. New objectives are unaffected.
 
 ## Acceptance scenarios
 
@@ -131,20 +131,10 @@ Type: B,H · Scenarios: [A161](#a161)
 - <a id="a131"></a>**A131** — A settled same-Task terminal reuse rechecks eligibility and sends no model or effort flag. When native terminal and worktree identity match the prior bound or closed attempt, its known effective route binds as inherited evidence with admission, dispatch, terminal and field provenance; a known Orca disagreement is a mismatch.
 - <a id="a132"></a>**A132** — Versioned records refuse other schemas without conversion; version drift blocks new mutation but leaves recovery available.
 - <a id="a138"></a>**A138** — No context control blocks no valid start; missing launch-preferences capability blocks only delegation.
-- <a id="a161"></a>**A161** — After an update, a 0.5 objective is reported with its schema and blocked, and it is not converted. `pod update` printed the notice. An in-flight 0.5 worker is settleable through Orca. A new objective works normally.                                                                                                                                                       
+- <a id="a161"></a>**A161** — After an update, a 0.5 objective is reported with its schema and blocked, and it is not converted. `pod update` printed the notice. An in-flight 0.5 worker is settleable through Orca. A new objective works normally.
 
 
 ## Structured contracts
-
-The coordinator proposes `{agent, model, effort|native_default, context:
-native_default, reason}` after reading the pool. Judgment considers reasoning
-need, ambiguity, risk, breadth, duration, capabilities, verification and useful
-context. There is no formula, complexity tier or role table. Deterministic
-selection validates the proposed id, eligibility, constraints, agent, supported
-effort and native context control; it does not rank choices. Orca currently
-exposes model and effort launch preferences but no per-worker context flag, so
-`native_default` omits that flag. Catalog context data and AA metrics are not
-native capability proof.
 
 | Record | Bound information |
 | --- | --- |
@@ -167,35 +157,6 @@ mutations refuse `objective_closed`. Each refusal identifies its referent
 and next safe action. `assurance_unbound` qualifies the report and withholds
 the review label; it does not refuse the report. Existing admission, native
 recovery and Governor codes retain their separate meanings.
-
-Governance binds the selected target identity and exact base snapshot. An explicit
-initial user selection is trusted input, including in a repository without a
-known default or on a maintained nondefault branch with its own policy. Git refs,
-ancestry and byte equality cannot prove pre-intake authorship or distinguish an
-accepted merge from manually moving a ref. Later updates that contain known
-objective candidate or result commits beyond the old base are guarded: they need
-a fresh direct user decision for the exact new snapshot. Ordinary independent
-target updates remain refreshable. Neither a repeated generic selector, stale
-snapshot decision, equal policy bytes nor an already bound ref bypasses that
-check. This is a bounded known-identity and authority check, not merge or
-policy-authorship proof.
-
-A guarded refresh uses existing private map fields: `governance_refresh: true`,
-a fresh `revision_authority` with `provenance: user_direct` and its instruction,
-and `governance` with `base_ref` equal to the full canonical target ref and
-`base` equal to the full newly observed commit. Both snapshot fields must match
-Git observation; the supplied base never overrides it. The checkpoint's
-kernel-owned `governance_history` preserves up to 64 distinct candidate identities
-and 64 explicit user decisions, including the canonical ref, commit, instruction
-and map sequence. A mapped Git checkpoint requires its current candidate to
-resolve to a commit before any write; unresolved names cannot enter the history.
-History survives admission and report writes; caller omission or replacement
-cannot erase it. Capacity refuses rather than evicts. Shared
-ancestry outside the trusted base catches intermediate commits as well as tips.
-An exact new snapshot decision can proceed despite unavailable old Git objects;
-it preserves those records and grants no authority for a different future base.
-Without that decision, missing comparison evidence holds and identifies the
-missing identity and recovery action. Recorded decisions appear in the report.
 
 Admission validates packet and recovers prior effects first, then issue, placement,
 authority, version, source and logical-ceiling checks. Under the objective lock,

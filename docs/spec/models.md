@@ -36,13 +36,13 @@ Project, issue, repository and worker material cannot widen the personal model p
 
 Type: B · Scenarios: [A10](#a10), [A45](#a45), [A48](#a48), [A116](#a116), [A122](#a122), [A178](#a178)
 
-Maintain the six base model identities in the bundled v2 catalog. Attributed provider guidance, Pod guide profiles, effort ladders and examples support judgment; dated AA records are informational. A missing optional measurement is unknown and never blocks eligibility. Effort variants remain detail, not selectable models. The catalog supplies `suggested_use` and `ladder` to dispatch-free config reads.
+Maintain the six base model identities in the bundled v2 catalog. Attributed provider descriptions (20–70 words) are provider statements; separate Pod guide profiles, effort ladders and examples support judgment; dated AA records are informational. A missing optional measurement is unknown and never blocks eligibility. Effort variants remain detail, not selectable models. The catalog supplies `suggested_use` and `ladder` to dispatch-free config reads.
 
 ### R15 — The coordinator selects a suitable eligible
 
 Type: B,H · Scenarios: [A05](coordination.md#a05), [A06](coordination.md#a06), [A07](#a07), [A36](#a36), [A123](#a123), [A179](#a179)
 
-The coordinator selects a suitable eligible agent/model/effort/context for each assignment and records a short reason. A deterministic boundary validates eligibility, constraint, effort, agent and native context support without reranking or another model call. An attempt keeps its route; safe replacement needs a fresh decision. Safety refusal bars rerouting the same Task.
+The coordinator selects a suitable eligible agent/model/effort/context for each assignment and records a short reason. A suitable non-Preferred choice names why it fits; a stricter repository rule names its actual source in the route reason with `repository` provenance. A deterministic boundary validates eligibility, constraint, effort, agent and native context support without reranking or another model call. An attempt keeps its route; safe replacement needs a fresh decision. Safety refusal bars rerouting the same Task.
 
 ### R16 — Read current preferences before selection and
 
@@ -100,8 +100,6 @@ Reactive failure records are attempt-local. Honor native retry-after, require se
 
 ## Acceptance scenarios
 
-- <a id="a179"></a>**A179** — A suitable non-Preferred worker assignment records a brief task-specific reason; a stricter repository model restriction is recorded with `repository` provenance and its source, while the running coordinator is unchanged.
-- <a id="a178"></a>**A178** — The v2 catalog validates six ids and paired AA records; config JSON supplies `suggested_use` and `ladder`, while the TUI shows guide-profile data and adaptive Details from 160×45 through 40×12 without sending a model call or dispatch.
 - <a id="a07"></a>**A07** — An explicit model restriction produces no silent substitution.
 - <a id="a09"></a>**A09** — Project, issue and worker input cannot expand the personal model pool or change host/project permissions.
 - <a id="a10"></a>**A10** — Catalog discovery alone cannot enable a model or prove installed capability.
@@ -113,7 +111,7 @@ Reactive failure records are attempt-local. Honor native retry-after, require se
 - <a id="a16"></a>**A16** — An alternative route waits for exact settlement or proven no-start of the failed attempt.
 - <a id="a17"></a>**A17** — Model-state actions change no provider billing, service or account setting.
 - <a id="a22"></a>**A22** — Lost start/request responses retain their logical reservation and recover the same immutable admission through exact Orca request/native identity without a blind replacement or repeated semantic start.
-- <a id="a28"></a>**A28** — Substantial or high-risk changes receive candidate-bound independent review through recorded assurance obligations, including under stricter project rules.                                                                                                                                                                                                                        
+- <a id="a28"></a>**A28** — Substantial or high-risk changes receive candidate-bound independent review through recorded assurance obligations, including under stricter project rules.
 - <a id="a36"></a>**A36** — No fallback intended to bypass a safety refusal.
 - <a id="a45"></a>**A45** — Fresh install writes six Available states without a model-approval ceremony or model call.
 - <a id="a46"></a>**A46** — One personal YAML stores model states and worker ceiling; project YAML can only narrow Governor policy, while objective constraints stay local.
@@ -136,6 +134,8 @@ Reactive failure records are attempt-local. Honor native retry-after, require se
 - <a id="a127"></a>**A127** — Actual route failures honor retry-after and require settlement before alternate dispatch; a safety refusal bars same-Task reroute.
 - <a id="a128"></a>**A128** — Two concurrent TUIs preserve unrelated edits and reject a stale targeted edit; failed persistence never reports Saved.
 - <a id="a141"></a>**A141** — Routine worker questions get coordinator replies; advisories retain route, while permission or unknown prompts block and safety refusal does not reroute.
+- <a id="a178"></a>**A178** — The v2 catalog validates six ids and paired AA records; config JSON supplies `suggested_use` and `ladder`, while the TUI shows guide-profile data and adaptive Details from 160×45 through 40×12, including a split view from 140 columns, without a model call or dispatch.
+- <a id="a179"></a>**A179** — A suitable non-Preferred worker assignment records a brief task-specific reason; a stricter repository model restriction is recorded with `repository` provenance and its source, while the running coordinator is unchanged.
 
 
 ## Configuration and defaults
@@ -208,3 +208,15 @@ Worker interaction follows this bounded decision table:
 | Informational warning | No response. |
 | Unknown or permission prompt | Localized blocker; never auto-accept. |
 | Safety refusal | No reroute. |
+
+## Route contract
+
+The coordinator proposes `{agent, model, effort|native_default, context:
+native_default, reason}` after reading the pool. Judgment considers reasoning
+need, ambiguity, risk, breadth, duration, capabilities, verification and useful
+context. There is no formula, complexity tier or role table. Deterministic
+selection validates the proposed id, eligibility, constraints, agent, supported
+effort and native context control; it does not rank choices. Orca currently
+exposes model and effort launch preferences but no per-worker context flag, so
+`native_default` omits that flag. Catalog context data and AA metrics are not
+native capability proof.

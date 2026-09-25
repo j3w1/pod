@@ -46,15 +46,6 @@ Type: H · Scenarios: [A170](#a170), [A171](#a171), [A172](#a172)
 
 ## Acceptance scenarios
 
-- <a id="a172"></a>**A172** — Changed ref or plan digest refuses `cleanup_changed`; deletion uses the plan's no-force Orca worktree command, exact-tip `git update-ref -d` or remote `--force-with-lease`, and protects the default branch, main checkout and unknown terminals.
-- <a id="a171"></a>**A171** — After exact-scope consent, unique work is retained, or a bundle is verified by `git bundle verify`, `list-heads` and restoration before guarded removal; a separately confirmed discard is the only unarchived unique-work deletion path.
-- <a id="a170"></a>**A170** — A read-only cleanup plan classifies this objective's clean integrated resources, merged remote head, unique data and protected/shared/active/unknown-terminal resources without changing refs, files, journals or Orca state.
-- <a id="a169"></a>**A169** — When the target moves after a verified delivery result, currency refuses `governance_changed` and names a direct user decision for the new exact snapshot; candidate-authored policy is not adopted.
-- <a id="a168"></a>**A168** — A missing/other-objective record, wrong scope/candidate/tree, wrong remote or target alias even with equal SHA, rebase result, readback mismatch or second different record refuses `delivery_unverified` or `delivery_recorded` without a write.
-- <a id="a167"></a>**A167** — For exact merge, squash and fast-forward commits with the authorized tree and target, an allowed merge PASS plus matching provider readback stores one delivery record and permits closure without governance refresh or proof rebind.
-- <a id="a166"></a>**A166** — Changing the prepared candidate/tree or target after consent makes the former authorization unusable; a new exact decision is required. Deployment, new provider effects and spending are not enabled by delivery consent.
-- <a id="a165"></a>**A165** — Local-only revision creates no `publish` or `merge` authorization: push, PR update and merge defer before effects, while hosted checks appear as `NOT_RUN`; defer records `user_hold`.
-- <a id="a164"></a>**A164** — With no applicable consent, the coordinator shows repository, target, candidate commit/tree and `publish`/`merge` scope once; remote merge choice records both scopes, permits push/PR and required CI, and merge uses `--match-head-commit` for that exact candidate without a second routine check prompt.
 - <a id="a81"></a>**A81** — A superseded candidate and premature validation each defer with an explainable reason and next action; an identical running action is attached to and a passing result for the same candidate and context is reused; a necessary rerun after changed input proceeds.
 - <a id="a82"></a>**A82** — A scoped Governor efficiency exception affects only efficiency deferrals, never authority or correctness.
 - <a id="a83"></a>**A83** — Push/PR without exact `publish` authorization and merge without exact `merge` authorization defer before effects; wrong candidate, tree or scope never grants either action. Technical readiness remains separate from permission.
@@ -68,3 +59,43 @@ Type: H · Scenarios: [A170](#a170), [A171](#a171), [A172](#a172)
 - <a id="a91"></a>**A91** — An independent or urgent delivery unit is admitted while another unit's workers, deliveries or corrections are unsettled.
 - <a id="a92"></a>**A92** — A project file that relaxes Governor mode, widens retries, enables cancellation, declares host control or adds an exception is refused.
 - <a id="a93"></a>**A93** — The enforcement level is reported as advisory unless the owner's personal policy declares a host control, and it is never reported as a proven control.
+- <a id="a164"></a>**A164** — With no applicable consent, the coordinator shows repository, target, candidate commit/tree and `publish`/`merge` scope once; remote merge choice records both scopes, permits push/PR and required CI, and merge uses `--match-head-commit` for that exact candidate without a second routine check prompt.
+- <a id="a165"></a>**A165** — Local-only revision creates no `publish` or `merge` authorization: push, PR update and merge defer before effects, while hosted checks appear as `NOT_RUN`; defer records `user_hold`.
+- <a id="a166"></a>**A166** — Changing the prepared candidate/tree or target after consent makes the former authorization unusable; a new exact decision is required. Deployment, new provider effects and spending are not enabled by delivery consent.
+- <a id="a167"></a>**A167** — For exact merge, squash and fast-forward commits with the authorized tree and target, an allowed merge PASS plus matching provider readback stores one delivery record and permits closure without governance refresh or proof rebind.
+- <a id="a168"></a>**A168** — A missing/other-objective record, wrong scope/candidate/tree, wrong remote or target alias even with equal SHA, rebase result, readback mismatch or second different record refuses `delivery_unverified` or `delivery_recorded` without a write.
+- <a id="a169"></a>**A169** — When the target moves after a verified delivery result, currency refuses `governance_changed` and names a direct user decision for the new exact snapshot; candidate-authored policy is not adopted.
+- <a id="a170"></a>**A170** — A read-only cleanup plan classifies this objective's clean integrated resources, merged remote head, unique data and protected/shared/active/unknown-terminal resources without changing refs, files, journals or Orca state.
+- <a id="a171"></a>**A171** — After exact-scope consent, unique work is retained, or a bundle is verified by `git bundle verify`, `list-heads` and restoration before guarded removal; a separately confirmed discard is the only unarchived unique-work deletion path.
+- <a id="a172"></a>**A172** — Changed ref or plan digest refuses `cleanup_changed`; deletion uses the plan's no-force Orca worktree command, exact-tip `git update-ref -d` or remote `--force-with-lease`, and protects the default branch, main checkout and unknown terminals.
+
+## Governance delivery baseline
+
+Governance binds the selected target identity and exact base snapshot. An explicit
+initial user selection is trusted input, including in a repository without a
+known default or on a maintained nondefault branch with its own policy. Git refs,
+ancestry and byte equality cannot prove pre-intake authorship or distinguish an
+accepted merge from manually moving a ref. Later updates that contain known
+objective candidate or result commits beyond the old base are guarded: they need
+a fresh direct user decision for the exact new snapshot. Ordinary independent
+target updates remain refreshable. Neither a repeated generic selector, stale
+snapshot decision, equal policy bytes nor an already bound ref bypasses that
+check. This is a bounded known-identity and authority check, not merge or
+policy-authorship proof.
+
+A guarded refresh uses existing private map fields: `governance_refresh: true`,
+a fresh `revision_authority` with `provenance: user_direct` and its instruction,
+and `governance` with `base_ref` equal to the full canonical target ref and
+`base` equal to the full newly observed commit. Both snapshot fields must match
+Git observation; the supplied base never overrides it. The checkpoint's
+kernel-owned `governance_history` preserves up to 64 distinct candidate identities
+and 64 explicit user decisions, including the canonical ref, commit, instruction
+and map sequence. A mapped Git checkpoint requires its current candidate to
+resolve to a commit before any write; unresolved names cannot enter the history.
+History survives admission and report writes; caller omission or replacement
+cannot erase it. Capacity refuses rather than evicts. Shared
+ancestry outside the trusted base catches intermediate commits as well as tips.
+An exact new snapshot decision can proceed despite unavailable old Git objects;
+it preserves those records and grants no authority for a different future base.
+Without that decision, missing comparison evidence holds and identifies the
+missing identity and recovery action. Recorded decisions appear in the report.

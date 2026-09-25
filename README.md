@@ -52,7 +52,7 @@ A small task can finish with zero workers. Missing Orca delegation support block
 
 ## Models and the terminal view
 
-`pod` opens an optional model TUI in a terminal; without a TTY it prints a short summary. The TUI shows six supported base models, a focus-driven guide with suggested uses and effort examples, native capability information, and dated Artificial Analysis records. All six rows stay visible at supported sizes; narrow terminals page Details. Space cycles Available, Preferred, and Disabled; `r` switches My selection and All models while retaining saved choices. Search, sort, and provider filters affect display only.
+`pod` opens an optional model TUI in a terminal; without a TTY it prints a short summary. The TUI shows six supported base models, a focus-driven guide with suggested uses and effort examples, native capability information, and dated Artificial Analysis records. All six rows stay visible at supported sizes. Wide terminals split the pool and guide with a POOL legend; compact terminals stack labelled guide sections, and the narrowest view pages Details. Runtime launch capability and unverified model access are shown separately. Space cycles Available, Preferred, and Disabled; `r` switches My selection and All models while retaining saved choices. Search, sort, and provider filters affect display only.
 
 The personal YAML at `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` is the single model preference authority. `pod config --json` shows the effective pool and path; `pod config edit` opens that file in your editor. A custom map can leave a model unset, which means not eligible. The six exact model ids are `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`.
 

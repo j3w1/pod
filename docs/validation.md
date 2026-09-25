@@ -72,7 +72,7 @@ unavailable delegation suppresses that flag.
 Live Codex and Claude trials additionally exercise A143, A150, A158 and A159
 in disposable objectives. A missing live case remains `NOT_RUN`. Stage-1
 review is the fresh final independent audit under the mechanism installed
-before 0.6. After merge and installation, a separate 0.6 disposable objective
+before 0.6.5. After merge and installation, a separate 0.6.5 disposable objective
 records an assurance obligation, review attempt, triage and label decision as
 self-hosting evidence; it cannot promote stage-1 evidence.
 
@@ -97,7 +97,8 @@ measurement records p50/p95/max for focus/save and external refresh with kernel,
 CPU, Python, ncurses, TERM, locale and terminal size; focus/save p95 must be
 under 500 ms and refresh within one second. Visual review examines `tests/tui_snapshot.py` SVG/PNG output at 160×45,
 100×30, 80×24, 60×20 and 40×12 in pink, dark and light palettes, plus
-NO_COLOR, ASCII, expanded detail and help. Inspect actual TUI and installer
+NO_COLOR, ASCII, expanded detail and help. `frame(strict=True)` and a
+40–200-column, 6-line-height sweep check that no line overflows. Inspect actual TUI and installer
 terminal output, including the multi-orca banner.
 
 The installer suite uses scrubbed disposable homes, a local tarball and HTTP

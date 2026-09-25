@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 import re
@@ -54,8 +55,12 @@ def assert_test_reference_exists(root: Path, path: str) -> None:
     file = root.joinpath(*module.split(".")).with_suffix(".py")
     if not file.is_file():
         raise ValueError(f"offline_test module does not exist: {path}")
-    text = file.read_text()
-    if f"class {cls}" not in text or f"def {method}" not in text:
+    tree = ast.parse(file.read_text(), filename=str(file))
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    exists = (any(node.name == cls for node in classes)
+              and any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and child.name == method for node in classes for child in node.body))
+    if not exists:
         raise ValueError(f"offline_test case does not exist: {path}")
 
 
@@ -172,8 +177,15 @@ class InventoryIntegrityTests(unittest.TestCase):
         validation = (root / "docs" / "validation.md").read_text()
         for phrase in ("All models", "My selection", "preference_changed",
                        "Pending same-UUID replay", "native_default", "pod-context/v4",
-                       "focus-driven Details", "one-shot installer"):
+                       "one-shot installer", "cleanup-plan", "--match-head-commit",
+                       "delivery: {record}", "selection_required", "critical-path"):
             self.assertIn(phrase, spec)
+        guidance = "\n".join(path.read_text() for path in
+                             (root / "skills" / "pod" / "references").glob("*.md"))
+        for phrase in ("publish", "merge_commit", "cleanup-plan", "`expect`",
+                       "`pod internal map`", "Optimize time to a verified result",
+                       "Preferred is a small tie-breaker"):
+            self.assertIn(phrase, guidance)
         for phrase in ("POD_REQUIRE_PTY=1", "pod.catalog --check", "SHA-pinned public install",
                        "independent review", "live native"):
             self.assertIn(phrase, validation)
