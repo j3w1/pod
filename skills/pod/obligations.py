@@ -69,10 +69,10 @@ NEXT_ACTIONS = {
 
 # Proposed map fields a caller may send; everything else in a stored map is stamped here.
 MAP_INPUT = {"seq", "obligations", "proposals", "governance", "governance_refresh",
-             "revision_authority", "reopen", "close", "rebind", "dispositions"}
+             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery"}
 MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "governance_sources",
               "coordinator_slot", "quiescence", "closure", "observations", "reopened",
-              "governance_history"}
+              "governance_history", "delivery"}
 
 
 def refuse(code: str, detail: str, message: str, **referent: Any) -> PodError:
@@ -718,6 +718,8 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
              "proposals": list(proposals.values())}
     if prior_map is not None and "governance_history" in prior_map:
         state["governance_history"] = deepcopy(prior_map["governance_history"])
+    if prior_map is not None and "delivery" in prior_map:
+        state["delivery"] = deepcopy(prior_map["delivery"])
     for ob in rows.values():
         if ob["state"] == "satisfied":
             for item in ob["receipts"]:
@@ -1456,6 +1458,8 @@ def report_projection(state: dict, ctx: dict) -> dict:
               "label": label_qualification(state, ctx, ctx.get("candidate"))}
     if state.get("governance_history", {}).get("decisions"):
         result["governance_decisions"] = deepcopy(state["governance_history"]["decisions"])
+    if state.get("delivery") is not None:
+        result["delivery"] = deepcopy(state["delivery"])
     if status == "quiescent":
         result["interim_report"] = state["quiescence"]["interim_report"]
     elif status == "open" and result["unfinished"]:
@@ -1474,7 +1478,8 @@ def observations(prior: dict | None, state: dict, ctx: dict) -> dict:
                                  "coordinator_slot": state.get("coordinator_slot")}),
                "governance_current": ctx.get("governance_current"),
                "governance_stale": (ctx.get("governance_current") is not None
-                                    and ctx["governance_current"] != state["governance"]["base"]),
+                                    and ctx["governance_current"] !=
+                                    (state.get("delivery") or {}).get("result", state["governance"]["base"])),
                "policy_gone": [ob["id"] for ob in state["obligations"]
                                if ob["provenance"] == "project_policy" and ob.get("source", {}).get("gone")]}
     snapshot = {**state, "observations": current}
@@ -1568,9 +1573,12 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
         lines.append(f"Flag       churn: {key} has {CHURN_THRESHOLD}+ settled admissions without satisfaction")
     if observed.get("governance_stale"):
         lines.append("Flag       governance base moved; refresh before new admission")
+    if state.get("delivery") is not None:
+        lines.append(f"Delivery   {state['delivery']['method']} {state['delivery']['result'][:12]}")
     return {"map": {"seq": state["seq"], "revision": state["revision"], "counts": counts,
                     "coordinator_slot": state.get("coordinator_slot"),
                     "quiescence": state.get("quiescence"), "closure": state.get("closure"),
+                    "delivery": state.get("delivery"),
                     "observations": state.get("observations"), "label": label,
                     "obligations": [{"id": ob["id"], "state": ob["state"],
                                      "referent": ob.get("executor") or ob.get("wait") or ob.get("external")

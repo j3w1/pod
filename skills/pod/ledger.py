@@ -174,6 +174,9 @@ def _validate_context(value: object) -> dict:
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict) and "governance_history" in checkpoint_value:
         _governance_history(checkpoint_value)
+    if isinstance(checkpoint_value, dict) and "delivery" in checkpoint_value:
+        from .governance import validate_delivery_record
+        validate_delivery_record(checkpoint_value["delivery"])
     return state
 
 
@@ -595,9 +598,20 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     prior_map = map_of(state)
     map_state: dict = {}
     ctx = None
+    has_delivery = "delivery" in proposed
+    delivery_request = proposed.pop("delivery", None)
     if proposed or prior_map is not None:
         refresh = proposed.get("governance_refresh") is True
-        if prior_map is not None and not refresh:
+        verified_delivery = None
+        if has_delivery:
+            from .governance import verify_delivery
+            if prior_map is None:
+                raise PodError("delivery_unverified", "A delivery needs a bound obligation map",
+                               {"detail": "map_missing", "next_action": "checkpoint the objective map first"})
+            record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
+            verified_delivery = verify_delivery(project, objective, prior_map, record_id,
+                                                seq=prior_map["seq"] + 1)
+        if prior_map is not None and not refresh and verified_delivery is None:
             require_governance_current(project, prior_map)
         if prior_map is None:
             declared = proposed.get("governance")
@@ -658,6 +672,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                  "a disposition names a recorded admission")
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
         map_state = accept_write(prior_map, proposed, ctx)
+        if verified_delivery is not None:
+            map_state["delivery"] = verified_delivery
         _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,
                                    snapshot_authorized=snapshot_authorized)
     return map_state, ctx

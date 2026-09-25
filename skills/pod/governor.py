@@ -913,6 +913,10 @@ def _validate_provider(value: object, *, nested: bool = True) -> dict | None:
     for key, item in value.items():
         if not isinstance(key, str) or len(key) > 64:
             raise PodError("invalid_provider", "Provider receipt keys are short names")
+        if key == "merge_commit" and (not isinstance(item, str) or not _GIT_OBJECT_ID.fullmatch(item)):
+            raise PodError("invalid_provider", "Provider merge_commit is a full Git commit id")
+        if key == "method" and item not in ("merge", "squash", "fast-forward"):
+            raise PodError("invalid_provider", "Provider merge method is merge, squash or fast-forward")
         if isinstance(item, dict) and nested:
             _validate_provider(item, nested=key == "triggered")
         elif not (item is None or isinstance(item, (str, int, bool))) or (isinstance(item, str) and len(item) > 512):
