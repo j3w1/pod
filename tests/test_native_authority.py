@@ -15,8 +15,8 @@ from pod.ledger import (check_bound_sources, checkpoint, constraints_update,
 from pod.operations import guarded_start
 from pod.records import packet
 from tests.common import fixture, kernel_binding, kernel_map
-from tests.test_governor import observation
-from tests.test_operations import FakePort, ROUTE
+from tests.kernel_support import observation
+from tests.kernel_support import FakePort, ROUTE
 
 
 def binding(run='run', owner='owner', generation=1, runtime='runtime'):

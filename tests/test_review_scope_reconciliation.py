@@ -6,7 +6,7 @@ from pod.errors import PodError
 from pod.internal import run as internal_run
 from pod.ledger import read
 from pod.operations import OrcaPort
-from tests.test_kernel_boundaries import KernelCase
+from tests.kernel_support import KernelCase
 
 
 class ScopeReconciliationTests(KernelCase):
