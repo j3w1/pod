@@ -58,6 +58,20 @@ def assert_test_reference_exists(root: Path, path: str) -> None:
         raise ValueError(f"offline_test case does not exist: {path}")
 
 
+def spec_text(root: Path) -> str:
+    paths = [root / "docs" / "pod-spec.md", *sorted((root / "docs" / "spec").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
+def spec_inventory(root: Path):
+    text = spec_text(root)
+    requirements = re.findall(r"^### (R\d{2}) — .*\n\nType: ([BHI,]+) · Scenarios: (.*)$",
+                              text, flags=re.M)
+    scenarios = re.findall(r'^- <a id="(a\d{2,3})"></a>\*\*(A\d{2,3})\*\*',
+                           text, flags=re.M)
+    return requirements, scenarios
+
+
 class InventoryIntegrityTests(unittest.TestCase):
     def test_offline_test_pointer_form_accepts_multiple_unique_existing_references(self):
         root = Path(__file__).resolve().parents[1]
@@ -92,13 +106,17 @@ class InventoryIntegrityTests(unittest.TestCase):
                 validate_skill(skill)
     def test_spec_and_coverage_ids_are_complete(self):
         root = Path(__file__).resolve().parents[1]
-        spec = (root / "docs" / "pod-spec.md").read_text()
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
-        requirements = re.findall(r"^\| (R\d{2}) \|", spec, flags=re.M)
-        scenarios = re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M)
-        self.assertEqual(requirements, [f"R{i:02}" for i in range(1, len(requirements) + 1)])
-        self.assertEqual(scenarios, [f"A{i:02}" for i in range(1, len(scenarios) + 1)])
-        self.assertEqual([row["id"] for row in coverage["scenarios"]], scenarios)
+        requirements, scenarios = spec_inventory(root)
+        ids = [id for id, _, _ in requirements]
+        scenario_ids = [id for _, id in scenarios]
+        self.assertEqual(sorted(ids), [f"R{i:02}" for i in range(1, len(ids) + 1)])
+        self.assertEqual(sorted(scenario_ids, key=lambda id: int(id[1:])),
+                         [f"A{i:02}" for i in range(1, len(scenario_ids) + 1)])
+        self.assertEqual([anchor for anchor, id in scenarios], [id.lower() for id in scenario_ids])
+        self.assertEqual(sorted(row["id"] for row in coverage["scenarios"]), sorted(scenario_ids))
+        for _, kind, _ in requirements:
+            self.assertTrue(set(kind.split(",")) <= {"B", "H", "I"})
         for row in coverage["scenarios"]:
             with self.subTest(row=row["id"]):
                 self.assertTrue(row["required_evidence"])
@@ -106,20 +124,14 @@ class InventoryIntegrityTests(unittest.TestCase):
 
     def test_requirement_scenario_references_resolve(self):
         root = Path(__file__).resolve().parents[1]
-        spec = (root / "docs" / "pod-spec.md").read_text()
-        scenarios = set(re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M))
+        requirements, rows = spec_inventory(root)
+        scenarios = {id for _, id in rows}
         referenced = set()
-        for requirement, refs in re.findall(r"^\| (R\d{2}) \| [^|]* \| .* \| ([^|]*) \|$", spec, flags=re.M):
+        for requirement, _, refs in requirements:
             with self.subTest(requirement=requirement):
-                for ref in (item.strip() for item in refs.split(",") if item.strip()):
-                    if "–" in ref:
-                        first, last = ref.split("–")
-                        self.assertIn(first, scenarios)
-                        self.assertIn(last, scenarios)
-                        referenced.update(f"A{i:02}" for i in range(int(first[1:]), int(last[1:]) + 1))
-                    else:
-                        self.assertIn(ref, scenarios)
-                        referenced.add(ref)
+                for ref in re.findall(r"\[(A\d{2,3})\]\([^)]*\)", refs):
+                    self.assertIn(ref, scenarios)
+                    referenced.add(ref)
         self.assertEqual(referenced, scenarios)
 
     def test_evidence_kinds_are_exact(self):
@@ -133,7 +145,7 @@ class InventoryIntegrityTests(unittest.TestCase):
 
     def test_current_contract_names_the_new_boundaries(self):
         root = Path(__file__).resolve().parents[1]
-        spec = (root / "docs" / "pod-spec.md").read_text()
+        spec = spec_text(root)
         validation = (root / "docs" / "validation.md").read_text()
         for phrase in ("All models", "My selection", "preference_changed",
                        "Pending same-UUID replay", "native_default", "pod-context/v4",
