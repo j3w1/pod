@@ -255,10 +255,11 @@ def require_authority(project: Path, objective: str, *, owner: str,
             "native": native, "references": refs}
 
 
-def context_root_for_run(run_id: str) -> Path | None:
+def contexts_for_run(run_id: str) -> list[tuple[Path, dict]]:
+    """Read every objective bound to one Run without choosing among them."""
     root = state_root()
     if not root.exists():
-        return None
+        return []
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
     matches = []
@@ -273,10 +274,15 @@ def context_root_for_run(run_id: str) -> Path | None:
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
         admission_match = any(row.get("run_id") == run_id for row in state["admissions"].values())
         if admission_match or any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs):
-            matches.append(path.parent)
+            matches.append((path.parent, state))
+    return matches
+
+
+def context_root_for_run(run_id: str) -> Path | None:
+    matches = contexts_for_run(run_id)
     if len(matches) > 1:
         raise PodError("ambiguous_context", "Multiple local contexts bind this Run")
-    return matches[0] if matches else None
+    return matches[0][0] if matches else None
 
 
 def context_for_run(run_id: str) -> dict | None:

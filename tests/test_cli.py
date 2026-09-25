@@ -49,6 +49,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(valid['status'],'valid')
         self.assertEqual(len(valid['eligible']),6)
         self.assertEqual(len(valid['catalog']),6)
+        self.assertTrue(all(row['suggested_use'] and set(row['ladder']) ==
+                            {'quick', 'normal', 'hard', 'escalation'} for row in valid['catalog']))
         path.write_text('schema: pod/v1\nselection: all\nmodels: {gpt-6-sol: available}\n')
         self.assertEqual(execute(args,self.project)['eligible'],[])
 
