@@ -1524,7 +1524,8 @@
       ],
       "offline_test": [
         "tests.test_delivery.VerifiedDeliveryTests.test_target_moved_after_verified_result_holds_future_work",
-        "tests.test_delivery.VerifiedDeliveryTests.test_moved_target_can_store_verified_provider_result_but_stays_stale"
+        "tests.test_delivery.VerifiedDeliveryTests.test_moved_target_can_store_verified_provider_result_but_stays_stale",
+        "tests.test_delivery.VerifiedDeliveryTests.test_owner_refresh_after_delivery_restores_currency"
       ],
       "status": "NOT_RUN"
     },

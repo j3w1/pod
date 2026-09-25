@@ -179,6 +179,22 @@ class VerifiedDeliveryTests(KernelCase):
         self.assertIn("target moved after the recorded delivery", str(caught.exception))
         self.assertEqual(read(self.project, "objective")["checkpoint"]["delivery"], delivered["delivery"])
 
+    def test_owner_refresh_after_delivery_restores_currency(self):
+        self.prepare_result()
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        (self.project / "README.md").write_text("later target change\n")
+        git(self.project, "add", "README.md")
+        git(self.project, "commit", "-qm", "later target")
+        moved = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/target", moved)
+        refreshed = self.write(self.stored(), governance_refresh=True,
+                               revision_authority={"provenance": "user_direct",
+                                                   "instruction": f"Adopt target at {moved}"},
+                               governance={"base_ref": "refs/remotes/origin/target", "base": moved})
+        self.assertEqual(refreshed["checkpoint"]["governance"]["base"], moved)
+        require_governance_current(self.project, refreshed["checkpoint"])
+        self.assertEqual(self.write(self.stored())["checkpoint"]["governance"]["base"], moved)
+
     def test_missing_record_and_wrong_authorization_refuse_without_checkpoint_write(self):
         candidate, tree, _ = self.prepare_result()
         from pod.governor import _read_journal

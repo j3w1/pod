@@ -456,14 +456,18 @@ def require_governance_current(project: Path, map_state: dict | None) -> None:
     if current is None:
         raise refuse("governance_unavailable", "governance_unavailable",
                      "the governance base cannot be resolved; new work holds", base_ref=governance["base_ref"])
+    if current == governance["base"]:
+        return
+    # A verified delivery result is current without adopting its policy; a later owner-approved refresh
+    # moves the bound base itself, so the base check above stays authoritative after one.
     delivery = map_state.get("delivery")
     if delivery is not None:
         validate_delivery_record(delivery)
-        if current != delivery["result"]:
-            raise refuse("governance_changed", "governance_changed",
-                         "the target moved after the recorded delivery; obtain a direct user decision "
-                         "for the new snapshot", recorded=delivery["result"][:12], current=current[:12])
-        return
+        if current == delivery["result"]:
+            return
+        raise refuse("governance_changed", "governance_changed",
+                     "the target moved after the recorded delivery; obtain a direct user decision "
+                     "for the new snapshot", recorded=delivery["result"][:12], current=current[:12])
     if current != governance["base"]:
         raise refuse("governance_changed", "governance_changed",
                      "the target branch moved since governance was bound", bound=governance["base"][:12],
