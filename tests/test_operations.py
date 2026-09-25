@@ -1,7 +1,9 @@
 from copy import deepcopy
 from datetime import datetime, timezone
+import base64
 import json
 import os
+import subprocess
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -9,7 +11,7 @@ from unittest.mock import patch
 from pod.config import load as load_config, set_model, write_defaults
 from pod.errors import PodError
 from pod.internal import run as internal_run
-from pod.ledger import (admission_identity, checkpoint, constraints_update, read,
+from pod.ledger import (admission_identity, checkpoint, constraints_update, objective_root, read,
                         route_failure, update_admission)
 from pod.operations import (_assignment_evidence, _preflight_refusal_classification,
                             guarded_start, recover_admission, OrcaPort)
@@ -933,6 +935,91 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(recovered['action'],'inspect_without_uuid')
         self.assertEqual(recovered['admission']['error']['code'],'native_attempt_absent')
         self.assertEqual(len(self.port.starts),0)
+
+    def unknown_native_start(self,request=REQUEST):
+        error={'code':'future_native_refusal','message':'Native rejected this exact request',
+               'data':{'taskId':'task','runId':'run'}}
+        if request: error['data']['orchestrationRequestId']=request
+        raw=json.dumps({'ok':False,'error':error,'_meta':{'runtimeId':'runtime'}}).encode()
+        original_run=subprocess.run
+        def run(argv,**kwargs):
+            if argv[0]=='/fixture/orca':return subprocess.CompletedProcess(argv,1,raw,b'')
+            return original_run(argv,**kwargs)
+        with patch.object(self.port,'start_worker',side_effect=OrcaPort().start_worker) as start, \
+             patch('pod.orca.executable',return_value=Path('/fixture/orca')), \
+             patch('pod.orca.subprocess.run',side_effect=run):
+            admission=self.start()['admission']
+        self.assertEqual(start.call_count,1)
+        self.assertEqual((admission['state'],admission['request_uuid']),('unresolved',request))
+        self.assertEqual(admission['error'],{'code':'native_effect_uncertain','detail':error})
+        ref=admission['recovery']['start_observations'][0]
+        path=objective_root(self.project,'objective')/'native-start'/(ref+'.json')
+        self.assertEqual(base64.b64decode(json.loads(path.read_text())['observation']['stdout']['base64']),raw)
+        return admission,path
+
+    def test_unknown_refusal_retains_provenance_through_exact_recovery(self):
+        admission,path=self.unknown_native_start();before=path.read_bytes()
+        self.port.state='absent'
+        with patch.object(self.port,'request_show',wraps=self.port.request_show) as shown:
+            missing=self.recover(admission)
+        shown.assert_called_once_with(REQUEST)
+        self.assertEqual(missing['admission']['error']['code'],'native_attempt_absent')
+        self.port.state='completed'
+        self.port.request_receipt={'exit':1,'error':{'code':'task_not_startable','message':'not ready'}}
+        self.assertEqual(self.recover(admission)['status'],'deferred')
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(self.port.starts,[])
+
+    def test_unknown_refusal_without_uuid_never_becomes_absence_proof(self):
+        admission,path=self.unknown_native_start(None);before=path.read_bytes()
+        recovered=self.recover(admission)
+        self.assertEqual((recovered['status'],recovered['action']),('unresolved','inspect_without_uuid'))
+        self.assertIsNone(recovered['admission']['request_uuid'])
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(self.port.starts,[])
+
+    def test_corrupt_or_missing_start_evidence_blocks_native_recovery(self):
+        admission,path=self.unknown_native_start();before=path.read_bytes()
+        for mode in ('corrupt','missing'):
+            with self.subTest(mode=mode):
+                if mode=='corrupt': path.write_text('{}')
+                else: path.unlink()
+                with patch.object(self.port,'start_worker') as start, \
+                     patch.object(self.port,'request_show') as shown:
+                    with self.assertRaises(PodError) as caught:self.recover(admission)
+                self.assertEqual(caught.exception.code,'native_evidence_unavailable')
+                start.assert_not_called();shown.assert_not_called()
+                path.write_bytes(before)
+
+    def test_pending_timeout_keeps_original_uuid_and_both_native_observations(self):
+        admission,path=self.unknown_native_start();before=path.read_bytes()
+        self.port.state='pending'
+        partial=json.dumps({'ok':False,'error':{'code':'another_refusal',
+                          'data':{'orchestrationRequestId':REQUEST}},'_meta':{'runtimeId':'runtime'}}).encode()
+        original_run=subprocess.run
+        calls=[]
+        def run(argv,**kwargs):
+            if argv[0]=='/fixture/orca':
+                calls.append(argv)
+                raise subprocess.TimeoutExpired(argv,1,output=partial)
+            return original_run(argv,**kwargs)
+        with patch.object(self.port,'start_worker',side_effect=OrcaPort().start_worker), \
+             patch('pod.orca.executable',return_value=Path('/fixture/orca')), \
+             patch('pod.orca.subprocess.run',side_effect=run):
+            with self.assertRaises(PodError):self.recover(admission)
+        self.assertEqual(len(calls),1)
+        self.assertIn('--retry-request',calls[0])
+        held=read(self.project,'objective')['admissions'][admission['admission_id']]
+        self.assertEqual((held['state'],held['request_uuid']),('unresolved',REQUEST))
+        self.assertEqual(len(held['recovery']['start_observations']),2)
+        self.assertEqual(path.read_bytes(),before)
+
+    def test_observation_limit_blocks_before_another_native_effect(self):
+        admission,_=self.unknown_native_start();self.port.state='pending'
+        with patch('pod.operations.MAX_START_OBSERVATIONS',1), \
+             patch.object(self.port,'start_worker') as start:
+            with self.assertRaises(PodError) as caught:self.recover(admission)
+        self.assertEqual(caught.exception.code,'native_evidence_full');start.assert_not_called()
 
     def test_alternative_after_failure_requires_native_settlement(self):
         first=self.start()['admission']

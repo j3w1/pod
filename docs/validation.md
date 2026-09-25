@@ -1,6 +1,6 @@
 # Pod validation
 
-This is the 0.6.0 verification contract. Every result names the exact commit,
+This is the 0.6.1 verification contract. Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
 PTY/subprocess behavior, installed-bundle proof, hosted CI, live native proof,
 visual review and independent review are separate labels. A check not exercised
@@ -172,7 +172,10 @@ current authority, runtime, placement, issue body and checkpoint core, but
 **does not re-check current model preferences**. A changed preference after
 row persistence governs only later starts. Invalid UUID, contradictory receipt
 or ambiguous native attempt holds. Effect-free native refusals defer without a
-blind replacement; uncertain errors remain unresolved until readback.
+blind replacement; uncertain errors remain unresolved until readback. Native start
+responses, including unknown refusals, malformed output, timeouts and unexpected
+exit statuses, retain immutable private evidence. Recovery checks its integrity;
+no test or new recording can reconstruct unavailable earlier responses.
 
 The Governor's deterministic local kernel keeps ALLOW/REUSE/DEFER, candidate
 binding, preflight, CI reuse, bounded failure classification and safe

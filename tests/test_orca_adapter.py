@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from pathlib import Path
@@ -129,16 +130,38 @@ class OrcaAdapterTests(unittest.TestCase):
 
     def test_refusal_envelope_preserves_request_and_partial_effects(self):
         request='11111111-1111-4111-8111-111111111111'
-        for code in ('task_not_found','task_not_startable','inject_rejected','runtime_error'):
+        for code in ('task_not_found','task_not_startable','inject_rejected','runtime_error','unknown'):
             value={'ok':False,'error':{'code':code,'message':'refused',
                                       'data':{'orchestrationRequestId':request}},
                    'result':{'dispatchId':'dispatch'},'_meta':{'runtimeId':'r'}}
             decoded=_mutation_envelope(json.dumps(value))
             self.assertEqual(decoded['request_uuid'],request)
             self.assertEqual(decoded['result']['dispatchId'],'dispatch')
-        with self.assertRaises(PodError):
-            _mutation_envelope(json.dumps({'ok':False,'error':{'code':'unknown'},
-                                           '_meta':{'runtimeId':'r'}}))
+            self.assertEqual(decoded['error'],value['error'])
+
+    def test_uncertain_outcomes_preserve_raw_provenance_and_available_request(self):
+        request='11111111-1111-4111-8111-111111111111'
+        response=json.dumps({'ok':False,'error':{'code':'future_refusal',
+                            'data':{'orchestrationRequestId':request}},
+                            '_meta':{'runtimeId':'r'}}).encode()
+        cases=[('exit',subprocess.CompletedProcess([],7,response,b'detail'),response,request),
+               ('timeout',subprocess.TimeoutExpired([],1,output=response,stderr=b'detail'),response,request),
+               ('malformed',subprocess.CompletedProcess([],1,b'{invalid',b'detail'),b'{invalid',None),
+               ('invalid_encoding',subprocess.CompletedProcess([],1,b'\xff',b'detail'),b'\xff',None),
+               ('malformed_result',subprocess.CompletedProcess([],1,
+                    response.replace(b'"ok": false',b'"result": [], "ok": false'),b'detail'),
+                    response.replace(b'"ok": false',b'"result": [], "ok": false'),request)]
+        for name,outcome,raw,expected_request in cases:
+            with (self.subTest(case=name), patch('pod.orca.executable',return_value=Path('/fixture/orca')),
+                 patch('pod.orca.subprocess.run',**({'side_effect':outcome} if isinstance(outcome,Exception)
+                                                  else {'return_value':outcome}))):
+                with self.assertRaises(PodError) as caught: mutate_command(START,accept_exit=(0,1))
+                exc=caught.exception
+                self.assertEqual(exc.code,'native_effect_uncertain')
+                self.assertEqual(base64.b64decode(exc.native_observation['stdout']['base64']),raw)
+                self.assertEqual(base64.b64decode(exc.native_observation['stderr']['base64']),b'detail')
+                self.assertEqual(getattr(exc,'native_reference',{}).get('request_uuid'),expected_request)
+                self.assertIsNone(exc.detail)  # Raw private output is not copied into public error text.
 
     def test_request_reference_conflict_is_not_flattened_away(self):
         one='11111111-1111-4111-8111-111111111111'
