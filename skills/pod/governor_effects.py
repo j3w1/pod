@@ -357,4 +357,3 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
             return {"status": settled["outcome"], "record_id": record_id, "action": "readback", "receipt": settled["receipt"]}
         return {"status": "UNKNOWN", "record_id": record_id, "action": "hold", "receipt": row["receipt"]}
     raise PodError("invalid_action", f"{kind} has no provider readback")
-
