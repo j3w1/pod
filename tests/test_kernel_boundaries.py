@@ -451,15 +451,14 @@ class GovernanceTests(KernelCase):
         self.refused("governance_unavailable", "governance_unavailable", self.start, "t",
                      self.packet(["S"]))
 
-    def test_committed_candidate_policy_cannot_select_governance_and_target_is_bound(self):
+    def test_candidate_policy_cannot_supply_its_own_initial_target_authority(self):
         git(self.project, "checkout", "-q", "-b", "candidate")
         (self.project / "AGENTS.md").write_text(AGENTS + "Candidate requires a new reviewer.\n")
         git(self.project, "commit", "-q", "-am", "candidate policy")
         candidate = git(self.project, "rev-parse", "HEAD")
         forged = self.policy("PX", "6")
         self.refused("governance_unavailable", "governance_unavailable", self.write,
-                     [self.criterion(), forged], governance={"base_ref": "candidate"},
-                     revision_authority={"provenance": "user_direct", "instruction": "use candidate"})
+                     [self.criterion(), forged], governance={"base_ref": "candidate"})
         self.refused("governance_unavailable", "governance_unavailable", self.write,
                      [self.criterion(), forged], governance={"base_ref": "HEAD"})
         accepted = self.write([self.criterion(), self.policy()], governance={"base_ref": None})
@@ -468,7 +467,10 @@ class GovernanceTests(KernelCase):
                           "exclude": [], "base": self.base})
         self.assertNotEqual(candidate, accepted["checkpoint"]["governance"]["base"])
 
-    def test_candidate_policy_ref_is_refused_across_branch_remote_and_detached_layouts(self):
+    def test_candidate_policy_retarget_needs_snapshot_authority_in_all_git_layouts(self):
+        # Explicit initial selection is trusted. These later retargets cannot adopt
+        # candidate policy through a generic selection after the baseline is bound.
+        baseline = self.intake()["checkpoint"]
         git(self.project, "checkout", "-q", "-b", "candidate")
         (self.project / "AGENTS.md").write_text(AGENTS + "Candidate requires another reviewer.\n")
         git(self.project, "commit", "-qam", "candidate policy")
@@ -480,19 +482,18 @@ class GovernanceTests(KernelCase):
                      {"project": str(self.project), "criteria": ["PoD#1"],
                       "coverage": [{"criterion": "PoD#1", "check": "unit"}],
                       "map": {"governance": {"base_ref": "candidate"},
-                              "revision_authority": direct,
                               "obligations": [self.criterion(), forged]}})
         for checkout, proposed in (("main", "candidate"), ("candidate", "origin/candidate")):
             with self.subTest(checkout=checkout, proposed=proposed):
                 git(self.project, "checkout", "-q", checkout)
                 self.refused("governance_unavailable", "governance_unavailable", self.write,
                              [self.criterion(), forged], governance={"base_ref": proposed},
-                             revision_authority=direct)
+                             governance_refresh=True, revision_authority=direct)
         git(self.project, "checkout", "-q", "--detach", self.candidate)
         self.refused("governance_unavailable", "governance_unavailable", self.write,
                      [self.criterion(), forged], governance={"base_ref": "candidate"},
-                     revision_authority=direct)
-        self.assertIsNone(read(self.project, "objective"))
+                     governance_refresh=True, revision_authority=direct)
+        self.assertEqual(read(self.project, "objective")["checkpoint"], baseline)
 
     def test_explicit_default_alias_on_checked_out_target_preserves_initial_baseline(self):
         git(self.project, "checkout", "-q", "target")
@@ -502,23 +503,14 @@ class GovernanceTests(KernelCase):
                          "refs/remotes/origin/target")
         self.assertEqual(state["checkpoint"]["governance"]["base"], self.candidate)
 
-    def test_missing_default_does_not_make_candidate_self_selection_independent(self):
+    def test_missing_default_needs_explicit_initial_target_selection(self):
         git(self.project, "branch", "candidate", self.candidate)
         git(self.project, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
         self.refused("governance_unavailable", "governance_unavailable", self.write,
-                     [self.criterion()], governance={"base_ref": "candidate"},
-                     revision_authority={"provenance": "user_direct",
-                                         "instruction": "select this target"})
+                     [self.criterion()], governance={"base_ref": "candidate"})
 
     def test_nondefault_target_needs_direct_selection_and_retarget_revision(self):
         git(self.project, "branch", "other-target")
-        (self.project / "README.md").write_text("candidate work\n")
-        git(self.project, "commit", "-qam", "candidate work")
-        self.candidate = git(self.project, "rev-parse", "HEAD")
-        git(self.project, "checkout", "-q", "other-target")
-        (self.project / "AGENTS.md").write_text(AGENTS + "Independent target rule.\n")
-        git(self.project, "commit", "-qam", "target policy")
-        git(self.project, "checkout", "-q", "main")
         git(self.project, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
         self.refused("governance_unavailable", "governance_unavailable", self.write,
                      [self.criterion()], governance={"base_ref": "other-target"})
@@ -872,8 +864,18 @@ class CapacityAndReviewTests(KernelCase):
         rows = self.stored()
         by = {row["id"]: row for row in rows}
         by["K1"].update(state="satisfied", evidence=[self.proof("K1")])
-        by["A"].pop("wait"); by["A"].update(state="satisfied", evidence=[{"attempt": review["admission_id"]}])
         self.write(rows)
+        by["A"].pop("wait"); by["A"].update(state="satisfied", evidence=[{"attempt": review["admission_id"]}])
+        self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows)
+        # The review that found the blocker is not post-correction proof.
+        current_packet = self.packet(["A"], role="review")
+        current_review = self.start("review-after-correction", current_packet)["admission"]
+        self.settle(current_review)
+        rows = self.stored()
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("executor")
+        a.update(state="satisfied", evidence=[{"attempt": current_review["admission_id"]}])
+        self.report(current_review, current_packet, map={"obligations": rows})
         with patch.object(OrcaPort, "read_native", autospec=True,
                           side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
             qualified = internal_run("acceptance", acceptance)

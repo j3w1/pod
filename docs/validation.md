@@ -30,7 +30,8 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 
 The 0.6 kernel has focused boundary tests for R81–R91 and A143–A163:
 provenance, independently selected target governance and base-revision refresh;
-committed candidate-policy injection and direct-user target retarget refusal;
+trusted initial target selection, guarded candidate-containing base updates,
+exact-snapshot user authorization and direct-user target retarget refusal;
 all obligation states and
 wait referents; one coordinator slot and boundary ownership; Git-derived
 result paths including over-limit refusal before boundary decisions, ancestry or
@@ -40,8 +41,9 @@ observations, assurance triage, affected-scope delta review and explicit REUSE; 
 closure and direct-user reopen; and hard cutover of older objectives. Seeded
 stdlib generative tests check P1–P6 after every accepted transition and print
 counterexamples on failure. P1 checks structural obligation accounting, not
-eventual progress. P5 checks binding integrity, not review truth. Receipt integrity
-regressions exercise pure kernel and production checkpoint/admission/report/acceptance boundaries: omission of an
+eventual progress. P5 checks binding integrity, not review truth. Late-report and finding-overflow regressions preserve required corrections and
+order proof by accepted map history independently of wall-clock timestamps.
+Receipt integrity regressions exercise pure kernel and production checkpoint/admission/report/acceptance boundaries: omission of an
 accepted assurance, candidate metadata edits, changed definitions on stable ids,
 fresh qualifying attempts, ordinary receipt relabeling/restoration, source and
 environment invalidation, governance refresh, explicit unaffected Git REUSE,

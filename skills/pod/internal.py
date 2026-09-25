@@ -80,13 +80,11 @@ def run(operation: str, request: dict) -> dict:
         declared = request.get("map", {}).get("governance") if isinstance(request.get("map"), dict) else None
         base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
         if "project" in request:
-            from .ledger import _independent_governance, governance_observation
+            from .ledger import governance_observation
             authority = request.get("map", {}).get("revision_authority") if isinstance(request.get("map"), dict) else None
             observed = governance_observation(
                 Path(request["project"]), base_ref,
                 user_direct=isinstance(authority, dict) and authority.get("provenance") == "user_direct")
-            observed = _independent_governance(Path(request["project"]), observed, None, {},
-                                                established_ref=None)
         else:
             observed = {"status": "no_repository"} if base_ref is None else {"status": "unavailable"}
         brief["map"] = brief_map(request["criteria"], request.get("map"),

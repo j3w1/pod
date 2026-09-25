@@ -7,12 +7,13 @@ Plan-only follows host permissions; accepted execution stays in this session.
 Before delegation or a brief, map original criteria and delivery obligations to
 provenance, checks or external dependencies. Trivial direct work needs no map.
 Discovery creates proposals until direct user revision or cited project policy
-adopts them. Fix governance source paths at intake and cite the target-branch
-base, never candidate edits. On base or authority change, reconcile the same
-sources before new admission or governed effects; preserve ids, history and
-moved exact text. Only genuinely gone policy obligations may be withdrawn.
-Unavailable sources hold new work. Rebind unaffected proof explicitly; pending
-native attempts retain immutable recovery.
+adopts them. Fix governance paths at intake. Explicit target selection establishes
+the trusted initial snapshot; Git cannot prove authorship. Later base updates
+containing objective candidate commits need fresh user authority for that exact
+snapshot. Reconcile changed bases and authority before new admissions or governed
+effects; preserve ids, history, declared sources and moved exact text. Only genuinely
+gone policy obligations may be withdrawn. Unavailable sources hold work. Rebind
+unaffected proof explicitly; pending native attempts retain immutable recovery.
 
 Give subgoals parents and checks or decisions with stop conditions. Keep one
 coordinator-held active obligation. Every unfinished obligation has active work,

@@ -101,16 +101,19 @@ _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "r
                      "run_id", "task_id", "plan_revision", "packet_id", "worktree", "reuse_of",
                      "native_binding", "recovery", "error", "failures", "created_at", "updated_at",
                      "serves", "role", "boundary", "map_revision", "candidate", "result",
-                     "changed_paths", "boundary_exceeded", "disposition", "report", "binding"}
+                     "changed_paths", "boundary_exceeded", "disposition", "report", "binding",
+                     "admitted_seq"}
 
 
 def _validate_admission(key: str, row: object) -> None:
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
-    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS, name="admission")
+    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq"}, name="admission")
     if value["admission_id"] != key:
         raise PodError("state_unsupported", "Admission identity or schema is unsupported")
+    if "admitted_seq" in value and (type(value["admitted_seq"]) is not int or value["admitted_seq"] < 1):
+        raise PodError("state_unsupported", "Admission sequence must be a positive integer")
     from .obligations import ROLES
     if (not isinstance(value["serves"], list) or not value["serves"] or value["role"] not in ROLES
             or not isinstance(value["boundary"], dict) or type(value["map_revision"]) is not int):
@@ -361,7 +364,7 @@ def _governance_target(project: Path, proposed: str | None, *, user_direct: bool
             and not selected.startswith(("refs/heads/", "refs/remotes/"))):
         return None, "candidate_or_nonbranch_ref"
     if default is not None and (selected == default or
-                                selected == "refs/heads/" + default.rsplit("/", 1)[-1]
+                                selected == "refs/heads/" + default.removeprefix("refs/remotes/origin/")
                                 and _resolve_commit(project, selected) == _resolve_commit(project, default)):
         return default, None
     if not user_direct:
@@ -422,48 +425,62 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
 
 
 def _independent_governance(project: Path, observed: dict, candidate: str | None,
-                            admissions: dict, *, established_ref: str | None) -> dict:
-    """Refuse a newly selected policy source on the candidate's own lineage.
+                            admissions: dict, *, established: dict | None,
+                            previous_candidate: str | None = None,
+                            snapshot_authorized: bool = False) -> dict:
+    """Preserve the selected baseline; reject adoption of known objective work.
 
-    A previously bound target is independent authority even when its commit later
-    advances through the candidate. For a new nondefault target, matching policy
-    bytes at the independently named default are safe; otherwise connected
-    candidate/result commits cannot establish that policy independently.
+    Initial target selection is the trusted authority input, including candidate
+    equality. Git cannot prove pre-intake authorship. Later target observations
+    are checked against that baseline, regardless of ref reuse or policy bytes.
+    Adopting known objective work requires direct authority for the exact new
+    snapshot; it does not prove that the project merged or authored that work.
     """
-    if (observed.get("status") != "observed" or observed.get("selection") == "default"
-            or observed.get("target_ref") == established_ref):
+    if observed.get("status") != "observed" or established is None:
         return observed
-    default = governance_observation(project, None)
-    if default.get("status") == "observed" and default.get("texts") == observed.get("texts"):
+    base = established.get("base")
+    if observed["commit"] == base:
         return observed
+
+    def unavailable(reason: str) -> dict:
+        return {"status": "unavailable", "reason": reason, "target_ref": observed["target_ref"]}
+
+    if base is None or _resolve_commit(project, base) is None:
+        return unavailable("bound_base_unavailable")
     if candidate is None:
-        return {"status": "unavailable", "reason": "candidate_identity_required",
-                "target_ref": observed["target_ref"]}
-    candidate_commit = _resolve_commit(project, candidate)
-    if candidate_commit is None:
-        return {"status": "unavailable", "reason": "candidate_identity_unavailable",
-                "target_ref": observed["target_ref"]}
-    identities = {candidate_commit}
+        return unavailable("candidate_identity_required")
+    values = [candidate]
+    if previous_candidate is not None:
+        values.append(previous_candidate)
     for row in admissions.values():
         result = row.get("result") or {}
-        for value in (result.get("head"), (row.get("report") or {}).get("result_commit")):
-            if value is None:
-                continue
-            resolved = _resolve_commit(project, value)
-            if resolved is None:
-                return {"status": "unavailable", "reason": "result_identity_unavailable",
-                        "target_ref": observed["target_ref"]}
-            identities.add(resolved)
+        values.extend(value for value in (row.get("candidate"), result.get("base"), result.get("head"),
+                                          (row.get("report") or {}).get("result_commit"))
+                      if value is not None)
+    identities = set()
+    for value in values:
+        resolved = _resolve_commit(project, value)
+        if resolved is None:
+            return unavailable("objective_identity_unavailable")
+        identities.add(resolved)
     target = observed["commit"]
-    for identity in identities:
-        forward = git_is_ancestor(project, target, identity)
-        backward = git_is_ancestor(project, identity, target)
-        if forward is None or backward is None:
-            return {"status": "unavailable", "reason": "target_relation_unavailable",
-                    "target_ref": observed["target_ref"]}
-        if forward or backward:
-            return {"status": "unavailable", "reason": "candidate_policy_target",
-                    "target_ref": observed["target_ref"]}
+    contains_work = False
+    for identity in sorted(identities):
+        baseline = git_is_ancestor(project, identity, base)
+        contained = git_is_ancestor(project, identity, target)
+        if baseline is None or contained is None:
+            return unavailable("target_relation_unavailable")
+        if contained and not baseline:
+            contains_work = True
+    if contains_work and not snapshot_authorized:
+        action = ("obtain a fresh direct user decision for this exact target snapshot, then write "
+                  "governance_refresh with revision_authority and governance.base_ref/base")
+        raise PodError("governance_unavailable",
+                       "The changed governance target contains known objective work beyond its bound base. "
+                       f"Next: {action}",
+                       {"detail": "governance_unavailable", "next_action": action,
+                        "referent": {"reason": "candidate_policy_target", "base_ref": observed["target_ref"],
+                                     "base": target, "previous_base": base}})
     return observed
 
 
@@ -792,6 +809,15 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                 base_ref = prior_map["governance"]["base_ref"]
                 declared = proposed.get("governance")
                 change = isinstance(declared, dict) and declared.get("base_ref", base_ref) != base_ref
+                if change:
+                    # Normalize only an alias of the already trusted target. This
+                    # comparison grants no authority to select a different target;
+                    # keep the original declaration for exact-snapshot consent below.
+                    canonical, _ = _governance_target(project, declared["base_ref"],
+                                                       user_direct=True, bound_ref=None)
+                    if canonical is not None and canonical == base_ref:
+                        proposed = {**proposed, "governance": {**declared, "base_ref": base_ref}}
+                        change = False
                 if change and refresh:
                     observed = governance_observation(
                         project, declared["base_ref"], user_direct=isinstance(proposed.get("revision_authority"), dict)
@@ -804,7 +830,14 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                             else governance_observation(project, None))
             observed = _independent_governance(
                 project, observed, core["candidate"], state["admissions"],
-                established_ref=(prior_map or {}).get("governance", {}).get("base_ref"))
+                established=(prior_map or {}).get("governance"),
+                previous_candidate=previous.get("candidate"),
+                snapshot_authorized=refresh
+                and isinstance(proposed.get("revision_authority"), dict)
+                and proposed["revision_authority"].get("provenance") == "user_direct"
+                and isinstance(declared, dict)
+                and declared.get("base_ref") == observed.get("target_ref")
+                and declared.get("base") == observed.get("commit"))
             ctx = kernel_context(project, objective, state, authority.get("native"),
                                  candidate=core["candidate"], criteria=core["criteria"],
                                  governance=observed, delegation=native.get("delegation"),
@@ -1061,7 +1094,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                **served, "boundary": packet_boundary(body)["boundary"],
                "candidate": checkpoint_value.get("candidate"), "result": result,
                "changed_paths": None, "boundary_exceeded": [], "disposition": None, "report": None,
-               "binding": admission_binding(body, ctx, map_state)}
+               "binding": admission_binding(body, ctx, map_state), "admitted_seq": new_map["seq"]}
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
@@ -1081,7 +1114,10 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
         require_authority(project, objective, owner=owner, state=state,
                           run_id=state["admissions"][admission_id]["run_id"])
         row = state["admissions"][admission_id]
+        admitted = ("admitted_seq" in row, row.get("admitted_seq"))
         update(row)
+        if admitted != ("admitted_seq" in row, row.get("admitted_seq")):
+            raise PodError("admission_conflict", "The admission's reservation sequence is immutable")
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
         _write(path, state)
         return row

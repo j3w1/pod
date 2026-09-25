@@ -806,12 +806,15 @@ class AssuranceTests(unittest.TestCase):
                         write(state, rows), ctx(admissions=admissions))
                 self.assertEqual(label_qualification(state, ctx(admissions=admissions), "c1")["label"], "WITHHELD")
         state, admissions = self.settle_review()
+        recorded = by_id(state, "A")["receipts"][0]
+        self.assertEqual(recorded["evidence"]["binding"], admissions["R1"]["binding"])
+        self.assertEqual(recorded["reported_seq"], state["seq"])
         admissions["R1"]["binding"] = {**admissions["R1"]["binding"], "environment": "another runner"}
         rows = rows_of(state)
         by = {row["id"]: row for row in rows}
         by["A"].update(state="satisfied", evidence=[{"attempt": "R1"}])
         by["A"].pop("wait")
-        refused(self, "obligation_unaccounted", "evidence_invalidated", accept_write, state,
+        refused(self, "obligation_invalid", "receipt_conflict", accept_write, state,
                 write(state, rows), ctx(admissions=admissions))
 
     def test_triage_creates_corrections_or_proposals_and_lists_downgrades(self):

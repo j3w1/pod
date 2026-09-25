@@ -462,7 +462,8 @@ def _evidence_record(ob: dict, raw: Any) -> dict:
     return record
 
 
-def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: bool) -> list[dict]:
+def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: bool,
+                    *, reported_attempt: str | None = None, seq: int) -> list[dict]:
     """Keep immutable receipt identities even when a caller omits the selected evidence.
 
     History is inside the existing obligation record, bounded by MAX_EVIDENCE, and is
@@ -471,6 +472,21 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
     """
     identity = "attempt" if ob["kind"] == "assurance" else "reference"
     receipts = {item["evidence"][identity]: deepcopy(item) for item in (prior or {}).get("receipts", [])}
+    if reported_attempt is not None:
+        admission = _admissions(ctx)[reported_attempt]
+        if review_completed(admission):
+            binding = admission.get("binding") or {}
+            base = {"attempt": reported_attempt, "candidate": admission.get("candidate"),
+                    "binding": deepcopy(admission.get("binding")),
+                    "definition": binding.get("definitions", {}).get(ob["id"]),
+                    "governance": binding.get("governance")}
+            previous = receipts.get(reported_attempt)
+            if previous is not None and previous["evidence"] != base:
+                raise refuse("obligation_invalid", "receipt_conflict",
+                             "a consumed review cannot change its bound receipt", obligation=ob["id"],
+                             receipt=reported_attempt)
+            receipts[reported_attempt] = {**(previous or {}), "evidence": base,
+                                          "reported_seq": (previous or {}).get("reported_seq", seq)}
     stamped = []
     for raw in ob.get("evidence", []):
         if ob["kind"] == "assurance":
@@ -585,17 +601,21 @@ def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) 
             return False
         if ob["kind"] == "assurance":
             admission = _admissions(ctx).get(row["attempt"])
-            # A later completed review that found a required correction supersedes
-            # the earlier accepted review, even if its old environment returns.
-            # The finding is recorded only by report triage of that exact attempt.
+            # Both reservation and report consumption must follow correction
+            # resolution. Wall-clock admission stamps provide neither ordering.
+            # Older accepted receipts can use accepted_seq as their report bound.
+            receipt = next((item for item in ob.get("receipts", [])
+                            if item["evidence"].get("attempt") == row["attempt"]), None)
+            proof_seq = (receipt or {}).get("reported_seq", (receipt or {}).get("accepted_seq"))
+            admitted_seq = admission.get("admitted_seq") if isinstance(admission, dict) else None
             superseded = any(
                 finding.get("triage") == "required_correction"
-                and finding.get("attempt") != row["attempt"]
-                and (not isinstance(admission, dict)
-                     or not isinstance(_admissions(ctx).get(finding.get("attempt")), dict)
-                     or not isinstance(admission.get("created_at"), str)
-                     or not isinstance(_admissions(ctx)[finding["attempt"]].get("created_at"), str)
-                     or admission["created_at"] <= _admissions(ctx)[finding["attempt"]]["created_at"])
+                and (not isinstance(proof_seq, int) or not isinstance(admitted_seq, int)
+                     or not isinstance(finding.get("recorded_seq"), int)
+                     or not isinstance(finding.get("resolved_seq"), int)
+                     or finding["resolved_seq"] < finding["recorded_seq"]
+                     or proof_seq <= finding["resolved_seq"]
+                     or admitted_seq <= finding["resolved_seq"])
                 for finding in ob.get("findings", []))
             if (not isinstance(admission, dict) or admission.get("role") != "review"
                     or admission.get("serves") != [ob["id"]] or row["attempt"] in _outstanding(ctx)
@@ -833,6 +853,12 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     # Withdrawals and evidence stamping.
     for ob in rows.values():
         earlier = prior_rows.get(ob["id"])
+        if ob["kind"] == "assurance":
+            for finding in ob.get("findings", []):
+                if finding.get("triage") == "required_correction" and "recorded_seq" not in finding:
+                    child = rows.get(finding.get("correction"))
+                    if child is not None and child.get("finding", {}).get("attempt") == finding.get("attempt"):
+                        finding["recorded_seq"] = child["introduced_seq"]
         if earlier is not None and earlier["state"] == "withdrawn":
             if ob["state"] != "withdrawn" or ob["withdrawal"] != earlier["withdrawal"]:
                 raise refuse("obligation_invalid", "withdrawal_unauthorized", "withdrawal is terminal",
@@ -842,19 +868,20 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
         if ob["id"] in rebind and ob["provenance"] == "project_policy" and ob.get("source", {}).get("gone"):
             raise refuse("obligation_unaccounted", "evidence_invalidated",
                          "evidence for a policy whose cited text is gone cannot be rebound", obligation=ob["id"])
-        ob["evidence"] = _stamp_evidence(ob, earlier, ctx, gov, ob["id"] in rebind)
+        reported = [item[1] for item in triaged
+                    if isinstance(item, tuple) and len(item) == 2 and item[0] == "review_report"
+                    and item[1] in _admissions(ctx)
+                    and _admissions(ctx)[item[1]].get("role") == "review"
+                    and _admissions(ctx)[item[1]].get("serves") == [ob["id"]]]
+        if len(reported) > 1:
+            raise refuse("obligation_invalid", "malformed", "one report consumes one review attempt")
+        ob["evidence"] = _stamp_evidence(ob, earlier, ctx, gov, ob["id"] in rebind,
+                                          reported_attempt=reported[0] if reported else None, seq=seq)
         reuse = _bind_reuse(ob, earlier, ctx)
         if reuse is not None:
             ob["reuse"] = reuse
         if not ob["evidence"]:
             ob.pop("evidence")
-        continuing = (earlier is not None and earlier["state"] == ob["state"] == "active"
-                      and earlier.get("executor") == ob.get("executor")
-                      and ob.get("executor") in _outstanding(ctx))
-        if ob["state"] not in TERMINAL and not continuing and _accepted_assurance_current(ob, ctx, gov):
-            raise refuse("obligation_unaccounted", "assurance_still_bound",
-                         "a still-valid accepted assurance cannot be reopened by removing its evidence",
-                         obligation=ob["id"])
     missing_rebind = [key for key in rebind if key not in rows]
     if missing_rebind:
         raise refuse("obligation_invalid", "malformed", "rebind names unknown obligations",
@@ -863,13 +890,44 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     state = {"seq": seq, "revision": revision, "governance": governance, "governance_sources": sources,
              "obligations": [rows[key] for key in [row["id"] for row in raw_obligations]],
              "proposals": list(proposals.values())}
-    _account(state, rows, seq, ctx, gov)
     for ob in rows.values():
         if ob["state"] == "satisfied":
             for item in ob["receipts"]:
-                if item["evidence"] in ob["evidence"]:
+                if item["evidence"] in ob.get("evidence", []):
                     item.setdefault("accepted_seq", seq)
                     item["reuse"] = deepcopy(ob.get("reuse"))
+    for ob in rows.values():
+        if ob["kind"] != "assurance":
+            continue
+        for finding in ob.get("findings", []):
+            if finding["triage"] != "required_correction":
+                continue
+            child = rows.get(finding.get("correction"))
+            if child is None or child.get("finding", {}).get("attempt") != finding["attempt"]:
+                finding.pop("resolved_seq", None)
+                continue
+            if child["state"] == "satisfied":
+                accepted = [item["accepted_seq"] for item in child["receipts"]
+                            if item["evidence"] in child.get("evidence", [])
+                            and isinstance(item.get("accepted_seq"), int)]
+                if accepted:
+                    finding["resolved_seq"] = max(accepted)
+                else:
+                    finding.pop("resolved_seq", None)
+            elif child["state"] == "withdrawn" and child["withdrawal"]["by"] == "user_direct":
+                finding.setdefault("resolved_seq", seq)
+            else:
+                finding.pop("resolved_seq", None)
+    for ob in rows.values():
+        earlier = prior_rows.get(ob["id"])
+        continuing = (earlier is not None and earlier["state"] == ob["state"] == "active"
+                      and earlier.get("executor") == ob.get("executor")
+                      and ob.get("executor") in _outstanding(ctx))
+        if ob["state"] not in TERMINAL and not continuing and _accepted_assurance_current(ob, ctx, gov):
+            raise refuse("obligation_unaccounted", "assurance_still_bound",
+                         "a still-valid accepted assurance cannot be reopened by removing its evidence",
+                         obligation=ob["id"])
+    _account(state, rows, seq, ctx, gov)
     _waits(state, rows, ctx)
     violations = properties(state, ctx)
     for name, found in violations.items():
@@ -1519,8 +1577,8 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
            admission_id: str) -> tuple[dict, frozenset]:
     """R82/R87: review findings become corrections or proposals; reports add only proposals.
 
-    Returns the map value and the obligation ids whose finding records this triage wrote,
-    which `accept_write` accepts from nowhere else.
+    Returns the map value, finding-owned obligation ids, and the consumed review
+    marker. Only this report boundary can supply those records to `accept_write`.
     """
     base = {key: value[key] for key in value if key in ("seq", "obligations", "proposals")}
     obligations = [dict(row) for row in base.get("obligations", state["obligations"])]
@@ -1534,7 +1592,7 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     assurance_id = (admission.get("serves") or [None])[0]
     prior_ids = {ob["id"] for ob in state["obligations"]}
     stored = next((ob.get("findings", []) for ob in state["obligations"] if ob["id"] == assurance_id), [])
-    written: set[str] = set()
+    written: set[str | tuple[str, str]] = set()
     records = []
     for raw in findings:
         record = _exact(raw, {"finding", "severity", "triage", "summary", "reason", "correction"},
@@ -1551,7 +1609,8 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
                              finding=record["finding"])
             _text(record["reason"], "reason", limit=1024)
         entry = {"attempt": admission_id, "finding": record["finding"], "severity": record["severity"],
-                 "triage": record["triage"], "summary": record["summary"]}
+                 "triage": record["triage"], "summary": record["summary"],
+                 "recorded_seq": state["seq"] + 1}
         if any(item.get("attempt") == admission_id and item.get("finding") == record["finding"]
                for item in stored):
             continue
@@ -1583,8 +1642,13 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         assurance = rows.get(assurance_id)
         if assurance is None:
             raise refuse("obligation_invalid", "malformed", "the reviewed assurance obligation is absent")
-        assurance["findings"] = (list(stored) + records)[-MAX_FINDINGS:]
+        if len(stored) + len(records) > MAX_FINDINGS:
+            raise refuse("obligation_invalid", "finding_limit",
+                         "the bounded finding history is full", obligation=assurance_id)
+        assurance["findings"] = list(stored) + records
         written.add(assurance_id)
+    if admission.get("role") == "review":
+        written.add(("review_report", admission_id))
     if not isinstance(proposals, list) or len(proposals) > 16:
         raise refuse("obligation_invalid", "malformed", "report proposals are a bounded list")
     for raw in proposals:

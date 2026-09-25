@@ -1253,10 +1253,15 @@
       ],
       "offline_test": [
         "tests.test_kernel_boundaries.GovernanceTests.test_policy_cites_governance_at_the_base_never_the_candidate",
-        "tests.test_kernel_boundaries.GovernanceTests.test_committed_candidate_policy_cannot_select_governance_and_target_is_bound",
-        "tests.test_kernel_boundaries.GovernanceTests.test_candidate_policy_ref_is_refused_across_branch_remote_and_detached_layouts",
+        "tests.test_kernel_boundaries.GovernanceTests.test_candidate_policy_cannot_supply_its_own_initial_target_authority",
+        "tests.test_kernel_boundaries.GovernanceTests.test_candidate_policy_retarget_needs_snapshot_authority_in_all_git_layouts",
         "tests.test_kernel_boundaries.GovernanceTests.test_explicit_default_alias_on_checked_out_target_preserves_initial_baseline",
-        "tests.test_kernel_boundaries.GovernanceTests.test_missing_default_does_not_make_candidate_self_selection_independent"
+        "tests.test_kernel_boundaries.GovernanceTests.test_missing_default_needs_explicit_initial_target_selection",
+        "tests.test_governance_refresh.GovernanceRefreshTests.test_missing_default_explicit_selection_allows_initial_baseline",
+        "tests.test_governance_refresh.GovernanceRefreshTests.test_maintained_release_policy_allows_equal_and_descendant_candidate",
+        "tests.test_governance_refresh.GovernanceRefreshTests.test_changed_base_cannot_adopt_current_candidate_policy_on_same_ref",
+        "tests.test_governance_refresh.GovernanceRefreshTests.test_guarded_refresh_requires_fresh_exact_canonical_snapshot_decision",
+        "tests.test_governance_refresh.GovernanceRefreshTests.test_independent_target_advance_refreshes_without_new_user_selection"
       ],
       "status": "NOT_RUN"
     },
@@ -1341,7 +1346,17 @@
       "offline_test": [
         "tests.test_obligations.AssuranceTests.test_correction_changing_reviewed_scope_reopens_for_delta_review_and_reuses_unaffected",
         "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_c07_authorized_definition_needs_fresh_review_and_keeps_old_receipt",
-        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_restored_binding_review_correction_is_recorded_and_old_proof_cannot_qualify"
+        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_restored_binding_review_correction_is_recorded_and_old_proof_cannot_qualify",
+        "tests.test_assurance_history.AssuranceHistoryTests.test_late_required_correction_survives_open_and_satisfied_states",
+        "tests.test_assurance_history.AssuranceHistoryTests.test_advisory_overflow_refuses_without_evicting_required_finding",
+        "tests.test_assurance_history.AssuranceHistoryTests.test_reverse_report_order_ignores_skewed_or_missing_admission_stamps",
+        "tests.test_assurance_history.AssuranceHistoryTests.test_unaccepted_report_before_blocker_cannot_be_offered_as_fresh_proof",
+        "tests.test_assurance_history.AssuranceHistoryTests.test_restored_proof_without_new_blocker_stays_bound",
+        "tests.test_assurance_history.AssuranceHistoryTests.test_review_reported_before_correction_completion_stays_too_early",
+        "tests.test_assurance_history.AssuranceHistoryTests.test_pre_correction_review_reported_late_stays_too_early",
+        "tests.test_admission_order.AdmissionOrderTests.test_reservation_sequence_is_atomic_and_same_request_replay_preserves_it",
+        "tests.test_admission_order.AdmissionOrderTests.test_admission_updates_cannot_change_or_remove_the_reservation_sequence",
+        "tests.test_admission_order.AdmissionOrderTests.test_missing_sequence_is_not_fabricated_and_malformed_values_are_refused"
       ],
       "status": "NOT_RUN"
     },
