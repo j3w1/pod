@@ -27,7 +27,7 @@ PACKET_FIELDS = {"schema", "objective", "criteria", "responsibility", "scope", "
 PACKET_REQUIRED = PACKET_FIELDS - {"objective_source", "worktree", "placement", "resolves",
                                    "stop_condition", "delta_from"}
 REPORT_FIELDS = {"schema", "assignment", "attempt", "candidate", "outcome", "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"}
-EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt"}
+EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt", "definition"}
 
 
 def _list(value: Any, name: str, limit: int = 64) -> list:
@@ -181,10 +181,25 @@ def report(value: Any, frozen: dict, native_binding: dict) -> dict:
     return {"status": "validated_observation", "observation": r, "native_binding": binding}
 
 
+def evidence_record(value: Any) -> dict:
+    """Canonical detailed receipt shape, shared by acceptance and obligation maps.
+
+    Map receipts additionally require a definition fingerprint; standalone acceptance
+    has no obligation definition to join. A reference identifies one immutable receipt
+    within its obligation, so a new observation needs a new reference.
+    """
+    e = exact(value, EVIDENCE_FIELDS, EVIDENCE_FIELDS - {"reviewer_attempt", "definition"}, name="evidence")
+    if e["schema"] != "pod-evidence/v1" or e["status"] not in ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+        raise PodError("invalid_evidence", "Invalid evidence schema or status")
+    if "definition" in e and not _sha256(e["definition"]):
+        raise PodError("invalid_evidence", "Evidence definition is a SHA256 fingerprint")
+    return e
+
+
 def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str,
              sources: list | None = None, dependencies: list | None = None,
              environment: str | None = None) -> dict:
-    e = exact(value, EVIDENCE_FIELDS, EVIDENCE_FIELDS - {"reviewer_attempt"}, name="evidence")
+    e = evidence_record(value)
     if e["schema"] != "pod-evidence/v1" or e["criterion"] != criterion or e["candidate"] != candidate or e["policy_revision"] != policy_revision:
         raise PodError("stale_evidence", "Evidence does not bind current criterion, candidate and policy")
     if (sources is not None and e["sources"] != sources or
@@ -302,7 +317,7 @@ def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str
                sources: list, dependencies: list, environment: str,
                review_required: bool, hosted_required: bool,
                owner_acceptance: dict | None = None, integration: dict | None = None,
-               label: dict | None = None) -> dict:
+               label: dict | None = None, route_holds: list[dict] | None = None) -> dict:
     """Project-criteria projection.
 
     Caller records never confer a check result. Three facts are deliberately not derived
@@ -353,12 +368,14 @@ def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str
             raise PodError("invalid_integration", "Integration observation does not bind this candidate")
     accepted = bool(checks_pass and granted is not None
                     and review in ("NOT_REQUIRED", "QUALIFIED")
-                    and hosted in ("NOT_REQUIRED", "RECORDED_PASS_UNVERIFIED"))
+                    and hosted in ("NOT_REQUIRED", "RECORDED_PASS_UNVERIFIED")
+                    and not route_holds)
     return {"implemented": "unassessed", "required_checks_pass": checks_pass,
             "independently_reviewed": review,
             "assurance_unbound": [] if review == "QUALIFIED" else qualification.get("assurance_unbound", []),
             "hosted_proof_complete": hosted,
             "accepted": accepted,
+            "route_holds": list(route_holds or []),
             "merged": bool(observed and observed.get("ancestor_of_base") is True),
             "released": bool(observed and observed.get("tags")),
             "criteria": checks, "project_assessment_required": granted is None}

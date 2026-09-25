@@ -11,7 +11,7 @@ from pod.errors import PodError
 from pod.obligations import (accept_write, admission_refusal, admit, disposition, evaluate_trace,
                              label_qualification, overlap, report_projection, serialization_flags,
                              status_projection, triage)
-from tests.common import VERIFICATION, proof
+from tests.common import VERIFICATION, proof as detailed_proof
 
 EMPTY = {"paths": [], "surfaces": []}
 
@@ -41,6 +41,10 @@ def ob(id, state="waiting", *, kind="subgoal", provenance="coordinator", **field
 
 def criterion(state="active", **fields):
     return ob("O1", state, kind="criterion", provenance="objective", source={"ref": "PoD#1"}, **fields)
+
+
+def proof(key, *args, definition=None, **kwargs):
+    return detailed_proof(key, *args, definition=definition or (criterion() if key == "O1" else ob(key)), **kwargs)
 
 
 def intake(*rows, governance=None, **extra):
@@ -219,7 +223,8 @@ class AccountingTests(unittest.TestCase):
     def test_evidence_is_the_detailed_record_joined_by_obligation_id_and_its_r41_binding(self):
         # Different human check text is fine; the structural join is the obligation id.
         first = accept_write(None, intake(ob("S", "satisfied", check="parser round-trips",
-                                             evidence=[proof("S", check="tests.test_parser.round_trip",
+                                             evidence=[proof("S", definition=ob("S", check="parser round-trips"),
+                                                             check="tests.test_parser.round_trip",
                                                              sources=[{"path": "src/p.py", "state": "present",
                                                                        "sha256": "a" * 64}])])), ctx())
         self.assertEqual(by_id(first, "S")["evidence"][0]["command"], "python -m unittest")
@@ -249,7 +254,7 @@ class AccountingTests(unittest.TestCase):
 
     def test_reuse_keeps_every_binding_except_the_candidate(self):
         first = accept_write(None, intake(ob("S", "satisfied", boundary={"paths": ["docs"]},
-                                             evidence=[proof("S")])), ctx())
+                                             evidence=[proof("S", definition=ob("S", boundary={"paths": ["docs"]}))])), ctx())
         rows = rows_of(first)
         rows[1]["reuse"] = {"from": "c1"}
         moved = {"candidate": "c2", "git_delta": lambda source, target: ["src/x.py"]}
@@ -556,11 +561,198 @@ def assurance_state():
     return accept_write(None, intake(*rows), ctx())
 
 
+class ProofIntegrityTests(unittest.TestCase):
+    authority = {"provenance": "user_direct", "instruction": "revise the verification definition"}
+
+    def satisfied(self):
+        state, admissions = AssuranceTests().settle_review()
+        rows = rows_of(state)
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("wait")
+        a.update(state="satisfied", evidence=[{"attempt": "R1"}])
+        context = ctx(admissions=admissions)
+        return accept_write(state, write(state, rows), context), context
+
+    @staticmethod
+    def reopen_rows(state):
+        rows = rows_of(state)
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("evidence", None)
+        a.pop("reuse", None)
+        a.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        return rows
+
+    def test_c06_accepted_assurance_cannot_be_erased_or_reopened_by_metadata(self):
+        state, context = self.satisfied()
+        for metadata in ({}, {"candidate": "invented-next"}, {"receipts": []},
+                         {"boundary": {"paths": ["elsewhere"]}}):
+            with self.subTest(metadata=metadata):
+                rows = self.reopen_rows(state)
+                next(row for row in rows if row["id"] == "A").update(metadata)
+                refused(self, "obligation_unaccounted", "assurance_still_bound", accept_write,
+                        state, write(state, rows), context)
+        refused(self, "unbound_assignment", "satisfied", admit, state, packet(["A"], role="review"),
+                context, admission_id="R2")
+        self.assertEqual(len(by_id(state, "A")["receipts"]), 1)
+
+    def test_c07_changed_definitions_refuse_old_proof_and_fresh_attempt_qualifies(self):
+        from pod.obligations import admission_binding, definition_id
+        for change in ({"question": "are secrets isolated?"}, {"check": "security reviewed"},
+                       {"scope": {"paths": ["src", "secrets"]}}, {"uncovered_risk": "thread races"}):
+            with self.subTest(change=change):
+                state, context = self.satisfied()
+                rows = rows_of(state)
+                a = next(row for row in rows if row["id"] == "A")
+                a.update(change)
+                refused(self, "obligation_unaccounted", "evidence_invalidated", accept_write, state,
+                        write(state, rows, revision_authority=self.authority), context)
+                rows = self.reopen_rows(state)
+                next(row for row in rows if row["id"] == "A").update(change)
+                revised = accept_write(state, write(state, rows, revision_authority=self.authority), context)
+                self.assertNotEqual(by_id(revised, "A")["definition"], by_id(state, "A")["definition"])
+                self.assertEqual(label_qualification(revised, context, "c1")["label"], "WITHHELD")
+                self.assertEqual(by_id(revised, "A")["receipts"], by_id(state, "A")["receipts"])
+                stale = rows_of(revised)
+                a = next(row for row in stale if row["id"] == "A")
+                a.pop("wait"); a.update(state="satisfied", evidence=[{"attempt": "R1"}])
+                refused(self, "obligation_unaccounted", "evidence_invalidated", accept_write,
+                        revised, write(revised, stale), context)
+                body = packet(["A"], role="review", revision=revised["revision"])
+                active = admit(revised, body, context, admission_id="R2")
+                context["admissions"]["R2"] = settled_row(
+                    ["A"], role="review", binding=admission_binding(body, context, revised),
+                    report={"outcome": "succeeded", "status": "validated_observation"})
+                fresh = rows_of(active)
+                a = next(row for row in fresh if row["id"] == "A")
+                a.pop("executor"); a.update(state="satisfied", evidence=[{"attempt": "R2"}])
+                qualified = accept_write(active, write(active, fresh), context)
+                self.assertEqual(label_qualification(qualified, context, "c1")["label"], "QUALIFIED")
+                self.assertEqual(context["admissions"]["R2"]["binding"]["definitions"]["A"], definition_id(a))
+                self.assertEqual(len(by_id(qualified, "A")["receipts"]), 2)
+
+    def test_unrelated_steering_and_authorized_withdrawal_preserve_provenance(self):
+        state, context = self.satisfied()
+        rows = rows_of(state)
+        rows[0]["check"] = "the unrelated delivery criterion is now explicit"
+        revised = accept_write(state, write(state, rows, revision_authority=self.authority), context)
+        self.assertEqual(by_id(revised, "A"), by_id(state, "A"))
+        self.assertEqual(label_qualification(revised, context, "c1")["label"], "QUALIFIED")
+        rows = rows_of(revised)
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("evidence")
+        a.update(state="withdrawn", withdrawal={"by": "coordinator", "reason": "risk no longer required"})
+        withdrawn = accept_write(revised, write(revised, rows), context)
+        self.assertEqual(by_id(withdrawn, "A")["receipts"], by_id(state, "A")["receipts"])
+        self.assertEqual(label_qualification(withdrawn, context, "c1")["label"], "WITHHELD")
+
+    def test_new_uncovered_risk_is_admissible_but_candidate_metadata_cannot_hide_overlap(self):
+        state, context = self.satisfied()
+        rows = rows_of(state)
+        next(row for row in rows if row["id"] == "A")["candidate"] = "other-metadata"
+        second = ob("A2", kind="assurance", scope={"paths": ["src"]}, question="races?",
+                    candidate="c1", existing_evidence="R1", insufficiency="races were not reviewed")
+        rows.append(second)
+        refused(self, "obligation_invalid", "missing_uncovered_risk", accept_write,
+                state, write(state, rows), context)
+        second["uncovered_risk"] = "concurrent cache updates"
+        changed = accept_write(state, write(state, rows), context)
+        admitted = admit(changed, packet(["A2"], role="review"), context, admission_id="R2")
+        self.assertEqual(by_id(admitted, "A")["state"], "satisfied")
+        self.assertEqual(by_id(admitted, "A2")["executor"], "R2")
+
+    def test_real_invalidation_allows_delta_but_restored_binding_cannot_hide_history(self):
+        state, context = self.satisfied()
+        for changed in ({"candidate": "c2"}, {"policy_revision": "new-policy"},
+                        {"verification": {**VERIFICATION, "environment": "other"}},
+                        {"verification": {**VERIFICATION, "dependencies": []}}):
+            with self.subTest(changed=changed):
+                moved = {**context, **changed}
+                waiting = accept_write(state, write(state, self.reopen_rows(state)), moved)
+                self.assertEqual(by_id(waiting, "A")["receipts"], by_id(state, "A")["receipts"])
+                admitted = admit(waiting, packet(["A"], role="review", delta_from="c1"), moved,
+                                 admission_id="R2")
+                self.assertEqual(by_id(admitted, "A")["executor"], "R2")
+                refused(self, "unbound_assignment", "assurance_still_bound", admit, waiting,
+                        packet(["A"], role="review"), context, admission_id="R2")
+
+    def test_explicit_unaffected_reuse_preserves_repeat_refusal_and_changed_scope_invalidates(self):
+        state, context = self.satisfied()
+        moved = {**context, "candidate": "c2", "git_delta": lambda source, target: ["docs/readme"]}
+        rows = rows_of(state)
+        next(row for row in rows if row["id"] == "A")["reuse"] = {"from": "c1"}
+        reused = accept_write(state, write(state, rows), moved)
+        self.assertEqual(label_qualification(reused, moved, "c2")["label"], "QUALIFIED")
+        refused(self, "obligation_unaccounted", "assurance_still_bound", accept_write, reused,
+                write(reused, self.reopen_rows(reused)), moved)
+        rows = rows_of(reused)
+        next(row for row in rows if row["id"] == "A")["scope"] = {"paths": ["src/new"]}
+        refused(self, "obligation_unaccounted", "evidence_invalidated", accept_write, reused,
+                write(reused, rows, revision_authority=self.authority), moved)
+
+    def test_restored_binding_preserves_an_already_admitted_review_without_qualifying_it(self):
+        from pod.obligations import admission_binding
+        state, context = self.satisfied()
+        moved = {**context, "verification": {**VERIFICATION, "environment": "other"}}
+        waiting = accept_write(state, write(state, self.reopen_rows(state)), moved)
+        body = packet(["A"], role="review")
+        active = admit(waiting, body, moved, admission_id="R2")
+        restored = {**context, "outstanding": ["R2"], "admissions": {
+            **context["admissions"], "R2": settled_row(["A"], role="review", state="reserved",
+                                                        binding=admission_binding(body, moved, waiting))}}
+        kept = accept_write(active, write(active, rows_of(active)), restored)
+        self.assertEqual(by_id(kept, "A")["executor"], "R2")
+        self.assertEqual(label_qualification(kept, restored, "c1")["label"], "WITHHELD")
+        refused(self, "unbound_assignment", "assurance_still_bound", admit, kept, body, restored,
+                admission_id="R3")
+
+    def test_ordinary_receipts_bind_definition_and_cannot_be_relabelled_after_omission(self):
+        from pod.obligations import definition_id
+        first = accept_write(None, {"governance": {"base_ref": None}, "obligations": [
+            criterion("satisfied", evidence=[proof("O1")]), ob("S", "active")]}, ctx())
+        old = deepcopy(by_id(first, "O1")["evidence"][0])
+        rows = rows_of(first)
+        s = next(row for row in rows if row["id"] == "O1")
+        s["check"] = "a newly authorized behavior"
+        refused(self, "obligation_unaccounted", "evidence_invalidated", accept_write, first,
+                write(first, rows, revision_authority=self.authority), ctx())
+        s.pop("evidence"); s.update(state="waiting", wait={"class": "sequenced", "referent": "S"}, receipts=[])
+        revised = accept_write(first, write(first, rows, revision_authority=self.authority), ctx())
+        self.assertEqual(by_id(revised, "O1")["receipts"], by_id(first, "O1")["receipts"])
+        for receipt, detail, code in ((old, "evidence_invalidated", "obligation_unaccounted"),
+                                     ({**old, "definition": definition_id(s)}, "receipt_conflict", "obligation_invalid"),
+                                     ({**old, "candidate": "c2"}, "receipt_conflict", "obligation_invalid")):
+            stale = rows_of(revised)
+            s = next(row for row in stale if row["id"] == "O1")
+            s.pop("wait"); s.update(state="satisfied", evidence=[receipt])
+            refused(self, code, detail, accept_write, revised, write(revised, stale), ctx())
+        s["evidence"] = [proof("O1", definition=s, check="tests.test_new_behavior", reference="fresh-log")]
+        qualified = accept_write(revised, write(revised, stale), ctx())
+        self.assertEqual(by_id(qualified, "O1")["state"], "satisfied")
+        self.assertEqual(len(by_id(qualified, "O1")["receipts"]), 2)
+
+    def test_ordinary_receipt_requires_definition_and_history_never_evicts(self):
+        from pod.obligations import MAX_EVIDENCE
+        missing = proof("S"); missing.pop("definition")
+        refused(self, "obligation_invalid", "evidence_unbound", accept_write, None,
+                intake(ob("S", "satisfied", evidence=[missing])), ctx())
+        state = accept_write(None, intake(ob("S")), ctx())
+        for index in range(MAX_EVIDENCE):
+            rows = rows_of(state)
+            s = next(row for row in rows if row["id"] == "S")
+            s["evidence"] = [proof("S", reference=f"log-{index}")]
+            state = accept_write(state, write(state, rows), ctx())
+        s["evidence"] = [proof("S", reference="one-too-many")]
+        refused(self, "obligation_invalid", "receipt_limit", accept_write, state, write(state, rows), ctx())
+        self.assertEqual(len(by_id(state, "S")["receipts"]), MAX_EVIDENCE)
+
+
 class AssuranceTests(unittest.TestCase):
     def reviewed(self, state=None):
         state = state or assurance_state()
         review = admit(state, packet(["A"], role="review"), ctx(), admission_id="R1")
         row = settled_row(["A"], role="review", report={"outcome": "succeeded", "status": "validated_observation"})
+        from pod.obligations import admission_binding
+        row["binding"] = admission_binding(packet(["A"], role="review"), ctx(), state)
         return review, {"R1": row}
 
     def settle_review(self, findings=(), extra_rows=()):
@@ -663,7 +855,7 @@ class AssuranceTests(unittest.TestCase):
     def test_correction_changing_reviewed_scope_reopens_for_delta_review_and_reuses_unaffected(self):
         state, admissions = self.settle_review()
         rows = rows_of(state)
-        evidence = [proof("D", check="doc")]
+        evidence = [proof("D", check="doc", definition=ob("D", boundary={"paths": ["docs"]}))]
         rows.append(ob("D", "satisfied", boundary={"paths": ["docs"]}, evidence=evidence))
         by = {row["id"]: row for row in rows}
         by["A"].update(state="satisfied", evidence=[{"attempt": "R1"}])

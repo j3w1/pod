@@ -335,8 +335,45 @@ def _resolve_commit(root: Path, ref: str) -> str | None:
     return value if _OBJECT.fullmatch(value) else None
 
 
-def governance_observation(project: Path, base_ref: str | None, *, at: str | None = None) -> dict:
-    """Read the declared governance sources from Git at a base commit, never the worktree."""
+def _symbolic_ref(root: Path, ref: str) -> str | None:
+    found = _git(root, ["symbolic-ref", "-q", ref])
+    value = found.stdout.strip() if found is not None and found.returncode == 0 else ""
+    return value if value.startswith(("refs/heads/", "refs/remotes/")) else None
+
+
+def _governance_target(project: Path, proposed: str | None, *, user_direct: bool,
+                       bound_ref: str | None) -> tuple[str | None, str | None]:
+    """Select a branch identity independently of the proposed policy citation."""
+    if bound_ref is not None:
+        return bound_ref, None
+    default = _symbolic_ref(project, "refs/remotes/origin/HEAD")
+    if default is not None and (not default.startswith("refs/remotes/origin/")
+                                or default == "refs/remotes/origin/HEAD"):
+        default = None
+    if proposed is None:
+        return (default, None) if default is not None else (None, "target_selection_required")
+    if not isinstance(proposed, str) or not _BASE_REF.fullmatch(proposed) or ".." in proposed:
+        return None, "target_ref_invalid"
+    current = _symbolic_ref(project, "HEAD")
+    named = _git(project, ["rev-parse", "--symbolic-full-name", "--verify", "--quiet",
+                           "--end-of-options", proposed])
+    selected = named.stdout.strip() if named is not None and named.returncode == 0 else ""
+    if (proposed == "HEAD" or selected == current or selected not in (default,)
+            and not selected.startswith(("refs/heads/", "refs/remotes/"))):
+        return None, "candidate_or_nonbranch_ref"
+    if default is not None and (selected == default or
+                                selected == "refs/heads/" + default.rsplit("/", 1)[-1]
+                                and _resolve_commit(project, selected) == _resolve_commit(project, default)):
+        return default, None
+    if not user_direct:
+        return None, "target_selection_required"
+    return selected, None
+
+
+def governance_observation(project: Path, base_ref: str | None, *, at: str | None = None,
+                           user_direct: bool = False, bound_ref: str | None = None,
+                           selection: str | None = None) -> dict:
+    """Read governance from the independently selected target, never the candidate."""
     from .github import repository_context
     from .obligations import GOVERNANCE_PATHS, MAX_GOVERNANCE_TEXT
     try:
@@ -345,12 +382,18 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
         return {"status": "unavailable", "reason": "repository_unreadable"}
     if context["repo_key"] is None:
         return {"status": "no_repository"}
-    if base_ref is None:
-        return {"status": "unavailable", "reason": "base_ref_missing"}
-    current = _resolve_commit(project, base_ref)
+    target, reason = _governance_target(project, base_ref, user_direct=user_direct, bound_ref=bound_ref)
+    if target is None:
+        return {"status": "unavailable", "reason": reason}
+    default = _symbolic_ref(project, "refs/remotes/origin/HEAD")
+    chosen_by = selection or ("default" if target == default else "user_direct")
+    if chosen_by == "default" and default != target:
+        return {"status": "unavailable", "reason": "default_target_changed", "target_ref": target}
+    current = _resolve_commit(project, target)
     commit = at if at is not None else current
     if commit is None or not _OBJECT.fullmatch(commit):
-        return {"status": "unavailable", "reason": "base_ref_unresolved", "current": current}
+        return {"status": "unavailable", "reason": "base_ref_unresolved", "target_ref": target,
+                "current": current}
     texts: dict[str, str | None] = {}
     for path in GOVERNANCE_PATHS:
         listed = _git(project, ["ls-tree", "-z", commit, "--", path])
@@ -375,7 +418,8 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
             texts[path] = blob.stdout.decode("utf-8")
         except UnicodeError:
             return {"status": "unavailable", "reason": "source_not_text", "current": current}
-    return {"status": "observed", "commit": commit, "current": current, "texts": texts}
+    return {"status": "observed", "target_ref": target, "selection": chosen_by, "commit": commit,
+            "current": current, "texts": texts}
 
 
 def require_governance_current(project: Path, map_state: dict | None) -> None:
@@ -386,6 +430,10 @@ def require_governance_current(project: Path, map_state: dict | None) -> None:
     governance = map_state["governance"]
     if governance.get("base_ref") is None:
         return
+    if (governance.get("selection") == "default"
+            and _symbolic_ref(project, "refs/remotes/origin/HEAD") != governance["base_ref"]):
+        raise refuse("governance_changed", "governance_changed",
+                     "the default target branch changed; a direct user revision must select a new target")
     current = _resolve_commit(project, governance["base_ref"])
     if current is None:
         raise refuse("governance_unavailable", "governance_unavailable",
@@ -426,8 +474,12 @@ def git_result(worktree: str | None, base: str | None, commit: str | None = None
             if index < len(entries) and entries[index]:
                 changed.add(entries[index])
         index += 1
+    paths = {path.rstrip("/") for path in changed if path}
+    if len(paths) > 1024:
+        return {"status": "over_limit", "reason": "changed_paths_limit", "base": base,
+                "head": head, "count": len(paths)}
     return {"status": "observed", "base": base, "head": head,
-            "changed_paths": sorted(path.rstrip("/") for path in changed if path)[:1024]}
+            "changed_paths": sorted(paths)}
 
 
 def git_head(worktree: str | None) -> str | None:
@@ -682,14 +734,28 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         ctx = None
         if proposed or prior_map is not None:
             refresh = proposed.get("governance_refresh") is True
+            if prior_map is not None and not refresh:
+                require_governance_current(project, prior_map)
             if prior_map is None:
                 declared = proposed.get("governance")
                 base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
-                observed = governance_observation(project, base_ref)
+                observed = governance_observation(
+                    project, base_ref,
+                    user_direct=isinstance(proposed.get("revision_authority"), dict)
+                    and proposed["revision_authority"].get("provenance") == "user_direct")
             else:
                 base_ref = prior_map["governance"]["base_ref"]
-                at = None if refresh else prior_map["governance"]["base"]
-                observed = (governance_observation(project, base_ref, at=at) if base_ref is not None
+                declared = proposed.get("governance")
+                change = isinstance(declared, dict) and declared.get("base_ref", base_ref) != base_ref
+                if change and refresh:
+                    observed = governance_observation(
+                        project, declared["base_ref"], user_direct=isinstance(proposed.get("revision_authority"), dict)
+                        and proposed["revision_authority"].get("provenance") == "user_direct")
+                else:
+                    at = None if refresh else prior_map["governance"]["base"]
+                    observed = (governance_observation(project, base_ref, at=at, bound_ref=base_ref,
+                                                       selection=prior_map["governance"].get("selection"))
+                                if base_ref is not None
                             else governance_observation(project, None))
             ctx = kernel_context(project, objective, state, authority.get("native"),
                                  candidate=core["candidate"], criteria=core["criteria"],
@@ -947,7 +1013,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                **served, "boundary": packet_boundary(body)["boundary"],
                "candidate": checkpoint_value.get("candidate"), "result": result,
                "changed_paths": None, "boundary_exceeded": [], "disposition": None, "report": None,
-               "binding": admission_binding(body, ctx)}
+               "binding": admission_binding(body, ctx, map_state)}
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
@@ -996,10 +1062,36 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         _require_open(state)
         ctx = kernel_context(project, objective, state, authority.get("native"))
         settled = admission_id not in ctx["outstanding"]
+        if not settled:
+            raise PodError("report_attempt_unverified", "The exact Dispatch has not settled natively")
+        report_value = observation.get("observation", {})
+        report_identity = digest(observation)
+        prior_report = row.get("report")
+        if prior_report is not None and (prior_report.get("observation_digest") != report_identity
+                                         or prior_report.get("result_commit") != result_commit):
+            raise PodError("report_conflict", "A consumed Dispatch report or result cannot be replaced")
+        if prior_report is not None and not accompanying and not findings and not proposals:
+            result = row.get("result") or {}
+            ingestion = {"status": "not_applicable"}
+            if row["role"] == "implement":
+                if result.get("paths_status") == "over_limit":
+                    ingestion = {"status": "over_limit", "reason": "changed_paths_limit",
+                                 "count": result["path_count"]}
+                else:
+                    ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
+                                 "boundary_exceeded": row["boundary_exceeded"]}
+            return {"ingestion": ingestion, "settled": True,
+                    "map": {"seq": map_state["seq"], "revision": map_state["revision"],
+                            "quiescence": map_state["quiescence"]},
+                    "report": report_projection(map_state, ctx)}
         ingestion = {"status": "not_applicable"}
         if row["role"] == "implement":
-            if not settled:
-                ingestion = {"status": "pending_settlement"}
+            if prior_report is not None:
+                result = row.get("result") or {}
+                ingestion = ({"status": "over_limit", "reason": "changed_paths_limit",
+                              "count": result["path_count"]} if result.get("paths_status") == "over_limit"
+                             else {"status": "recorded", "changed_paths": row["changed_paths"],
+                                   "boundary_exceeded": row["boundary_exceeded"]})
             elif row["changed_paths"] is not None:
                 ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
                              "boundary_exceeded": row["boundary_exceeded"]}
@@ -1007,19 +1099,26 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 base = (row.get("result") or {}).get("base")
                 observed = git_result((row.get("result") or {}).get("worktree"), base, result_commit)
                 if observed["status"] == "observed":
-                    row["result"] = {**row["result"], "head": observed["head"]}
+                    row["result"] = {**row["result"], "head": observed["head"],
+                                     "paths_status": "observed"}
                     row["changed_paths"] = observed["changed_paths"]
                     row["boundary_exceeded"] = exceeded(observed["changed_paths"], row["boundary"])
                     ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
                                  "boundary_exceeded": row["boundary_exceeded"], "head": observed["head"],
                                  "committed": observed["head"] != base}
+                elif observed["status"] == "over_limit":
+                    row["result"] = {**row["result"], "head": observed["head"],
+                                     "paths_status": "over_limit", "path_count": observed["count"]}
+                    ingestion = observed
                 else:
                     ingestion = observed
-        report_value = observation.get("observation", {})
-        row["report"] = {"outcome": report_value.get("outcome"), "status": observation.get("status"),
-                         "attempt": report_value.get("attempt"),
-                         "consumed_at": datetime.now(timezone.utc).isoformat()}
-        row["updated_at"] = row["report"]["consumed_at"]
+        if prior_report is None:
+            row["report"] = {"outcome": report_value.get("outcome"), "status": observation.get("status"),
+                             "attempt": report_value.get("attempt"),
+                             "observation": report_value,
+                             "observation_digest": report_identity, "result_commit": result_commit,
+                             "consumed_at": datetime.now(timezone.utc).isoformat()}
+            row["updated_at"] = row["report"]["consumed_at"]
         value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
                                 admission_id=admission_id)
         new_map = accept_write(map_state, value, ctx, triaged=triaged)

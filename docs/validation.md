@@ -29,15 +29,26 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | Post-merge public command | Literally run `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh \| sh` in a clean disposable home and on the intended host | `main` distribution, installed version and receipt match the merged commit. |
 
 The 0.6 kernel has focused boundary tests for R81–R91 and A143–A163:
-provenance and base-revision governance refresh; all obligation states and
+provenance, independently selected target governance and base-revision refresh;
+committed candidate-policy injection and direct-user target retarget refusal;
+all obligation states and
 wait referents; one coordinator slot and boundary ownership; Git-derived
-result paths, ancestry or noncommit attestation, discard then replacement;
-assurance triage, affected-scope delta review and explicit REUSE; quiescence,
+result paths including over-limit refusal before boundary decisions, ancestry or
+noncommit attestation, discard then replacement; immutable settled report replay,
+fresh review attempts, objective-bound route holds, normalized partial launch
+observations, assurance triage, affected-scope delta review and explicit REUSE; quiescence,
 closure and direct-user reopen; and hard cutover of older objectives. Seeded
 stdlib generative tests check P1–P6 after every accepted transition and print
 counterexamples on failure. P1 checks structural obligation accounting, not
-eventual progress. P5 checks binding integrity, not review truth. Scripted
-record checks run the slot-filling, serialization, amplification, churn and
+eventual progress. P5 checks binding integrity, not review truth. Receipt integrity
+regressions exercise pure kernel and production checkpoint/admission/report/acceptance boundaries: omission of an
+accepted assurance, candidate metadata edits, changed definitions on stable ids,
+fresh qualifying attempts, ordinary receipt relabeling/restoration, source and
+environment invalidation, governance refresh, explicit unaffected Git REUSE,
+unrelated steering, authorized withdrawal and new uncovered risk. Immutable
+receipt history stays inside the map and refuses overflow without eviction.
+Definition identity remains separate from natural-language outcomes and test
+names. Scripted record checks run the slot-filling, serialization, amplification, churn and
 scope-inflation cases on sanitized traces; counts and durations are
 observations, not gates. A150 requires two accepted writes, positive delegation
 availability, free capacity, and no bounded current-input rationale/revisit

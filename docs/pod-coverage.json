@@ -556,7 +556,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_records.RecordTests.test_failed_required_check_blocks_even_with_pass_and_review_is_contextual",
+      "offline_test": "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_ordinary_definition_and_receipt_identity_survive_checkpoint_omission",
       "status": "NOT_RUN"
     },
     {
@@ -1083,7 +1083,7 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_orca_adapter.OrcaAdapterTests.test_three_exact_worker_argv_shapes",
+      "offline_test": "tests.test_kernel_boundaries.CapacityAndReviewTests.test_objective_acceptance_holds_known_route_mismatch",
       "status": "NOT_RUN"
     },
     {
@@ -1245,7 +1245,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.GovernanceTests.test_policy_cites_governance_at_the_base_never_the_candidate",
+      "offline_test": "tests.test_kernel_boundaries.GovernanceTests.test_committed_candidate_policy_cannot_select_governance_and_target_is_bound",
       "status": "NOT_RUN"
     },
     {
@@ -1294,7 +1294,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.ResultTests.test_changed_paths_come_from_git_and_integration_is_validated_by_ancestry",
+      "offline_test": "tests.test_kernel_boundaries.ResultTests.test_changed_path_overflow_holds_integration_with_outside_path_after_1024",
       "status": "NOT_RUN"
     },
     {
@@ -1310,7 +1310,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_obligations.AssuranceTests.test_review_packets_serve_one_assurance_and_repeat_review_is_refused",
+      "offline_test": "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_c06_checkpoint_cannot_erase_accepted_review_or_start_repeat",
       "status": "NOT_RUN"
     },
     {
@@ -1318,7 +1318,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_obligations.AssuranceTests.test_correction_changing_reviewed_scope_reopens_for_delta_review_and_reuses_unaffected",
+      "offline_test": "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_c07_authorized_definition_needs_fresh_review_and_keeps_old_receipt",
       "status": "NOT_RUN"
     },
     {
@@ -1326,7 +1326,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_obligations.AssuranceTests.test_label_needs_bound_non_withdrawn_assurance",
+      "offline_test": "tests.test_kernel_boundaries.CapacityAndReviewTests.test_review_report_is_immutable_and_a_fresh_settled_attempt_can_qualify",
       "status": "NOT_RUN"
     },
     {

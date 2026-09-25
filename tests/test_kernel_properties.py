@@ -9,6 +9,8 @@ test. On failure the seed, step and operation are printed as the counterexample.
 """
 
 from copy import deepcopy
+import hashlib
+import json
 import os
 import random
 import unittest
@@ -114,7 +116,8 @@ class Simulation:
                 row["evidence"] = [proof(self.random.choice((row["id"], row["id"], row["id"], "other")),
                                          self.random.choice((self.candidate, self.candidate, "c0")),
                                          status=self.random.choice(("PASS", "PASS", "FAILED")),
-                                         environment=self.random.choice(("fixture", "fixture", "other")))]
+                                         environment=self.random.choice(("fixture", "fixture", "other")),
+                                         definition=row)]
             if not row["evidence"]:
                 row.pop("evidence")
         elif pick == "sequenced":
@@ -196,6 +199,13 @@ class Simulation:
                                         "reason": "judged unnecessary"}
         if self.random.random() < 0.15:
             value["revision_authority"] = {"provenance": "user_direct", "instruction": "direct steering"}
+            if self.random.random() < 0.5:
+                target = self.random.choice(rows)
+                target["check"] += " with revised behavior"
+        if self.random.random() < 0.1:
+            target = self.random.choice(rows)
+            target.pop("evidence", None)
+            target["receipts"] = []  # Caller omission cannot delete accepted provenance.
         if self.random.random() < 0.1:
             value["close"] = True
         if self.map.get("closure") and self.random.random() < 0.5:
@@ -240,7 +250,7 @@ class Simulation:
                                 "state": "reserved", "disposition": None, "changed_paths": None,
                                 "boundary_exceeded": [], "candidate": self.candidate, "report": None,
                                 "result": {"base": "b" * 40, "head": None} if role == "implement" else None,
-                                "binding": admission_binding(body, context)}
+                                "binding": admission_binding(body, context, self.map)}
         self.outstanding.append(key)
         self.accept("admit " + key + " " + repr(body), state)
 
@@ -349,7 +359,7 @@ class Simulation:
             elif row["provenance"] == "coordinator" and row["kind"] == "subgoal" and self.random.random() < 0.3:
                 row["state"], row["withdrawal"] = "withdrawn", {"by": "coordinator", "reason": "folded"}
             else:
-                row["state"], row["evidence"] = "satisfied", [proof(row["id"], self.candidate)]
+                row["state"], row["evidence"] = "satisfied", [proof(row["id"], self.candidate, definition=row)]
         value = {"obligations": rows, "proposals": self.map["proposals"]}
         if not quiesce and self.random.random() < 0.7:
             value["close"] = True
@@ -385,7 +395,7 @@ class Simulation:
         self.admissions[key] = {"serves": body["serves"], "role": "review", "boundary": body["boundary"],
                                 "state": "reserved", "disposition": None, "changed_paths": None,
                                 "boundary_exceeded": [], "candidate": self.candidate, "report": None,
-                                "result": None, "binding": admission_binding(body, self.ctx())}
+                                "result": None, "binding": admission_binding(body, self.ctx(), self.map)}
         self.outstanding.append(key)
         self.accept("admit " + key, state)
 
@@ -408,6 +418,16 @@ class Simulation:
 
     def accept(self, label: str, state: dict) -> None:
         self.log.append(label)
+        previous = {row["id"]: row for row in (self.map or {}).get("obligations", [])}
+        for row in state["obligations"]:
+            identity = "attempt" if row["kind"] == "assurance" else "reference"
+            receipts = {item["evidence"][identity]: item for item in row.get("receipts", [])}
+            for old in previous.get(row["id"], {}).get("receipts", []):
+                kept = receipts.get(old["evidence"][identity])
+                if (kept is None or old["evidence"] != kept["evidence"]
+                        or old.get("accepted_seq") is not None
+                        and kept.get("accepted_seq") != old["accepted_seq"]):
+                    raise AssertionError(f"seed {self.seed}: receipt provenance changed after {label}")
         self.map = state
         self.accepted += 1
         self.closures += bool(state.get("closure"))
@@ -524,6 +544,24 @@ def oracle(state: dict, context: dict) -> dict:
                     for attempt in attempts):
                 found["oracle_P5"].append(row["id"])
     for row in rows.values():
+        # Reconstruct semantic identity from the accepted record independently of the
+        # production helper; candidate metadata and map revision are deliberately absent.
+        semantics = {key: row[key] for key in (
+            "id", "kind", "provenance", "parent", "check", "resolves", "stop_condition",
+            "scope", "question", "insufficiency", "existing_evidence", "uncovered_risk") if key in row}
+        if row["kind"] != "assurance":
+            semantics["boundary"] = row["boundary"]
+        definition = hashlib.sha256(json.dumps(semantics, sort_keys=True, separators=(",", ":"),
+                                               ensure_ascii=False).encode()).hexdigest()
+        if row["definition"] != definition:
+            found["oracle_P5"].append(f"{row['id']} definition identity")
+        if row["state"] == "satisfied":
+            for item in row.get("evidence", []):
+                if item.get("definition") != definition:
+                    found["oracle_P5"].append(f"{row['id']} evidence definition")
+                if row["kind"] == "assurance" and admissions[item["attempt"]]["binding"].get(
+                        "definitions", {}).get(row["id"]) != definition:
+                    found["oracle_P5"].append(f"{row['id']} attempt definition")
         # R41: every satisfied non-assurance obligation carries evidence joined to it by id and
         # bound to the current environment and policy.
         if row["state"] == "satisfied" and row["kind"] != "assurance":

@@ -81,7 +81,10 @@ def run(operation: str, request: dict) -> dict:
         base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
         if "project" in request:
             from .ledger import governance_observation
-            observed = governance_observation(Path(request["project"]), base_ref)
+            authority = request.get("map", {}).get("revision_authority") if isinstance(request.get("map"), dict) else None
+            observed = governance_observation(
+                Path(request["project"]), base_ref,
+                user_direct=isinstance(authority, dict) and authority.get("provenance") == "user_direct")
         else:
             observed = {"status": "no_repository"} if base_ref is None else {"status": "unavailable"}
         brief["map"] = brief_map(request["criteria"], request.get("map"),
@@ -174,6 +177,14 @@ def run(operation: str, request: dict) -> dict:
             from .ledger import kernel_view
             view = kernel_view(Path(request["project"]), request["objective"], candidate=request["candidate"])
             arguments["label"] = view["label"]
+            arguments["route_holds"] = [
+                {"admission": key, "reason": "route_mismatch" if decision.get("route_mismatch")
+                 else "effective_unknown"}
+                for key, row in view["state"]["admissions"].items()
+                if row.get("state") in ("bound", "closed")
+                for decision in [row.get("route_decision") or {}]
+                if decision.get("route_mismatch") or decision.get("effective_unknown")
+            ] if view["state"] is not None else []
         objective_source = arguments.pop("objective_source", None)
         if objective_source is not None:
             if "project" not in request:

@@ -2,6 +2,7 @@
 acceptance, Governor, status/doctor and cutover, against disposable Git repositories."""
 
 from contextlib import redirect_stdout
+from copy import deepcopy
 from io import StringIO
 import json
 import os
@@ -50,6 +51,8 @@ class KernelCase(unittest.TestCase):
         git(self.project, "commit", "-q", "-m", "base")
         git(self.project, "branch", "target")
         self.base = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/target", self.base)
+        git(self.project, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/target")
         write_defaults(self.root / "config" / "pod" / "config.yaml")
         self.port = FakePort()
         context = repository_context(self.project)
@@ -67,7 +70,11 @@ class KernelCase(unittest.TestCase):
                 "next_safe_action": "continue", "verification": dict(VERIFICATION), **extra}
 
     def proof(self, obligation, **extra):
-        return proof(obligation, self.candidate, policy_revision=effective(self.project)["revision"], **extra)
+        state = read(self.project, "objective")
+        definition = (next(row for row in self.stored() if row["id"] == obligation)
+                      if state else self.criterion())
+        return proof(obligation, self.candidate, definition=definition,
+                     policy_revision=effective(self.project)["revision"], **extra)
 
     def write(self, obligations, objective="objective", **fields) -> dict:
         return checkpoint(self.project, objective, owner="owner",
@@ -140,6 +147,202 @@ class KernelCase(unittest.TestCase):
                                            "report": body, **extra})
 
 
+class ProofIntegrityBoundaryTests(KernelCase):
+    authority = {"provenance": "user_direct", "instruction": "verify the revised security requirement"}
+
+    def review(self, task="review", **packet_fields):
+        frozen = self.packet(["A"], role="review", **packet_fields)
+        admission = self.start(task, frozen)["admission"]
+        self.settle(admission)
+        rows = self.stored()
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("executor")
+        a.update(state="satisfied", evidence=[{"attempt": admission["admission_id"]}])
+        self.report(admission, frozen, map={"obligations": rows})
+        return admission
+
+    def satisfied(self, **packet_fields):
+        self.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+                     "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
+                     "candidate": self.base, "existing_evidence": "tests", "insufficiency": "no review",
+                     "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}})
+        return self.review(**packet_fields)
+
+    def label(self):
+        with patch.object(OrcaPort, "read_native", autospec=True,
+                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
+            return internal_run("acceptance", {
+                "project": str(self.project), "objective": "objective", "criteria": ["PoD#1"],
+                "evidence_rows": [], "candidate": self.candidate, "policy_revision": "p", "sources": [],
+                "dependencies": [], "environment": "fixture", "review_required": False,
+                "hosted_required": False})["independently_reviewed"]
+
+    def waiting(self):
+        rows = deepcopy(self.stored())
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("evidence", None); a.pop("reuse", None)
+        a.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        return rows
+
+    def test_c06_checkpoint_cannot_erase_accepted_review_or_start_repeat(self):
+        self.satisfied()
+        before = read(self.project, "objective")
+        for metadata in ({}, {"candidate": "changed-metadata"}, {"receipts": []}):
+            rows = self.waiting()
+            next(row for row in rows if row["id"] == "A").update(metadata)
+            self.refused("obligation_unaccounted", "assurance_still_bound", self.write, rows)
+            self.assertEqual(read(self.project, "objective"), before)
+        self.refused("unbound_assignment", "satisfied", self.start,
+                     "repeat", self.packet(["A"], role="review"))
+        self.assertEqual(len(read(self.project, "objective")["admissions"]), 1)
+        self.assertEqual(self.label(), "QUALIFIED")
+
+    def test_c07_authorized_definition_needs_fresh_review_and_keeps_old_receipt(self):
+        original = self.satisfied()
+        rows = deepcopy(self.stored())
+        a = next(row for row in rows if row["id"] == "A")
+        a["question"] = "are security boundaries correct?"
+        self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows,
+                     revision_authority=self.authority)
+        a.pop("evidence"); a.update(state="waiting", wait={"class": "sequenced", "referent": "O1"}, receipts=[])
+        revised = self.write(rows, revision_authority=self.authority)
+        self.assertEqual(self.label(), "WITHHELD")
+        a = next(row for row in revised["checkpoint"]["obligations"] if row["id"] == "A")
+        self.assertEqual(len(a["receipts"]), 1)
+        old = a["receipts"][0]["evidence"]
+        self.assertNotEqual(old["definition"], a["definition"])
+        stale = self.stored()
+        a = next(row for row in stale if row["id"] == "A")
+        a.pop("wait"); a.update(state="satisfied", evidence=[old])
+        self.refused("obligation_unaccounted", "evidence_invalidated", self.write, stale)
+        fresh = self.review("fresh-review")
+        self.assertNotEqual(original["binding"]["definitions"], fresh["binding"]["definitions"])
+        self.assertEqual(self.label(), "QUALIFIED")
+        rows = self.stored()
+        rows[0]["check"] = "unrelated delivery clarification"
+        unaffected = next(row for row in rows if row["id"] == "A")
+        self.write(rows, revision_authority=self.authority)
+        self.assertEqual(next(row for row in self.stored() if row["id"] == "A"), unaffected)
+        self.assertEqual(self.label(), "QUALIFIED")
+
+    def test_ordinary_definition_and_receipt_identity_survive_checkpoint_omission(self):
+        self.intake(self.sub("S"))
+        rows = self.stored()
+        s = next(row for row in rows if row["id"] == "O1")
+        receipt = self.proof("O1", check="tests.test_round_trip")
+        s.pop("executor"); s.update(state="satisfied", evidence=[receipt])
+        holder = next(row for row in rows if row["id"] == "S")
+        holder.pop("wait"); holder.update(state="active", executor="coordinator")
+        self.write(rows)
+        s["check"] = "a new outcome description"
+        self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows,
+                     revision_authority=self.authority)
+        s.pop("evidence"); s.update(state="waiting", wait={"class": "sequenced", "referent": "S"})
+        self.write(rows, revision_authority=self.authority)
+        current = next(row for row in self.stored() if row["id"] == "O1")
+        for altered, detail, code in ((receipt, "evidence_invalidated", "obligation_unaccounted"),
+                                     ({**receipt, "definition": current["definition"]},
+                                      "receipt_conflict", "obligation_invalid"),
+                                     ({**receipt, "candidate": "another-candidate"},
+                                      "receipt_conflict", "obligation_invalid")):
+            rows = self.stored()
+            s = next(row for row in rows if row["id"] == "O1")
+            s.pop("wait"); s.update(state="satisfied", evidence=[altered])
+            self.refused(code, detail, self.write, rows)
+        s["evidence"] = [self.proof("O1", check="tests.test_new_outcome", reference="new-observation")]
+        self.write(rows)
+        self.assertEqual(len(next(row for row in self.stored() if row["id"] == "O1")["receipts"]), 2)
+
+    def test_real_environment_invalidation_allows_fresh_review_but_restoration_refuses_erasure(self):
+        self.satisfied()
+        changed = {**VERIFICATION, "environment": "a-new-runner"}
+        waiting = self.waiting()
+        self.write(waiting, verification=changed)
+        self.assertEqual(self.label(), "WITHHELD")
+        self.refused("obligation_unaccounted", "assurance_still_bound", self.write, self.waiting())
+        fresh = self.review("new-runner-review")
+        self.assertEqual(fresh["binding"]["environment"], "a-new-runner")
+        self.assertEqual(self.label(), "QUALIFIED")
+
+    def test_restored_environment_keeps_an_existing_native_admission_and_withholds_label(self):
+        self.satisfied()
+        self.write(self.waiting(), verification={**VERIFICATION, "environment": "another runner"})
+        review = self.start("already-admitted", self.packet(["A"], role="review"))["admission"]
+        self.write(self.stored())  # The original verification environment returns.
+        self.assertEqual(next(row for row in self.stored() if row["id"] == "A")["executor"],
+                         review["admission_id"])
+        self.assertEqual(self.label(), "WITHHELD")
+        self.refused("unbound_assignment", "assurance_still_bound", self.start,
+                     "no-repeat", self.packet(["A"], role="review"))
+
+    def test_real_git_delta_reuses_unaffected_scope_and_requires_affected_review(self):
+        self.satisfied()
+        (self.project / "README.md").write_text("a documentation correction\n")
+        git(self.project, "add", "README.md"); git(self.project, "commit", "-qm", "docs")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        rows = self.stored()
+        next(row for row in rows if row["id"] == "A")["reuse"] = {"from": self.base}
+        self.write(rows)
+        self.assertEqual(self.label(), "QUALIFIED")
+        self.refused("obligation_unaccounted", "assurance_still_bound", self.write, self.waiting())
+        (self.project / "src" / "old.py").write_text("a parser correction\n")
+        git(self.project, "add", "src"); git(self.project, "commit", "-qm", "parser")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        self.refused("obligation_unaccounted", "evidence_invalidated", self.write, self.stored())
+        self.write(self.waiting())
+        fresh = self.review("delta-review", delta_from=self.base)
+        self.assertEqual(fresh["candidate"], self.candidate)
+        self.assertEqual(self.label(), "QUALIFIED")
+
+    def test_source_invalidation_allows_review_but_source_restoration_keeps_accepted_proof(self):
+        from pod.records import source_identity
+        original = source_identity(self.project, "src/old.py")
+        self.satisfied(sources=[original])
+        (self.project / "src" / "old.py").write_text("changed source bytes\n")
+        self.write(self.waiting())
+        self.assertEqual(self.label(), "WITHHELD")
+        (self.project / "src" / "old.py").write_text("old\n")
+        self.refused("unbound_assignment", "assurance_still_bound", self.start,
+                     "source-restored", self.packet(["A"], role="review"))
+
+    def test_new_uncovered_risk_and_authorized_withdrawal_keep_original_receipts(self):
+        self.satisfied()
+        rows = deepcopy(self.stored())
+        original = next(row for row in rows if row["id"] == "A")
+        original["candidate"] = "metadata-cannot-hide-the-current-binding"
+        second = {**original, "id": "A2", "candidate": self.candidate, "question": "concurrent access?",
+                  "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        for key in ("evidence", "receipts", "introduced_seq"):
+            second.pop(key, None)
+        rows.append(second)
+        self.refused("obligation_invalid", "missing_uncovered_risk", self.write, rows)
+        second["uncovered_risk"] = "concurrent cache updates"
+        self.write(rows)
+        admitted = self.start("risk-review", self.packet(["A2"], role="review"))["admission"]
+        self.assertEqual(admitted["serves"], ["A2"])
+        rows = self.stored()
+        original = next(row for row in rows if row["id"] == "A")
+        receipts = deepcopy(original["receipts"])
+        original.pop("evidence")
+        original.update(state="withdrawn", withdrawal={"by": "coordinator", "reason": "original risk no longer required"})
+        self.write(rows)
+        self.assertEqual(next(row for row in self.stored() if row["id"] == "A")["receipts"], receipts)
+
+    def test_governance_refresh_preserves_stale_receipts_and_requires_explicit_rebind(self):
+        self.satisfied()
+        (self.project / "AGENTS.md").write_text(AGENTS + "Clarify an unrelated delivery rule.\n")
+        git(self.project, "add", "AGENTS.md"); git(self.project, "commit", "-qm", "policy clarification")
+        git(self.project, "update-ref", "refs/remotes/origin/target", git(self.project, "rev-parse", "HEAD"))
+        # Candidate intentionally stays fixed: source-governance invalidation is separate.
+        self.write(self.waiting(), governance_refresh=True)
+        rows = self.stored()
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("wait"); a.update(state="satisfied", evidence=[a["receipts"][0]["evidence"]])
+        self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows)
+        self.write(rows, governance_refresh=True, rebind=["A"])
+        self.assertEqual(self.label(), "QUALIFIED")
+
+
 class GovernanceTests(KernelCase):
     def policy(self, key="PA", lines="3", **fields):
         row = {"id": key, "kind": "assurance", "provenance": "project_policy",
@@ -179,14 +382,64 @@ class GovernanceTests(KernelCase):
         self.assertEqual(proposed["report"]["proposals_out_of_scope"][0]["id"], "P1")
 
     def test_a_git_project_binds_a_target_branch_and_unavailable_bases_hold_work(self):
-        self.refused("governance_unavailable", "governance_unavailable", self.write, [self.criterion()],
-                     governance={"base_ref": None})
+        default = self.write([self.criterion()], governance={"base_ref": None}, objective="default")
+        self.assertEqual(default["checkpoint"]["governance"]["base_ref"],
+                         "refs/remotes/origin/target")
         self.refused("governance_unavailable", "governance_unavailable", self.write, [self.criterion()],
                      governance={"base_ref": "no-such-branch"})
         self.intake(self.sub("S"))
         git(self.project, "branch", "-D", "target")
+        git(self.project, "update-ref", "-d", "refs/remotes/origin/target")
         self.refused("governance_unavailable", "governance_unavailable", self.start, "t",
                      self.packet(["S"]))
+
+    def test_committed_candidate_policy_cannot_select_governance_and_target_is_bound(self):
+        git(self.project, "checkout", "-q", "-b", "candidate")
+        (self.project / "AGENTS.md").write_text(AGENTS + "Candidate requires a new reviewer.\n")
+        git(self.project, "commit", "-q", "-am", "candidate policy")
+        candidate = git(self.project, "rev-parse", "HEAD")
+        forged = self.policy("PX", "6")
+        self.refused("governance_unavailable", "governance_unavailable", self.write,
+                     [self.criterion(), forged], governance={"base_ref": "candidate"},
+                     revision_authority={"provenance": "user_direct", "instruction": "use candidate"})
+        self.refused("governance_unavailable", "governance_unavailable", self.write,
+                     [self.criterion(), forged], governance={"base_ref": "HEAD"})
+        accepted = self.write([self.criterion(), self.policy()], governance={"base_ref": None})
+        self.assertEqual(accepted["checkpoint"]["governance"],
+                         {"base_ref": "refs/remotes/origin/target", "selection": "default",
+                          "exclude": [], "base": self.base})
+        self.assertNotEqual(candidate, accepted["checkpoint"]["governance"]["base"])
+
+    def test_nondefault_target_needs_direct_selection_and_retarget_revision(self):
+        git(self.project, "branch", "other-target")
+        git(self.project, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+        self.refused("governance_unavailable", "governance_unavailable", self.write,
+                     [self.criterion()], governance={"base_ref": "other-target"})
+        user = {"provenance": "user_direct", "instruction": "Select other-target for this objective"}
+        selected = self.write([self.criterion()], governance={"base_ref": "other-target"},
+                              revision_authority=user)
+        self.assertEqual(selected["checkpoint"]["governance"]["base_ref"], "refs/heads/other-target")
+        self.assertEqual(selected["checkpoint"]["governance"]["selection"], "user_direct")
+        git(self.project, "branch", "another-target")
+        self.refused("obligation_invalid", "governance_source_unrecognized", self.write,
+                     self.stored(), governance={"base_ref": "another-target"}, governance_refresh=True)
+        revised = self.write(self.stored(), governance={"base_ref": "another-target"},
+                             governance_refresh=True, revision_authority=user)
+        self.assertEqual(revised["checkpoint"]["governance"]["base_ref"], "refs/heads/another-target")
+
+    def test_default_target_retarget_holds_until_direct_revision(self):
+        self.intake(self.sub("S"))
+        git(self.project, "update-ref", "refs/remotes/origin/other", self.base)
+        git(self.project, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/other")
+        self.refused("governance_changed", "governance_changed", self.start, "t", self.packet(["S"]))
+        self.refused("governance_changed", "governance_changed", self.write, self.stored())
+        self.refused("governance_unavailable", "governance_unavailable", self.write,
+                     self.stored(), governance_refresh=True)
+        revised = self.write(self.stored(), governance={"base_ref": "refs/remotes/origin/other"},
+                             governance_refresh=True,
+                             revision_authority={"provenance": "user_direct",
+                                                 "instruction": "Switch this objective to origin/other"})
+        self.assertEqual(revised["checkpoint"]["governance"]["base_ref"], "refs/remotes/origin/other")
 
     def test_base_change_holds_new_work_until_refresh_relocates_or_marks_gone(self):
         rule = {"id": "PB", "kind": "steer", "provenance": "project_policy",
@@ -197,6 +450,7 @@ class GovernanceTests(KernelCase):
         (self.project / "AGENTS.md").write_text("# Rules\n\n\n\n" + AGENTS.replace(
             "Reviews bind to a frozen candidate.\n", ""))
         git(self.project, "commit", "-q", "-am", "move and remove rules")
+        git(self.project, "update-ref", "refs/remotes/origin/target", "target")
         git(self.project, "checkout", "-q", "main")
         self.refused("governance_changed", "governance_changed", self.start, "t", self.packet(["S"]))
         from pod.governor import decide
@@ -228,6 +482,35 @@ class GovernanceTests(KernelCase):
 
 
 class ResultTests(KernelCase):
+    def test_changed_path_overflow_holds_integration_with_outside_path_after_1024(self):
+        self.intake(self.sub("S", boundary={"paths": ["src"]}))
+        frozen = self.packet(["S"], boundary={"paths": ["src"]})
+        admission = self.start("impl", frozen)["admission"]
+        for index in range(1024):
+            (self.project / "src" / f"generated-{index:04}.py").write_text("x\n")
+        outside = self.project / "zzz" / "outside.txt"
+        outside.parent.mkdir()
+        outside.write_text("outside\n")
+        self.settle(admission)
+        rows = self.stored()
+        s = next(row for row in rows if row["id"] == "S")
+        s.pop("executor"); s.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        consumed = self.report(admission, frozen, map={"obligations": rows})
+        self.assertEqual((consumed["ingestion"]["status"], consumed["ingestion"]["count"]),
+                         ("over_limit", 1025))
+        self.assertEqual(consumed["report"]["result_over_limit"],
+                         [{"admission": admission["admission_id"], "path_count": 1025}])
+        stored = read(self.project, "objective")["admissions"][admission["admission_id"]]
+        self.assertIsNone(stored["changed_paths"])
+        self.assertEqual(stored["result"]["paths_status"], "over_limit")
+        self.refused("obligation_unaccounted", "disposition_invalid", self.write, self.stored(),
+                     dispositions=[{"admission": admission["admission_id"],
+                                    "integrated_into": self.base, "reason": "approved", "attestation": "yes"}])
+        discarded = self.write(self.stored(), dispositions=[{"admission": admission["admission_id"],
+                                                              "discarded": True, "reason": "path evidence incomplete"}])
+        self.assertEqual(discarded["admissions"][admission["admission_id"]]["report"]["outcome"],
+                         "succeeded")
+
     def test_changed_paths_come_from_git_and_integration_is_validated_by_ancestry(self):
         self.intake(self.sub("S", boundary={"paths": ["src"]}))
         frozen = self.packet(["S"], boundary={"paths": ["src"]})
@@ -312,6 +595,71 @@ class EvidenceBindingTests(KernelCase):
 
 
 class CapacityAndReviewTests(KernelCase):
+    def _acceptance_with_route(self, effective, *, advance=False, closed=False):
+        self.intake(self.sub("S"))
+        self.port.effective = effective
+        admission = self.start("impl", self.packet(["S"]))["admission"]
+        if advance:
+            git(self.project, "commit", "--allow-empty", "-q", "-m", "next candidate")
+            self.candidate = git(self.project, "rev-parse", "HEAD")
+            self.write(self.stored())
+        passing = {"schema": "pod-evidence/v1", "criterion": "PoD#1", "candidate": self.candidate,
+                   "sources": [], "policy_revision": "p", "dependencies": [], "environment": "fixture",
+                   "check": "unit", "command": "unit", "result": "passed", "timestamp": "2026-09-24T00:00:00Z",
+                   "status": "PASS", "reference": "log"}
+        owner = {"schema": "pod-acceptance-authorization/v1", "candidate": self.candidate,
+                 "policy_revision": "p", "utc": "2026-09-24T00:00:00Z", "accepted_by": "owner"}
+        from pod.ledger import kernel_view as real_kernel_view
+        def acceptance_view(*args, **kwargs):
+            view = real_kernel_view(*args, **kwargs)
+            if closed and view["state"] is not None:
+                view["state"]["admissions"][admission["admission_id"]]["state"] = "closed"
+            return view
+        with patch.object(OrcaPort, "read_native", autospec=True,
+                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)), \
+                patch("pod.ledger.kernel_view", side_effect=acceptance_view):
+            result = internal_run("acceptance", {
+                "project": str(self.project), "objective": "objective", "criteria": ["PoD#1"],
+                "evidence_rows": [passing], "candidate": self.candidate, "policy_revision": "p",
+                "sources": [], "dependencies": [], "environment": "fixture", "review_required": False,
+                "hosted_required": False, "owner_acceptance": owner})
+        self.assertTrue(result["required_checks_pass"])
+        self.assertFalse(result["project_assessment_required"])
+        return admission, result
+
+    def test_objective_acceptance_holds_known_route_mismatch(self):
+        admission, result = self._acceptance_with_route({"agent": "codex", "model": "gpt-6-luna",
+                                                          "effort": "medium"})
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["route_holds"], [{"admission": admission["admission_id"],
+                                                   "reason": "route_mismatch"}])
+
+    def test_objective_acceptance_holds_unknown_route(self):
+        admission, result = self._acceptance_with_route({"agent": None, "model": None, "effort": None})
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["route_holds"], [{"admission": admission["admission_id"],
+                                                   "reason": "effective_unknown"}])
+
+    def test_objective_acceptance_holds_mismatch_after_candidate_advances(self):
+        admission, result = self._acceptance_with_route({"agent": "codex", "model": "gpt-6-luna",
+                                                          "effort": "medium"}, advance=True)
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["route_holds"], [{"admission": admission["admission_id"],
+                                                   "reason": "route_mismatch"}])
+
+    def test_objective_acceptance_holds_unknown_after_candidate_advances_and_admission_closes(self):
+        admission, result = self._acceptance_with_route({"agent": None, "model": None, "effort": None},
+                                                        advance=True, closed=True)
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["route_holds"], [{"admission": admission["admission_id"],
+                                                   "reason": "effective_unknown"}])
+
+    def test_objective_acceptance_allows_known_matching_route(self):
+        _, result = self._acceptance_with_route({"agent": "codex", "model": "gpt-6-sol",
+                                                  "effort": "medium"})
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["route_holds"], [])
+
     def test_capacity_wait_is_valid_only_at_the_ceiling_and_proposals_are_never_admitted(self):
         tasks = [self.sub(f"T{index}") for index in range(1, 6)]
         self.intake(*tasks, proposals=[{"id": "P1", "source": "worker_report", "origin_ref": "earlier",
@@ -424,8 +772,8 @@ class CapacityAndReviewTests(KernelCase):
         a = next(row for row in rows if row["id"] == "A")
         a.pop("wait"); a.update(state="satisfied", evidence=[{"attempt": review["admission_id"]}])
         self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows)
-        rescoped = self.report(review, frozen, outcome="succeeded", scope=["src", "docs"])
-        self.assertEqual(rescoped["status"], "reconciliation_required")
+        self.refused("report_conflict", None, self.report, review, frozen,
+                     outcome="succeeded", scope=["src", "docs"])
         self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows)
         with patch.object(OrcaPort, "read_native", autospec=True,
                           side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
@@ -435,6 +783,43 @@ class CapacityAndReviewTests(KernelCase):
                 "dependencies": [], "environment": "fixture", "review_required": False,
                 "hosted_required": False})
         self.assertEqual(label["independently_reviewed"], "WITHHELD")
+
+    def test_review_report_is_immutable_and_a_fresh_settled_attempt_can_qualify(self):
+        assurance = {"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+                     "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
+                     "candidate": self.base, "existing_evidence": "unit tests", "insufficiency": "no review",
+                     "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        self.intake(assurance)
+        frozen = self.packet(["A"], role="review")
+        first = self.start("review-failed", frozen)["admission"]
+        self.refused("report_attempt_unverified", None, self.report, first, frozen, outcome="succeeded")
+        self.assertIsNone(read(self.project, "objective")["admissions"][first["admission_id"]]["report"])
+        self.settle(first)
+        rows = self.stored()
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("executor"); a.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        self.report(first, frozen, outcome="failed", map={"obligations": rows})
+        stored = read(self.project, "objective")["admissions"][first["admission_id"]]["report"]
+        self.assertEqual(stored["observation"]["failures"], ["review not completed"])
+        before_replay = read(self.project, "objective")["revision"]
+        replay = self.report(first, frozen, outcome="failed")
+        self.assertEqual(replay["status"], "validated_observation")
+        self.assertEqual(read(self.project, "objective")["revision"], before_replay)
+        self.assertEqual(read(self.project, "objective")["admissions"][first["admission_id"]]["report"], stored)
+        self.refused("report_conflict", None, self.report, first, frozen, outcome="succeeded")
+        self.assertEqual(read(self.project, "objective")["admissions"][first["admission_id"]]["report"], stored)
+        second = self.start("review-fresh", frozen)["admission"]
+        self.settle(second)
+        rows = self.stored()
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("executor"); a.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        self.report(second, frozen, map={"obligations": rows})
+        rows = self.stored()
+        a = next(row for row in rows if row["id"] == "A")
+        a.pop("wait"); a.update(state="satisfied", evidence=[{"attempt": second["admission_id"]}])
+        qualified = self.write(rows)
+        self.assertEqual(qualified["report"]["label"]["label"], "QUALIFIED")
+        self.assertEqual(read(self.project, "objective")["admissions"][first["admission_id"]]["report"], stored)
 
 
 class LifecycleTests(KernelCase):

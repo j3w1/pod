@@ -263,7 +263,8 @@ def _relocate(source: dict, observed: dict, sources: list[dict]) -> dict:
 _OBLIGATION_FIELDS = {"id", "kind", "provenance", "introduced_seq", "parent", "check", "resolves",
                       "stop_condition", "boundary", "source", "state", "executor", "wait", "external",
                       "evidence", "withdrawal", "adopts", "reuse", "scope", "question", "candidate",
-                      "existing_evidence", "insufficiency", "uncovered_risk", "findings", "finding"}
+                      "existing_evidence", "insufficiency", "uncovered_risk", "findings", "finding",
+                      "definition", "receipts"}
 _DEFINITION = ("check", "resolves", "stop_condition", "scope", "question", "insufficiency",
                "existing_evidence", "uncovered_risk")
 _STATE_FIELDS = {"active": "executor", "waiting": "wait", "blocked_external": "external",
@@ -395,9 +396,20 @@ def _settled_serving(ctx: dict, obligation: str) -> list[str]:
 
 # --------------------------------------------------------------------------- evidence
 
-_EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies",
-                   "environment", "check", "command", "result", "timestamp", "status", "reference",
-                   "reviewer_attempt"}
+def definition_id(ob: dict) -> str:
+    """Identity of what is verified, separate from state, candidate and test command.
+
+    Revisions of other obligations and governance line relocation do not change this
+    identity. Candidate, source, environment, dependency and policy checks remain separate.
+    """
+    value = {key: ob[key] for key in ("id", "kind", "provenance", "parent", *_DEFINITION)
+             if key in ob}
+    # Assurance scope is what the reviewer checks; its editing boundary is only ownership.
+    if ob["kind"] != "assurance":
+        value["boundary"] = boundary(ob.get("boundary"))
+    if "scope" in value:
+        value["scope"] = boundary(value["scope"])
+    return digest(value)
 
 
 def _source_entries(value: Any, name: str) -> list[dict]:
@@ -427,10 +439,12 @@ def _evidence_record(ob: dict, raw: Any) -> dict:
     keeps is the binding: candidate, sources, effective Governor policy, dependencies,
     environment and the command and result that produced the status.
     """
-    row = _exact(raw, _EVIDENCE_FIELDS | {"governance"}, _EVIDENCE_FIELDS - {"reviewer_attempt"}, "evidence")
-    if row["schema"] != "pod-evidence/v1":
-        raise refuse("obligation_invalid", "malformed", "obligation evidence is a pod-evidence/v1 record",
-                     obligation=ob["id"])
+    from .records import evidence_record
+    try:
+        row = evidence_record({k: v for k, v in raw.items() if k != "governance"}
+                              if isinstance(raw, dict) else raw)
+    except PodError as exc:
+        raise refuse("obligation_invalid", "malformed", str(exc), obligation=ob["id"]) from exc
     if row["criterion"] != ob["id"]:
         raise refuse("obligation_invalid", "evidence_unbound",
                      "an evidence record names the obligation it serves as its criterion",
@@ -438,35 +452,54 @@ def _evidence_record(ob: dict, raw: Any) -> dict:
     for field in ("candidate", "policy_revision", "environment", "check", "command", "result", "timestamp",
                   "reference"):
         _text(row[field], field)
-    if row["status"] not in ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"):
-        raise refuse("obligation_invalid", "malformed", "evidence status is unsupported", obligation=ob["id"])
-    record = {key: row[key] for key in _EVIDENCE_FIELDS if key in row}
+    if "definition" not in row:
+        raise refuse("obligation_invalid", "evidence_unbound",
+                     "map evidence names the obligation definition it verified", obligation=ob["id"])
+    record = dict(row)
     record["sources"] = _source_entries(row["sources"], "evidence")
     record["dependencies"] = _dependencies(row["dependencies"], "evidence")
     return record
 
 
 def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: bool) -> list[dict]:
-    """Pod stamps each evidence row; assurance rows take their binding from the review admission."""
-    prior_rows = {digest({"attempt": row["attempt"]} if ob["kind"] == "assurance" else
-                         {k: v for k, v in row.items() if k != "governance"}): row
-                  for row in (prior or {}).get("evidence", [])}
+    """Keep immutable receipt identities even when a caller omits the selected evidence.
+
+    History is inside the existing obligation record, bounded by MAX_EVIDENCE, and is
+    never evicted or accepted from the caller. Full history refuses another receipt;
+    it cannot silently make a forgotten receipt new again.
+    """
+    identity = "attempt" if ob["kind"] == "assurance" else "reference"
+    receipts = {item["evidence"][identity]: deepcopy(item) for item in (prior or {}).get("receipts", [])}
     stamped = []
     for raw in ob.get("evidence", []):
         if ob["kind"] == "assurance":
-            row = _exact(raw, {"attempt", "candidate", "binding", "governance"}, {"attempt"}, "assurance evidence")
+            row = _exact(raw, {"attempt", "candidate", "binding", "governance", "definition"},
+                         {"attempt"}, "assurance evidence")
             _text(row["attempt"], "attempt", limit=128)
             admission = _admissions(ctx).get(row["attempt"])
             admission = admission if isinstance(admission, dict) else {}
-            key = digest({"attempt": row["attempt"]})
             base = {"attempt": row["attempt"], "candidate": admission.get("candidate"),
-                    "binding": admission.get("binding")}
+                    "binding": deepcopy(admission.get("binding")),
+                    "definition": (admission.get("binding") or {}).get("definitions", {}).get(ob["id"])}
         else:
             base = _evidence_record(ob, raw)
-            key = digest(base)
-        previous = prior_rows.get(key)
-        stamp = previous.get("governance") if previous and not rebind else gov
-        stamped.append({**base, "governance": stamp})
+        key = base[identity]
+        previous = receipts.get(key)
+        if previous and base != {k: v for k, v in previous["evidence"].items() if k != "governance"}:
+            raise refuse("obligation_invalid", "receipt_conflict",
+                         "an observed receipt cannot change its definition, candidate or content",
+                         obligation=ob["id"], receipt=key)
+        stamp = (previous["evidence"]["governance"] if previous else
+                 (base.get("binding") or {}).get("governance") if identity == "attempt" else gov)
+        if rebind:
+            stamp = gov
+        evidence = {**base, "governance": stamp}
+        receipts[key] = {**(previous or {}), "evidence": evidence}
+        stamped.append(evidence)
+    if len(receipts) > MAX_EVIDENCE:
+        raise refuse("obligation_invalid", "receipt_limit", "the bounded receipt history is full",
+                     obligation=ob["id"])
+    ob["receipts"] = list(receipts.values())
     return stamped
 
 
@@ -503,14 +536,14 @@ def review_completed(admission: Any) -> bool:
 def _reuse_valid(ob: dict, ctx: dict, candidate: str) -> bool:
     reuse = ob.get("reuse")
     return (isinstance(reuse, dict) and reuse.get("to") == candidate
-            and isinstance(reuse.get("delta"), list))
+            and reuse.get("definition") == definition_id(ob) and isinstance(reuse.get("delta"), list))
 
 
 def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
     """Explicit REUSE: the Git delta between candidates must leave the obligation's scope unaffected."""
     if "reuse" not in ob:
         return None
-    raw = _exact(ob["reuse"], {"from", "to", "delta"}, {"from"}, "reuse")
+    raw = _exact(ob["reuse"], {"from", "to", "delta", "definition"}, {"from"}, "reuse")
     source = _text(raw["from"], "reuse from", limit=128)
     current = ctx.get("candidate")
     scope = ob["scope"] if ob["kind"] == "assurance" else ob["boundary"]
@@ -518,7 +551,8 @@ def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
         raise refuse("obligation_unaccounted", "evidence_invalidated",
                      "reuse needs a declared path scope to show it is unaffected", obligation=ob["id"])
     previous = (prior or {}).get("reuse")
-    if isinstance(previous, dict) and previous.get("from") == source and previous.get("to") == current:
+    if (isinstance(previous, dict) and previous.get("from") == source and previous.get("to") == current
+            and previous.get("definition") == definition_id(ob)):
         return previous
     delta_reader: Callable | None = ctx.get("git_delta")
     delta = delta_reader(source, current) if delta_reader is not None and isinstance(current, str) else None
@@ -532,7 +566,7 @@ def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
         raise refuse("obligation_unaccounted", "evidence_invalidated",
                      "the candidate delta touches the obligation's scope; it needs fresh evidence",
                      obligation=ob["id"], paths=",".join(touched["paths"][:8]))
-    return {"from": source, "to": current, "delta": sorted(delta)[:256]}
+    return {"from": source, "to": current, "delta": sorted(delta)[:256], "definition": definition_id(ob)}
 
 
 def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) -> bool:
@@ -545,18 +579,29 @@ def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) 
     if _reuse_valid(ob, ctx, current):
         allowed.add(ob["reuse"]["from"])
     for row in rows:
-        if row.get("governance") != gov or row.get("candidate") not in allowed:
+        if (row.get("definition") != definition_id(ob)
+                or row.get("governance") != gov or row.get("candidate") not in allowed):
             return False
         if ob["kind"] == "assurance":
             admission = _admissions(ctx).get(row["attempt"])
             if (not isinstance(admission, dict) or admission.get("role") != "review"
                     or admission.get("serves") != [ob["id"]] or row["attempt"] in _outstanding(ctx)
                     or not review_completed(admission) or admission.get("candidate") != row.get("candidate")
+                    or (admission.get("binding") or {}).get("definitions", {}).get(ob["id"]) != row["definition"]
+                    or row.get("binding") != admission.get("binding")
                     or not binding_current(admission.get("binding"), ctx)):
                 return False
         elif row.get("status") != "PASS" or not binding_current(row, ctx):
             return False
     return True
+
+
+def _accepted_assurance_current(ob: dict, ctx: dict, gov: str) -> bool:
+    """An accepted proof survives omission and unsatisfied intermediate states."""
+    return ob["kind"] == "assurance" and any(
+        item.get("accepted_seq") is not None and evidence_valid(
+            {**ob, "evidence": [item["evidence"]], "reuse": item.get("reuse")}, ctx, gov)
+        for item in ob.get("receipts", []))
 
 
 # --------------------------------------------------------------------------- write
@@ -610,7 +655,8 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     observed = ctx.get("governance")
     if prior_map is None:
         # A round-tripped stamped base is ignored: Pod binds the base it reads itself.
-        declared = _exact(value.get("governance"), {"base_ref", "exclude", "base"}, {"base_ref"}, "governance")
+        declared = _exact(value.get("governance"), {"base_ref", "selection", "exclude", "base"},
+                          {"base_ref"}, "governance")
         if declared["base_ref"] is not None:
             _text(declared["base_ref"], "base_ref", limit=256)
         exclude = declared.get("exclude", [])
@@ -621,18 +667,28 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
         if exclude and not user:
             raise refuse("obligation_invalid", "provenance_unauthorized",
                          "only a direct user constraint excludes a governance source")
-        sources, base = bind_governance(observed, declared["base_ref"], sorted(exclude))
-        governance = {"base_ref": declared["base_ref"], "exclude": sorted(exclude), "base": base}
+        target_ref = observed.get("target_ref") if isinstance(observed, dict) else None
+        sources, base = bind_governance(observed, target_ref or declared["base_ref"], sorted(exclude))
+        governance = {"base_ref": target_ref, "selection": observed.get("selection") if target_ref else None,
+                      "exclude": sorted(exclude), "base": base}
     else:
         governance = prior_map["governance"]
-        if "governance" in value and (not isinstance(value["governance"], dict)
-                                      or any(governance.get(k) != v for k, v in value["governance"].items()
-                                             if k in ("base_ref", "exclude"))):
-            raise refuse("obligation_invalid", "governance_source_unrecognized",
-                         "governance sources are fixed at intake")
+        declared = value.get("governance")
+        if declared is not None:
+            if not isinstance(declared, dict) or set(declared) - {"base_ref", "selection", "exclude", "base"}:
+                raise refuse("obligation_invalid", "governance_source_unrecognized",
+                             "governance sources are fixed at intake")
+            if declared.get("exclude", governance["exclude"]) != governance["exclude"]:
+                raise refuse("obligation_invalid", "governance_source_unrecognized",
+                             "governance source paths are fixed at intake")
+            if declared.get("base_ref", governance["base_ref"]) != governance["base_ref"] and not (user and refresh):
+                raise refuse("obligation_invalid", "governance_source_unrecognized",
+                             "a target change needs a direct user revision and governance refresh")
         if refresh:
-            sources, base = bind_governance(observed, governance["base_ref"], governance["exclude"])
-            governance = {**governance, "base": base}
+            target_ref = observed.get("target_ref") if isinstance(observed, dict) else None
+            sources, base = bind_governance(observed, target_ref, governance["exclude"])
+            governance = {**governance, "base_ref": target_ref,
+                          "selection": observed.get("selection") if target_ref else None, "base": base}
         else:
             sources = prior_map["governance_sources"]
     gov = governance_digest(sources)
@@ -683,6 +739,7 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     criteria = ctx.get("criteria", [])
     for ob in rows.values():
         earlier = prior_rows.get(ob["id"])
+        ob["definition"] = definition_id(ob)
         if earlier is not None:
             for key in ("kind", "provenance", "parent"):
                 if ob.get(key) != earlier.get(key):
@@ -741,8 +798,11 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     for ob in rows.values():
         if ob["kind"] == "assurance" and ob["id"] not in prior_rows and ob["state"] != "withdrawn":
             for other in rows.values():
+                recorded = {**other, "receipts": prior_rows.get(other["id"], {}).get("receipts", [])}
                 if (other is not ob and other["kind"] == "assurance" and other["state"] != "withdrawn"
-                        and other["candidate"] == ob["candidate"] and overlaps(other["scope"], ob["scope"])
+                        and (other["candidate"] == ob["candidate"]
+                             or _accepted_assurance_current(recorded, ctx, gov))
+                        and overlaps(other["scope"], ob["scope"])
                         and not ob.get("uncovered_risk")):
                     raise refuse("obligation_invalid", "missing_uncovered_risk",
                                  "an overlapping assurance on the same candidate names the risk it adds",
@@ -773,6 +833,13 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
             ob["reuse"] = reuse
         if not ob["evidence"]:
             ob.pop("evidence")
+        continuing = (earlier is not None and earlier["state"] == ob["state"] == "active"
+                      and earlier.get("executor") == ob.get("executor")
+                      and ob.get("executor") in _outstanding(ctx))
+        if ob["state"] not in TERMINAL and not continuing and _accepted_assurance_current(ob, ctx, gov):
+            raise refuse("obligation_unaccounted", "assurance_still_bound",
+                         "a still-valid accepted assurance cannot be reopened by removing its evidence",
+                         obligation=ob["id"])
     missing_rebind = [key for key in rebind if key not in rows]
     if missing_rebind:
         raise refuse("obligation_invalid", "malformed", "rebind names unknown obligations",
@@ -782,6 +849,12 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
              "obligations": [rows[key] for key in [row["id"] for row in raw_obligations]],
              "proposals": list(proposals.values())}
     _account(state, rows, seq, ctx, gov)
+    for ob in rows.values():
+        if ob["state"] == "satisfied":
+            for item in ob["receipts"]:
+                if item["evidence"] in ob["evidence"]:
+                    item.setdefault("accepted_seq", seq)
+                    item["reuse"] = deepcopy(ob.get("reuse"))
     _waits(state, rows, ctx)
     violations = properties(state, ctx)
     for name, found in violations.items():
@@ -1149,9 +1222,14 @@ def p4_no_integration_deadlock(state: dict, ctx: dict) -> list[str]:
 def p5_assurance_binding(state: dict, ctx: dict) -> list[str]:
     """Assurance-binding integrity: every satisfied assurance is bound; not review truth."""
     gov = governance_digest(state["governance_sources"])
-    return [f"{ob['id']} is satisfied without a bound review attempt"
+    found = [f"{ob['id']} is satisfied without a bound review attempt"
             for ob in state["obligations"]
             if ob["kind"] == "assurance" and ob["state"] == "satisfied" and not evidence_valid(ob, ctx, gov)]
+    found += [f"{ob['id']} is reopened while its accepted review remains bound"
+              for ob in state["obligations"]
+              if ob["state"] not in TERMINAL and ob.get("executor") not in _outstanding(ctx)
+              and _accepted_assurance_current(ob, ctx, gov)]
+    return found
 
 
 def p6_terminal_closure(state: dict, ctx: dict) -> list[str]:
@@ -1281,6 +1359,9 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
         if ob["state"] in TERMINAL:
             raise refuse("unbound_assignment", ob["state"], f"the served obligation is {ob['state']}",
                          obligation=served)
+        if _accepted_assurance_current(ob, ctx, governance_digest(state["governance_sources"])):
+            raise refuse("unbound_assignment", "assurance_still_bound",
+                         "an accepted assurance receipt is still valid", obligation=served)
         busy = _serving(ctx, served, outstanding_only=True)
         if busy:
             raise refuse("unbound_assignment", "obligation_busy", "the obligation already has an outstanding admission",
@@ -1308,6 +1389,10 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
                                  "the boundary overlaps the coordinator-held obligation", obligation=ob["id"],
                                  paths=",".join(found["paths"][:8]), surfaces=",".join(found["surfaces"]))
         for key, row in undispositioned(ctx).items():
+            if (row.get("result") or {}).get("paths_status") == "over_limit":
+                raise refuse("integration_pending", "integration_pending",
+                             "the settled result has more changed paths than Pod can verify",
+                             admission=key)
             found = overlap(binding["boundary"], _admission_boundary(row))
             if found["paths"] or found["surfaces"]:
                 raise refuse("integration_pending", "integration_pending",
@@ -1316,14 +1401,17 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
     return binding
 
 
-def admission_binding(body: dict, ctx: dict) -> dict:
+def admission_binding(body: dict, ctx: dict, state: dict) -> dict:
     """The R41 context an attempt runs under: policy, environment, dependencies, bound sources."""
     verification = ctx.get("verification") or {}
     sources = [*(body.get("sources") or []),
                *({"path": ref["path"], "state": "present", "sha256": ref["sha256"]}
                  for ref in (body.get("context") or []) if ref.get("kind") in ("source", "instruction"))]
     return {"policy_revision": ctx.get("policy_revision"), "environment": verification.get("environment"),
-            "dependencies": list(verification.get("dependencies", [])), "sources": sources}
+            "dependencies": list(verification.get("dependencies", [])), "sources": sources,
+            "governance": governance_digest(state["governance_sources"]),
+            "definitions": {ob["id"]: definition_id(ob) for ob in state["obligations"]
+                            if ob["id"] in body["serves"]}}
 
 
 def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying: dict | None = None) -> dict:
@@ -1346,7 +1434,7 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
                                                       "boundary": binding["boundary"], "state": "reserved",
                                                       "disposition": None, "changed_paths": None,
                                                       "candidate": ctx.get("candidate"), "report": None,
-                                                      "binding": admission_binding(body, ctx)}}
+                                                      "binding": admission_binding(body, ctx, state)}}
     outstanding = list(dict.fromkeys([*_outstanding(ctx), admission_id]))
     return accept_write(state, value, {**ctx, "admissions": admissions, "outstanding": outstanding})
 
@@ -1545,6 +1633,9 @@ def report_projection(state: dict, ctx: dict) -> dict:
               "boundary_exceeded": [{"admission": key, "paths": row["boundary_exceeded"],
                                      "disposition": row.get("disposition")}
                                     for key, row in sorted(admissions.items()) if row.get("boundary_exceeded")],
+              "result_over_limit": [{"admission": key, "path_count": row["result"]["path_count"]}
+                                    for key, row in sorted(admissions.items())
+                                    if (row.get("result") or {}).get("paths_status") == "over_limit"],
               "proposals_out_of_scope": [{"id": row["id"], "source": row["source"], "summary": row["summary"]}
                                          for row in state.get("proposals", []) if row["status"] == "open"],
               "label": label_qualification(state, ctx, ctx.get("candidate"))}

@@ -555,6 +555,25 @@ class AdmissionTests(unittest.TestCase):
         self.assertTrue(reused['route_decision']['effective_unknown'])
         self.assertEqual(reused['effective_evidence']['requested']['model'],ROUTE['model'])
 
+    def test_partial_launch_shapes_compare_only_known_relevant_fields(self):
+        from pod.operations import _effective_evidence
+        from tests.common import envelope
+        shown=envelope('reused-terminal-worker-show')
+        shown['result']['worker']['startOptions']['launch']={
+            'effective':{},'requested':{'agent':'codex','model':'gpt-6-sol'},'extra':'ignored'}
+        receipt={'launch':{'effective':{'agent':None,'model':None,'effort':None,'extra':'ignored'},
+                           'requested':{'agent':'codex','model':'gpt-6-sol','effort':None,
+                                        'extra':'different'}}}
+        effective,mismatch=_effective_evidence(receipt,shown,{'request':dict(ROUTE)})
+        self.assertEqual([effective[key] for key in ('agent','model','effort')],['unknown']*3)
+        self.assertFalse(mismatch)
+        shown['result']['worker']['startOptions']['launch']['effective']['model']='gpt-6-luna'
+        receipt['launch']['effective']['model']='gpt-6-sol'
+        self.assertTrue(_effective_evidence(receipt,shown,{'request':dict(ROUTE)})[1])
+        shown['result']['worker']['startOptions']['launch']['effective'].clear()
+        receipt['launch']['effective']['model']='gpt-6-luna'
+        self.assertTrue(_effective_evidence(receipt,shown,{'request':dict(ROUTE)})[1])
+
     def test_effective_unknown_and_mismatch_bind_without_acceptance(self):
         self.port.effective={'agent':'codex','model':'gpt-6-luna','effort':'medium'}
         row=self.start()['admission']

@@ -276,25 +276,36 @@ def _effective_evidence(receipt: dict, shown: dict, admission: dict) -> tuple[di
     claimed = receipt_launch.get("effective") if isinstance(receipt_launch, dict) else None
     observed_requested = launch.get("requested") if isinstance(launch, dict) else None
     claimed_requested = receipt_launch.get("requested") if isinstance(receipt_launch, dict) else None
-    if (observed is not None and claimed is not None and observed != claimed
-            or observed_requested is not None and claimed_requested is not None
-            and observed_requested != claimed_requested):
-        mismatch = True
-    else:
-        mismatch = False
+    fields = ("agent", "model", "effort")
+    def known_conflict(left: object, right: object) -> bool:
+        return (isinstance(left, dict) and isinstance(right, dict)
+                and any(_observed_value(left.get(key)) != "unknown"
+                        and _observed_value(right.get(key)) != "unknown"
+                        and _observed_value(left.get(key)) != _observed_value(right.get(key))
+                        for key in fields))
+
+    # Receipt and worker-show can represent the same unknown field as absent or null.
+    # Only two known, relevant values can contradict one another.
+    mismatch = (known_conflict(observed, claimed)
+                or known_conflict(observed_requested, claimed_requested))
     # Orca reports null launch fields for a reused terminal, which sends no model or effort
     # flag. Absent, null or malformed effective values are unknown, never observed settings.
     effective = {key: _observed_value(observed.get(key)) if isinstance(observed, dict) else "unknown"
-                 for key in ("agent", "model", "effort")}
+                 for key in fields}
     effective["context"] = "native_default"
     requested = admission["request"]
-    for key in ("agent", "model", "effort"):
+    for key in fields:
         expected = requested[key]
         if expected != "native_default" and (
-                isinstance(observed_requested, dict) and observed_requested.get(key) not in (None, expected)
-                or isinstance(claimed_requested, dict) and claimed_requested.get(key) not in (None, expected)):
+                isinstance(observed_requested, dict)
+                and _observed_value(observed_requested.get(key)) not in ("unknown", expected)
+                or isinstance(claimed_requested, dict)
+                and _observed_value(claimed_requested.get(key)) not in ("unknown", expected)):
             mismatch = True
         if effective[key] != "unknown" and requested[key] != "native_default" and effective[key] != requested[key]:
+            mismatch = True
+        if (isinstance(claimed, dict) and requested[key] != "native_default"
+                and _observed_value(claimed.get(key)) not in ("unknown", requested[key])):
             mismatch = True
     return effective, mismatch
 

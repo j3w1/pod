@@ -163,9 +163,16 @@ VERIFICATION = {"dependencies": ["pyyaml==6.0.3"], "environment": "fixture"}
 
 
 def proof(obligation: str, candidate: str = "c1", *, status: str = "PASS", policy_revision: str = "p",
-          environment: str = "fixture", dependencies=("pyyaml==6.0.3",), sources=(), check: str = "unit") -> dict:
+          environment: str = "fixture", dependencies=("pyyaml==6.0.3",), sources=(), check: str = "unit",
+          definition: dict | None = None, reference: str | None = None) -> dict:
     """A detailed pod-evidence/v1 record joined to one obligation by its id (R41)."""
-    return {"schema": "pod-evidence/v1", "criterion": obligation, "candidate": candidate,
+    row = {"schema": "pod-evidence/v1", "criterion": obligation, "candidate": candidate,
             "sources": list(sources), "policy_revision": policy_revision, "dependencies": list(dependencies),
             "environment": environment, "check": check, "command": "python -m unittest", "result": "observed",
             "timestamp": "2026-09-24T00:00:00Z", "status": status, "reference": "log"}
+    if definition is not None:
+        from pod.obligations import definition_id
+        row["definition"] = definition_id(definition)
+    from pod.util import digest
+    row["reference"] = reference or "log-" + digest(row)[:16]
+    return row
