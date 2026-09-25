@@ -1,6 +1,6 @@
 """Real launcher/PTY proof; pyte and wcwidth remain test-only dependencies."""
 
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 import json
 import os
 from pathlib import Path
@@ -12,6 +12,7 @@ import time
 import unittest
 
 from tests.pty_harness import PtySession, dependencies_available, environment, fixture_config, LAUNCHER
+from tests.install_support import ignored_sigint
 
 
 class TuiPtyTests(unittest.TestCase):
@@ -34,8 +35,9 @@ class TuiPtyTests(unittest.TestCase):
         from pod.config import load, set_model, set_mode
         self.load,self.set_model,self.set_mode=load,set_model,set_mode
 
-    def open(self, *, cols=80, rows=24, **env):
-        session=PtySession(home=self.home,cwd=self.work,cols=cols,rows=rows,env_extra=env)
+    def open(self, *, cols=80, rows=24, ignore_sigint=False, **env):
+        with ignored_sigint() if ignore_sigint else nullcontext():
+            session=PtySession(home=self.home,cwd=self.work,cols=cols,rows=rows,env_extra=env)
         self.addCleanup(session.close)
         session.wait_for('Details  ',timeout=4)
         session.settle()
@@ -279,12 +281,12 @@ class TuiPtyTests(unittest.TestCase):
         self.assertEqual(self.load(personal=self.config)['saved']['gpt-6-sol'],'preferred')
 
     def test_ctrl_c_and_sigterm_exit_without_writing(self):
-        first=self.open()
+        first=self.open(ignore_sigint=True)
         before=self.config.read_bytes()
         first.send('\x03')
         first.wait_for(lambda s:s.closed,timeout=2)
         self.assertEqual(self.config.read_bytes(),before)
-        second=self.open()
+        second=self.open(ignore_sigint=True)
         os.kill(second.pid,signal.SIGTERM)
         second.wait_for(lambda s:s.closed,timeout=2)
         self.assertEqual(self.config.read_bytes(),before)
