@@ -200,7 +200,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
     def test_skill_preserves_direct_plan_and_continuation_paths(self):
         text = (self.root / "skills" / "pod" / "SKILL.md").read_text()
         for phrase in ("a direct objective uses the same flow", "Plan-only",
-                       "reconcile changes", "Before implementation", "visible agent tabs"):
+                       "reconcile changes", "Before implementation"):
             self.assertIn(phrase, text)
 
     def test_external_metadata_notice_is_short_and_not_a_product_dependency(self):
@@ -218,7 +218,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         for phrase in ("curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh",
                        "$pod https://github.com/owner/project/issues/123",
                        "Pod Execution Spec reference", "Authoring in ChatGPT",
-                       "Plan only", "Continue after interruption", "visible agent tab",
+                       "Plan only", "Continue after interruption",
                        "pod config --json", "native_default", "gpt-6-luna", "`VERSION`",
                        "pod update", "docs/installation.md"):
             self.assertIn(phrase, text)

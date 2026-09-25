@@ -104,7 +104,42 @@ def _assignment_evidence(shown: dict, admission: dict) -> dict:
     return {"admission_id": admission["admission_id"], "runtime": shown["runtime"],
             "run_id": binding["runId"], "task_id": binding["taskId"],
             "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
-            "settled": _native_assignment_settled(shown)}
+            "settled": _native_assignment_settled(shown),
+            "placement": _placement_evidence(result, binding)}
+
+
+def _placement_evidence(result: dict, binding: dict) -> dict:
+    """Presentation facts from the same exact native read; none is UI rendering proof."""
+    worker = result["worker"]
+    handle = binding.get("terminalHandle")
+    terminal = result.get("terminal")
+    resource = result.get("terminalResource")
+    # After terminal reuse Orca transfers ownership to the follow-up Dispatch; its tab
+    # then belongs to that Dispatch. A resource without a named owner proves neither.
+    owned = resource is None or (isinstance(resource, dict)
+                                 and resource.get("ownerDispatchId") == binding["dispatchId"])
+    terminal = terminal if (isinstance(terminal, dict) and handle is not None
+                            and terminal.get("handle") == handle
+                            and terminal.get("worktreeId") == binding["worktreeId"]
+                            and owned) else {}
+    facts = {"worktree": binding["worktreeId"], "tab": terminal.get("tabId"),
+             "native_worker_state": worker.get("state"), "terminal": handle,
+             "placement_readback": "observed", "surfaces": [], "warnings": [],
+             "ui_visibility": "unverified", "ui_focus": "unverified"}
+    if worker.get("agentTerminalHandle") != handle:
+        facts.update(tab=None, placement_readback="unavailable")
+        return facts
+    for name in ("effects", "residualResources"):
+        effects = worker.get(name)
+        for effect in effects if isinstance(effects, list) else []:
+            if (not isinstance(effect, dict) or handle is None or effect.get("kind") != "terminal"
+                    or effect.get("role") != "agent" or effect.get("id") != handle):
+                continue
+            for key, target in (("surface", "surfaces"), ("warning", "warnings")):
+                value = effect.get(key)
+                if isinstance(value, str) and value not in facts[target]:
+                    facts[target].append(value)
+    return facts
 
 
 class NativePort(Protocol):

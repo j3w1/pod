@@ -20,6 +20,7 @@ from .ledger import context_root_for_run, state_inventory
 from .orca import contract, current_run, worker_rows
 from .placement import inspect as inspect_placements, skills_cli_entry
 from .selection import active_constraints
+from .term import clean
 
 
 def parser() -> argparse.ArgumentParser:
@@ -212,6 +213,10 @@ def _status(project: Path, run: str | None) -> dict:
                                   "task": row["task_id"], "dispatch": binding.get("dispatchId"),
                                   "worker": binding.get("workerId"),
                                   "terminal": binding.get("terminalHandle"),
+                                  "worktree": binding.get("worktreeId"),
+                                  "tab": None, "placement_readback": "unavailable",
+                                  "surfaces": [], "warnings": [],
+                                  "ui_visibility": "unverified", "ui_focus": "unverified",
                                   "state": row["state"], "runtime": row["runtime"]})
     result.update({"status": "unavailable" if native_error else "observed",
                    "objective": checkpoint.get("objective") if checkpoint else None,
@@ -249,6 +254,8 @@ def _status(project: Path, run: str | None) -> dict:
             result["obligations"] = view["status"]["map"]
             result["obligation_lines"] = view["status"]["lines"]
             result["native_settlement"] = view["settlement"]
+            for ref in native_references:
+                ref.update(view.get("placements", {}).get(ref["admission_id"], {}))
             result["report"] = view["report"]
             if checkpoint.get("closure"):
                 result["blocker"] = result["blocker"] or "objective_closed"
@@ -359,7 +366,13 @@ def main(argv: list[str] | None = None) -> int:
                   f"running: {identity_label(identity['running'])}")
         for ref in result.get("native_references", []):
             print(f"  Task {ref['task']} | Dispatch {ref['dispatch'] or 'pending'} | "
-                  f"worker {ref['worker'] or 'unknown'} | terminal {ref['terminal'] or 'none'} | {ref['state']}")
+                  f"worker {ref['worker'] or 'unknown'} | terminal {ref['terminal'] or 'unavailable'} | "
+                  f"tab {ref['tab'] or 'unavailable'} | worktree {ref['worktree'] or 'unverified'} | "
+                  f"{ref['state']} | UI visibility/focus unverified")
+            for surface in ref['surfaces']:
+                print(f"    Orca placement surface: {clean(surface)}")
+            for warning in ref['warnings']:
+                print(f"    Orca placement warning: {clean(warning)}")
         for line in result.get("obligation_lines", []):
             print(line)
         for row in result.get("superseded", []):

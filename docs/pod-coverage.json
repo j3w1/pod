@@ -904,9 +904,14 @@
     {
       "id": "A107",
       "required_evidence": [
+        "unit",
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_orca_adapter.OrcaAdapterTests.test_three_exact_worker_argv_shapes",
+        "tests.test_operations.AdmissionTests.test_status_exposes_native_discoverability_without_ui_claim_or_write",
+        "tests.test_operations.AdmissionTests.test_missing_native_terminal_keeps_visibility_unknown"
+      ],
       "status": "NOT_RUN"
     },
     {

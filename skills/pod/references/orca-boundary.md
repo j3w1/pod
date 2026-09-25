@@ -1,8 +1,7 @@
 # The Orca boundary
 
-Load Orca's installed, version-matched orchestration guide before runtime work.
-It owns Runs, Tasks, Dispatches, placement, messaging, Delivery, lifecycle,
-request recovery and cleanup. Pod supplies no alternate lifecycle journal.
+Use Orca's installed guide for runtime operations and cleanup; Pod adds no
+lifecycle journal.
 
 ## Pod admission
 
@@ -13,17 +12,20 @@ packet, placement, sources, version, eligibility, constraints, route and
 ceiling. Read preferences under the objective lock before recording the row;
 release the lock before `worker-start`. A changed choice refuses
 `preference_changed` without a write. Later edits affect later starts.
-Reselect at most twice.
 
 A bound assignment frees a logical slot after exact native settlement, even
 when its terminal is retained. Reserved and unresolved requests remain
 outstanding. Do not enumerate all Runs or workers, infer terminal liveness or
 physical occupancy, or count another objective's workers.
 
-Normal workers use native worker-start and visible agent tabs. After validating
-and preserving an exact completed report, follow Orca's Delivery acknowledgment
-and worker-release order promptly. Reuse requires an immediate supported
-follow-up; uncertainty and protected resources remain retained.
+Normal workers use native worker-start and Orca's new-agent-tab setting.
+Report Task/Dispatch, worktree, terminal/tab references and native placement
+warnings through status/readback. `surface: background` and discoverability
+warnings describe native placement; terminal presence/absence proves neither
+rendering nor focus. Diagnose missing tabs with the existing worker, never a
+duplicate. Invent no visibility flag; change no preferences. Focus requires
+supported behavior and user request. Preserve reports; follow Delivery/release
+ordering. Reuse only for immediate follow-up; retain protected/uncertain resources.
 
 Orca's documented effect-free refusals `task_not_found`, `task_not_startable`
 and `inject_rejected` record `deferred` with no binding or blind retry.
@@ -34,11 +36,11 @@ Completed and absent request diagnosis is read-only. Pending replay preserves
 its original request and checks authority, runtime, placement, issue body and
 checkpoint core. It does not re-check preferences or make a new model choice.
 
-New terminal reuse requires the prior attempt to be settled with a known
+Terminal reuse requires a settled prior attempt with a known
 terminal, copies its effective route and rechecks eligibility. Native
 `worker-start --terminal` carries no model or effort flag. New model+effort and
 model-with-omitted-effort starts use only Orca's documented launch preferences.
-The capability is required for delegation, not safe direct work.
+Only delegation requires this capability.
 
 Requested and effective model/effort evidence is distinct. Missing effective
 fields stay `unknown`; an exact bound attempt with a mismatch is marked
