@@ -354,11 +354,10 @@ def _governance_target(project: Path, proposed: str | None, *, user_direct: bool
         return (default, None) if default is not None else (None, "target_selection_required")
     if not isinstance(proposed, str) or not _BASE_REF.fullmatch(proposed) or ".." in proposed:
         return None, "target_ref_invalid"
-    current = _symbolic_ref(project, "HEAD")
     named = _git(project, ["rev-parse", "--symbolic-full-name", "--verify", "--quiet",
                            "--end-of-options", proposed])
     selected = named.stdout.strip() if named is not None and named.returncode == 0 else ""
-    if (proposed == "HEAD" or selected == current or selected not in (default,)
+    if (proposed == "HEAD" or selected not in (default,)
             and not selected.startswith(("refs/heads/", "refs/remotes/"))):
         return None, "candidate_or_nonbranch_ref"
     if default is not None and (selected == default or
@@ -420,6 +419,52 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
             return {"status": "unavailable", "reason": "source_not_text", "current": current}
     return {"status": "observed", "target_ref": target, "selection": chosen_by, "commit": commit,
             "current": current, "texts": texts}
+
+
+def _independent_governance(project: Path, observed: dict, candidate: str | None,
+                            admissions: dict, *, established_ref: str | None) -> dict:
+    """Refuse a newly selected policy source on the candidate's own lineage.
+
+    A previously bound target is independent authority even when its commit later
+    advances through the candidate. For a new nondefault target, matching policy
+    bytes at the independently named default are safe; otherwise connected
+    candidate/result commits cannot establish that policy independently.
+    """
+    if (observed.get("status") != "observed" or observed.get("selection") == "default"
+            or observed.get("target_ref") == established_ref):
+        return observed
+    default = governance_observation(project, None)
+    if default.get("status") == "observed" and default.get("texts") == observed.get("texts"):
+        return observed
+    if candidate is None:
+        return {"status": "unavailable", "reason": "candidate_identity_required",
+                "target_ref": observed["target_ref"]}
+    candidate_commit = _resolve_commit(project, candidate)
+    if candidate_commit is None:
+        return {"status": "unavailable", "reason": "candidate_identity_unavailable",
+                "target_ref": observed["target_ref"]}
+    identities = {candidate_commit}
+    for row in admissions.values():
+        result = row.get("result") or {}
+        for value in (result.get("head"), (row.get("report") or {}).get("result_commit")):
+            if value is None:
+                continue
+            resolved = _resolve_commit(project, value)
+            if resolved is None:
+                return {"status": "unavailable", "reason": "result_identity_unavailable",
+                        "target_ref": observed["target_ref"]}
+            identities.add(resolved)
+    target = observed["commit"]
+    for identity in identities:
+        forward = git_is_ancestor(project, target, identity)
+        backward = git_is_ancestor(project, identity, target)
+        if forward is None or backward is None:
+            return {"status": "unavailable", "reason": "target_relation_unavailable",
+                    "target_ref": observed["target_ref"]}
+        if forward or backward:
+            return {"status": "unavailable", "reason": "candidate_policy_target",
+                    "target_ref": observed["target_ref"]}
+    return observed
 
 
 def require_governance_current(project: Path, map_state: dict | None) -> None:
@@ -757,6 +802,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                                        selection=prior_map["governance"].get("selection"))
                                 if base_ref is not None
                             else governance_observation(project, None))
+            observed = _independent_governance(
+                project, observed, core["candidate"], state["admissions"],
+                established_ref=(prior_map or {}).get("governance", {}).get("base_ref"))
             ctx = kernel_context(project, objective, state, authority.get("native"),
                                  candidate=core["candidate"], criteria=core["criteria"],
                                  governance=observed, delegation=native.get("delegation"),

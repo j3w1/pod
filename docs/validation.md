@@ -112,7 +112,9 @@ not prove private GitHub access or authorize writes. A live issue read retrieves
 the full body, verifies target and digest, and rechecks material amendments.
 
 The [scenario coverage file](pod-coverage.json) has one current scenario per row.
-`offline_test` names an existing deterministic test only; `null` identifies
+Its single `offline_test` authoring field may be a test reference string, a
+nonempty list of unique existing deterministic test references, or `null` when
+no offline test pointer is recorded. `null` identifies
 work scheduled in a later milestone or evidence that requires another kind of
 check. All rows stay `NOT_RUN` until actual evidence is recorded. A requirement
 change updates its scenario and coverage row in the same commit.

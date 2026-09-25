@@ -31,7 +31,48 @@ def execution_spec_source(root: Path) -> Path:
     return matches[0]
 
 
+def offline_test_references(value):
+    """Normalize the single coverage field while rejecting malformed pointers."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        refs = [value]
+    elif isinstance(value, list) and value:
+        refs = value
+    else:
+        raise ValueError("offline_test must be a string, nonempty list, or null")
+    if any(not isinstance(ref, str) or not ref for ref in refs):
+        raise ValueError("offline_test references must be nonempty strings")
+    if len(set(refs)) != len(refs):
+        raise ValueError("offline_test references must be unique")
+    return refs
+
+
+def assert_test_reference_exists(root: Path, path: str) -> None:
+    module, cls, method = path.rsplit(".", 2)
+    file = root.joinpath(*module.split(".")).with_suffix(".py")
+    if not file.is_file():
+        raise ValueError(f"offline_test module does not exist: {path}")
+    text = file.read_text()
+    if f"class {cls}" not in text or f"def {method}" not in text:
+        raise ValueError(f"offline_test case does not exist: {path}")
+
+
 class InventoryIntegrityTests(unittest.TestCase):
+    def test_offline_test_pointer_form_accepts_multiple_unique_existing_references(self):
+        root = Path(__file__).resolve().parents[1]
+        coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
+        row = next(row for row in coverage["scenarios"] if row["id"] == "A157")
+        self.assertIsInstance(row["offline_test"], list)
+        refs = offline_test_references(row["offline_test"])
+        self.assertGreaterEqual(len(refs), 2)
+        for ref in refs:
+            assert_test_reference_exists(root, ref)
+        with self.assertRaises(ValueError):
+            offline_test_references([refs[0], refs[0]])
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            assert_test_reference_exists(root, "tests.test_missing.Case.test_missing")
+
     def test_repository_owned_validator_checks_the_actual_canonical_skill(self):
         root = Path(__file__).resolve().parents[1]
         result = validate_skill(root / "skills" / "pod")
@@ -109,14 +150,8 @@ class InventoryIntegrityTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
         for row in coverage["scenarios"]:
-            path = row["offline_test"]
-            if path:
-                module, cls, method = path.rsplit(".", 2)
-                file = root.joinpath(*module.split(".")).with_suffix(".py")
-                self.assertTrue(file.is_file(), path)
-                text = file.read_text()
-                self.assertIn(f"class {cls}", text)
-                self.assertIn(f"def {method}", text)
+            for path in offline_test_references(row["offline_test"]):
+                assert_test_reference_exists(root, path)
 
 
 class ExecutionSpecDocumentationTests(unittest.TestCase):

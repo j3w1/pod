@@ -556,7 +556,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_ordinary_definition_and_receipt_identity_survive_checkpoint_omission",
+      "offline_test": [
+        "tests.test_records.RecordTests.test_failed_required_check_blocks_even_with_pass_and_review_is_contextual",
+        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_ordinary_definition_and_receipt_identity_survive_checkpoint_omission"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1083,7 +1086,10 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_kernel_boundaries.CapacityAndReviewTests.test_objective_acceptance_holds_known_route_mismatch",
+      "offline_test": [
+        "tests.test_orca_adapter.OrcaAdapterTests.test_three_exact_worker_argv_shapes",
+        "tests.test_kernel_boundaries.CapacityAndReviewTests.test_objective_acceptance_holds_known_route_mismatch"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1245,7 +1251,13 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.GovernanceTests.test_committed_candidate_policy_cannot_select_governance_and_target_is_bound",
+      "offline_test": [
+        "tests.test_kernel_boundaries.GovernanceTests.test_policy_cites_governance_at_the_base_never_the_candidate",
+        "tests.test_kernel_boundaries.GovernanceTests.test_committed_candidate_policy_cannot_select_governance_and_target_is_bound",
+        "tests.test_kernel_boundaries.GovernanceTests.test_candidate_policy_ref_is_refused_across_branch_remote_and_detached_layouts",
+        "tests.test_kernel_boundaries.GovernanceTests.test_explicit_default_alias_on_checked_out_target_preserves_initial_baseline",
+        "tests.test_kernel_boundaries.GovernanceTests.test_missing_default_does_not_make_candidate_self_selection_independent"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1294,7 +1306,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.ResultTests.test_changed_path_overflow_holds_integration_with_outside_path_after_1024",
+      "offline_test": [
+        "tests.test_kernel_boundaries.ResultTests.test_changed_paths_come_from_git_and_integration_is_validated_by_ancestry",
+        "tests.test_kernel_boundaries.ResultTests.test_changed_path_overflow_holds_integration_with_outside_path_after_1024",
+        "tests.test_kernel_boundaries.ResultTests.test_unknown_and_unavailable_settled_paths_hold_other_implementation_until_discard"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1310,7 +1326,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_c06_checkpoint_cannot_erase_accepted_review_or_start_repeat",
+      "offline_test": [
+        "tests.test_obligations.AssuranceTests.test_review_packets_serve_one_assurance_and_repeat_review_is_refused",
+        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_c06_checkpoint_cannot_erase_accepted_review_or_start_repeat",
+        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_withdrawn_current_assurance_still_requires_uncovered_risk_for_restatement"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1318,7 +1338,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_c07_authorized_definition_needs_fresh_review_and_keeps_old_receipt",
+      "offline_test": [
+        "tests.test_obligations.AssuranceTests.test_correction_changing_reviewed_scope_reopens_for_delta_review_and_reuses_unaffected",
+        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_c07_authorized_definition_needs_fresh_review_and_keeps_old_receipt",
+        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_restored_binding_review_correction_is_recorded_and_old_proof_cannot_qualify"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1326,7 +1350,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_kernel_boundaries.CapacityAndReviewTests.test_review_report_is_immutable_and_a_fresh_settled_attempt_can_qualify",
+      "offline_test": [
+        "tests.test_obligations.AssuranceTests.test_label_needs_bound_non_withdrawn_assurance",
+        "tests.test_kernel_boundaries.CapacityAndReviewTests.test_review_report_is_immutable_and_a_fresh_settled_attempt_can_qualify",
+        "tests.test_review_scope_reconciliation.ScopeReconciliationTests.test_first_scope_mismatch_requires_reconciliation_and_withholds_binding"
+      ],
       "status": "NOT_RUN"
     },
     {

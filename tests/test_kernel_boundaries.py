@@ -328,6 +328,64 @@ class ProofIntegrityBoundaryTests(KernelCase):
         self.write(rows)
         self.assertEqual(next(row for row in self.stored() if row["id"] == "A")["receipts"], receipts)
 
+    def test_withdrawn_current_assurance_still_requires_uncovered_risk_for_restatement(self):
+        self.satisfied()
+        rows = self.stored()
+        original = next(row for row in rows if row["id"] == "A")
+        receipts = deepcopy(original["receipts"])
+        original.pop("evidence")
+        original.update(state="withdrawn", withdrawal={"by": "coordinator", "reason": "risk no longer required"})
+        restated = {"id": "A2", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+                    "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
+                    "candidate": self.base, "existing_evidence": "tests", "insufficiency": "no review",
+                    "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        self.refused("obligation_invalid", "missing_uncovered_risk", self.write, [*rows, restated])
+        self.write(rows)
+        self.assertEqual(next(row for row in self.stored() if row["id"] == "A")["receipts"], receipts)
+        self.refused("obligation_invalid", "missing_uncovered_risk", self.write,
+                     [*self.stored(), restated])
+        restated["uncovered_risk"] = "new concurrency behavior outside the original review"
+        self.write([*self.stored(), restated])
+        self.assertEqual(self.start("new-risk-review", self.packet(["A2"], role="review"))
+                         ["admission"]["serves"], ["A2"])
+
+    def test_restored_binding_review_correction_is_recorded_and_old_proof_cannot_qualify(self):
+        first = self.satisfied()
+        self.write(self.waiting(), verification={**VERIFICATION, "environment": "another runner"})
+        frozen = self.packet(["A"], role="review")
+        review = self.start("review-after-invalidation", frozen)["admission"]
+        self.write(self.stored())  # The old environment and accepted proof are current again.
+        self.settle(review)
+        rows = self.stored()
+        assurance = next(row for row in rows if row["id"] == "A")
+        assurance.pop("executor")
+        assurance.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        rows.append({"id": "K1", "kind": "correction", "provenance": "coordinator", "parent": "A",
+                     "check": "repair the reported defect", "boundary": {"paths": ["src"]},
+                     "state": "unassigned"})
+        consumed = self.report(review, frozen, map={"obligations": rows}, triage=[
+            {"finding": "f1", "severity": "blocker", "triage": "required_correction",
+             "summary": "real defect", "correction": "K1"}])
+        self.assertTrue(consumed["settled"])
+        state = read(self.project, "objective")
+        self.assertIsNotNone(state["admissions"][review["admission_id"]]["report"])
+        self.assertEqual(next(row for row in self.stored() if row["id"] == "K1")["finding"]["attempt"],
+                         review["admission_id"])
+        self.assertEqual(self.label(), "WITHHELD")
+        rows = self.stored()
+        correction = next(row for row in rows if row["id"] == "K1")
+        correction.pop("state")
+        correction.update(state="satisfied", evidence=[self.proof("K1")])
+        self.write(rows)
+        rows = self.stored()
+        assurance = next(row for row in rows if row["id"] == "A")
+        assurance.pop("wait")
+        assurance.update(state="satisfied", evidence=[{"attempt": first["admission_id"]}])
+        self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows)
+        self.assertEqual(self.label(), "WITHHELD")
+        self.review("review-after-correction")
+        self.assertEqual(self.label(), "QUALIFIED")
+
     def test_governance_refresh_preserves_stale_receipts_and_requires_explicit_rebind(self):
         self.satisfied()
         (self.project / "AGENTS.md").write_text(AGENTS + "Clarify an unrelated delivery rule.\n")
@@ -410,8 +468,57 @@ class GovernanceTests(KernelCase):
                           "exclude": [], "base": self.base})
         self.assertNotEqual(candidate, accepted["checkpoint"]["governance"]["base"])
 
+    def test_candidate_policy_ref_is_refused_across_branch_remote_and_detached_layouts(self):
+        git(self.project, "checkout", "-q", "-b", "candidate")
+        (self.project / "AGENTS.md").write_text(AGENTS + "Candidate requires another reviewer.\n")
+        git(self.project, "commit", "-qam", "candidate policy")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/candidate", self.candidate)
+        direct = {"provenance": "user_direct", "instruction": "select candidate target"}
+        forged = self.policy("PX", "6")
+        self.refused("governance_unavailable", "governance_unavailable", internal_run, "brief",
+                     {"project": str(self.project), "criteria": ["PoD#1"],
+                      "coverage": [{"criterion": "PoD#1", "check": "unit"}],
+                      "map": {"governance": {"base_ref": "candidate"},
+                              "revision_authority": direct,
+                              "obligations": [self.criterion(), forged]}})
+        for checkout, proposed in (("main", "candidate"), ("candidate", "origin/candidate")):
+            with self.subTest(checkout=checkout, proposed=proposed):
+                git(self.project, "checkout", "-q", checkout)
+                self.refused("governance_unavailable", "governance_unavailable", self.write,
+                             [self.criterion(), forged], governance={"base_ref": proposed},
+                             revision_authority=direct)
+        git(self.project, "checkout", "-q", "--detach", self.candidate)
+        self.refused("governance_unavailable", "governance_unavailable", self.write,
+                     [self.criterion(), forged], governance={"base_ref": "candidate"},
+                     revision_authority=direct)
+        self.assertIsNone(read(self.project, "objective"))
+
+    def test_explicit_default_alias_on_checked_out_target_preserves_initial_baseline(self):
+        git(self.project, "checkout", "-q", "target")
+        state = self.write([self.criterion(), self.policy()], governance={"base_ref": "target"})
+        self.assertEqual(state["checkpoint"]["governance"]["selection"], "default")
+        self.assertEqual(state["checkpoint"]["governance"]["base_ref"],
+                         "refs/remotes/origin/target")
+        self.assertEqual(state["checkpoint"]["governance"]["base"], self.candidate)
+
+    def test_missing_default_does_not_make_candidate_self_selection_independent(self):
+        git(self.project, "branch", "candidate", self.candidate)
+        git(self.project, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+        self.refused("governance_unavailable", "governance_unavailable", self.write,
+                     [self.criterion()], governance={"base_ref": "candidate"},
+                     revision_authority={"provenance": "user_direct",
+                                         "instruction": "select this target"})
+
     def test_nondefault_target_needs_direct_selection_and_retarget_revision(self):
         git(self.project, "branch", "other-target")
+        (self.project / "README.md").write_text("candidate work\n")
+        git(self.project, "commit", "-qam", "candidate work")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "checkout", "-q", "other-target")
+        (self.project / "AGENTS.md").write_text(AGENTS + "Independent target rule.\n")
+        git(self.project, "commit", "-qam", "target policy")
+        git(self.project, "checkout", "-q", "main")
         git(self.project, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
         self.refused("governance_unavailable", "governance_unavailable", self.write,
                      [self.criterion()], governance={"base_ref": "other-target"})
@@ -420,7 +527,7 @@ class GovernanceTests(KernelCase):
                               revision_authority=user)
         self.assertEqual(selected["checkpoint"]["governance"]["base_ref"], "refs/heads/other-target")
         self.assertEqual(selected["checkpoint"]["governance"]["selection"], "user_direct")
-        git(self.project, "branch", "another-target")
+        git(self.project, "branch", "another-target", "other-target")
         self.refused("obligation_invalid", "governance_source_unrecognized", self.write,
                      self.stored(), governance={"base_ref": "another-target"}, governance_refresh=True)
         revised = self.write(self.stored(), governance={"base_ref": "another-target"},
@@ -482,6 +589,33 @@ class GovernanceTests(KernelCase):
 
 
 class ResultTests(KernelCase):
+    def test_unknown_and_unavailable_settled_paths_hold_other_implementation_until_discard(self):
+        self.intake(self.sub("S", boundary={"paths": ["src"]}),
+                    self.sub("T", boundary={"paths": ["docs"]}))
+        frozen = self.packet(["S"], boundary={"paths": ["src"]})
+        first = self.start("first-impl", frozen)["admission"]
+        outside = self.project / "docs" / "outside.md"
+        outside.parent.mkdir()
+        outside.write_text("outside the first boundary\n")
+        self.settle(first)
+        rows = self.stored()
+        owner = next(row for row in rows if row["id"] == "S")
+        owner.pop("executor")
+        owner.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        self.write(rows)
+        self.refused("integration_pending", "integration_pending", self.start,
+                     "second-impl", self.packet(["T"], boundary={"paths": ["docs"]}))
+        consumed = self.report(first, frozen, result_commit="not-a-commit")
+        self.assertEqual(consumed["ingestion"]["status"], "unavailable")
+        stored = read(self.project, "objective")["admissions"][first["admission_id"]]
+        self.assertIsNone(stored["changed_paths"])
+        self.refused("integration_pending", "integration_pending", self.start,
+                     "second-impl", self.packet(["T"], boundary={"paths": ["docs"]}))
+        self.write(self.stored(), dispositions=[{"admission": first["admission_id"],
+                                                 "discarded": True, "reason": "result paths unavailable"}])
+        second = self.start("second-impl", self.packet(["T"], boundary={"paths": ["docs"]}))
+        self.assertEqual(second["status"], "bound")
+
     def test_changed_path_overflow_holds_integration_with_outside_path_after_1024(self):
         self.intake(self.sub("S", boundary={"paths": ["src"]}))
         frozen = self.packet(["S"], boundary={"paths": ["src"]})
@@ -681,6 +815,10 @@ class CapacityAndReviewTests(KernelCase):
         self.refused("unbound_assignment", "proposed", self.start, "p", self.packet(["P1"]))
         t3 = next(row for row in rows if row["id"] == "T3")
         t3["wait"] = {"class": "sequenced", "referent": "O1"}
+        self.refused("integration_pending", "integration_pending", self.start,
+                     "t3", self.packet(["T3"]), accompanying={"obligations": rows})
+        self.write(rows, dispositions=[{"admission": first["admission_id"], "discarded": True,
+                                        "reason": "the stopped attempt is set aside"}])
         admitted = self.start("t3", self.packet(["T3"]), accompanying={"obligations": rows})
         self.assertEqual(admitted["status"], "bound")
         state = read(self.project, "objective")["checkpoint"]

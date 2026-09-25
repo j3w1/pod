@@ -252,6 +252,7 @@ class AdmissionTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught: self.start('task3')
         self.assertEqual(caught.exception.code,'logical_capacity_full')
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.discard(first,reason='the first result is set aside before another implementation')
         self.assertEqual(self.start('task3')['status'],'bound')
         self.assertEqual(len(self.port.starts),3)
 
@@ -295,6 +296,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertTrue(native['assignments'][0]['settled'])
             self.assertEqual(logical_projection(self.project,native,objective='objective')['outstanding'],[])
             self.record_failure(first,kind='unavailable')
+            self.discard(first,reason='the stopped attempt has no implementation result to integrate')
             replacement=self.start('replacement-task',frozen=self.frozen(route=ROUTE,task='replacement-task'))
         self.assertEqual(replacement['status'],'bound')
         self.assertEqual(len(self.port.starts),2)
@@ -535,6 +537,7 @@ class AdmissionTests(unittest.TestCase):
         first=self.start()['admission']
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
         self.port.effective={'agent':None,'model':None,'effort':None}
+        self.discard(first,reason='the first implementation is set aside before reuse')
         original=self.port.start_worker
         def reuse(**kwargs):
             receipt=original(**kwargs)
@@ -631,6 +634,7 @@ class AdmissionTests(unittest.TestCase):
         first=self.start()['admission']; identity=first['admission_id']
         with self.assertRaises(PodError): self.start('task2',reuse_of=identity)
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.discard(first,reason='the first implementation is set aside before reuse')
         second=self.start('task2',reuse_of=identity)['admission']
         self.assertEqual(self.port.starts[-1]['terminal'],first['native_binding']['terminalHandle'])
         self.assertEqual(second['reuse_of'],identity)
@@ -648,6 +652,7 @@ class AdmissionTests(unittest.TestCase):
                 self.start('task2',reuse_of=identity)
             self.assertEqual(blocked.exception.code,'reuse_unavailable')
         self.assertEqual(len(self.port.starts),1)
+        self.discard(first,reason='the first implementation is set aside before reuse')
         def show_without_stage_status(dispatch):
             shown=original(dispatch)
             shown['result']['projection']['stage'].pop('dispatch')
@@ -682,6 +687,7 @@ class AdmissionTests(unittest.TestCase):
         self.record_failure(first,kind='rate_limited',retry_after='2099-01-01T00:00:00Z')
         with self.assertRaises(PodError): self.start('task2')
         self.record_failure(first,kind='rate_limited',clear=True,cleared_by='runtime_change')
+        self.discard(first,reason='the failed first attempt has no result to integrate')
         self.assertEqual(self.start('task2')['status'],'bound')
 
     def test_source_and_instruction_changes_reject_before_start(self):
@@ -947,6 +953,7 @@ class AdmissionTests(unittest.TestCase):
                          update=lambda row:row['failures'].clear())
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='failed'
         self.record_failure(first,kind='unavailable')
+        self.discard(first,reason='the failed attempt has no result to integrate')
         self.assertEqual(self.start('task2',frozen=self.frozen(route=alternate,task='task2'))['status'],'bound')
 
     def test_safety_refusal_bars_same_task_on_another_run(self):
@@ -1114,6 +1121,7 @@ class AdmissionTests(unittest.TestCase):
         first=self.start()['admission']
         self.port.workers[first['native_binding']['dispatchId']]['outcome']='failed'
         self.record_failure(first,kind='unavailable')
+        self.discard(first,reason='the failed attempt has no result to integrate')
         alternative={**ROUTE,'model':'gpt-6-luna','reason':'failed original route'}
         frozen=self.frozen(route=alternative,task='task2')
         set_model(self.personal,'gpt-6-luna','disabled',displayed=load_config(self.project))

@@ -1,8 +1,9 @@
 """The obligation map kernel: records every coordination decision must leave.
 
 Work starts only for a recorded, authorized obligation; every unfinished obligation is
-either advanced or waits on one named, checkable reason; a settled result never blocks
-its own replacement; `independently reviewed` is derived from bound assurance records;
+either advanced or waits on one named, checkable reason; an undispositioned settled
+result with incomplete path evidence holds new implementation; `independently reviewed`
+is derived from bound assurance records;
 an objective closes only when its obligations are satisfied or withdrawn.
 
 This module is deterministic over its inputs. It makes no model call, reads nothing and
@@ -55,7 +56,7 @@ _COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 NEXT_ACTIONS = {
     "unbound_assignment": "admit only a packet that serves unsatisfied obligations of the current map revision",
     "ownership_conflict": "record an ownership wait on the overlapping holder, or narrow the boundary",
-    "integration_pending": "record a disposition for the settled result, or narrow the boundary",
+    "integration_pending": "record a disposition, or establish complete paths and a nonoverlapping boundary",
     "objective_closed": "only a direct user revision with reopen continues a closed objective",
     "obligation_invalid": "correct the obligation's provenance, parent, check or citation",
     "obligation_unaccounted": "restate every obligation with exactly one currently valid state",
@@ -584,12 +585,24 @@ def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) 
             return False
         if ob["kind"] == "assurance":
             admission = _admissions(ctx).get(row["attempt"])
+            # A later completed review that found a required correction supersedes
+            # the earlier accepted review, even if its old environment returns.
+            # The finding is recorded only by report triage of that exact attempt.
+            superseded = any(
+                finding.get("triage") == "required_correction"
+                and finding.get("attempt") != row["attempt"]
+                and (not isinstance(admission, dict)
+                     or not isinstance(_admissions(ctx).get(finding.get("attempt")), dict)
+                     or not isinstance(admission.get("created_at"), str)
+                     or not isinstance(_admissions(ctx)[finding["attempt"]].get("created_at"), str)
+                     or admission["created_at"] <= _admissions(ctx)[finding["attempt"]]["created_at"])
+                for finding in ob.get("findings", []))
             if (not isinstance(admission, dict) or admission.get("role") != "review"
                     or admission.get("serves") != [ob["id"]] or row["attempt"] in _outstanding(ctx)
                     or not review_completed(admission) or admission.get("candidate") != row.get("candidate")
                     or (admission.get("binding") or {}).get("definitions", {}).get(ob["id"]) != row["definition"]
                     or row.get("binding") != admission.get("binding")
-                    or not binding_current(admission.get("binding"), ctx)):
+                    or not binding_current(admission.get("binding"), ctx) or superseded):
                 return False
         elif row.get("status") != "PASS" or not binding_current(row, ctx):
             return False
@@ -799,7 +812,9 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
         if ob["kind"] == "assurance" and ob["id"] not in prior_rows and ob["state"] != "withdrawn":
             for other in rows.values():
                 recorded = {**other, "receipts": prior_rows.get(other["id"], {}).get("receipts", [])}
-                if (other is not ob and other["kind"] == "assurance" and other["state"] != "withdrawn"
+                if (other is not ob and other["kind"] == "assurance"
+                        and (other["state"] != "withdrawn"
+                             or _accepted_assurance_current(recorded, ctx, gov))
                         and (other["candidate"] == ob["candidate"]
                              or _accepted_assurance_current(recorded, ctx, gov))
                         and overlaps(other["scope"], ob["scope"])
@@ -1389,9 +1404,10 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
                                  "the boundary overlaps the coordinator-held obligation", obligation=ob["id"],
                                  paths=",".join(found["paths"][:8]), surfaces=",".join(found["surfaces"]))
         for key, row in undispositioned(ctx).items():
-            if (row.get("result") or {}).get("paths_status") == "over_limit":
+            if (row.get("changed_paths") is None
+                    or (row.get("result") or {}).get("paths_status") not in (None, "observed")):
                 raise refuse("integration_pending", "integration_pending",
-                             "the settled result has more changed paths than Pod can verify",
+                             "the settled result has no complete changed-path evidence",
                              admission=key)
             found = overlap(binding["boundary"], _admission_boundary(row))
             if found["paths"] or found["surfaces"]:
