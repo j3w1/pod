@@ -56,10 +56,11 @@ def assert_test_reference_exists(root: Path, path: str) -> None:
     if not file.is_file():
         raise ValueError(f"offline_test module does not exist: {path}")
     tree = ast.parse(file.read_text(), filename=str(file))
-    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
-    exists = (any(node.name == cls for node in classes)
-              and any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                      and child.name == method for node in classes for child in node.body))
+    # The method must be defined in the named class itself, not merely somewhere in the module.
+    exists = any(isinstance(node, ast.ClassDef) and node.name == cls
+                 and any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method
+                         for child in node.body)
+                 for node in tree.body)
     if not exists:
         raise ValueError(f"offline_test case does not exist: {path}")
 
