@@ -1,35 +1,13 @@
 # Planning and packets
 
-Create a new objective worktree explicitly on branch `orca/<task-slug>`, never
-relying on a host default. On CE Devbox:
-`ce-devbox worktrees add PROJECT TASK BASE --branch orca/TASK apply`; its
-`agent/TASK` default stays for non-Pod work. A reused objective worktree keeps
-its branch; worker isolation follows Orca placement. Bind the actual branch and report any mismatch.
+Create a new objective worktree explicitly on branch `orca/<task-slug>`, never relying on a host default. On CE Devbox: `ce-devbox worktrees add PROJECT TASK BASE --branch orca/TASK apply`; its `agent/TASK` default stays for non-Pod work. Reuse keeps its branch. Bind the actual branch; Orca owns placement.
 
-Discovery creates proposals until direct user revision or cited project policy
-adopts them. Fix governance paths at intake. Explicit target selection establishes
-the trusted initial snapshot; Git cannot prove authorship. Later base updates
-containing objective candidate commits need fresh user authority for that exact
-snapshot. Reconcile changed bases and authority before new admissions or governed
-effects; preserve ids, history, declared sources and moved exact text. Only genuinely
-gone policy obligations may be withdrawn. Unavailable sources hold work. Rebind
-unaffected proof explicitly; pending native attempts retain immutable recovery.
+Discovery creates proposals until direct user revision or cited project policy adopts them. Fix governance paths at intake. Explicit target selection establishes the trusted initial snapshot; Git cannot prove authorship. Candidate-containing target updates need exact-snapshot direct-user authority. Reconcile changed bases before new admissions or governed effects; retain ids, history and cited text. Only genuinely gone policy obligations may be withdrawn. Unavailable sources hold work. Rebind unaffected proof explicitly; pending requests retain immutable recovery.
 
-Give subgoals parents and checks or decisions with stop conditions. Keep one
-coordinator-held active obligation. Every unfinished obligation has active work,
-an external block or one valid controlling wait. Re-evaluate resolved waits.
-A free slot creates no delegation duty. Independent sequencing across two map
-writes with free capacity and available delegation needs a bounded rationale
-and revisit condition bound to current inputs.
+Map criteria, delivery and human/provider dependencies to obligations with provenance and checks. Use `pod internal map` before writes: read seq, restatable rows, outstanding and settled attempts, undispositioned results and next actions. Use checkpoint/report-map `update` with required next `seq` for small changes; re-read on `map_stale`. Short non-assurance evidence supplies check, command, result and reference; Pod fills current bindings. A served settled assurance may use its attempt. Keep one coordinator-held active obligation. Every unfinished obligation has work, an external block or a valid controlling wait; re-evaluate resolved waits.
 
-Packets name role, served obligations, path/surface boundary, candidate, route,
-sources, reporting and permitted actions. Settle shared contracts before
-overlapping work. Bind only relevant digested context, never secrets or full
-chat. Changed or absent sources reject; unavailable reads hold. Created output
-paths belong in scope, not source bindings. Reports join packet, admission and
-native attempt; Git supplies changed paths. Discarded results retain evidence
-and branch. Disposition alone never satisfies an obligation.
+Optimize time to a verified result. At each transition, dispatch only ready, distinct assignments that shorten that path; waiting is valid and spare capacity creates no duty. Lean is never a one-worker rule. Once a candidate is frozen, run gates and same-candidate read-only review concurrently when useful. Governor validation may overlap that review, while release awaits both. Settle shared contracts before overlapping edits.
 
-Retain correction history across rewording or restart. Diagnose repeated failure
-with an example, hypothesis, last evidence and discriminating check. Invalidate
-affected packets and proof when inputs change. Orca governs native handoffs.
+Packets name role, served obligations, boundary, candidate, route, sources, reporting and permitted actions. Investigations need a decision and stop condition. Bind relevant digested context, never secrets or whole chat. Changed or absent sources reject; unavailable reads hold. Created output paths belong in scope, not source bindings. Reports join packet, admission and native attempt; Git supplies changed paths. Preserve discarded results and branches. Disposition alone never satisfies an obligation.
+
+Retain correction history. Diagnose repeats with example, hypothesis and discriminating check. Invalidate affected proof on changed inputs. Orca governs handoffs.
