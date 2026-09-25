@@ -11,14 +11,14 @@ from pathlib import Path
 from .errors import PodError
 from .records import (acceptance, integration_observation, packet, report, source_identity,
                       verify_sources)
-from .util import bounded_json, bounded_stdin_json, exact
+from .util import bounded_json, bounded_stdin_json, exact, route_flags
 from .context import execution_brief
 
 
 def _governor_projection(project: Path, objective: str, owner: str, *, mutating: bool,
                          version_exempt: bool = False) -> dict:
     """Join Governor work to stable current-Run authority and objective assignments."""
-    from .ledger import binding_valid, logical_projection, read
+    from .ledger import bound_assignments, logical_projection, read
     from .operations import OrcaPort
 
     state = read(project, objective)
@@ -33,7 +33,7 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
         require_current_identity(state.get("checkpoint"))
     authority_runs: set[str] = set()
     runtimes: set[object] = set()
-    assignments = []
+    assignments = bound_assignments(state)
     if state is not None:
         for row in state.get("admissions", {}).values():
             if not isinstance(row, dict):
@@ -41,8 +41,6 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
             if isinstance(row.get("run_id"), str):
                 authority_runs.add(row["run_id"])
             runtimes.add(row.get("runtime"))
-            if row.get("state") == "bound" and binding_valid(row.get("native_binding")):
-                assignments.append(row)
         checkpoint_value = state.get("checkpoint")
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
         for ref in refs:
@@ -199,12 +197,12 @@ def _op_acceptance(request: dict) -> dict:
         view = kernel_view(Path(request["project"]), request["objective"], candidate=request["candidate"])
         arguments["label"] = view["label"]
         arguments["route_holds"] = [
-            {"admission": key, "reason": "route_mismatch" if decision.get("route_mismatch")
+            {"admission": key, "reason": "route_mismatch" if flags[0]
              else "effective_unknown"}
             for key, row in view["state"]["admissions"].items()
             if row.get("state") in ("bound", "closed")
-            for decision in [row.get("route_decision") or {}]
-            if decision.get("route_mismatch") or decision.get("effective_unknown")
+            for flags in [route_flags(row)]
+            if flags[0] or flags[1]
         ] if view["state"] is not None else []
     objective_source = arguments.pop("objective_source", None)
     if objective_source is not None:

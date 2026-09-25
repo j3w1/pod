@@ -26,7 +26,7 @@ from .config import GOVERNED_KINDS, effective, validate_effects
 from .errors import PodError
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
-from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact
+from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact, route_summary
 
 SCHEMA = "pod-governor/v2"
 KINDS = GOVERNED_KINDS
@@ -703,11 +703,11 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         _reason(reasons, "correctness", "unit_unbound",
                 "managed execution needs the unit's prepared candidate and its remote, branch and base")
     checkpoint = _checkpoint(state)
-    if any(row.get("route_decision", {}).get("route_mismatch")
-           for row in state.get("admissions", {}).values()):
+    mismatch, unknown = route_summary(list(state.get("admissions", {}).values()),
+                                      unknown_states=("bound", "closed"))
+    if mismatch:
         _reason(reasons, "correctness", "route_mismatch", "a bound worker used a different route")
-    elif any(row.get("route_decision", {}).get("effective_unknown")
-             for row in state.get("admissions", {}).values() if row.get("state") in ("bound", "closed")):
+    elif unknown:
         _reason(reasons, "correctness", "effective_unknown", "worker launch readback lacks effective values")
     effects, source = _effects(action, governor_policy)
     validates = kind in VALIDATION_KINDS or bool(effects and any(e.startswith("workflow:") for e in effects))

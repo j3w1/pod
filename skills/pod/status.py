@@ -11,6 +11,7 @@ from .ledger import context_root_for_run
 from .orca import current_run, worker_rows
 from .selection import active_constraints
 from .term import clean
+from .util import route_summary
 
 
 def status(project: Path, run: str | None, *, current_run_fn=current_run,
@@ -60,6 +61,7 @@ def status(project: Path, run: str | None, *, current_run_fn=current_run,
     recorded = checkpoint_identity(checkpoint) if checkpoint else None
     drift = bool(checkpoint and not identity_matches(recorded, running))
     admissions = list(state["admissions"].values()) if state else []
+    mismatch, unknown = route_summary(admissions)
     checkpoint_refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else None
     checkpoint_assignments = checkpoint.get("assignments") if isinstance(checkpoint, dict) else None
     checkpoint_refs = checkpoint_refs if isinstance(checkpoint_refs, list) else []
@@ -90,8 +92,8 @@ def status(project: Path, run: str | None, *, current_run_fn=current_run,
                                        "plan_revision": checkpoint.get("plan_revision"),
                                        "candidate": checkpoint.get("candidate")}
                                       if checkpoint else None,
-                   "route_mismatch": any(row["route_decision"].get("route_mismatch") for row in admissions),
-                   "effective_unknown": any(row["route_decision"].get("effective_unknown") for row in admissions),
+                   "route_mismatch": mismatch,
+                   "effective_unknown": unknown,
                    "installed_version_drift": drift,
                    "bundle_identity": {"checkpoint": recorded, "running": running, "drift": drift},
                    "installed_version_detail": identity_drift_message(checkpoint, running=running) if drift else None,
@@ -100,8 +102,8 @@ def status(project: Path, run: str | None, *, current_run_fn=current_run,
                    "pending_admissions": sum(row["state"] in ("reserved", "unresolved") for row in admissions),
                    "verification_gaps": checkpoint.get("verification_gaps", []) if checkpoint else [],
                    "remaining_gates": checkpoint.get("remaining_gates", []) if checkpoint else [],
-                   "blocker": "route_mismatch" if any(row["route_decision"].get("route_mismatch") for row in admissions)
-                              else "effective_unknown" if any(row["route_decision"].get("effective_unknown") for row in admissions)
+                   "blocker": "route_mismatch" if mismatch
+                              else "effective_unknown" if unknown
                               else native_error or checkpoint.get("blocker") if checkpoint else native_error,
                    "next_safe_action": checkpoint.get("next_safe_action", "inspect native Run")
                                        if checkpoint else "inspect native Run"})

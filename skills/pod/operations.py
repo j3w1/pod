@@ -10,7 +10,8 @@ from typing import Protocol
 from uuid import UUID
 
 from .errors import PodError
-from .ledger import (admission_identity, binding_valid, objective_root, read, reserve,
+from .ledger import (admission_identity, binding_valid, bound_assignments as _bound_assignments,
+                     objective_root, read, reserve,
                      update_admission, _lock, _path, _read, _write, _native_assignment_settled)
 from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, contract, current_run, mutate_command, read_command,
                    worker_rows, worker_show, worktree_identity, worktree_selector)
@@ -705,14 +706,6 @@ def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: s
                            "next": next_step}
     return update_admission(project, objective, owner=owner,
                             admission_id=admission_id, update=apply)
-
-
-def _bound_assignments(state: dict | None, *, include_closed: bool = False) -> tuple[dict, ...]:
-    if not isinstance(state, dict):
-        return ()
-    return tuple(row for row in state.get("admissions", {}).values()
-                 if isinstance(row, dict) and row.get("state") in (("bound", "closed") if include_closed else ("bound",))
-                 and binding_valid(row.get("native_binding")))
 
 
 def _current_authority(project: Path, objective: str, admission: dict, *, issue_port=None) -> None:

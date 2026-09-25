@@ -96,6 +96,15 @@ def binding_valid(binding: object) -> bool:
     return terminal is None or isinstance(terminal, str) and bool(terminal)
 
 
+def bound_assignments(state: dict | None, *, include_closed: bool = False) -> tuple[dict, ...]:
+    if not isinstance(state, dict):
+        return ()
+    states = ("bound", "closed") if include_closed else ("bound",)
+    return tuple(row for row in state.get("admissions", {}).values()
+                 if isinstance(row, dict) and row.get("state") in states
+                 and binding_valid(row.get("native_binding")))
+
+
 _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "request",
                      "route_decision", "effective_evidence", "runtime", "request_uuid",
                      "run_id", "task_id", "plan_revision", "packet_id", "worktree", "reuse_of",
@@ -231,8 +240,7 @@ def require_authority(project: Path, objective: str, *, owner: str,
             raise PodError("native_authority_unverified", "Current coordinator Run is unavailable")
         refs = {current["id"]: first["runtime"]}
     selected = (run_id,) if run_id is not None else tuple(sorted(refs))
-    assignments = tuple(row for row in state.get("admissions", {}).values()
-                        if row.get("state") == "bound" and binding_valid(row.get("native_binding")))
+    assignments = bound_assignments(state)
     native = port.read_native(owner, authority_runs=selected, assignments=assignments)
     if (native.get("authoritative") is not True or native.get("owner") != owner
             or native.get("scope") != "objective_assignments" or native.get("complete") is not True
