@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,7 +19,6 @@ CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1"}
 AGENTS = ("codex", "claude")
 PREFLIGHT_REFUSALS = ("task_not_found", "task_not_startable", "inject_rejected")
-DECODED_REFUSALS = PREFLIGHT_REFUSALS + ("runtime_error",)
 WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:", "issue:")
 
 
@@ -85,7 +86,8 @@ def _envelope(stdout: str) -> dict:
         raise PodError("orca_contract", "Orca returned invalid JSON") from exc
     if not isinstance(value, dict) or not value.get("ok") or not isinstance(value.get("result"), dict):
         raise PodError("orca_contract", "Orca returned an unsupported result")
-    runtime = value.get("_meta", {}).get("runtimeId")
+    meta = value.get("_meta")
+    runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
     if not isinstance(runtime, str) or not runtime:
         raise PodError("orca_contract", "Orca runtime identity is unavailable")
     mutation = value["result"].get("mutation")
@@ -95,15 +97,16 @@ def _envelope(stdout: str) -> dict:
     return {"runtime": runtime, "result": value["result"], "request_uuid": request_uuid}
 
 
-def _mutation_envelope(stdout: str) -> dict:
-    """Decode a mutation receipt, including Orca's documented refused-start codes."""
+def _mutation_envelope(stdout: str | bytes) -> dict:
+    """Decode native response fields; refusal classification belongs to admission."""
     try:
         value = json.loads(stdout)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise PodError("native_effect_uncertain", "Native response is not valid JSON") from exc
     if not isinstance(value, dict):
         raise PodError("native_effect_uncertain", "Native response is malformed")
-    runtime = value.get("_meta", {}).get("runtimeId")
+    meta = value.get("_meta")
+    runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
     if not isinstance(runtime, str) or not runtime:
         raise PodError("native_effect_uncertain", "Native response has no runtime identity")
     if value.get("ok") is True and isinstance(value.get("result"), dict):
@@ -111,8 +114,6 @@ def _mutation_envelope(stdout: str) -> dict:
         error = None
     elif value.get("ok") is False and isinstance(value.get("error"), dict):
         error = value["error"]
-        if error.get("code") not in DECODED_REFUSALS:
-            raise PodError("native_effect_uncertain", "Native refusal is not a documented refused-start code")
         native_result = value.get("result")
         if native_result is not None and not isinstance(native_result, dict):
             raise PodError("native_effect_uncertain", "Native refusal carries a malformed result")
@@ -131,6 +132,17 @@ def _mutation_envelope(stdout: str) -> dict:
                 result[key] = value[key]
     else:
         raise PodError("native_effect_uncertain", "Native response does not prove an effect or refusal")
+    request_uuid, conflict = _request_identity(value)
+    if conflict:
+        result["_request_conflict"] = True
+    return {"runtime": runtime, "result": result, "request_uuid": request_uuid,
+            "error": error}
+
+
+def _request_identity(value: dict) -> tuple[object, bool]:
+    """Collect native identifiers even when the result body cannot be interpreted."""
+    result = value.get("result") if isinstance(value.get("result"), dict) else {}
+    error = value.get("error")
     request_references = []
     request_malformed = False
     for carrier in (result, value):
@@ -150,11 +162,15 @@ def _mutation_envelope(stdout: str) -> dict:
         else:
             request_references.append(error_request)
     request_uuid = request_references[0] if request_references else None
-    if (request_malformed
-            or any(reference != request_uuid for reference in request_references[1:])):
-        result["_request_conflict"] = True
-    return {"runtime": runtime, "result": result, "request_uuid": request_uuid,
-            "error": error}
+    return request_uuid, (request_malformed or any(
+        reference != request_uuid for reference in request_references[1:]))
+
+
+def _captured_output(value: str | bytes | None) -> dict:
+    raw = value.encode("utf-8") if isinstance(value, str) else value or b""
+    # Out-of-contract oversized output is identified, never silently truncated into proof.
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+            "base64": base64.b64encode(raw).decode("ascii") if len(raw) <= MAX_OUTPUT else None}
 
 
 def _worker_list_tail(tail: list[str]) -> bool:
@@ -242,18 +258,40 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
     if not _mutate_allowed(argv):
         raise PodError("unsupported_orca_mutation", "Orca adapter accepts only known mutations")
     command = [str(executable()), *argv]
+    stdout, stderr, returncode, transport = None, None, None, "completed"
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise PodError("native_effect_uncertain", "Native response is unavailable") from exc
-    if completed.returncode not in accept_exit:
-        raise PodError("native_effect_uncertain", "Native command returned an unsupported exit status")
-    if len(completed.stdout) > MAX_OUTPUT:
-        raise PodError("orca_contract", "Native response exceeds bounded output")
-    envelope = _mutation_envelope(completed.stdout)
+        completed = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
+        stdout, stderr, returncode = completed.stdout, completed.stderr, completed.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr, transport = exc.stdout, exc.stderr, "timeout"
+    except OSError as exc:
+        transport = type(exc).__name__
+    observation = {"argv": command, "transport": transport, "exit": returncode,
+                   "stdout": _captured_output(stdout), "stderr": _captured_output(stderr)}
+    try:
+        if transport != "completed":
+            raise PodError("native_effect_uncertain", "Native response is unavailable")
+        if returncode not in accept_exit:
+            raise PodError("native_effect_uncertain", "Native command returned an unsupported exit status")
+        if observation["stdout"]["bytes"] > MAX_OUTPUT:
+            raise PodError("native_effect_uncertain", "Native response exceeds bounded output")
+        envelope = _mutation_envelope(stdout)
+    except PodError as exc:
+        # Private exception attributes are persisted by admission, not echoed as CLI error text.
+        exc.native_observation = observation
+        try:
+            value = json.loads(stdout) if observation["stdout"]["bytes"] <= MAX_OUTPUT else None
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            value = None
+        if isinstance(value, dict):
+            meta = value.get("_meta")
+            request, conflict = _request_identity(value)
+            exc.native_reference = {"runtime": meta.get("runtimeId") if isinstance(meta, dict) else None,
+                                    "request_uuid": request, "_request_conflict": conflict}
+        raise
     return {"runtime": envelope["runtime"], "exit": completed.returncode,
             "result": envelope["result"], "request_uuid": envelope.get("request_uuid"),
-            "error": envelope.get("error")}
+            "error": envelope.get("error"), "native_observation": observation}
 
 
 def contract() -> dict:
