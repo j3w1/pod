@@ -29,6 +29,31 @@ def user_direct_revision(value: object) -> bool:
     return isinstance(value, dict) and value.get("provenance") == "user_direct"
 
 
+def canonical_bound_ref(project: Path, bound_ref: str | None, proposed: str | None,
+                        *, branch: dict | None = None) -> str:
+    """Accept an alias only when Git or the configured remote proves the same ref identity."""
+    if bound_ref is None:
+        return proposed or "origin/main"
+    if isinstance(branch, dict):
+        remote, base = branch.get("remote"), branch.get("base")
+        if not isinstance(remote, str) or not isinstance(base, str):
+            raise PodError("target_mismatch", "The prepared remote/base is not the bound governance target")
+        target = f"refs/remotes/{remote}/{base}"
+        configured = _git(project, ["config", "--get", f"remote.{remote}.url"])
+        if (target != bound_ref or configured is None or configured.returncode != 0 or not configured.stdout.strip()
+                or _resolve_commit(project, target) is None):
+            raise PodError("target_mismatch", "The prepared remote/base is not the bound governance target")
+    if proposed is None or proposed == bound_ref:
+        return bound_ref
+    if not isinstance(proposed, str) or not _BASE_REF.fullmatch(proposed) or ".." in proposed:
+        raise PodError("target_mismatch", "Target alias is not a plain Git ref")
+    named = _git(project, ["rev-parse", "--symbolic-full-name", "--verify", "--quiet",
+                           "--end-of-options", proposed])
+    if named is None or named.returncode != 0 or named.stdout.strip() != bound_ref:
+        raise PodError("target_mismatch", "Target alias does not name the bound governance ref")
+    return bound_ref
+
+
 DELIVERY_FIELDS = {"seq", "record", "target_ref", "base", "result", "candidate", "tree",
                    "method", "authorization_reference", "provider"}
 

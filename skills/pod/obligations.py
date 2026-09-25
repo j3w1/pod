@@ -62,22 +62,23 @@ NEXT_ACTIONS = {
     "obligation_invalid": "correct the obligation's provenance, parent, check or citation",
     "obligation_unaccounted": "restate every obligation with exactly one currently valid state",
     "wait_invalid": "restate the wait with one controlling class and a current referent",
-    "map_stale": "re-read the checkpoint and write the next sequence number",
+    "map_stale": "re-read with pod internal map and write its next sequence number",
     "governance_changed": "write a checkpoint with governance_refresh to reconcile at the new base",
     "governance_unavailable": "restore the governance source read; new work holds until it is bound",
 }
 
 # Proposed map fields a caller may send; everything else in a stored map is stamped here.
 MAP_INPUT = {"seq", "obligations", "proposals", "governance", "governance_refresh",
-             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery"}
+             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery", "update"}
 MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "governance_sources",
               "coordinator_slot", "quiescence", "closure", "observations", "reopened",
               "governance_history", "delivery"}
 
 
-def refuse(code: str, detail: str, message: str, **referent: Any) -> PodError:
+def refuse(code: str, detail: str, message: str, *, next_action: str | None = None,
+           **referent: Any) -> PodError:
     """One boundary refusal naming its detail, referent and next safe action."""
-    action = NEXT_ACTIONS.get(code, "inspect the refused record")
+    action = next_action or NEXT_ACTIONS.get(code, "inspect the refused record")
     named = ", ".join(f"{key}={value}" for key, value in sorted(referent.items()))
     text = f"{detail}: {message}" + (f" ({named})" if named else "") + f". Next: {action}"
     return PodError(code, text, {"detail": detail, "referent": referent, "next_action": action})
@@ -656,7 +657,59 @@ def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: fr
 
 
 
-def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
+def expand_update(prior: dict | None, value: dict) -> dict:
+    """Apply a bounded patch to prior rows before the ordinary full-map validator."""
+    if "update" not in value:
+        return value
+    if "obligations" in value:
+        raise refuse("obligation_invalid", "malformed", "update and obligations are mutually exclusive")
+    current_seq = prior.get("seq", 0) if isinstance(prior, dict) else 0
+    revision = prior.get("revision", 0) if isinstance(prior, dict) else 0
+    expected = current_seq + 1
+    if type(value.get("seq")) is not int or value["seq"] != expected:
+        raise refuse("map_stale", "map_stale", "re-read with pod internal map before an update",
+                     current_seq=current_seq, expected=expected, revision=revision)
+    changes = value["update"]
+    if not isinstance(changes, dict) or len(changes) > MAX_OBLIGATIONS:
+        raise refuse("obligation_invalid", "malformed", "update is a bounded mapping of obligation ids")
+    rows = {row["id"]: deepcopy(row) for row in (prior or {}).get("obligations", [])}
+    for key, patch in changes.items():
+        _ident(key, "updated obligation")
+        if not isinstance(patch, dict) or patch.get("id", key) != key:
+            raise refuse("obligation_invalid", "malformed", "an update names its exact obligation id",
+                         obligation=key)
+        if key not in rows:
+            rows[key] = {**patch, "id": key}
+            continue
+        row = rows[key]
+        if "state" in patch and patch["state"] != row.get("state"):
+            for field in (*_STATE_FIELDS.values(), "reuse"):
+                row.pop(field, None)
+        row.update(patch)
+    return {**{key: item for key, item in value.items() if key != "update"},
+            "obligations": list(rows.values())}
+
+
+def restatable_rows(state: dict) -> list[dict]:
+    """Expose complete caller fields without receipt history or kernel stamps."""
+    rows = []
+    for stored in state["obligations"]:
+        row = {key: deepcopy(value) for key, value in stored.items()
+               if key not in ("introduced_seq", "definition", "receipts", "findings", "finding")}
+        if row.get("provenance") == "project_policy" and isinstance(row.get("source"), dict):
+            row["source"] = {key: row["source"][key] for key in ("path", "lines") if key in row["source"]}
+        if row.get("kind") == "assurance":
+            row["evidence"] = [{"attempt": item["attempt"]} for item in row.get("evidence", [])]
+        else:
+            row["evidence"] = [{key: value for key, value in item.items() if key != "governance"}
+                               for item in row.get("evidence", [])]
+        if isinstance(row.get("reuse"), dict):
+            row["reuse"] = {"from": row["reuse"]["from"]}
+        rows.append(row)
+    return rows
+
+
+def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
     """Validate one proposed map write against the prior accepted map and current facts.
 
     Returns the map fields to persist. Every refusal names its code, detail, referent and
@@ -665,6 +718,7 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     report boundary's triage (`triaged`) may add them.
     """
     prior_map = prior if isinstance(prior, dict) and prior.get("obligations") is not None else None
+    value = expand_update(prior_map, value)
     # Dispositions change admission rows, so the ledger applies them before this write.
     unknown = set(value) - (MAP_INPUT - {"dispositions"})
     if unknown:
@@ -689,12 +743,15 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
         raise refuse("obligation_invalid", "malformed", "reopen applies only to a closed objective")
     seq = prior_map["seq"] + 1 if prior_map else 1
     if "seq" in value and value["seq"] != seq:
-        raise refuse("map_stale", "map_stale", "the proposed map is not the next write", expected=seq)
+        raise refuse("map_stale", "map_stale", "the proposed map is not the next write; "
+                     "re-read with pod internal map", current_seq=(prior_map or {}).get("seq", 0),
+                     expected=seq, revision=(prior_map or {}).get("revision", 0))
     refresh = value.get("governance_refresh") is True
     if "governance_refresh" in value and not refresh:
         raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present")
     if refresh and prior_map is None:
         raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed")
+    ctx = {**ctx, "governance_refresh": refresh}
     revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
 
     observed, governance, sources, gov, rebind = _write_governance(prior_map, value, ctx, user, refresh)
@@ -778,6 +835,19 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     elif "close" in value:
         raise refuse("obligation_invalid", "malformed", "close is true when present")
     return state
+
+
+def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
+    """Expose refusal context alongside the same ordered map transition."""
+    try:
+        return _accept_write(prior, value, ctx, triaged=triaged)
+    except PodError as exc:
+        current = prior if isinstance(prior, dict) else {}
+        detail = dict(exc.detail) if isinstance(exc.detail, dict) else {}
+        detail.setdefault("current_seq", current.get("seq", 0))
+        detail.setdefault("revision", current.get("revision", 0))
+        exc.detail = detail
+        raise
 
 
 def _introduce(ob: dict, intake: bool, user: bool, observed: dict | None, sources: list[dict],
@@ -864,7 +934,9 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str) 
                                  "a worker executor is an admission that serves the obligation", obligation=ob["id"])
                 if executor not in outstanding:
                     raise refuse("obligation_unaccounted", "active_admission_settled",
-                                 "the executing admission has settled; restate the obligation",
+                                 "the executing admission has settled; restate as waiting, blocked_external, "
+                                 "satisfied with evidence, or withdrawn with authority",
+                                 next_action="re-read with pod internal map, then choose the valid restatement",
                                  obligation=ob["id"], admission=executor)
             else:
                 for key in outstanding:
@@ -891,11 +963,20 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str) 
                              "a served result has no disposition", obligation=ob["id"], admission=served[0])
             if "evidence" not in ob:
                 raise refuse("obligation_unaccounted", "satisfied_without_evidence",
-                             "satisfied needs passing bound evidence", obligation=ob["id"])
+                             "satisfied needs a settled attempt or short evidence with check, command, result "
+                             "and reference", obligation=ob["id"],
+                             next_action="use one settled attempt or add a short evidence receipt",
+                             settled_attempts=",".join(_settled_serving(ctx, ob["id"])))
             if not evidence_valid(ob, ctx, gov):
+                eligible = ([item["id"] for item in rows.values() if item.get("receipts")
+                             and not (item["provenance"] == "project_policy"
+                                      and item.get("source", {}).get("gone"))]
+                            if ctx.get("governance_refresh") else [])
                 raise refuse("obligation_unaccounted", "evidence_invalidated",
                              "its evidence is not passing and valid for the current candidate and governance",
-                             obligation=ob["id"])
+                             obligation=ob["id"], eligible_rebind=",".join(eligible),
+                             next_action=("re-read with pod internal map and rebind eligible ids"
+                                          if eligible else "record current passing evidence"))
             if ob["kind"] == "assurance":
                 for child in rows.values():
                     if (child.get("parent") == ob["id"] and child["kind"] == "correction"
@@ -1402,7 +1483,10 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
         return out
     if row.get("boundary_exceeded") and "reason" not in record:
         raise refuse("obligation_unaccounted", "disposition_invalid",
-                     "a result that exceeded its boundary needs a reason to integrate", admission=key)
+                     "a boundary-exceeded result needs reason; use dispositions "
+                     f"[{{'admission':'{key}','integrated_into':'<candidate>','reason':'<why>'}}]",
+                     next_action="add reason to this exact disposition and re-read with pod internal map",
+                     admission=key, missing="reason")
     head = result.get("head")
     if isinstance(head, str) and head != result.get("base"):
         ancestor = ctx.get("is_ancestor")

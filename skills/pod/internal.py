@@ -226,9 +226,14 @@ def _op_acceptance(request: dict) -> dict:
 
 
 def _op_integration_observe(request: dict) -> dict:
-    exact(request, {"project", "candidate", "base_ref"}, {"project", "candidate"}, name="request")
-    return integration_observation(Path(request["project"]), request["candidate"],
-                                   base_ref=request.get("base_ref", "origin/main"))
+    exact(request, {"project", "candidate", "base_ref", "objective"}, {"project", "candidate"}, name="request")
+    from .governance import canonical_bound_ref
+    from .ledger import map_of, read
+    project = Path(request["project"])
+    state = read(project, request["objective"]) if "objective" in request else None
+    bound = (map_of(state) or {}).get("governance", {}).get("base_ref") if state else None
+    base_ref = canonical_bound_ref(project, bound, request.get("base_ref"))
+    return integration_observation(project, request["candidate"], base_ref=base_ref)
 
 
 def _op_checkpoint(request: dict) -> dict:
@@ -297,11 +302,16 @@ def _op_governor_prepare(request: dict) -> dict:
                     "workflows", "verification", "toolchain", "environment"},
           {"project", "objective", "owner", "unit"}, name="request")
     from .governor import observe_candidate, prepare_candidate
+    from .governance import canonical_bound_ref
+    from .ledger import map_of, read
     project = Path(request["project"])
     _governor_projection(project, request["objective"], request["owner"], mutating=True)
+    state = read(project, request["objective"])
+    bound = (map_of(state) or {}).get("governance", {}).get("base_ref") if state else None
+    base_ref = canonical_bound_ref(project, bound, request.get("base_ref"), branch=request.get("branch"))
     # Commit and tree are read from Git here. A caller cannot hand in the candidate it
     # wants validated, because that identity is what every later reuse rests on.
-    observation = observe_candidate(project, base_ref=request.get("base_ref", "origin/main"),
+    observation = observe_candidate(project, base_ref=base_ref,
                                     workflows=request.get("workflows"),
                                     verification=request.get("verification"),
                                     toolchain=request.get("toolchain"),
@@ -399,6 +409,12 @@ def _op_cleanup_plan(request: dict) -> dict:
                 expect=request.get("expect"), archives=request.get("archives"))
 
 
+def _op_map(request: dict) -> dict:
+    exact(request, {"project", "objective"}, {"project", "objective"}, name="request")
+    from .ledger import map_read
+    return map_read(Path(request["project"]), request["objective"])
+
+
 
 _OPERATIONS = {
     'brief': _op_brief,
@@ -425,6 +441,7 @@ _OPERATIONS = {
     'governor-status': _op_governor_status,
     'admission': _op_admission,
     'cleanup-plan': _op_cleanup_plan,
+    'map': _op_map,
 }
 
 
@@ -444,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
                                                "governor", "governor-outcome", "governor-prepare",
                                                "governor-preflight", "governor-classify",
                                                "governor-correct", "governor-execute",
-                                               "governor-reconcile", "governor-status", "cleanup-plan"))
+                                               "governor-reconcile", "governor-status", "cleanup-plan", "map"))
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:

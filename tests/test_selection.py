@@ -47,7 +47,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_missing_benchmark_group_cannot_block_supported_selection(self):
         document=deepcopy(load_catalog())
-        del document['reference_benchmark']['models']['gpt-6-luna']
+        del document['benchmarks']['models']['gpt-6-luna']
         snapshot=load(personal=self.path)
         with patch('pod.catalog.load',return_value=document):
             self.assertTrue(validate_choice(snapshot,[],[],choice())['allowed'])

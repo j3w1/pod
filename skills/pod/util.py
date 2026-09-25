@@ -172,5 +172,9 @@ def route_summary(rows: list[dict], *, unknown_states: tuple[str, ...] | None = 
 
 def bounded_text(value: Any, *, name: str, limit: int = 4096) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit or "\x00" in value:
-        raise PodError("invalid_" + name, f"{name} must be bounded, nonempty text")
+        code_name = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
+        length = len(value) if isinstance(value, str) else None
+        raise PodError("invalid_" + code_name,
+                       f"{name} must be bounded, nonempty text (limit {limit}, length {length})",
+                       {"field": name, "limit": limit, "length": length})
     return value
