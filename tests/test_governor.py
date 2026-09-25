@@ -397,6 +397,34 @@ class CandidateTests(GovernorCase):
 
 
 class DecisionTests(GovernorCase):
+    def test_inherited_reuse_route_does_not_defer_but_unknown_route_does(self):
+        from pod import governor
+        binding = self.prepared(project_yaml="schema: pod/v1\n")["candidate"]
+        original = governor._read
+        def with_route(unknown):
+            def load(path):
+                state=original(path)
+                if 'admissions' in state:
+                    state['admissions']={'reuse':{
+                        'state':'bound','route_decision':{
+                            'effective':{'agent':'codex','model':'gpt-6-sol','effort':'medium',
+                                         'context':'native_default'},
+                            'effective_unknown':unknown,'route_mismatch':False},
+                        'effective_evidence':{'inherited':{
+                            'admission':'prior','dispatch':'dispatch-prior','terminal':'term-prior',
+                            'fields':['agent','model','effort']}}}}
+                return state
+            return load
+        with patch('pod.governor._read',side_effect=with_route(False)):
+            known=self.decide(action(candidate=binding['id'],effects=[]),
+                              native_projection={'outstanding':[]})
+        self.assertNotIn('effective_unknown',self.codes(known))
+        with patch('pod.governor._read',side_effect=with_route(True)):
+            unknown=self.decide(action(candidate=binding['id'],effects=[]),
+                                native_projection={'outstanding':[]})
+        self.assertEqual(unknown['decision'],'DEFER')
+        self.assertIn('effective_unknown',self.codes(unknown))
+
     def test_effects_are_judged_not_the_verb(self):
         binding = self.prepared(project_yaml="schema: pod/v1\n")["candidate"]
         unknown = self.decide(action(candidate=binding["id"]))
