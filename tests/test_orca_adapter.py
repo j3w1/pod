@@ -92,7 +92,9 @@ class OrcaAdapterTests(unittest.TestCase):
         with patch('pod.operations.mutate_command',return_value={'runtime':'r','exit':0,'request_uuid':None,
                 'result':{'state':'ready'}}) as mutate:
             port.start_worker(run='r',task='t',owner='o',route=route)
-            self.assertEqual(mutate.call_args.args[0][-3:],['--effort','high','--json'])
+            self.assertEqual(mutate.call_args.args[0],['orchestration','worker-start',
+                '--task','t','--run','r','--worktree','current','--agent','codex',
+                '--model','gpt-6-sol','--effort','high','--json'])
             port.start_worker(run='r',task='t',owner='o',route={**route,'effort':'native_default'})
             self.assertNotIn('--effort',mutate.call_args.args[0])
             port.start_worker(run='r',task='t',owner='o',route=route,terminal='terminal')

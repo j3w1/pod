@@ -811,6 +811,10 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
             "status": status_projection(map_state, ctx),
             "label": label_qualification(map_state, ctx, candidate if candidate is not None else ctx["candidate"])}
     view["report"] = report_projection(map_state, ctx) if map_state is not None else None
+    view["placements"] = {row["admission_id"]: row["placement"]
+                          for row in (native or {}).get("assignments", [])
+                          if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
+                          and isinstance(row.get("placement"), dict)}
     return view
 
 

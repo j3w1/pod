@@ -1,5 +1,7 @@
 from copy import deepcopy
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -629,6 +631,47 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(offline['status'],'unavailable')
         self.assertEqual(offline['native_references'][0]['task'],'task')
         self.assertEqual(path.read_bytes(),before)
+
+    def test_status_exposes_native_discoverability_without_ui_claim_or_write(self):
+        from pod.cli import execute,main,parser
+        from pod.ledger import _path
+        started=self.start()['admission'];binding=started['native_binding']
+        path=_path(self.project,'objective');before=path.read_bytes()
+        shown=self.port.show_worker(binding['dispatchId'])
+        warning='Terminal exists, but Orca could not make it discoverable.'
+        effect={'kind':'terminal','role':'agent','id':binding['terminalHandle'],
+                'surface':'background','warning':warning}
+        shown['result']['worker'].update(effects=[effect],residualResources=[effect])
+        shown['result']['terminal']={'handle':binding['terminalHandle'],
+                                    'worktreeId':binding['worktreeId'],'tabId':'native-tab'}
+        with patch('pod.cli.current_run',return_value={'runtime':'runtime','run':{'id':'run'}}), \
+             patch('pod.cli.worker_rows',return_value={'runtime':'runtime','scope':'run',
+                                                      'workers':[],'complete':True}), \
+             patch('pod.operations.OrcaPort.show_worker',return_value=shown) as reader:
+            status=execute(parser().parse_args(['status','--json']),self.project)
+        reader.assert_called_once_with(binding['dispatchId'])
+        ref=status['native_references'][0]
+        self.assertEqual((ref['worktree'],ref['terminal'],ref['tab']),
+                         (binding['worktreeId'],binding['terminalHandle'],'native-tab'))
+        self.assertEqual(ref['warnings'],[warning]);self.assertEqual(ref['surfaces'],['background'])
+        self.assertEqual((ref['ui_visibility'],ref['ui_focus']),('unverified','unverified'))
+        output=StringIO()
+        with patch('pod.cli.execute',return_value=status),redirect_stdout(output):main(['status'])
+        self.assertIn(warning,output.getvalue());self.assertIn('native-tab',output.getvalue())
+        self.assertEqual(path.read_bytes(),before)
+        other=deepcopy(shown);other['result']['terminal']['handle']='unrelated'
+        self.assertIsNone(_assignment_evidence(other,started)['placement']['tab'])
+        self.assertEqual(_assignment_evidence(other,started)['settled'],
+                         _assignment_evidence(shown,started)['settled'])
+
+    def test_missing_native_terminal_keeps_visibility_unknown(self):
+        self.port.headless=True
+        started=self.start()['admission']
+        facts=_assignment_evidence(self.port.show_worker(started['native_binding']['dispatchId']),started)
+        self.assertIsNone(facts['placement']['terminal']);self.assertIsNone(facts['placement']['tab'])
+        self.assertEqual(facts['placement']['ui_visibility'],'unverified')
+        self.assertEqual(facts['placement']['ui_focus'],'unverified')
+        self.assertEqual(facts['placement']['worktree'],started['native_binding']['worktreeId'])
 
     def test_reuse_requires_settlement_and_exact_effective_model(self):
         first=self.start()['admission']; identity=first['admission_id']
