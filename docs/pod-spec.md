@@ -353,8 +353,9 @@ Git observation; the supplied base never overrides it. The checkpoint's
 kernel-owned `governance_history` preserves up to 64 distinct candidate identities
 and 64 explicit user decisions, including the canonical ref, commit, instruction
 and map sequence. A mapped Git checkpoint requires its current candidate to
-resolve to a commit before any write; unresolved names cannot enter the history. History survives admission and report writes; caller omission
-or replacement cannot erase it. Capacity refuses rather than evicts. Shared
+resolve to a commit before any write; unresolved names cannot enter the history.
+History survives admission and report writes; caller omission or replacement
+cannot erase it. Capacity refuses rather than evicts. Shared
 ancestry outside the trusted base catches intermediate commits as well as tips.
 An exact new snapshot decision can proceed despite unavailable old Git objects;
 it preserves those records and grants no authority for a different future base.

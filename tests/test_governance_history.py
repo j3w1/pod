@@ -120,9 +120,17 @@ class GovernanceHistoryTests(boundaries.KernelCase):
             self.write(self.stored())
         self.assertEqual(later.exception.detail["detail"], "candidate_identity_unavailable")
         self.assertEqual(read(self.project, "objective"), before)
-        self.candidate = self.base
         target = self.commit("README.md", "independent target\n", "target")
         boundaries.git(self.project, "update-ref", "refs/remotes/origin/target", target)
+        with self.assertRaises(PodError) as refresh_error:
+            self.write(self.stored(), governance_refresh=True)
+        self.assertEqual(refresh_error.exception.code, "invalid_checkpoint")
+        self.assertEqual(read(self.project, "objective"), before)
+        with self.assertRaises(PodError) as authorized_error:
+            self.authorize(target)
+        self.assertEqual(authorized_error.exception.code, "invalid_checkpoint")
+        self.assertEqual(read(self.project, "objective"), before)
+        self.candidate = self.base
         state = self.write(self.stored(), governance_refresh=True)["checkpoint"]
         self.assertEqual(state["governance"]["base"], target)
         self.assertNotIn("pending-candidate", state["governance_history"]["candidates"])

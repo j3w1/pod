@@ -452,18 +452,23 @@ def _governance_history(prior: dict | None) -> dict:
             "decisions": [dict(row) for row in history["decisions"]]}
 
 
-def _retain_governance_history(project: Path, map_state: dict, prior: dict | None,
-                               candidate: str, proposed: dict, *, snapshot_authorized: bool) -> None:
-    if map_state["governance"].get("base") is None:
-        return
-    history = _governance_history(prior)
-    # Resolve aliases now, before a later checkout or ref movement changes their meaning.
+def _checkpoint_candidate(project: Path, candidate: str | None) -> str:
     identity = _resolve_commit(project, candidate)
     if identity is None:
         raise PodError("invalid_checkpoint",
                        "A mapped Git checkpoint candidate must resolve to a commit. "
                        "Next: name the current available candidate commit before writing the checkpoint",
                        {"detail": "candidate_identity_unavailable", "candidate": candidate})
+    return identity
+
+
+def _retain_governance_history(project: Path, map_state: dict, prior: dict | None,
+                               candidate: str, proposed: dict, *, snapshot_authorized: bool) -> None:
+    if map_state["governance"].get("base") is None:
+        return
+    history = _governance_history(prior)
+    # Resolve aliases now, before a later checkout or ref movement changes their meaning.
+    identity = _checkpoint_candidate(project, candidate)
     bounded_text(identity, name="candidate history", limit=512)
     if identity not in history["candidates"]:
         history["candidates"].append(identity)
@@ -501,6 +506,7 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
     """
     if observed.get("status") != "observed" or established is None:
         return observed
+    current_candidate = _checkpoint_candidate(project, candidate)
     base = established.get("base")
     if observed["commit"] == base:
         return observed
@@ -521,9 +527,7 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
 
     if base is None or _resolve_commit(project, base) is None:
         return unavailable("bound_base_unavailable", base)
-    if candidate is None:
-        return unavailable("candidate_identity_required")
-    values = [candidate, *(known_candidates or [])]
+    values = [current_candidate, *(known_candidates or [])]
     if previous_candidate is not None:
         values.append(previous_candidate)
     for row in admissions.values():
