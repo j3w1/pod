@@ -181,7 +181,7 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod doctor [--json]` | Read-only installation, catalog, preference, runtime capability and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
 | `pod --version` | Reports the installed root `VERSION` before dependency checks. |
-| `pod internal <op> --input FILE` or `--input -` | Hidden structured operation for the skill; bounded JSON from a regular file or stdin, with no public command tree. |
+| `pod internal <op> --input FILE` or `--input -` | Hidden structured operation for the skill; bounded JSON from a regular file or stdin, with no public command tree. A refusal is a blocked envelope with its code, message and detail; an unexpected failure is the blocked code `internal_error`, with the traceback only on stderr. |
 
 Codex invokes `$pod ...` and Claude Code invokes `/pod ...` inside an existing
 conversation. The global launcher is user-local; the one-shot installer from `main`
