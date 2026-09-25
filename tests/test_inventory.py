@@ -203,6 +203,16 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                        "reconcile changes", "Before implementation"):
             self.assertIn(phrase, text)
 
+    def test_new_objective_worktree_requests_the_orca_branch(self):
+        # A host default such as agent/<task> once became the objective branch because
+        # the skill never asked for orca/<task-slug>; the request must stay explicit.
+        read = lambda *path: " ".join((self.root.joinpath("skills", "pod", *path)).read_text().split())
+        self.assertIn("create one on `orca/<task-slug>`", read("SKILL.md"))
+        planning = read("references", "planning.md")
+        for phrase in ("explicitly on branch `orca/<task-slug>`", "never relying on a host default",
+                       "--branch orca/TASK", "keeps its branch", "Bind the actual branch"):
+            self.assertIn(phrase, planning)
+
     def test_external_metadata_notice_is_short_and_not_a_product_dependency(self):
         text = (self.root / "AGENTS.md").read_text()
         notice = text.split("## Upstream metadata governance", 1)[1]
