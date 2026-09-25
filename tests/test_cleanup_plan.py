@@ -1,0 +1,164 @@
+"""Read-only cleanup decisions over disposable Git worktrees and a local remote."""
+
+from __future__ import annotations
+
+import subprocess
+
+from pod.cleanup import plan
+from pod.errors import PodError
+from pod.github import repository_context
+from pod.governor import _empty_journal, _record_path, _write_journal
+from pod.ledger import objective_root
+from tests.kernel_support import KernelCase, git
+
+
+class CleanupPlanTests(KernelCase):
+    def setUp(self):
+        super().setUp()
+        self.child = self.root / "objective-worktree"
+        git(self.project, "worktree", "add", "-qb", "objective", str(self.child))
+        context = repository_context(self.child)
+        self.intake(worktree={"repository": context["repository"], "repo_key": context["repo_key"],
+                              "path": context["worktree"], "branch": context["branch"]})
+        self.terminals = []
+        self.orca_reads = []
+
+    def orca_read(self, argv):
+        self.orca_reads.append(list(argv))
+        if argv[:2] == ["worktree", "show"]:
+            return {"result": {"worktree": {"path": str(self.child), "isMainWorktree": False}}}
+        if argv[:2] == ["terminal", "list"]:
+            return {"result": {"terminals": list(self.terminals), "truncated": False}}
+        raise AssertionError(argv)
+
+    def observed(self, **kwargs):
+        return plan(self.project, "objective", orca_reader=self.orca_read, native_port=self.port, **kwargs)
+
+    def resource(self, result, kind):
+        return next(row for row in result["resources"] if row["kind"] == kind)
+
+    def test_clean_integrated_worktree_and_branch_have_guarded_commands_without_writes(self):
+        state_path = objective_root(self.project, "objective") / "context.json"
+        before_state = state_path.read_bytes()
+        before_refs = git(self.project, "show-ref")
+        before_files = {path.name: path.read_bytes() for path in self.child.iterdir() if path.is_file()}
+        result = self.observed()
+        worktree = self.resource(result, "worktree")
+        branch = self.resource(result, "local_branch")
+        self.assertEqual(worktree["class"], "integrated")
+        self.assertEqual(worktree["delete_argv"],
+                         ["orca", "worktree", "rm", "--worktree", "path:" + str(self.child), "--json"])
+        self.assertEqual(branch["class"], "integrated")
+        self.assertIsNone(branch["delete_argv"])
+        self.assertIn("Orca also removes", " ".join(branch["reasons"]))
+        self.assertEqual(state_path.read_bytes(), before_state)
+        self.assertEqual(git(self.project, "show-ref"), before_refs)
+        self.assertEqual({path.name: path.read_bytes() for path in self.child.iterdir() if path.is_file()},
+                         before_files)
+        self.assertFalse((_record_path(self.project, "objective")).exists())
+        self.assertEqual([argv[:2] for argv in self.orca_reads], [["worktree", "show"], ["terminal", "list"]])
+
+    def test_untracked_data_and_unknown_terminal_are_never_silently_deleted(self):
+        (self.child / "valuable.txt").write_text("private work\n")
+        unique = self.resource(self.observed(), "worktree")
+        self.assertEqual(unique["class"], "unique")
+        self.assertIsNone(unique["delete_argv"])
+        self.assertEqual(unique["archive_argv"][-1], "refs/heads/objective")
+        self.terminals = [{"handle": "foreign", "worktreePath": str(self.child)}]
+        protected = self.resource(self.observed(), "worktree")
+        self.assertEqual(protected["class"], "protected")
+        self.assertIsNone(protected["delete_argv"])
+
+    def test_ignored_data_and_stash_are_unique_even_when_worktree_looks_clean(self):
+        (self.project / ".git" / "info" / "exclude").write_text("*.scratch\n")
+        (self.child / "notes.scratch").write_text("retained data\n")
+        ignored = self.resource(self.observed(), "worktree")
+        self.assertEqual(ignored["class"], "unique")
+        self.assertIn("notes.scratch", " ".join(ignored["reasons"]))
+        (self.child / "notes.scratch").unlink()
+        (self.child / "README.md").write_text("uncommitted tracked data\n")
+        git(self.child, "stash", "push", "-qm", "keep this work")
+        stashed = self.resource(self.observed(), "worktree")
+        self.assertEqual(stashed["class"], "unique")
+        self.assertIn("stash", " ".join(stashed["reasons"]))
+        self.assertIsNone(stashed["delete_argv"])
+
+    def test_expect_reports_changed_resource_ids_without_saved_state(self):
+        first = self.observed()
+        self.assertEqual(self.observed(expect=first["expect"])["digest"], first["digest"])
+        (self.child / "valuable.txt").write_text("new data\n")
+        with self.assertRaises(PodError) as changed:
+            self.observed(expect=first["expect"])
+        self.assertEqual(changed.exception.code, "cleanup_changed")
+        self.assertIn("worktree:" + str(self.child), changed.exception.detail["changed"])
+
+    def test_verified_archive_allows_a_guarded_unique_worktree_command(self):
+        (self.child / "README.md").write_text("unique commit\n")
+        git(self.child, "add", "README.md")
+        git(self.child, "commit", "-qm", "unique")
+        tip = git(self.child, "rev-parse", "HEAD")
+        ref = "refs/heads/objective"
+        bundle = self.root / "objective.bundle"
+        git(self.project, "bundle", "create", str(bundle), ref)
+        verified = self.observed(archives=[{"path": str(bundle), "ref": ref, "tip": tip}])
+        worktree = self.resource(verified, "worktree")
+        self.assertEqual(worktree["class"], "unique")
+        self.assertTrue(worktree["archive_verified"])
+        self.assertIsNotNone(worktree["delete_argv"])
+        bundle.write_text("corrupt\n")
+        rejected = self.resource(self.observed(archives=[{"path": str(bundle), "ref": ref, "tip": tip}]),
+                                 "worktree")
+        self.assertFalse(rejected["archive_verified"])
+        self.assertIsNone(rejected["delete_argv"])
+
+    def test_merged_remote_tip_has_an_exact_lease(self):
+        bare = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+        git(self.project, "remote", "add", "origin", str(bare))
+        git(self.project, "push", "-q", "origin", "refs/heads/objective:refs/heads/objective")
+        journal = _empty_journal()
+        journal["units"]["delivery"] = {"name": "delivery", "generation": 1, "history": [],
+                                         "preflight": {}, "published": {"origin/objective": self.base},
+                                         "tasks": [], "candidate": None,
+                                         "branch": {"remote": "origin", "base": "target",
+                                                    "branch": "objective"}}
+        _write_journal(_record_path(self.project, "objective"), journal)
+        remote = self.resource(self.observed(), "remote_branch")
+        self.assertEqual(remote["class"], "merged_remote_head")
+        self.assertEqual(remote["delete_argv"],
+                         ["git", "push", "--force-with-lease=refs/heads/objective:" + self.base,
+                          "origin", ":refs/heads/objective"])
+
+    def test_remote_tip_change_invalidates_expect_and_main_checkout_is_protected(self):
+        bare = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+        git(self.project, "remote", "add", "origin", str(bare))
+        git(self.project, "push", "-q", "origin", "refs/heads/objective:refs/heads/objective")
+        journal = _empty_journal()
+        journal["units"]["delivery"] = {"name": "delivery", "generation": 1, "history": [],
+                                         "preflight": {}, "published": {"origin/objective": self.base},
+                                         "tasks": [], "candidate": None,
+                                         "branch": {"remote": "origin", "base": "target", "branch": "objective"}}
+        _write_journal(_record_path(self.project, "objective"), journal)
+        first = self.observed()
+        (self.child / "README.md").write_text("new remote tip\n")
+        git(self.child, "add", "README.md")
+        git(self.child, "commit", "-qm", "new remote tip")
+        git(self.child, "push", "-q", "origin", "refs/heads/objective:refs/heads/objective")
+        with self.assertRaises(PodError) as changed:
+            self.observed(expect=first["expect"])
+        self.assertIn("remote_branch:origin/objective", changed.exception.detail["changed"])
+        main_context = repository_context(self.project)
+        self.write(self.stored(), worktree={"repository": main_context["repository"],
+                                            "repo_key": main_context["repo_key"],
+                                            "path": main_context["worktree"],
+                                            "branch": main_context["branch"]})
+        main = next(row for row in self.observed()["resources"]
+                    if row["id"] == "worktree:" + str(self.project))
+        self.assertEqual(main["class"], "protected")
+        self.assertIsNone(main["delete_argv"])
+
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

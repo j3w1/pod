@@ -14,7 +14,7 @@ BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "agents/openai.yaml", "scr
                "references/execution-spec.md", "references/planning.md", "references/models.md",
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md")
-BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "catalog.py", "cli.py", "config.py", "context.py",
+BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py", "cli.py", "config.py", "context.py",
                   "errors.py", "github.py", "gitio.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py",
                   "obligations.py", "operations.py", "orca.py", "placement.py", "records.py", "selection.py",
                   "skill_validation.py", "status.py", "term.py", "tui.py", "tui_render.py",

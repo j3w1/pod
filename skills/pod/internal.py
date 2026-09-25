@@ -392,6 +392,13 @@ def _op_admission(request: dict) -> dict:
                          reuse_of=request.get("reuse_of"), accompanying=request.get("map"))
 
 
+def _op_cleanup_plan(request: dict) -> dict:
+    exact(request, {"project", "objective", "expect", "archives"}, {"project", "objective"}, name="request")
+    from .cleanup import plan
+    return plan(Path(request["project"]), request["objective"],
+                expect=request.get("expect"), archives=request.get("archives"))
+
+
 
 _OPERATIONS = {
     'brief': _op_brief,
@@ -417,6 +424,7 @@ _OPERATIONS = {
     'governor-reconcile': _op_governor_reconcile,
     'governor-status': _op_governor_status,
     'admission': _op_admission,
+    'cleanup-plan': _op_cleanup_plan,
 }
 
 
@@ -436,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
                                                "governor", "governor-outcome", "governor-prepare",
                                                "governor-preflight", "governor-classify",
                                                "governor-correct", "governor-execute",
-                                               "governor-reconcile", "governor-status"))
+                                               "governor-reconcile", "governor-status", "cleanup-plan"))
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
