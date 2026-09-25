@@ -1,4 +1,4 @@
-"""One checked, manually maintained catalog of supported base models."""
+"""Validated model identities, attributed guidance, and optional AA observations."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ IDS = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5",
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CATALOG_PATH = Path(__file__).with_name("catalog.json")
 REFERENCE_URL = "https://artificialanalysis.ai/leaderboards/models"
+UNKNOWN = {"effort": None, "profile": "Unknown", "intelligence": None,
+           "usd_per_task": None, "first_chunk_s": None, "total_response_s": None}
 
 
 def _unique_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -54,25 +56,61 @@ def _date(value: object, name: str) -> date:
 
 
 def _url(value: object, name: str) -> str:
-    parsed = urlparse(_text(value, name))
+    parsed = urlparse(_text(value, name, limit=500))
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
         raise PodError("invalid_catalog", f"{name} must be an HTTPS source URL")
     return value
 
 
+def _record(row: object, model: dict) -> dict | None:
+    if not isinstance(row, dict) or set(row) not in (
+            {"effort", "profile", "intelligence", "usd_per_task", "first_chunk_s", "total_response_s"},
+            {"effort", "profile", "intelligence", "usd_per_task", "first_chunk_s", "total_response_s", "note"}):
+        return None
+    effort = row["effort"]
+    if effort not in (*model["efforts"], "none") or (effort == "none") != (row["profile"] == "Non-reasoning"):
+        return None
+    try:
+        _text(row["profile"], "benchmark profile", limit=80)
+        if "note" in row:
+            _text(row["note"], "benchmark note", limit=200)
+    except PodError:
+        return None
+    if effort != "none" and row["profile"] not in (effort, effort + " with fallback"):
+        return None
+    score = row["intelligence"]
+    if score is not None and (type(score) is not int or not 0 <= score <= 100):
+        return None
+    for key in ("usd_per_task", "first_chunk_s", "total_response_s"):
+        value = row[key]
+        if value is not None and (type(value) not in (float, int) or not 0 <= value <= 100000):
+            return None
+    return row
+
+
+def _rows(document: dict, model: dict) -> list[dict]:
+    block = document.get("benchmarks")
+    groups = block.get("models") if isinstance(block, dict) else None
+    rows = groups.get(model["id"]) if isinstance(groups, dict) else None
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 16:
+        return []
+    checked = [_record(row, model) for row in rows]
+    if any(row is None for row in checked) or len({row["effort"] for row in checked}) != len(rows):
+        return []
+    return checked
+
+
 def validate(data: object) -> dict:
-    if (not isinstance(data, dict) or set(data) - {"schema", "models", "reference_benchmark"}
-            or not {"schema", "models"} <= set(data)):
-        raise PodError("invalid_catalog", "Catalog has missing or unsupported base fields")
-    root = data
-    if root["schema"] != "pod-catalog/v1":
+    root = _exact(data, {"schema", "models", "benchmarks"}, "catalog")
+    if root["schema"] != "pod-catalog/v2":
         raise PodError("invalid_catalog", "Unsupported catalog schema")
     models = root["models"]
     if not isinstance(models, list) or [m.get("id") if isinstance(m, dict) else None for m in models] != list(IDS):
         raise PodError("invalid_catalog", "Catalog needs exactly the six supported ids in order")
+    orders = []
     for model in models:
         _exact(model, {"id", "name", "agent", "provider", "efforts", "native_default",
-                       "documented_context_tokens", "guidance", "examples", "sources"}, "model")
+                       "documented_context_tokens", "guidance", "sources", "guide"}, "model")
         model_id = model["id"]
         agent = "claude" if model_id.startswith("claude-") else "codex"
         provider = "Anthropic" if agent == "claude" else "OpenAI"
@@ -82,24 +120,15 @@ def validate(data: object) -> dict:
         efforts = model["efforts"]
         allowed = set(EFFORTS) | ({"ultra"} if model_id in IDS[3:5] else set())
         if (not isinstance(efforts, list) or any(not isinstance(effort, str) for effort in efforts)
-                or len(efforts) != len(set(efforts))
-                or set(efforts) != allowed or efforts[:5] != list(EFFORTS)
-                or model["native_default"] not in efforts):
+                or len(efforts) != len(set(efforts)) or set(efforts) != allowed
+                or efforts[:5] != list(EFFORTS) or model["native_default"] not in efforts):
             raise PodError("invalid_catalog", "Model efforts differ from documented native values")
         context = model["documented_context_tokens"]
-        if context is not None and (type(context) is not int or not 1 <= context <= 2_000_000):
-            raise PodError("invalid_catalog", "Documented context must be tokens or null")
         if (agent == "claude" and context != 1_000_000) or (agent == "codex" and context is not None):
             raise PodError("invalid_catalog", "Documented context differs from checked sources")
         guidance = _text(model["guidance"], "guidance")
-        if not 35 <= len(guidance.split()) <= 55 or not guidance.startswith(provider):
-            raise PodError("invalid_catalog", "Guidance needs 35–55 attributed words")
-        examples = model["examples"]
-        if (not isinstance(examples, list) or not 1 <= len(examples) <= 2
-                or any(not isinstance(example, str) for example in examples)):
-            raise PodError("invalid_catalog", "A model needs one or two Pod examples")
-        for example in examples:
-            _text(example, "Pod example", limit=200)
+        if not 35 <= len(guidance.split()) <= 70 or not guidance.startswith(provider):
+            raise PodError("invalid_catalog", "Guidance needs 35–70 attributed words")
         sources = model["sources"]
         if not isinstance(sources, list) or not sources:
             raise PodError("invalid_catalog", "Model needs an official source")
@@ -109,74 +138,46 @@ def validate(data: object) -> dict:
             _date(source["checked"], "checked date")
             allowed_hosts = ("anthropic.com", "claude.com") if agent == "claude" else ("chatgpt.com",)
             host = urlparse(source["url"]).hostname
-            if not isinstance(host, str) or not any(
-                    host == domain or host.endswith("." + domain) for domain in allowed_hosts):
+            if not isinstance(host, str) or not any(host == domain or host.endswith("." + domain) for domain in allowed_hosts):
                 raise PodError("invalid_catalog", "Source is not the model provider's documentation")
-    # The dated third-party reference is informative and may be incomplete. It is
-    # checked separately so a missing score cannot disable a supported route.
+        guide = _exact(model["guide"], {"profile", "suggested_use", "best_for", "use_when", "ladder",
+                                        "trade_off", "examples", "limitations", "coding_order"}, "guide")
+        if guide["profile"] not in efforts or guide["profile"] == "ultra":
+            raise PodError("invalid_catalog", "Guide profile is not a selectable effort")
+        for key, limit in (("suggested_use", 80), ("best_for", 220), ("use_when", 260),
+                           ("trade_off", 260), ("limitations", 260)):
+            _text(guide[key], key, limit=limit)
+        ladder = _exact(guide["ladder"], {"quick", "normal", "hard", "escalation"}, "ladder")
+        if any(value not in efforts or value == "ultra" for value in ladder.values()):
+            raise PodError("invalid_catalog", "Guide ladder has unsupported effort")
+        examples = guide["examples"]
+        if not isinstance(examples, list) or not 1 <= len(examples) <= 3:
+            raise PodError("invalid_catalog", "Guide needs one to three examples")
+        for example in examples:
+            _exact(example, {"effort", "text"}, "example")
+            if example["effort"] not in efforts or example["effort"] == "ultra":
+                raise PodError("invalid_catalog", "Example effort is unsupported")
+            _text(example["text"], "example text", limit=180)
+        order = guide["coding_order"]
+        if type(order) is not int or not 1 <= order <= 6:
+            raise PodError("invalid_catalog", "Coding order must be 1–6")
+        orders.append(order)
+        # Optional benchmark data can be missing, but a present profile must resolve.
+        rows = _rows(root, model)
+    if sorted(orders) != list(range(1, 7)):
+        raise PodError("invalid_catalog", "Coding orders must be unique")
+    benchmark = root["benchmarks"]
+    if benchmark is not None:
+        if not isinstance(benchmark, dict) or set(benchmark) != {"source", "captured", "models"}:
+            raise PodError("invalid_catalog", "Benchmark block has unsupported fields")
+        _url(benchmark["source"], "benchmark source")
+        if benchmark["source"] != REFERENCE_URL:
+            raise PodError("invalid_catalog", "Benchmark source differs from AA")
+        _date(benchmark["captured"], "benchmark capture date")
+        groups = benchmark["models"]
+        if not isinstance(groups, dict) or set(groups) - set(IDS):
+            raise PodError("invalid_catalog", "Benchmark groups have unsupported ids")
     return root
-
-
-def _variant(row: object) -> dict | None:
-    if (not isinstance(row, dict)
-            or set(row) != {"profile", "intelligence", "usd_per_task", "first_chunk_s"}):
-        return None
-    profile, score = row["profile"], row["intelligence"]
-    if (not isinstance(profile, str) or not 1 <= len(profile) <= 80
-            or any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in profile)
-            or type(score) is not int or not 0 <= score <= 100):
-        return None
-    for field in ("usd_per_task", "first_chunk_s"):
-        value = row[field]
-        if value is not None and (type(value) not in (float, int) or not 0 <= value <= 100000):
-            return None
-    return row
-
-
-def reference_entry(document: dict, model_id: str) -> dict:
-    """Return a safe display profile, with unknowns for an incomplete AA row."""
-    benchmark = document.get("reference_benchmark")
-    groups = benchmark.get("models") if isinstance(benchmark, dict) else None
-    item = groups.get(model_id) if isinstance(groups, dict) else None
-    empty = {"profile": "Unknown", "intelligence": None,
-             "usd_per_task": None, "first_chunk_s": None}
-    if not isinstance(item, dict):
-        return {"reference_variant": "Unknown", "variants": [empty], "complete": False}
-    selected = item.get("reference_variant")
-    variants = item.get("variants")
-    if (not isinstance(selected, str) or not selected or not isinstance(variants, list)
-            or not variants or len(variants) > 32):
-        return {"reference_variant": "Unknown", "variants": [empty], "complete": False}
-    rows = [_variant(row) for row in variants]
-    labels = [row["profile"] for row in rows if row is not None]
-    if (any(row is None for row in rows) or len(labels) != len(set(labels))
-            or rows[0]["profile"] != selected):
-        return {"reference_variant": "Unknown", "variants": [empty], "complete": False}
-    return {"reference_variant": selected, "variants": rows, "complete": True}
-
-
-def benchmark_warnings(document: dict) -> list[str]:
-    """Maintenance diagnostics; none are route or catalog-base blockers."""
-    benchmark = document.get("reference_benchmark")
-    if not isinstance(benchmark, dict):
-        return ["reference benchmark is missing"]
-    warnings = []
-    if benchmark.get("url") != REFERENCE_URL:
-        warnings.append("reference benchmark attribution URL is missing or changed")
-    try:
-        _date(benchmark.get("captured"), "benchmark capture date")
-    except PodError:
-        warnings.append("reference benchmark capture date is missing or invalid")
-    groups = benchmark.get("models")
-    if not isinstance(groups, dict):
-        warnings.append("reference benchmark model groups are missing")
-    else:
-        if set(groups) - set(IDS):
-            warnings.append("reference benchmark has unsupported model groups")
-        for model_id in IDS:
-            if not reference_entry(document, model_id)["complete"]:
-                warnings.append(f"{model_id}: selected reference row is missing or incomplete")
-    return warnings
 
 
 def load(path: Path = CATALOG_PATH) -> dict:
@@ -184,7 +185,7 @@ def load(path: Path = CATALOG_PATH) -> dict:
         raw = path.read_bytes()
     except OSError as exc:
         raise PodError("invalid_catalog", "Catalog cannot be read") from exc
-    if len(raw) > 64 * 1024:
+    if len(raw) > 128 * 1024:
         raise PodError("invalid_catalog", "Catalog exceeds its size limit")
     try:
         document = json.loads(raw, object_pairs_hook=_unique_pairs)
@@ -197,28 +198,80 @@ def by_id(document: dict | None = None) -> dict[str, dict]:
     return {row["id"]: row for row in (load() if document is None else document)["models"]}
 
 
+def records(document: dict, model_id: str) -> list[dict]:
+    model = by_id(document)[model_id]
+    return _rows(document, model)
+
+
+def record(document: dict, model_id: str, effort: str) -> dict:
+    return next((row for row in records(document, model_id) if row["effort"] == effort),
+                {**UNKNOWN, "effort": effort, "profile": effort})
+
+
+def reference_entry(document: dict, model_id: str) -> dict:
+    model = by_id(document)[model_id]
+    rows = records(document, model_id)
+    selected = record(document, model_id, model["guide"]["profile"])
+    return {"reference_variant": selected["profile"], "variants": rows or [selected],
+            "complete": bool(rows and selected in rows)}
+
+
 def reference_rows(document: dict | None = None) -> dict[str, dict]:
     doc = load() if document is None else document
-    return {model_id: reference_entry(doc, model_id)["variants"][0] for model_id in IDS}
+    return {model_id: record(doc, model_id, by_id(doc)[model_id]["guide"]["profile"]) for model_id in IDS}
 
 
 def ranks(document: dict | None = None) -> dict[str, int | None]:
     scores = {model_id: row["intelligence"] for model_id, row in reference_rows(document).items()}
     if any(score is None for score in scores.values()):
         return {model_id: None for model_id in IDS}
-    return {model_id: 1 + sum(other > score for other in scores.values())
-            for model_id, score in scores.items()}
+    return {model_id: 1 + sum(other > score for other in scores.values()) for model_id, score in scores.items()}
 
 
 def age(document: dict | None = None, *, today: date | None = None) -> int | None:
     doc = load() if document is None else document
-    benchmark = doc.get("reference_benchmark")
-    captured = benchmark.get("captured") if isinstance(benchmark, dict) else None
+    block = doc.get("benchmarks")
     try:
-        observed = _date(captured, "benchmark capture date")
+        observed = _date(block.get("captured") if isinstance(block, dict) else None, "benchmark capture date")
     except PodError:
         return None
     return ((today or date.today()) - observed).days
+
+
+def format_usd(value: int | float | None) -> str:
+    if value is None:
+        return "unknown"
+    if value == 0:
+        return "$0.00"
+    return f"${value:.2f}" if value >= 0.01 else f"${value:.2g}"
+
+
+def format_latency(value: int | float | None) -> str:
+    if value is None:
+        return "unknown"
+    return f"{value:.0f} s" if value >= 100 else f"{value:.1f} s"
+
+
+def guide_projection(document: dict | None = None) -> list[dict]:
+    """Compact display guidance for the dispatch-free config JSON path."""
+    doc = load() if document is None else document
+    return [{key: model[key] for key in ("id", "name", "agent", "efforts", "guidance")}
+            | {"suggested_use": model["guide"]["suggested_use"], "ladder": model["guide"]["ladder"].copy()}
+            for model in doc["models"]]
+
+
+def benchmark_warnings(document: dict) -> list[str]:
+    block = document.get("benchmarks")
+    if not isinstance(block, dict):
+        return ["benchmark rows are missing"]
+    warnings = []
+    for model in document["models"]:
+        rows = records(document, model["id"])
+        if not rows:
+            warnings.append(f"{model['id']}: benchmark rows are missing or incomplete")
+        elif model["guide"]["profile"] not in {row["effort"] for row in rows}:
+            warnings.append(f"{model['id']}: guide profile benchmark row is missing")
+    return warnings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -231,8 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Catalog validation failed: {exc}")
         return 1
     warnings = benchmark_warnings(document)
-    print("Catalog is valid: six supported models and dated reference rows" if not warnings
-          else "Catalog models valid; reference benchmark needs maintenance")
+    print(f"Catalog valid: six models; AA captured {document['benchmarks']['captured'] if document['benchmarks'] else 'unknown'}")
     for warning in warnings:
         print("Benchmark warning: " + warning)
     return 0
