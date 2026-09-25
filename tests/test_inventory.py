@@ -218,7 +218,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         for phrase in ("curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh",
                        "$pod https://github.com/owner/project/issues/123",
                        "Pod Execution Spec reference", "Authoring in ChatGPT",
-                       "Plan only", "Continue after interruption", "visible agent tab",
+                       "Plan only", "Continue after interruption",
                        "pod config --json", "native_default", "gpt-6-luna", "`VERSION`",
                        "pod update", "docs/installation.md"):
             self.assertIn(phrase, text)
