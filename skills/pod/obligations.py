@@ -1540,6 +1540,11 @@ def report_projection(state: dict, ctx: dict) -> dict:
               "proposals_out_of_scope": [{"id": row["id"], "source": row["source"], "summary": row["summary"]}
                                          for row in state.get("proposals", []) if row["status"] == "open"],
               "label": label_qualification(state, ctx, ctx.get("candidate"))}
+    if any(ob["kind"] == "delivery" for ob in rows):
+        delivery_status = ctx.get("governor_delivery") or {}
+        result["delivery_authorization"] = delivery_status.get("units") or {
+            "unprepared": {"publish": "MISSING", "merge": "MISSING"}}
+        result["hosted_checks"] = delivery_status.get("hosted_checks", "NOT_RUN")
     if state.get("governance_history", {}).get("decisions"):
         result["governance_decisions"] = deepcopy(state["governance_history"]["decisions"])
     if state.get("delivery") is not None:

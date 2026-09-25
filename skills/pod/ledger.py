@@ -478,6 +478,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
     from .config import effective, load
     from .records import source_identity
     from .selection import worker_ceiling
+    from .governor import objective_delivery_reporting
     checkpoint_value = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
     snapshot = load(project)
     ceiling = worker_ceiling(snapshot, state.get("constraints", [])) if not snapshot["errors"] else 0
@@ -516,6 +517,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "verification": verification if verification is not None else checkpoint_value.get("verification"),
             "authorization_granted": _authorization_granted(project, objective),
             "governor_pending": _governor_pending(project, objective),
+            "governor_delivery": objective_delivery_reporting(project, objective),
             "git_delta": lambda source, target: git_delta(project, source, target),
             "is_ancestor": lambda commit, target: git_is_ancestor(project, commit, target)}
 

@@ -284,5 +284,20 @@ class ReviewOverlapTests(KernelCase):
                          ["integration_unsettled"])
 
 
+class LocalOnlyReportTests(KernelCase):
+    def test_user_direct_local_delivery_reports_missing_scopes_and_unrun_hosted_checks(self):
+        self.intake()
+        delivery = {"id": "D", "kind": "delivery", "provenance": "user_direct",
+                    "source": {"instruction": "Keep this delivery local"}, "check": "local delivery is complete",
+                    "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        outcome = self.write([*self.stored(), delivery],
+                             revision_authority={"provenance": "user_direct",
+                                                 "instruction": "Keep this delivery local"})
+        report = outcome["report"]
+        self.assertEqual(report["hosted_checks"], "NOT_RUN")
+        self.assertEqual(report["delivery_authorization"],
+                         {"unprepared": {"publish": "MISSING", "merge": "MISSING"}})
+
+
 if __name__ == "__main__":
     unittest.main()

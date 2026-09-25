@@ -1418,6 +1418,36 @@ def discover_triggers(project: Path) -> dict:
     return proposal
 
 
+def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
+    """Whether this unit's current candidate holds publish/merge consent, and its hosted-check state.
+
+    Consent counts only when an ALLOW row for the exact prepared commit carries an authorization that still
+    validates for that commit, tree and scope; hosted checks are what the journal recorded, never inferred.
+    """
+    binding = unit.get("candidate")
+    authorization = {}
+    for scope, kinds in (("publish", PUBLICATION_KINDS), ("merge", ("merge",))):
+        granted = False
+        if isinstance(binding, dict) and binding.get("commit") and binding.get("tree"):
+            for row in rows:
+                if row["action"]["kind"] not in kinds or row.get("commit") != binding["commit"]:
+                    continue
+                try:
+                    granted = validate_authorization(row["action"].get("authorization"),
+                                                     candidate=binding["commit"], tree=binding["tree"],
+                                                     kind=scope) is not None
+                except PodError:
+                    granted = False
+                if granted:
+                    break
+        authorization[scope] = "RECORDED" if granted else "MISSING"
+    validations = [row for row in rows if row["action"]["kind"] in VALIDATION_KINDS]
+    hosted = ("RECORDED_PASS_UNVERIFIED" if any(row["outcome"] == "PASS" for row in validations)
+              else "PENDING" if any(row["outcome"] in ("pending", "UNKNOWN") for row in validations)
+              else "NOT_RUN" if not validations else "FAILED")
+    return {"authorization": authorization, "hosted_checks": hosted}
+
+
 def _unit_projection(unit: dict, actions: list[dict]) -> dict:
     binding = unit.get("candidate")
     rows = [row for row in actions if row["action"]["unit"] == unit["name"] and row["decision"] == "ALLOW"]
@@ -1425,6 +1455,7 @@ def _unit_projection(unit: dict, actions: list[dict]) -> dict:
                "provider": row["receipt"].get("provider")} for row in rows if row["outcome"] == "pending"]
     unresolved = [row["record_id"] for row in rows if row["outcome"] == "UNKNOWN"]
     last = unit.get("last_decision")
+    delivery = _unit_delivery(unit, rows)
     return {"generation": unit["generation"], "branch": unit.get("branch"), "tasks": unit.get("tasks", []),
             "candidate": ({key: binding[key] for key in ("id", "commit", "tree", "dirty_paths", "prepared_at",
                                                           "policy_revision")}
@@ -1436,7 +1467,25 @@ def _unit_projection(unit: dict, actions: list[dict]) -> dict:
             "last_decision": last,
             "blocker": (last.get("codes") or None) if last and last.get("decision") == "DEFER" else None,
             "next_action": last.get("next_action") if last else None,
-            "active_validation": active, "unresolved": unresolved}
+            "active_validation": active, "unresolved": unresolved, **delivery}
+
+
+def objective_delivery_reporting(project: Path, objective: str) -> dict:
+    """Read only exact Governor evidence for the obligation report."""
+    try:
+        journal = _read_journal(_record_path(project, objective))
+    except PodError:
+        return {"units": {}, "hosted_checks": "UNAVAILABLE"}
+    units = {}
+    for name, unit in journal["units"].items():
+        rows = [row for row in journal["actions"] if row["action"]["unit"] == unit.get("name", name)
+                and row["decision"] == "ALLOW"]
+        units[name] = _unit_delivery(unit, rows)
+    statuses = [unit["hosted_checks"] for unit in units.values()]
+    hosted = ("RECORDED_PASS_UNVERIFIED" if "RECORDED_PASS_UNVERIFIED" in statuses
+              else "PENDING" if "PENDING" in statuses else "FAILED" if "FAILED" in statuses
+              else "NOT_RUN")
+    return {"units": {name: unit["authorization"] for name, unit in units.items()}, "hosted_checks": hosted}
 
 
 def status_at(root: Path, *, project: Path | None = None,
