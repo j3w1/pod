@@ -1261,7 +1261,13 @@
         "tests.test_governance_refresh.GovernanceRefreshTests.test_maintained_release_policy_allows_equal_and_descendant_candidate",
         "tests.test_governance_refresh.GovernanceRefreshTests.test_changed_base_cannot_adopt_current_candidate_policy_on_same_ref",
         "tests.test_governance_refresh.GovernanceRefreshTests.test_guarded_refresh_requires_fresh_exact_canonical_snapshot_decision",
-        "tests.test_governance_refresh.GovernanceRefreshTests.test_independent_target_advance_refreshes_without_new_user_selection"
+        "tests.test_governance_refresh.GovernanceRefreshTests.test_independent_target_advance_refreshes_without_new_user_selection",
+        "tests.test_governance_history.GovernanceHistoryTests.test_intermediate_candidate_policy_needs_exact_snapshot_authority",
+        "tests.test_governance_history.GovernanceHistoryTests.test_old_checkpoint_candidates_survive_round_trip_omission_and_later_writes",
+        "tests.test_governance_history.GovernanceHistoryTests.test_pruned_discarded_result_requires_exact_consent_without_losing_history",
+        "tests.test_governance_history.GovernanceHistoryTests.test_decisions_persist_through_admission_report_and_attempted_replacement",
+        "tests.test_governance_history.GovernanceHistoryTests.test_candidate_history_limit_preserves_the_previous_checkpoint",
+        "tests.test_governance_history.GovernanceHistoryTests.test_malformed_shared_ancestry_observation_cannot_approve_refresh"
       ],
       "status": "NOT_RUN"
     },

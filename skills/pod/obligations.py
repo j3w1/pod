@@ -70,7 +70,8 @@ NEXT_ACTIONS = {
 MAP_INPUT = {"seq", "obligations", "proposals", "governance", "governance_refresh",
              "revision_authority", "reopen", "close", "rebind", "dispositions"}
 MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "governance_sources",
-              "coordinator_slot", "quiescence", "closure", "observations", "reopened"}
+              "coordinator_slot", "quiescence", "closure", "observations", "reopened",
+              "governance_history"}
 
 
 def refuse(code: str, detail: str, message: str, **referent: Any) -> PodError:
@@ -890,6 +891,8 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     state = {"seq": seq, "revision": revision, "governance": governance, "governance_sources": sources,
              "obligations": [rows[key] for key in [row["id"] for row in raw_obligations]],
              "proposals": list(proposals.values())}
+    if prior_map is not None and "governance_history" in prior_map:
+        state["governance_history"] = deepcopy(prior_map["governance_history"])
     for ob in rows.values():
         if ob["state"] == "satisfied":
             for item in ob["receipts"]:
@@ -1719,6 +1722,8 @@ def report_projection(state: dict, ctx: dict) -> dict:
               "proposals_out_of_scope": [{"id": row["id"], "source": row["source"], "summary": row["summary"]}
                                          for row in state.get("proposals", []) if row["status"] == "open"],
               "label": label_qualification(state, ctx, ctx.get("candidate"))}
+    if state.get("governance_history", {}).get("decisions"):
+        result["governance_decisions"] = deepcopy(state["governance_history"]["decisions"])
     if status == "quiescent":
         result["interim_report"] = state["quiescence"]["interim_report"]
     elif status == "open" and result["unfinished"]:
