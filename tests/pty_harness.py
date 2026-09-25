@@ -76,6 +76,8 @@ class PtySession:
         pid, master = pty.fork()
         if pid == 0:
             try:
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
+                signal.signal(signal.SIGINT, signal.SIG_DFL)
                 fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
                 os.chdir(cwd)
                 os.execve(sys.executable, [sys.executable, "-I", str(launcher), *(argv or [])], env)

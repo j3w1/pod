@@ -350,9 +350,44 @@ def _effective_evidence(receipt: dict, shown: dict, admission: dict) -> tuple[di
     return effective, mismatch
 
 
+def _reuse_effective_evidence(receipt: dict, shown: dict, admission: dict,
+                              prior: dict | None) -> tuple[dict, bool, dict | None]:
+    effective, mismatch = _effective_evidence(receipt, shown, admission)
+    binding = prior.get("native_binding") if isinstance(prior, dict) else None
+    decision = prior.get("route_decision") if isinstance(prior, dict) else None
+    previous = decision.get("effective") if isinstance(decision, dict) else None
+    worker = shown["result"]["worker"]
+    if (not admission.get("reuse_of") or not isinstance(prior, dict)
+            or prior.get("state") not in ("bound", "closed") or not binding_valid(binding)
+            or not binding["terminalHandle"] or not isinstance(previous, dict)
+            or any(_observed_value(previous.get(key)) == "unknown"
+                   for key in ("agent", "model", "effort"))
+            or worker.get("agentTerminalHandle") != binding["terminalHandle"]
+            or worker.get("worktreeId") != binding["worktreeId"]):
+        return effective, mismatch, None
+    start_options = worker.get("startOptions")
+    shown_launch = start_options.get("launch") if isinstance(start_options, dict) else None
+    receipt_launch = receipt.get("launch") if isinstance(receipt, dict) else None
+    observations = [values for launch in (shown_launch, receipt_launch) if isinstance(launch, dict)
+                    for values in (launch.get("effective"), launch.get("requested"))
+                    if isinstance(values, dict)]
+    inherited = []
+    for key in ("agent", "model", "effort"):
+        if any(_observed_value(values.get(key)) not in ("unknown", previous[key])
+               for values in observations):
+            mismatch = True
+        if effective[key] == "unknown":
+            effective[key] = previous[key]
+            inherited.append(key)
+    provenance = {"admission": admission["reuse_of"], "dispatch": binding["dispatchId"],
+                  "terminal": binding["terminalHandle"], "fields": inherited}
+    return effective, mismatch, provenance
+
+
 def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
           receipt: dict, port: NativePort, request_uuid: str | None) -> dict:
-    admission = read(project, objective)["admissions"][admission_id]
+    admissions = read(project, objective)["admissions"]
+    admission = admissions[admission_id]
     if receipt.get("runtime") not in (None, admission["runtime"]):
         raise PodError("native_identity_unverified", "Start receipt changed runtime")
     dispatch = receipt.get("dispatchId")
@@ -361,7 +396,8 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
         raise PodError("native_identity_unverified", "Start receipt identity is incomplete")
     shown = port.show_worker(dispatch)
     binding = _binding_from_show(shown, admission, dispatch)
-    effective, mismatch = _effective_evidence(receipt, shown, admission)
+    effective, mismatch, inherited = _reuse_effective_evidence(
+        receipt, shown, admission, admissions.get(admission.get("reuse_of")))
     def apply(row: dict) -> None:
         recovery = dict(row.get("recovery", {}))
         recovery.pop("preflight_refusal", None)
@@ -373,6 +409,8 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
         row["error"] = {"code": "route_mismatch"} if mismatch else None
         row["recovery"] = recovery
         row["effective_evidence"] = {"requested": admission["request"], "effective": effective}
+        if inherited is not None:
+            row["effective_evidence"]["inherited"] = inherited
         row["route_decision"]["effective"] = effective
         row["route_decision"]["route_mismatch"] = mismatch
         row["route_decision"]["effective_unknown"] = any(

@@ -105,13 +105,14 @@ def run(operation: str, request: dict) -> dict:
         if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
                 or admission.get("packet_id") != request["packet"].get("packet_id")):
             raise PodError("report_attempt_unverified", "No exact native admission binding")
-        from .operations import OrcaPort, _binding_from_show, _effective_evidence
+        from .operations import OrcaPort, _binding_from_show, _reuse_effective_evidence
         binding = admission["native_binding"]
         shown = OrcaPort(Path(request["project"])).show_worker(binding["dispatchId"])
         fresh = _binding_from_show(shown, admission, binding["dispatchId"])
         if fresh != binding:
             raise PodError("report_attempt_unverified", "Fresh native identity differs from admission")
-        effective, mismatch = _effective_evidence({}, shown, admission)
+        effective, mismatch, inherited = _reuse_effective_evidence(
+            {}, shown, admission, state["admissions"].get(admission.get("reuse_of")))
         if (mismatch or any(admission["route_decision"].get("effective", {}).get(key) not in
                             (effective[key], "unknown") for key in ("agent", "model", "effort"))):
             from .ledger import update_admission
@@ -126,6 +127,8 @@ def run(operation: str, request: dict) -> dict:
                 row["route_decision"]["effective"] = effective
                 row["route_decision"]["effective_unknown"] = False
                 row["effective_evidence"]["effective"] = effective
+                if inherited is not None:
+                    row["effective_evidence"]["inherited"] = inherited
             update_admission(Path(request["project"]), request["objective"],
                              owner=admission["owner"], admission_id=admission["admission_id"],
                              update=refresh)

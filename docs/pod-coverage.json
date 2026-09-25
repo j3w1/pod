@@ -1124,7 +1124,15 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_reuse_requires_settlement_and_exact_effective_model",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_reuse_requires_settlement_and_exact_effective_model",
+        "tests.test_operations.AdmissionTests.test_reused_terminal_null_launch_receipt_inherits_verified_route",
+        "tests.test_operations.AdmissionTests.test_reuse_different_terminal_keeps_unknown",
+        "tests.test_operations.AdmissionTests.test_reuse_different_worktree_keeps_unknown",
+        "tests.test_operations.AdmissionTests.test_reuse_known_conflicting_native_value_is_mismatch",
+        "tests.test_operations.AdmissionTests.test_report_consumes_inherited_reuse_without_route_mismatch",
+        "tests.test_governor.DecisionTests.test_inherited_reuse_route_does_not_defer_but_unknown_route_does"
+      ],
       "status": "NOT_RUN"
     },
     {

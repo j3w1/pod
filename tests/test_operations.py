@@ -515,7 +515,35 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(recover_admission(self.project,'objective',owner='owner',
                          admission_id=first['admission_id'],worktree='current',port=self.port)['status'],'unresolved')
 
-    def test_reused_terminal_null_launch_receipt_is_unknown_not_an_observed_mismatch(self):
+    def reuse_with_launch(self, *, terminal=None, worktree=None, effective=None):
+        first=self.start()['admission']
+        self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
+        self.discard(first,reason='the first implementation is set aside before reuse')
+        self.port.effective=effective if effective is not None else {'agent':None,'model':None,'effort':None}
+        original=self.port.start_worker
+        def reuse(**kwargs):
+            receipt=original(**kwargs)
+            receipt['launch']={'requested':{'agent':None,'model':None,'effort':None},
+                               'effective':{'agent':None,'model':None,'effort':None}}
+            if terminal is not None:
+                self.port.workers[receipt['dispatchId']]['terminal']=terminal
+            if worktree is not None:
+                self.port.workers[receipt['dispatchId']]['worktree']=worktree
+            return receipt
+        shown_before=self.port.show_worker
+        def show(dispatch):
+            shown=shown_before(dispatch)
+            if dispatch!=first['native_binding']['dispatchId']:
+                shown['result']['worker']['startOptions']['launch']['requested']={
+                    'agent':None,'model':None,'effort':None}
+            return shown
+        frozen=self.frozen(task='task2')
+        with patch.object(self.port,'start_worker',side_effect=reuse), \
+             patch.object(self.port,'show_worker',side_effect=show):
+            reused=self.start('task2',frozen=frozen,reuse_of=first['admission_id'])['admission']
+        return first,reused,frozen
+
+    def test_reused_terminal_null_launch_receipt_inherits_verified_route(self):
         from pod.operations import _effective_evidence, _receipt_from_request_show
         from tests.common import envelope
         admission={'request':dict(ROUTE)}
@@ -537,30 +565,87 @@ class AdmissionTests(unittest.TestCase):
         effective,mismatch=_effective_evidence({},partial,admission)
         self.assertEqual((effective['agent'],effective['model'],effective['effort'],mismatch),
                          ('codex','unknown','unknown',False))
-        # Known-null effective values on a real reuse bind as unknown, which still blocks acceptance.
-        first=self.start()['admission']
-        self.port.workers[first['native_binding']['dispatchId']]['outcome']='succeeded'
-        self.port.effective={'agent':None,'model':None,'effort':None}
-        self.discard(first,reason='the first implementation is set aside before reuse')
-        original=self.port.start_worker
-        def reuse(**kwargs):
-            receipt=original(**kwargs)
-            receipt['launch']={'requested':{'agent':None,'model':None,'effort':None},
-                               'effective':{'agent':None,'model':None,'effort':None}}
-            return receipt
-        shown_before=self.port.show_worker
-        def show(dispatch):
-            shown=shown_before(dispatch)
-            if dispatch!=first['native_binding']['dispatchId']:
-                shown['result']['worker']['startOptions']['launch']['requested']={
-                    'agent':None,'model':None,'effort':None}
-            return shown
-        with patch.object(self.port,'start_worker',side_effect=reuse), \
-             patch.object(self.port,'show_worker',side_effect=show):
-            reused=self.start('task2',reuse_of=first['admission_id'])['admission']
+        first,reused,_=self.reuse_with_launch()
         self.assertFalse(reused['route_decision']['route_mismatch'])
-        self.assertTrue(reused['route_decision']['effective_unknown'])
+        self.assertFalse(reused['route_decision']['effective_unknown'])
+        self.assertEqual(reused['route_decision']['effective'],
+                         {key:ROUTE[key] for key in ('agent','model','effort','context')})
+        self.assertEqual(reused['effective_evidence']['inherited'],{
+            'admission':first['admission_id'],'dispatch':first['native_binding']['dispatchId'],
+            'terminal':first['native_binding']['terminalHandle'],
+            'fields':['agent','model','effort']})
         self.assertEqual(reused['effective_evidence']['requested']['model'],ROUTE['model'])
+
+    def test_reuse_different_terminal_keeps_unknown(self):
+        _,reused,_=self.reuse_with_launch(terminal='another-terminal')
+        self.assertTrue(reused['route_decision']['effective_unknown'])
+        self.assertEqual(reused['route_decision']['effective']['model'],'unknown')
+        self.assertNotIn('inherited',reused['effective_evidence'])
+
+    def test_reuse_different_worktree_keeps_unknown(self):
+        _,reused,_=self.reuse_with_launch(worktree='another-worktree')
+        self.assertTrue(reused['route_decision']['effective_unknown'])
+        self.assertEqual(reused['route_decision']['effective']['model'],'unknown')
+        self.assertNotIn('inherited',reused['effective_evidence'])
+
+    def test_reuse_known_conflicting_native_value_is_mismatch(self):
+        _,reused,_=self.reuse_with_launch(effective={'agent':'codex','model':'gpt-6-luna','effort':None})
+        self.assertTrue(reused['route_decision']['route_mismatch'])
+        self.assertEqual(reused['error']['code'],'route_mismatch')
+        self.assertEqual(reused['effective_evidence']['inherited']['fields'],['effort'])
+
+    def reuse_evidence(self, *, worker_effective=None, worker_requested=None,
+                       receipt_effective=None, receipt_requested=None):
+        from pod.operations import _reuse_effective_evidence
+        binding={'runId':'run','taskId':'task','dispatchId':'dispatch','workerId':'worker',
+                 'worktreeId':'worktree','terminalHandle':'terminal'}
+        prior={'state':'bound','native_binding':binding,
+               'route_decision':{'effective':{'agent':'codex','model':'gpt-6-sol',
+                                              'effort':'native_default'}}}
+        admission={'request':{**ROUTE,'effort':'native_default'},'reuse_of':'prior'}
+        shown={'result':{'worker':{'agentTerminalHandle':'terminal','worktreeId':'worktree',
+                                   'startOptions':{'launch':{
+                                       'effective':worker_effective or {},
+                                       'requested':worker_requested or {}}}}}}
+        receipt={'launch':{'effective':receipt_effective or {},
+                           'requested':receipt_requested or {}}}
+        return _reuse_effective_evidence(receipt,shown,admission,prior)
+
+    def test_reuse_receipt_effective_conflicts_with_prior_native_default(self):
+        effective,mismatch,provenance=self.reuse_evidence(
+            worker_effective={'effort':None},receipt_effective={'effort':'high'})
+        self.assertTrue(mismatch)
+        self.assertEqual(effective['effort'],'native_default')
+        self.assertEqual(provenance['fields'],['agent','model','effort'])
+
+    def test_reuse_matching_receipt_effective_is_not_mismatch(self):
+        _,mismatch,_=self.reuse_evidence(receipt_effective={'effort':'native_default'})
+        self.assertFalse(mismatch)
+        _,mismatch,_=self.reuse_evidence(receipt_effective={'effort':'high'})
+        self.assertTrue(mismatch)
+
+    def test_reuse_known_requested_conflict_with_prior_is_mismatch(self):
+        for source in ('worker_requested','receipt_requested'):
+            with self.subTest(source=source):
+                _,mismatch,_=self.reuse_evidence(**{source:{'effort':'high'}})
+                self.assertTrue(mismatch)
+
+    def test_report_consumes_inherited_reuse_without_route_mismatch(self):
+        _,reused,frozen=self.reuse_with_launch()
+        binding=reused['native_binding']
+        self.port.workers[binding['dispatchId']]['outcome']='succeeded'
+        report={'schema':'pod-report/v1','assignment':frozen['packet_id'],
+                'attempt':binding['dispatchId'],'candidate':'candidate','outcome':'succeeded',
+                'scope':['notes.txt'],'files':[],'checks':['unit passed'],'failures':[],
+                'evidence':[],'uncertainty':[],'questions':[]}
+        with patch.object(OrcaPort,'show_worker',autospec=True,
+                          side_effect=lambda _port,dispatch:self.port.show_worker(dispatch)):
+            consumed=internal_run('report',{'project':str(self.project),'objective':'objective',
+                                            'admission_id':reused['admission_id'],
+                                            'packet':frozen,'report':report,'map':self.restated()})
+        self.assertEqual(consumed['report']['status'],'open')
+        self.assertFalse(read(self.project,'objective')['admissions'][reused['admission_id']]
+                         ['route_decision']['route_mismatch'])
 
     def test_partial_launch_shapes_compare_only_known_relevant_fields(self):
         from pod.operations import _effective_evidence

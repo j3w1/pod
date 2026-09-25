@@ -23,6 +23,20 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@contextmanager
+def ignored_sigint():
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def restore_child_signals() -> None:
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
 def archive_tree(target: Path, *, changes: dict[str, bytes] | None = None) -> Path:
     """Archive tracked working bytes under one tar root, preserving VERSION's link."""
     changes = changes or {}
@@ -80,7 +94,9 @@ mode=os.environ.get('POD_TEST_NPX_MODE','copy')
 if mode=='fail': sys.exit(17)
 source=pathlib.Path(args[args.index('add')+1])/'skills'/'pod'
 canonical=pathlib.Path(os.environ['HOME'])/'.agents/skills/pod'
-if mode=='sleep': time.sleep(8)
+if mode=='sleep':
+ pathlib.Path(os.environ['POD_TEST_NPX_STARTED']).write_text('started')
+ time.sleep(60)
 if canonical.is_symlink(): sys.exit(18)
 if canonical.exists(): shutil.rmtree(canonical)
 if mode=='half_copy':

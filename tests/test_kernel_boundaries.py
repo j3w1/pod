@@ -1005,6 +1005,7 @@ class LifecycleTests(KernelCase):
         rows = [self.criterion("satisfied", evidence=evidence),
                 {**self.sub("S", "withdrawn"), "withdrawal": {"by": "coordinator", "reason": "folded into O1"}}]
         closed = self.write(rows, close=True)["checkpoint"]
+        self.assertEqual(closed["closure"]["report"]["status"], "closed")
         self.assertEqual(closed["closure"]["report"]["withdrawn"][0]["reason"], "folded into O1")
         revision = closed["revision"]
         calls = {

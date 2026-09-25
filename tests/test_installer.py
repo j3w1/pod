@@ -13,7 +13,8 @@ import tempfile
 import time
 import unittest
 
-from tests.install_support import ROOT, archive_tree, local_server, run_install, run_install_pty, run_pod, sandbox
+from tests.install_support import (ROOT, archive_tree, ignored_sigint, local_server, restore_child_signals,
+                                   run_install, run_install_pty, run_pod, sandbox)
 from pod.installer import BANNER
 
 
@@ -454,15 +455,17 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(json.loads(self.receipt.read_text())['status'],'installing')
 
     def test_concurrent_installer_and_sigint(self):
-        env = {**self.env, "POD_TEST_NPX_MODE": "sleep"}
-        first = subprocess.Popen(["sh", str(ROOT / "install.sh")], env=env, cwd=self.root / "work",
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 text=True, start_new_session=True)
+        started = self.root / "npx-started"
+        env = {**self.env, "POD_TEST_NPX_MODE": "sleep", "POD_TEST_NPX_STARTED": str(started)}
+        with ignored_sigint():
+            first = subprocess.Popen(["sh", str(ROOT / "install.sh")], env=env, cwd=self.root / "work",
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True, start_new_session=True, preexec_fn=restore_child_signals)
         try:
-            deadline = time.monotonic() + 12
-            while time.monotonic() < deadline and not self.receipt.exists():
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and not started.exists():
                 time.sleep(.05)
-            self.assertTrue(self.receipt.exists())
+            self.assertTrue(started.exists())
             second = run_install(self.env)
             self.assertEqual(second.returncode, 1)
             self.assertIn("Another Pod installer", second.stderr)
