@@ -402,7 +402,7 @@ def _title(state: State, width: int, caps: Capabilities) -> Line:
 def _footer(state: State, width: int, caps: Capabilities) -> Line:
     """Descriptive shortcuts, dropping the least important ones until the line fits."""
     items = [("Space", "change state"), ("s", "sort: " + SORTS[state.sort_index]), ("f", "filter"),
-             ("r", "All models" if state.preferences["mode"] != "all" else "My selection"), ("/", "search"),
+             ("r", "use All models" if state.preferences["mode"] != "all" else "use My selection"), ("/", "search"),
              ("Enter", "more"), ("?", "help"), ("q", "quit")]
     if state.help_open or state.expanded:
         items = [("Esc", "back"), ("PgDn/PgUp", "scroll"), ("?", "help"), ("q", "quit")]

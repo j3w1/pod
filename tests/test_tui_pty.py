@@ -63,7 +63,7 @@ class TuiPtyTests(unittest.TestCase):
         for index,name in enumerate(expected):
             if index:
                 session.send('\x1bOB')
-                session.wait_for(lambda s:name in self.focused(s))
+                session.wait_for(lambda s:name in self.focused(s) and 'BENCHMARK SOURCE' in s.text())
             self.assertIn(name,self.focused(session))
             model=next(row for row in catalog['models'] if row['name']==name)
             self.assertIn(model['guide']['suggested_use'][:8],session.text())
