@@ -1,11 +1,11 @@
 # Planning and packets
 
-For issue work, read [Pod Execution Spec](execution-spec.md), verify the
-repository, and bind body digest and worktree. Direct work skips issue intake.
-Plan-only follows host permissions; accepted execution stays in this session.
+Create a new objective worktree explicitly on branch `orca/<task-slug>`, never
+relying on a host default. On CE Devbox:
+`ce-devbox worktrees add PROJECT TASK BASE --branch orca/TASK apply`; its
+`agent/TASK` default stays for non-Pod work. A reused objective worktree keeps
+its branch; worker isolation follows Orca placement. Bind the actual branch and report any mismatch.
 
-Before delegation or a brief, map original criteria and delivery obligations to
-provenance, checks or external dependencies. Trivial direct work needs no map.
 Discovery creates proposals until direct user revision or cited project policy
 adopts them. Fix governance paths at intake. Explicit target selection establishes
 the trusted initial snapshot; Git cannot prove authorship. Later base updates

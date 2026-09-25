@@ -26,8 +26,8 @@ workers or edits. Accepted plans continue unless authority or scope changes.
 
 Use direct work when sufficient. Before delegation or a brief, map criteria
 and delivery obligations to provenance, checks and dependencies. Trivial direct
-work needs no map. Before implementation needing isolation, select the exact objective worktree through
-the installed mechanism; preserve unrelated work. Read
+work needs no map. Before implementation needing isolation, reuse the objective
+worktree or create one on `orca/<task-slug>`; preserve unrelated work. Read
 [planning and packets](references/planning.md).
 
 ## Select and admit

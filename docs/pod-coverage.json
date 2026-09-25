@@ -890,7 +890,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_same_selector_resolving_elsewhere_blocks_start_and_pending_replay",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_same_selector_resolving_elsewhere_blocks_start_and_pending_replay",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_new_objective_worktree_requests_the_orca_branch"
+      ],
       "status": "NOT_RUN"
     },
     {
