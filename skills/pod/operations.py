@@ -10,7 +10,8 @@ from typing import Protocol
 from uuid import UUID
 
 from .errors import PodError
-from .ledger import (admission_identity, binding_valid, objective_root, read, reserve,
+from .ledger import (admission_identity, binding_valid, bound_assignments as _bound_assignments,
+                     objective_root, read, reserve,
                      update_admission, _lock, _path, _read, _write, _native_assignment_settled)
 from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, contract, current_run, mutate_command, read_command,
                    worker_rows, worker_show, worktree_identity, worktree_selector)
@@ -707,14 +708,6 @@ def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: s
                             admission_id=admission_id, update=apply)
 
 
-def _bound_assignments(state: dict | None, *, include_closed: bool = False) -> tuple[dict, ...]:
-    if not isinstance(state, dict):
-        return ()
-    return tuple(row for row in state.get("admissions", {}).values()
-                 if isinstance(row, dict) and row.get("state") in (("bound", "closed") if include_closed else ("bound",))
-                 and binding_valid(row.get("native_binding")))
-
-
 def _current_authority(project: Path, objective: str, admission: dict, *, issue_port=None) -> None:
     """Pending replay retains its original route; check only continuing authority/core."""
     state = read(project, objective)
@@ -763,6 +756,69 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
                  receipt=receipt, port=port, request_uuid=request_uuid)
 
 
+def _recover_completed(project: Path, objective: str, owner: str, admission_id: str,
+                       admission: dict, request_uuid: str, receipt: dict | None,
+                       native_port: NativePort) -> dict:
+    if receipt is None:
+        row = _hold(project, objective, owner=owner, admission_id=admission_id,
+                    request_uuid=request_uuid, code="native_receipt_missing", detail="completed request")
+    else:
+        completed = {"runtime": admission["runtime"], **receipt}
+        row = _request_conflict_result(project, objective, owner=owner,
+                                       admission_id=admission_id, receipt=completed,
+                                       request_uuid=request_uuid)
+        if row is None:
+            row = _refusal_result(project, objective, owner=owner, admission_id=admission_id,
+                                  admission=admission, receipt=completed, request_uuid=request_uuid)
+        if row is None:
+            row = _bind(project, objective, owner=owner, admission_id=admission_id,
+                        receipt=completed, port=native_port, request_uuid=request_uuid)
+    return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
+
+
+def _recover_pending(project: Path, objective: str, owner: str, admission_id: str,
+                     admission: dict, state: dict, request_uuid: str, worktree: str,
+                     native_port: NativePort, issue_port) -> dict:
+    if _known_request_conflict(admission):
+        return {"status": admission["state"], "admission": admission, "action": "hold"}
+    _current_authority(project, objective, admission, issue_port=issue_port)
+    capability = native_port.capability()
+    if capability.get("runtime") != admission["runtime"]:
+        raise PodError("orca_runtime_changed", "Pending replay capability changed runtime")
+    placement = _check_native_placement(native_port, worktree,
+                                        admission.get("recovery", {}).get("placement_binding"))
+    if placement is not None and placement["runtime"] != admission["runtime"]:
+        raise PodError("orca_runtime_changed", "Pending placement belongs to another runtime")
+    pre_effect = native_port.read_native(owner, authority_runs=(admission["run_id"],))
+    if (pre_effect.get("authoritative") is not True or pre_effect.get("owner") != owner
+            or pre_effect.get("runtime") != admission["runtime"]):
+        raise PodError("native_authority_unverified", "Pending replay lost Run ownership")
+    terminal = None
+    if admission["reuse_of"]:
+        previous = state["admissions"].get(admission["reuse_of"])
+        terminal = previous["native_binding"]["terminalHandle"] if previous else None
+        if not isinstance(terminal, str) or not terminal:
+            raise PodError("reuse_unavailable", "Pending terminal reuse lost its binding")
+    receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
+                                       run=admission["run_id"], task=admission["task_id"],
+                                       owner=owner, route=admission["request"], worktree=worktree,
+                                       retry_request=request_uuid, terminal=terminal)
+    row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
+                                   receipt=receipt, request_uuid=request_uuid)
+    if row is None:
+        row = _refusal_result(project, objective, owner=owner, admission_id=admission_id,
+                              admission=admission, receipt=receipt, request_uuid=request_uuid)
+    if row is None:
+        returned = receipt.get("request_uuid")
+        if returned is not None and returned != request_uuid:
+            row = _hold(project, objective, owner=owner, admission_id=admission_id,
+                        request_uuid=request_uuid, code="native_request_mismatch", detail=returned)
+        else:
+            row = _bind(project, objective, owner=owner, admission_id=admission_id,
+                        receipt=receipt, port=native_port, request_uuid=request_uuid)
+    return {"status": row["state"], "admission": row, "action": "joined_pending_request"}
+
+
 def recover_admission(project: Path, objective: str, *, owner: str, admission_id: str,
                       worktree: str, port: NativePort | None = None, issue_port=None) -> dict:
     """Recover the same admission; pending replay never rechecks model preferences."""
@@ -805,65 +861,49 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         return {"status": row["state"], "admission": row, "action": "hold"}
     status, receipt = _receipt_from_request_show(shown, request_uuid)
     if status == "completed":
-        if receipt is None:
-            row = _hold(project, objective, owner=owner, admission_id=admission_id,
-                        request_uuid=request_uuid, code="native_receipt_missing", detail="completed request")
-        else:
-            completed = {"runtime": admission["runtime"], **receipt}
-            row = _request_conflict_result(project, objective, owner=owner,
-                                           admission_id=admission_id, receipt=completed,
-                                           request_uuid=request_uuid)
-            if row is None:
-                row = _refusal_result(project, objective, owner=owner, admission_id=admission_id,
-                                      admission=admission, receipt=completed, request_uuid=request_uuid)
-            if row is None:
-                row = _bind(project, objective, owner=owner, admission_id=admission_id,
-                            receipt=completed, port=native_port, request_uuid=request_uuid)
-        return {"status": row["state"], "admission": row, "action": "recorded_receipt"}
+        return _recover_completed(project, objective, owner, admission_id, admission,
+                                  request_uuid, receipt, native_port)
     if status == "pending":
-        if _known_request_conflict(admission):
-            return {"status": admission["state"], "admission": admission, "action": "hold"}
-        _current_authority(project, objective, admission, issue_port=issue_port)
-        capability = native_port.capability()
-        if capability.get("runtime") != admission["runtime"]:
-            raise PodError("orca_runtime_changed", "Pending replay capability changed runtime")
-        placement = _check_native_placement(native_port, worktree,
-                                            admission.get("recovery", {}).get("placement_binding"))
-        if placement is not None and placement["runtime"] != admission["runtime"]:
-            raise PodError("orca_runtime_changed", "Pending placement belongs to another runtime")
-        pre_effect = native_port.read_native(owner, authority_runs=(admission["run_id"],))
-        if (pre_effect.get("authoritative") is not True or pre_effect.get("owner") != owner
-                or pre_effect.get("runtime") != admission["runtime"]):
-            raise PodError("native_authority_unverified", "Pending replay lost Run ownership")
-        terminal = None
-        if admission["reuse_of"]:
-            previous = state["admissions"].get(admission["reuse_of"])
-            terminal = previous["native_binding"]["terminalHandle"] if previous else None
-            if not isinstance(terminal, str) or not terminal:
-                raise PodError("reuse_unavailable", "Pending terminal reuse lost its binding")
-        receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
-                                           run=admission["run_id"], task=admission["task_id"],
-                                           owner=owner, route=admission["request"], worktree=worktree,
-                                           retry_request=request_uuid, terminal=terminal)
-        row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
-                                       receipt=receipt, request_uuid=request_uuid)
-        if row is None:
-            row = _refusal_result(project, objective, owner=owner, admission_id=admission_id,
-                                  admission=admission, receipt=receipt, request_uuid=request_uuid)
-        if row is None:
-            returned = receipt.get("request_uuid")
-            if returned is not None and returned != request_uuid:
-                row = _hold(project, objective, owner=owner, admission_id=admission_id,
-                            request_uuid=request_uuid, code="native_request_mismatch", detail=returned)
-            else:
-                row = _bind(project, objective, owner=owner, admission_id=admission_id,
-                            receipt=receipt, port=native_port, request_uuid=request_uuid)
-        return {"status": row["state"], "admission": row, "action": "joined_pending_request"}
+        return _recover_pending(project, objective, owner, admission_id, admission, state,
+                                request_uuid, worktree, native_port, issue_port)
     if _known_request_conflict(admission):
         return {"status": admission["state"], "admission": admission, "action": "hold"}
     row = _adopt_unique(project, objective, owner=owner, admission_id=admission_id,
                         port=native_port, request_uuid=request_uuid)
     return {"status": row["state"], "admission": row, "action": "inspect_after_absent"}
+
+
+def _launch_reserved(project: Path, objective: str, owner: str, admission_id: str,
+                     admission: dict, native_port: NativePort, run: str, task: str,
+                     proposed: dict, worktree: str, reuse_of: str | None) -> dict:
+    terminal = None
+    if reuse_of:
+        prior = read(project, objective)["admissions"][reuse_of]
+        terminal = prior["native_binding"]["terminalHandle"]
+    try:
+        receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
+                                           run=run, task=task, owner=owner, route=proposed,
+                                           worktree=worktree, terminal=terminal)
+        row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
+                                       receipt=receipt, request_uuid=None)
+        if row is None:
+            row = _refusal_result(project, objective, owner=owner, admission_id=admission_id,
+                                  admission=admission, receipt=receipt)
+        if row is not None:
+            return {"status": row["state"], "admission": row, "decision": row["route_decision"]}
+        request_uuid = _valid_request_uuid(receipt.get("request_uuid"))
+        _record_request(project, objective, owner=owner, admission_id=admission_id,
+                        request_uuid=request_uuid, receipt=receipt)
+        row = _bind(project, objective, owner=owner, admission_id=admission_id,
+                    receipt=receipt, port=native_port, request_uuid=request_uuid)
+        return {"status": row["state"], "admission": row, "decision": row["route_decision"]}
+    except Exception as exc:
+        code = exc.code if isinstance(exc, PodError) else type(exc).__name__
+        current = read(project, objective)["admissions"][admission_id]
+        request_uuid = current.get("request_uuid")
+        _hold(project, objective, owner=owner, admission_id=admission_id,
+              request_uuid=request_uuid, code=code, detail=str(exc))
+        raise
 
 
 def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
@@ -924,31 +964,5 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
                                       worktree=worktree, port=native_port, issue_port=issue_port)
         return {**recovered, "decision": recovered["admission"]["route_decision"]}
-    terminal = None
-    if reuse_of:
-        prior = read(project, objective)["admissions"][reuse_of]
-        terminal = prior["native_binding"]["terminalHandle"]
-    try:
-        receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
-                                           run=run, task=task, owner=owner, route=proposed,
-                                           worktree=worktree, terminal=terminal)
-        row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
-                                       receipt=receipt, request_uuid=None)
-        if row is None:
-            row = _refusal_result(project, objective, owner=owner, admission_id=admission_id,
-                                  admission=admission, receipt=receipt)
-        if row is not None:
-            return {"status": row["state"], "admission": row, "decision": row["route_decision"]}
-        request_uuid = _valid_request_uuid(receipt.get("request_uuid"))
-        _record_request(project, objective, owner=owner, admission_id=admission_id,
-                        request_uuid=request_uuid, receipt=receipt)
-        row = _bind(project, objective, owner=owner, admission_id=admission_id,
-                    receipt=receipt, port=native_port, request_uuid=request_uuid)
-        return {"status": row["state"], "admission": row, "decision": row["route_decision"]}
-    except Exception as exc:
-        code = exc.code if isinstance(exc, PodError) else type(exc).__name__
-        current = read(project, objective)["admissions"][admission_id]
-        request_uuid = current.get("request_uuid")
-        _hold(project, objective, owner=owner, admission_id=admission_id,
-              request_uuid=request_uuid, code=code, detail=str(exc))
-        raise
+    return _launch_reserved(project, objective, owner, admission_id, admission, native_port,
+                            run, task, proposed, worktree, reuse_of)

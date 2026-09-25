@@ -131,10 +131,25 @@ def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD) -> None:
             os.unlink(name)
 
 
-def exact(value: Any, fields: set[str], required: set[str] | None = None, *, name: str = "record") -> dict:
+def exact(value: Any, fields: set[str], required: set[str] | None = None, *,
+          name: str = "record", error=None) -> dict:
     if not isinstance(value, dict) or set(value) - fields or (required or set()) - set(value):
+        if error is not None:
+            raise error(name)
         raise PodError("invalid_" + name, f"{name} has missing or unsupported fields")
     return value
+
+
+def route_flags(row: dict) -> tuple[bool, bool]:
+    decision = row.get("route_decision") or {}
+    return bool(decision.get("route_mismatch")), bool(decision.get("effective_unknown"))
+
+
+def route_summary(rows: list[dict], *, unknown_states: tuple[str, ...] | None = None) -> tuple[bool, bool]:
+    flagged = [(row, route_flags(row)) for row in rows]
+    return (any(flags[0] for _, flags in flagged),
+            any(flags[1] and (unknown_states is None or row.get("state") in unknown_states)
+                for row, flags in flagged))
 
 
 def bounded_text(value: Any, *, name: str, limit: int = 4096) -> str:

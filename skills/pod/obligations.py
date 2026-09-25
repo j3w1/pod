@@ -22,7 +22,8 @@ import re
 from typing import Any, Callable
 
 from .errors import PodError
-from .util import digest
+from .gitio import OBJECT_ID
+from .util import digest, exact
 
 KINDS = ("criterion", "delivery", "assurance", "correction", "steer", "subgoal")
 PROVENANCES = ("objective", "user_direct", "project_policy", "coordinator")
@@ -51,7 +52,7 @@ CHURN_THRESHOLD = 3
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _SURFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 _LINES = re.compile(r"([1-9][0-9]{0,6})(?:-([1-9][0-9]{0,6}))?\Z")
-_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_COMMIT = OBJECT_ID
 
 NEXT_ACTIONS = {
     "unbound_assignment": "admit only a packet that serves unsatisfied obligations of the current map revision",
@@ -97,9 +98,8 @@ def _ident(value: Any, name: str, *, code: str = "obligation_invalid") -> str:
 
 def _exact(value: Any, fields: set[str], required: set[str], name: str, *,
            code: str = "obligation_invalid") -> dict:
-    if not isinstance(value, dict) or set(value) - fields or required - set(value):
-        raise refuse(code, "malformed", f"{name} has missing or unsupported fields")
-    return value
+    return exact(value, fields, required, name=name,
+                 error=lambda label: refuse(code, "malformed", f"{label} has missing or unsupported fields"))
 
 
 # --------------------------------------------------------------------------- boundaries
@@ -414,228 +414,24 @@ def definition_id(ob: dict) -> str:
     return digest(value)
 
 
-def _source_entries(value: Any, name: str) -> list[dict]:
-    if not isinstance(value, list) or len(value) > 64:
-        raise refuse("obligation_invalid", "malformed", f"{name} sources are a bounded list")
-    rows = []
-    for item in value:
-        entry = _exact(item, {"path", "state", "sha256"}, {"path", "state"}, "evidence source")
-        _path(entry["path"], code="obligation_invalid")
-        if entry["state"] not in ("present", "absent", "unavailable"):
-            raise refuse("obligation_invalid", "malformed", "an evidence source state is unsupported")
-        rows.append(dict(entry))
-    return rows
 
 
-def _dependencies(value: Any, name: str) -> list[str]:
-    if not isinstance(value, list) or len(value) > 64:
-        raise refuse("obligation_invalid", "malformed", f"{name} dependencies are a bounded list")
-    return [_text(item, "dependency", limit=512) for item in value]
 
 
-def _evidence_record(ob: dict, raw: Any) -> dict:
-    """The detailed pod-evidence/v1 record, structurally joined to this obligation (R41).
-
-    The record's `criterion` names the obligation id; its check text may differ from the
-    obligation's outcome description, because Pod cannot judge what a test proves. What Pod
-    keeps is the binding: candidate, sources, effective Governor policy, dependencies,
-    environment and the command and result that produced the status.
-    """
-    from .records import evidence_record
-    try:
-        row = evidence_record({k: v for k, v in raw.items() if k != "governance"}
-                              if isinstance(raw, dict) else raw)
-    except PodError as exc:
-        raise refuse("obligation_invalid", "malformed", str(exc), obligation=ob["id"]) from exc
-    if row["criterion"] != ob["id"]:
-        raise refuse("obligation_invalid", "evidence_unbound",
-                     "an evidence record names the obligation it serves as its criterion",
-                     obligation=ob["id"], criterion=str(row["criterion"])[:64])
-    for field in ("candidate", "policy_revision", "environment", "check", "command", "result", "timestamp",
-                  "reference"):
-        _text(row[field], field)
-    if "definition" not in row:
-        raise refuse("obligation_invalid", "evidence_unbound",
-                     "map evidence names the obligation definition it verified", obligation=ob["id"])
-    record = dict(row)
-    record["sources"] = _source_entries(row["sources"], "evidence")
-    record["dependencies"] = _dependencies(row["dependencies"], "evidence")
-    return record
 
 
-def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: bool,
-                    *, reported_attempt: str | None = None, seq: int) -> list[dict]:
-    """Keep immutable receipt identities even when a caller omits the selected evidence.
-
-    History is inside the existing obligation record, bounded by MAX_EVIDENCE, and is
-    never evicted or accepted from the caller. Full history refuses another receipt;
-    it cannot silently make a forgotten receipt new again.
-    """
-    identity = "attempt" if ob["kind"] == "assurance" else "reference"
-    receipts = {item["evidence"][identity]: deepcopy(item) for item in (prior or {}).get("receipts", [])}
-    if reported_attempt is not None:
-        admission = _admissions(ctx)[reported_attempt]
-        if review_completed(admission):
-            binding = admission.get("binding") or {}
-            base = {"attempt": reported_attempt, "candidate": admission.get("candidate"),
-                    "binding": deepcopy(admission.get("binding")),
-                    "definition": binding.get("definitions", {}).get(ob["id"]),
-                    "governance": binding.get("governance")}
-            previous = receipts.get(reported_attempt)
-            if previous is not None and previous["evidence"] != base:
-                raise refuse("obligation_invalid", "receipt_conflict",
-                             "a consumed review cannot change its bound receipt", obligation=ob["id"],
-                             receipt=reported_attempt)
-            receipts[reported_attempt] = {**(previous or {}), "evidence": base,
-                                          "reported_seq": (previous or {}).get("reported_seq", seq)}
-    stamped = []
-    for raw in ob.get("evidence", []):
-        if ob["kind"] == "assurance":
-            row = _exact(raw, {"attempt", "candidate", "binding", "governance", "definition"},
-                         {"attempt"}, "assurance evidence")
-            _text(row["attempt"], "attempt", limit=128)
-            admission = _admissions(ctx).get(row["attempt"])
-            admission = admission if isinstance(admission, dict) else {}
-            base = {"attempt": row["attempt"], "candidate": admission.get("candidate"),
-                    "binding": deepcopy(admission.get("binding")),
-                    "definition": (admission.get("binding") or {}).get("definitions", {}).get(ob["id"])}
-        else:
-            base = _evidence_record(ob, raw)
-        key = base[identity]
-        previous = receipts.get(key)
-        if previous and base != {k: v for k, v in previous["evidence"].items() if k != "governance"}:
-            raise refuse("obligation_invalid", "receipt_conflict",
-                         "an observed receipt cannot change its definition, candidate or content",
-                         obligation=ob["id"], receipt=key)
-        stamp = (previous["evidence"]["governance"] if previous else
-                 (base.get("binding") or {}).get("governance") if identity == "attempt" else gov)
-        if rebind:
-            stamp = gov
-        evidence = {**base, "governance": stamp}
-        receipts[key] = {**(previous or {}), "evidence": evidence}
-        stamped.append(evidence)
-    if len(receipts) > MAX_EVIDENCE:
-        raise refuse("obligation_invalid", "receipt_limit", "the bounded receipt history is full",
-                     obligation=ob["id"])
-    ob["receipts"] = list(receipts.values())
-    return stamped
 
 
-def binding_current(binding: Any, ctx: dict) -> bool:
-    """R41: effective Governor policy, environment, dependencies and sources still hold."""
-    if not isinstance(binding, dict):
-        return False
-    verification = ctx.get("verification")
-    current_source = ctx.get("source_current")
-    if (not isinstance(verification, dict) or binding.get("policy_revision") is None
-            or binding.get("policy_revision") != ctx.get("policy_revision")
-            or binding.get("environment") != verification.get("environment")
-            or not isinstance(binding.get("dependencies"), list)
-            or not set(binding["dependencies"]) <= set(verification.get("dependencies", []))
-            or not isinstance(binding.get("sources"), list)):
-        return False
-    for entry in binding["sources"]:
-        if not isinstance(entry, dict) or current_source is None or current_source(entry) is not True:
-            return False
-    return True
 
 
-def review_completed(admission: Any) -> bool:
-    """A review attempt binds assurance only when its report is a completed, validated observation.
-
-    Completion is not approval: a completed review may carry findings, which triage turns
-    into corrections that the assurance obligation waits on.
-    """
-    report = admission.get("report") if isinstance(admission, dict) else None
-    return (isinstance(report, dict) and report.get("outcome") == "succeeded"
-            and report.get("status") == "validated_observation")
 
 
-def _reuse_valid(ob: dict, ctx: dict, candidate: str) -> bool:
-    reuse = ob.get("reuse")
-    return (isinstance(reuse, dict) and reuse.get("to") == candidate
-            and reuse.get("definition") == definition_id(ob) and isinstance(reuse.get("delta"), list))
 
 
-def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
-    """Explicit REUSE: the Git delta between candidates must leave the obligation's scope unaffected."""
-    if "reuse" not in ob:
-        return None
-    raw = _exact(ob["reuse"], {"from", "to", "delta", "definition"}, {"from"}, "reuse")
-    source = _text(raw["from"], "reuse from", limit=128)
-    current = ctx.get("candidate")
-    scope = ob["scope"] if ob["kind"] == "assurance" else ob["boundary"]
-    if not scope["paths"]:
-        raise refuse("obligation_unaccounted", "evidence_invalidated",
-                     "reuse needs a declared path scope to show it is unaffected", obligation=ob["id"])
-    previous = (prior or {}).get("reuse")
-    if (isinstance(previous, dict) and previous.get("from") == source and previous.get("to") == current
-            and previous.get("definition") == definition_id(ob)):
-        return previous
-    delta_reader: Callable | None = ctx.get("git_delta")
-    delta = delta_reader(source, current) if delta_reader is not None and isinstance(current, str) else None
-    if delta is None:
-        raise refuse("obligation_unaccounted", "evidence_invalidated",
-                     "the Git delta between the candidates cannot be read, so reuse is unproven",
-                     obligation=ob["id"], candidate=source)
-    touched = overlap({"paths": [_path(path, code="obligation_unaccounted") for path in delta], "surfaces": []},
-                      {"paths": scope["paths"], "surfaces": []})
-    if touched["paths"]:
-        raise refuse("obligation_unaccounted", "evidence_invalidated",
-                     "the candidate delta touches the obligation's scope; it needs fresh evidence",
-                     obligation=ob["id"], paths=",".join(touched["paths"][:8]))
-    return {"from": source, "to": current, "delta": sorted(delta)[:256], "definition": definition_id(ob)}
 
 
-def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) -> bool:
-    """Whether a satisfied obligation's evidence is passing and currently valid (R41)."""
-    current = ctx.get("candidate") if candidate is None else candidate
-    rows = ob.get("evidence", [])
-    if not rows:
-        return False
-    allowed = {current}
-    if _reuse_valid(ob, ctx, current):
-        allowed.add(ob["reuse"]["from"])
-    for row in rows:
-        if (row.get("definition") != definition_id(ob)
-                or row.get("governance") != gov or row.get("candidate") not in allowed):
-            return False
-        if ob["kind"] == "assurance":
-            admission = _admissions(ctx).get(row["attempt"])
-            # Both reservation and report consumption must follow correction
-            # resolution. Wall-clock admission stamps provide neither ordering.
-            # Older accepted receipts can use accepted_seq as their report bound.
-            receipt = next((item for item in ob.get("receipts", [])
-                            if item["evidence"].get("attempt") == row["attempt"]), None)
-            proof_seq = (receipt or {}).get("reported_seq", (receipt or {}).get("accepted_seq"))
-            admitted_seq = admission.get("admitted_seq") if isinstance(admission, dict) else None
-            superseded = any(
-                finding.get("triage") == "required_correction"
-                and (not isinstance(proof_seq, int) or not isinstance(admitted_seq, int)
-                     or not isinstance(finding.get("recorded_seq"), int)
-                     or not isinstance(finding.get("resolved_seq"), int)
-                     or finding["resolved_seq"] < finding["recorded_seq"]
-                     or proof_seq <= finding["resolved_seq"]
-                     or admitted_seq <= finding["resolved_seq"])
-                for finding in ob.get("findings", []))
-            if (not isinstance(admission, dict) or admission.get("role") != "review"
-                    or admission.get("serves") != [ob["id"]] or row["attempt"] in _outstanding(ctx)
-                    or not review_completed(admission) or admission.get("candidate") != row.get("candidate")
-                    or (admission.get("binding") or {}).get("definitions", {}).get(ob["id"]) != row["definition"]
-                    or row.get("binding") != admission.get("binding")
-                    or not binding_current(admission.get("binding"), ctx) or superseded):
-                return False
-        elif row.get("status") != "PASS" or not binding_current(row, ctx):
-            return False
-    return True
 
 
-def _accepted_assurance_current(ob: dict, ctx: dict, gov: str) -> bool:
-    """An accepted proof survives omission and unsatisfied intermediate states."""
-    return ob["kind"] == "assurance" and any(
-        item.get("accepted_seq") is not None and evidence_valid(
-            {**ob, "evidence": [item["evidence"]], "reuse": item.get("reuse")}, ctx, gov)
-        for item in ob.get("receipts", []))
 
 
 # --------------------------------------------------------------------------- write
@@ -644,47 +440,8 @@ def _first(value: dict, key: str, default: Any) -> Any:
     return value[key] if key in value else default
 
 
-def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
-    """Validate one proposed map write against the prior accepted map and current facts.
-
-    Returns the map fields to persist. Every refusal names its code, detail, referent and
-    next safe action. `prior` is the previously accepted map (or None); `value` holds the
-    caller's proposed fields from MAP_INPUT. Review findings are Pod's record: only the
-    report boundary's triage (`triaged`) may add them.
-    """
-    prior_map = prior if isinstance(prior, dict) and prior.get("obligations") is not None else None
-    # Dispositions change admission rows, so the ledger applies them before this write.
-    unknown = set(value) - (MAP_INPUT - {"dispositions"})
-    if unknown:
-        raise refuse("obligation_invalid", "malformed", "unsupported map fields: " + ", ".join(sorted(unknown)))
-    closed = bool(prior_map and prior_map.get("closure"))
-    authority = _authority(value.get("revision_authority"))
-    user = authority is not None
-    reopen = value.get("reopen") is True
-    if closed and not (user and reopen):
-        raise refuse("objective_closed", "objective_closed", "the objective is closed",
-                     closure_revision=prior_map["closure"]["revision"])
-    if prior_map is not None and "obligations" not in value:
-        # A checkpoint that leaves the map unchanged still revalidates it against current facts.
-        value = {**value, "obligations": deepcopy(prior_map["obligations"])}
-    if value.get("obligations") is None:
-        if prior_map is not None:
-            raise refuse("obligation_unaccounted", "missing_state", "an obligation map cannot be removed")
-        if set(value) - {"seq"}:
-            raise refuse("obligation_invalid", "malformed", "map fields need an obligation list")
-        return {}
-    if "reopen" in value and (value["reopen"] is not True or not closed):
-        raise refuse("obligation_invalid", "malformed", "reopen applies only to a closed objective")
-    seq = prior_map["seq"] + 1 if prior_map else 1
-    if "seq" in value and value["seq"] != seq:
-        raise refuse("map_stale", "map_stale", "the proposed map is not the next write", expected=seq)
-    refresh = value.get("governance_refresh") is True
-    if "governance_refresh" in value and not refresh:
-        raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present")
-    if refresh and prior_map is None:
-        raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed")
-    revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
-
+def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
+                      user: bool, refresh: bool) -> tuple:
     # Governance: declared at intake, read at the base, refreshed only by an explicit revision.
     observed = ctx.get("governance")
     if prior_map is None:
@@ -732,6 +489,10 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     if rebind and not refresh:
         raise refuse("obligation_invalid", "malformed", "evidence is rebound only by a governance refresh")
 
+    return observed, governance, sources, gov, rebind
+
+
+def _write_proposals(prior_map: dict | None, value: dict) -> dict:
     # Proposals persist; only adoption changes their status.
     prior_proposals = {row["id"]: row for row in (prior_map or {}).get("proposals", [])}
     raw_proposals = _first(value, "proposals", list(prior_proposals.values()))
@@ -755,6 +516,13 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
         if key not in proposals:
             raise refuse("obligation_invalid", "malformed", "a proposal cannot be dropped", proposal=key)
 
+    return proposals
+
+
+def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
+                       user: bool, triaged: frozenset, refresh: bool,
+                       observed: dict | None, sources: list[dict], gov: str,
+                       proposals: dict) -> tuple[list, dict, dict, list]:
     # Obligations: structure, stable identity, authority.
     raw_obligations = value["obligations"]
     if not isinstance(raw_obligations, list) or len(raw_obligations) > MAX_OBLIGATIONS:
@@ -844,13 +612,11 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
                                  "an overlapping assurance on the same candidate names the risk it adds",
                                  obligation=ob["id"], overlaps=other["id"])
 
-    # Coverage: every original criterion has an objective obligation (R39).
-    covered = _covered(rows)
-    for criterion in criteria:
-        if criterion not in covered:
-            raise refuse("obligation_unaccounted", "criterion_uncovered",
-                         "every original criterion needs an objective obligation", criterion=criterion)
+    return raw_obligations, prior_rows, rows, criteria
 
+
+def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: frozenset,
+                    ctx: dict, gov: str, user: bool, authority: dict | None, seq: int) -> None:
     # Withdrawals and evidence stamping.
     for ob in rows.values():
         earlier = prior_rows.get(ob["id"])
@@ -887,6 +653,65 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
     if missing_rebind:
         raise refuse("obligation_invalid", "malformed", "rebind names unknown obligations",
                      obligation=missing_rebind[0])
+
+
+
+def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
+    """Validate one proposed map write against the prior accepted map and current facts.
+
+    Returns the map fields to persist. Every refusal names its code, detail, referent and
+    next safe action. `prior` is the previously accepted map (or None); `value` holds the
+    caller's proposed fields from MAP_INPUT. Review findings are Pod's record: only the
+    report boundary's triage (`triaged`) may add them.
+    """
+    prior_map = prior if isinstance(prior, dict) and prior.get("obligations") is not None else None
+    # Dispositions change admission rows, so the ledger applies them before this write.
+    unknown = set(value) - (MAP_INPUT - {"dispositions"})
+    if unknown:
+        raise refuse("obligation_invalid", "malformed", "unsupported map fields: " + ", ".join(sorted(unknown)))
+    closed = bool(prior_map and prior_map.get("closure"))
+    authority = _authority(value.get("revision_authority"))
+    user = authority is not None
+    reopen = value.get("reopen") is True
+    if closed and not (user and reopen):
+        raise refuse("objective_closed", "objective_closed", "the objective is closed",
+                     closure_revision=prior_map["closure"]["revision"])
+    if prior_map is not None and "obligations" not in value:
+        # A checkpoint that leaves the map unchanged still revalidates it against current facts.
+        value = {**value, "obligations": deepcopy(prior_map["obligations"])}
+    if value.get("obligations") is None:
+        if prior_map is not None:
+            raise refuse("obligation_unaccounted", "missing_state", "an obligation map cannot be removed")
+        if set(value) - {"seq"}:
+            raise refuse("obligation_invalid", "malformed", "map fields need an obligation list")
+        return {}
+    if "reopen" in value and (value["reopen"] is not True or not closed):
+        raise refuse("obligation_invalid", "malformed", "reopen applies only to a closed objective")
+    seq = prior_map["seq"] + 1 if prior_map else 1
+    if "seq" in value and value["seq"] != seq:
+        raise refuse("map_stale", "map_stale", "the proposed map is not the next write", expected=seq)
+    refresh = value.get("governance_refresh") is True
+    if "governance_refresh" in value and not refresh:
+        raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present")
+    if refresh and prior_map is None:
+        raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed")
+    revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
+
+    observed, governance, sources, gov, rebind = _write_governance(prior_map, value, ctx, user, refresh)
+
+    proposals = _write_proposals(prior_map, value)
+
+    raw_obligations, prior_rows, rows, criteria = _write_obligations(
+        prior_map, value, ctx, seq, user, triaged, refresh, observed, sources, gov, proposals)
+
+    # Coverage: every original criterion has an objective obligation (R39).
+    covered = _covered(rows)
+    for criterion in criteria:
+        if criterion not in covered:
+            raise refuse("obligation_unaccounted", "criterion_uncovered",
+                         "every original criterion needs an objective obligation", criterion=criterion)
+
+    _write_evidence(rows, prior_rows, rebind, triaged, ctx, gov, user, authority, seq)
 
     state = {"seq": seq, "revision": revision, "governance": governance, "governance_sources": sources,
              "obligations": [rows[key] for key in [row["id"] for row in raw_obligations]],
@@ -1111,6 +936,117 @@ def _wait_record(ob: dict) -> dict:
     return record
 
 
+def _validate_wait(ob: dict, rows: dict[str, dict], ctx: dict, outstanding: set[str],
+                   admissions: dict, held: list[dict], pending: dict) -> str | None:
+    wait = _wait_record(ob)
+    cls, referent = wait["class"], wait["referent"]
+    name = ob["id"]
+    if cls in ("dependency", "contract_unsettled"):
+        target = rows.get(referent) if isinstance(referent, str) else None
+        if target is None or target is ob or cls == "contract_unsettled" and target["kind"] != "subgoal":
+            raise refuse("wait_invalid", "unknown_referent", f"{cls} names another obligation"
+                         + (" that is a subgoal" if cls == "contract_unsettled" else ""), obligation=name)
+        if target["state"] in TERMINAL:
+            raise refuse("wait_invalid", "resolved_referent", "the waited-on obligation is settled",
+                         obligation=name, referent=referent)
+        return referent
+    elif cls == "sequenced":
+        if not held:
+            raise refuse("wait_invalid", "sequenced_without_active",
+                         "sequenced waits on the coordinator-held active obligation", obligation=name)
+        if referent != held[0]["id"]:
+            raise refuse("wait_invalid", "unknown_referent", "sequenced names the coordinator-held obligation",
+                         obligation=name, expected=held[0]["id"])
+    elif cls == "ownership":
+        if isinstance(referent, str) and referent in admissions:
+            if referent not in outstanding:
+                raise refuse("wait_invalid", "resolved_referent", "the overlapping admission has settled",
+                             obligation=name, referent=referent)
+            other = _admission_boundary(admissions[referent])
+        elif isinstance(referent, str) and referent in rows:
+            if not (rows[referent]["state"] == "active" and rows[referent]["executor"] == "coordinator"):
+                raise refuse("wait_invalid", "resolved_referent", "the obligation is no longer coordinator-held",
+                             obligation=name, referent=referent)
+            other = rows[referent]["boundary"]
+        else:
+            raise refuse("wait_invalid", "unknown_referent",
+                         "ownership names an outstanding admission or the coordinator-held obligation",
+                         obligation=name)
+        if not overlaps(ob["boundary"], other):
+            raise refuse("wait_invalid", "ownership_without_overlap", "the declared boundaries do not overlap",
+                         obligation=name, referent=referent)
+    elif cls == "capacity":
+        ceiling = ctx.get("ceiling", 0)
+        if (not isinstance(referent, list) or len(referent) > 8
+                or any(not isinstance(item, str) for item in referent)):
+            raise refuse("wait_invalid", "unknown_referent", "capacity names the reservations holding the ceiling",
+                         obligation=name)
+        if len(outstanding) < ceiling:
+            raise refuse("wait_invalid", "capacity_below_ceiling",
+                         "a capacity wait is valid only at the ceiling", obligation=name,
+                         reserved=len(outstanding), ceiling=ceiling)
+        if set(referent) != outstanding:
+            raise refuse("wait_invalid", "unknown_referent", "capacity names exactly the outstanding reservations",
+                         obligation=name)
+    elif cls == "integration_pending":
+        if not isinstance(referent, str) or referent not in admissions:
+            raise refuse("wait_invalid", "unknown_referent", "integration_pending names a settled result",
+                         obligation=name)
+        if referent not in pending:
+            raise refuse("wait_invalid", "resolved_referent", "the result has a disposition or is not settled",
+                         obligation=name, referent=referent)
+        if not overlaps(ob["boundary"], _admission_boundary(admissions[referent])):
+            raise refuse("wait_invalid", "ownership_without_overlap", "the result does not overlap this boundary",
+                         obligation=name, referent=referent)
+    elif cls == "input_unavailable":
+        reader = ctx.get("source_state")
+        if not isinstance(referent, str) or not referent:
+            raise refuse("wait_invalid", "unknown_referent", "input_unavailable names a source binding path",
+                         obligation=name)
+        if reader is None or reader(referent) != "unavailable":
+            raise refuse("wait_invalid", "resolved_referent", "the source binding is readable now",
+                         obligation=name, referent=referent)
+    elif cls == "authority":
+        record = _exact(referent, {"kind", "scope", "candidate", "need"}, {"kind"}, "authority referent",
+                        code="wait_invalid")
+        if record["kind"] == "authorization":
+            if record.get("scope") not in AUTHORIZED_SCOPES or not isinstance(record.get("candidate"), str):
+                raise refuse("wait_invalid", "unknown_referent",
+                             "a missing authorization names its scope and candidate", obligation=name)
+            granted = ctx.get("authorization_granted")
+            if granted is not None and granted(record["scope"], record["candidate"]):
+                raise refuse("wait_invalid", "resolved_referent", "the authorization is recorded",
+                             obligation=name)
+        elif record["kind"] in ("native_authority", "permission"):
+            _text(record.get("need"), "need", code="wait_invalid", detail="unknown_referent")
+        else:
+            raise refuse("wait_invalid", "unknown_referent", "authority names an authorization or blocked authority",
+                         obligation=name)
+    elif cls == "user_hold":
+        constraints = [row for row in ctx.get("constraints", []) if row.get("id") == referent]
+        if not constraints or constraints[0].get("provenance") != "user_direct":
+            raise refuse("wait_invalid", "unknown_referent", "user_hold names a user_direct constraint",
+                         obligation=name)
+        if constraints[0].get("active", True) is False:
+            raise refuse("wait_invalid", "resolved_referent", "the user constraint is no longer in force",
+                         obligation=name, referent=referent)
+    return None
+
+
+def _check_wait_cycles(edges: dict[str, str]) -> None:
+    for start in edges:
+        seen = [start]
+        cursor = start
+        while cursor in edges:
+            cursor = edges[cursor]
+            if cursor in seen:
+                raise refuse("wait_invalid", "cycle", "dependency and contract waits are acyclic",
+                             obligations=",".join(seen))
+            seen.append(cursor)
+
+
+
+
 def _waits(state: dict, rows: dict[str, dict], ctx: dict) -> None:
     """R84: one controlling reason, valid for its class and current referent."""
     outstanding = set(_outstanding(ctx))
@@ -1121,107 +1057,10 @@ def _waits(state: dict, rows: dict[str, dict], ctx: dict) -> None:
     for ob in rows.values():
         if ob["state"] != "waiting":
             continue
-        wait = _wait_record(ob)
-        cls, referent = wait["class"], wait["referent"]
-        name = ob["id"]
-        if cls in ("dependency", "contract_unsettled"):
-            target = rows.get(referent) if isinstance(referent, str) else None
-            if target is None or target is ob or cls == "contract_unsettled" and target["kind"] != "subgoal":
-                raise refuse("wait_invalid", "unknown_referent", f"{cls} names another obligation"
-                             + (" that is a subgoal" if cls == "contract_unsettled" else ""), obligation=name)
-            if target["state"] in TERMINAL:
-                raise refuse("wait_invalid", "resolved_referent", "the waited-on obligation is settled",
-                             obligation=name, referent=referent)
-            edges[name] = referent
-        elif cls == "sequenced":
-            if not held:
-                raise refuse("wait_invalid", "sequenced_without_active",
-                             "sequenced waits on the coordinator-held active obligation", obligation=name)
-            if referent != held[0]["id"]:
-                raise refuse("wait_invalid", "unknown_referent", "sequenced names the coordinator-held obligation",
-                             obligation=name, expected=held[0]["id"])
-        elif cls == "ownership":
-            if isinstance(referent, str) and referent in admissions:
-                if referent not in outstanding:
-                    raise refuse("wait_invalid", "resolved_referent", "the overlapping admission has settled",
-                                 obligation=name, referent=referent)
-                other = _admission_boundary(admissions[referent])
-            elif isinstance(referent, str) and referent in rows:
-                if not (rows[referent]["state"] == "active" and rows[referent]["executor"] == "coordinator"):
-                    raise refuse("wait_invalid", "resolved_referent", "the obligation is no longer coordinator-held",
-                                 obligation=name, referent=referent)
-                other = rows[referent]["boundary"]
-            else:
-                raise refuse("wait_invalid", "unknown_referent",
-                             "ownership names an outstanding admission or the coordinator-held obligation",
-                             obligation=name)
-            if not overlaps(ob["boundary"], other):
-                raise refuse("wait_invalid", "ownership_without_overlap", "the declared boundaries do not overlap",
-                             obligation=name, referent=referent)
-        elif cls == "capacity":
-            ceiling = ctx.get("ceiling", 0)
-            if (not isinstance(referent, list) or len(referent) > 8
-                    or any(not isinstance(item, str) for item in referent)):
-                raise refuse("wait_invalid", "unknown_referent", "capacity names the reservations holding the ceiling",
-                             obligation=name)
-            if len(outstanding) < ceiling:
-                raise refuse("wait_invalid", "capacity_below_ceiling",
-                             "a capacity wait is valid only at the ceiling", obligation=name,
-                             reserved=len(outstanding), ceiling=ceiling)
-            if set(referent) != outstanding:
-                raise refuse("wait_invalid", "unknown_referent", "capacity names exactly the outstanding reservations",
-                             obligation=name)
-        elif cls == "integration_pending":
-            if not isinstance(referent, str) or referent not in admissions:
-                raise refuse("wait_invalid", "unknown_referent", "integration_pending names a settled result",
-                             obligation=name)
-            if referent not in pending:
-                raise refuse("wait_invalid", "resolved_referent", "the result has a disposition or is not settled",
-                             obligation=name, referent=referent)
-            if not overlaps(ob["boundary"], _admission_boundary(admissions[referent])):
-                raise refuse("wait_invalid", "ownership_without_overlap", "the result does not overlap this boundary",
-                             obligation=name, referent=referent)
-        elif cls == "input_unavailable":
-            reader = ctx.get("source_state")
-            if not isinstance(referent, str) or not referent:
-                raise refuse("wait_invalid", "unknown_referent", "input_unavailable names a source binding path",
-                             obligation=name)
-            if reader is None or reader(referent) != "unavailable":
-                raise refuse("wait_invalid", "resolved_referent", "the source binding is readable now",
-                             obligation=name, referent=referent)
-        elif cls == "authority":
-            record = _exact(referent, {"kind", "scope", "candidate", "need"}, {"kind"}, "authority referent",
-                            code="wait_invalid")
-            if record["kind"] == "authorization":
-                if record.get("scope") not in AUTHORIZED_SCOPES or not isinstance(record.get("candidate"), str):
-                    raise refuse("wait_invalid", "unknown_referent",
-                                 "a missing authorization names its scope and candidate", obligation=name)
-                granted = ctx.get("authorization_granted")
-                if granted is not None and granted(record["scope"], record["candidate"]):
-                    raise refuse("wait_invalid", "resolved_referent", "the authorization is recorded",
-                                 obligation=name)
-            elif record["kind"] in ("native_authority", "permission"):
-                _text(record.get("need"), "need", code="wait_invalid", detail="unknown_referent")
-            else:
-                raise refuse("wait_invalid", "unknown_referent", "authority names an authorization or blocked authority",
-                             obligation=name)
-        elif cls == "user_hold":
-            constraints = [row for row in ctx.get("constraints", []) if row.get("id") == referent]
-            if not constraints or constraints[0].get("provenance") != "user_direct":
-                raise refuse("wait_invalid", "unknown_referent", "user_hold names a user_direct constraint",
-                             obligation=name)
-            if constraints[0].get("active", True) is False:
-                raise refuse("wait_invalid", "resolved_referent", "the user constraint is no longer in force",
-                             obligation=name, referent=referent)
-    for start in edges:
-        seen = [start]
-        cursor = start
-        while cursor in edges:
-            cursor = edges[cursor]
-            if cursor in seen:
-                raise refuse("wait_invalid", "cycle", "dependency and contract waits are acyclic",
-                             obligations=",".join(seen))
-            seen.append(cursor)
+        edge = _validate_wait(ob, rows, ctx, outstanding, admissions, held, pending)
+        if edge is not None:
+            edges[ob["id"]] = edge
+    _check_wait_cycles(edges)
 
 
 # --------------------------------------------------------------------------- properties
@@ -1491,6 +1330,16 @@ def admission_binding(body: dict, ctx: dict, state: dict) -> dict:
                             if ob["id"] in body["serves"]}}
 
 
+def reserved_admission_shape(body: dict, ctx: dict, state: dict) -> dict:
+    """Fields shared by the map's admission preview and the persisted reservation."""
+    binding = packet_binding(body)
+    return {"serves": binding["serves"], "role": binding["role"],
+            "boundary": binding["boundary"], "state": "reserved",
+            "disposition": None, "changed_paths": None,
+            "candidate": ctx.get("candidate"), "report": None,
+            "binding": admission_binding(body, ctx, state)}
+
+
 def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying: dict | None = None) -> dict:
     """The map write that accompanies an admission row: served obligations become active."""
     binding = admission_refusal(state, body, ctx, admission_id=admission_id)
@@ -1507,11 +1356,7 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
     value = {"obligations": obligations, "proposals": base.get("proposals", state.get("proposals", []))}
     if "seq" in base:
         value["seq"] = base["seq"]
-    admissions = {**_admissions(ctx), admission_id: {"serves": binding["serves"], "role": binding["role"],
-                                                      "boundary": binding["boundary"], "state": "reserved",
-                                                      "disposition": None, "changed_paths": None,
-                                                      "candidate": ctx.get("candidate"), "report": None,
-                                                      "binding": admission_binding(body, ctx, state)}}
+    admissions = {**_admissions(ctx), admission_id: reserved_admission_shape(body, ctx, state)}
     outstanding = list(dict.fromkeys([*_outstanding(ctx), admission_id]))
     return accept_write(state, value, {**ctx, "admissions": admissions, "outstanding": outstanding})
 
@@ -1576,123 +1421,10 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
     return out
 
 
-def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *,
-           admission_id: str) -> tuple[dict, frozenset]:
-    """R82/R87: review findings become corrections or proposals; reports add only proposals.
-
-    Returns the map value, finding-owned obligation ids, and the consumed review
-    marker. Only this report boundary can supply those records to `accept_write`.
-    """
-    base = {key: value[key] for key in value if key in ("seq", "obligations", "proposals")}
-    obligations = [dict(row) for row in base.get("obligations", state["obligations"])]
-    listed = [dict(row) for row in base.get("proposals", state.get("proposals", []))]
-    admission = _admissions(ctx).get(admission_id) or {}
-    if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
-        raise refuse("obligation_invalid", "malformed", "triage is a bounded list")
-    if findings and admission.get("role") != "review":
-        raise refuse("obligation_invalid", "malformed", "only a review attempt is triaged", admission=admission_id)
-    rows = {row.get("id"): row for row in obligations}
-    assurance_id = (admission.get("serves") or [None])[0]
-    prior_ids = {ob["id"] for ob in state["obligations"]}
-    stored = next((ob.get("findings", []) for ob in state["obligations"] if ob["id"] == assurance_id), [])
-    written: set[str | tuple[str, str]] = set()
-    records = []
-    for raw in findings:
-        record = _exact(raw, {"finding", "severity", "triage", "summary", "reason", "correction"},
-                        {"finding", "severity", "triage", "summary"}, "finding")
-        _ident(record["finding"], "finding")
-        _text(record["summary"], "summary")
-        if record["severity"] not in SEVERITIES or record["triage"] not in TRIAGE:
-            raise refuse("obligation_invalid", "malformed", "severity or triage is unsupported",
-                         finding=record["finding"])
-        if record["severity"] in ("blocker", "major") and record["triage"] == "advisory":
-            if "reason" not in record:
-                raise refuse("obligation_invalid", "downgrade_unreasoned",
-                             "downgrading a reviewer's blocker or major finding needs a reason",
-                             finding=record["finding"])
-            _text(record["reason"], "reason", limit=1024)
-        entry = {"attempt": admission_id, "finding": record["finding"], "severity": record["severity"],
-                 "triage": record["triage"], "summary": record["summary"],
-                 "recorded_seq": state["seq"] + 1}
-        if any(item.get("attempt") == admission_id and item.get("finding") == record["finding"]
-               for item in stored):
-            continue
-        if "reason" in record:
-            entry["reason"] = record["reason"]
-        known = {row.get("id") for row in listed}
-        if record["triage"] == "required_correction":
-            correction = rows.get(record.get("correction"))
-            if (correction is None or record["correction"] in prior_ids or correction.get("kind") != "correction"
-                    or correction.get("parent") != assurance_id or correction.get("provenance") != "coordinator"):
-                raise refuse("obligation_invalid", "no_parent",
-                             "a required correction is a new coordinator correction under the assurance obligation",
-                             finding=record["finding"])
-            correction["finding"] = {"attempt": admission_id, "finding": record["finding"],
-                                     "severity": record["severity"]}
-            written.add(correction["id"])
-            entry["correction"] = record["correction"]
-        else:
-            if "correction" in record:
-                raise refuse("obligation_invalid", "malformed", "an advisory finding becomes a proposal",
-                             finding=record["finding"])
-            key = "adv-" + digest({"attempt": admission_id, "finding": record["finding"]})[:12]
-            if key not in known:
-                listed.append({"id": key, "source": "reviewer_advisory", "origin_ref": admission_id[:64],
-                               "summary": record["summary"], "status": "open"})
-            entry["proposal"] = key
-        records.append(entry)
-    if records:
-        assurance = rows.get(assurance_id)
-        if assurance is None:
-            raise refuse("obligation_invalid", "malformed", "the reviewed assurance obligation is absent")
-        if len(stored) + len(records) > MAX_FINDINGS:
-            raise refuse("obligation_invalid", "finding_limit",
-                         "the bounded finding history is full", obligation=assurance_id)
-        assurance["findings"] = list(stored) + records
-        written.add(assurance_id)
-    if admission.get("role") == "review":
-        written.add(("review_report", admission_id))
-    if not isinstance(proposals, list) or len(proposals) > 16:
-        raise refuse("obligation_invalid", "malformed", "report proposals are a bounded list")
-    for raw in proposals:
-        record = _exact(raw, {"summary", "source"}, {"summary"}, "report proposal")
-        _text(record["summary"], "summary")
-        source = record.get("source", "worker_report")
-        if source not in PROPOSAL_SOURCES:
-            raise refuse("obligation_invalid", "malformed", "proposal source is unsupported")
-        key = "rep-" + digest({"attempt": admission_id, "summary": record["summary"]})[:12]
-        if key not in {row.get("id") for row in listed}:
-            listed.append({"id": key, "source": source, "origin_ref": admission_id[:64],
-                           "summary": record["summary"], "status": "open"})
-    out = {**{k: v for k, v in value.items() if k not in ("obligations", "proposals")},
-           "obligations": obligations, "proposals": listed}
-    return out, frozenset(written)
 
 
 # --------------------------------------------------------------------------- reporting
 
-def label_qualification(state: dict | None, ctx: dict, candidate: str | None) -> dict:
-    """R88: the `independently reviewed` label is derived, never asserted."""
-    if not isinstance(state, dict) or state.get("obligations") is None:
-        return {"label": "WITHHELD", "assurance_unbound": [{"obligation": None, "gap": "none_recorded"}],
-                "withdrawn": [], "required": False}
-    gov = governance_digest(state["governance_sources"])
-    rows = [ob for ob in state["obligations"] if ob["kind"] == "assurance"]
-    live = [ob for ob in rows if ob["state"] != "withdrawn"]
-    gaps = []
-    if not live:
-        gaps.append({"obligation": None, "gap": "none_recorded"})
-    for ob in live:
-        if ob["state"] != "satisfied":
-            gaps.append({"obligation": ob["id"], "gap": "unbound"})
-        elif candidate is None or candidate != ctx.get("candidate") or not evidence_valid(ob, ctx, gov, candidate):
-            gaps.append({"obligation": ob["id"], "gap": "invalidated"})
-    withdrawn = [{"obligation": ob["id"], "provenance": ob["provenance"], **ob["withdrawal"]}
-                 for ob in rows if ob["state"] == "withdrawn"]
-    # Recorded, non-withdrawn assurance obligations are themselves a review requirement; a
-    # caller cannot declare them not required.
-    return {"label": "WITHHELD" if gaps else "QUALIFIED", "assurance_unbound": gaps, "withdrawn": withdrawn,
-            "required": bool(live)}
 
 
 def report_projection(state: dict, ctx: dict) -> dict:
@@ -1846,84 +1578,8 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
             "lines": lines}
 
 
-# --------------------------------------------------------------------------- recorded traces
 
-TRACE_SCHEMA = "pod-trace/v1"
-
-
-def evaluate_trace(trace: Any) -> dict:
-    """Scripted record checks over a sanitized recorded trace (R91, A162).
-
-    Slot filling, amplification and scope inflation are findings the boundary refuses, so
-    any occurrence fails the trace. Serialization and churn are flags. Wall time and
-    admission counts are observations only. A trace without obligation maps, such as a
-    0.5 native-observation capture, is reported as not evaluable rather than as a pass.
-    """
-    if isinstance(trace, dict) and trace.get("schema") != TRACE_SCHEMA and isinstance(trace.get("observations"), list):
-        rows = [row for row in trace["observations"] if isinstance(row, dict)]
-        stamps = sorted(str(row.get("completed_at")) for row in rows if row.get("completed_at"))
-        return {"schema": TRACE_SCHEMA, "label": "recorded_native_observations", "evaluable": False,
-                "reason": "the trace has no obligation maps or boundary decisions",
-                "checks": {name: "NOT_EVALUABLE" for name in
-                           ("slot_filling", "serialization", "amplification", "churn", "scope_inflation")},
-                "observations": {"native_dispatches": trace.get("native_dispatch_count", "unknown"),
-                                 "starts": sum(row.get("start_observed") is True for row in rows),
-                                 "settlements": sum(row.get("settlement_observed") is True for row in rows),
-                                 "first_completion": stamps[0] if stamps else "unknown",
-                                 "last_completion": stamps[-1] if stamps else "unknown",
-                                 "admissions": "unknown", "wall_time": "unknown"},
-                "failed": False}
-    record = _exact(trace, {"schema", "label", "records", "observations"}, {"schema", "label", "records"},
-                    "trace", code="invalid_trace")
-    if record["label"] not in ("synthetic", "recorded") or not isinstance(record["records"], list):
-        raise PodError("invalid_trace", "Trace label is synthetic or recorded with a record list")
-    findings = {"slot_filling": [], "serialization": [], "amplification": [], "churn": [], "scope_inflation": []}
-    previous = None
-    settled: dict[str, int] = {}
-    satisfied: set[str] = set()
-    admissions = 0
-    for index, row in enumerate(record["records"]):
-        if not isinstance(row, dict) or row.get("kind") not in ("write", "admission", "settlement"):
-            raise PodError("invalid_trace", f"Trace record {index} is malformed")
-        if row["kind"] == "write":
-            current = row["map"]
-            rows = {ob["id"]: ob for ob in current["obligations"]}
-            earlier = {ob["id"] for ob in (previous or {}).get("obligations", [])}
-            proposals = {item["id"] for item in (previous or {}).get("proposals", [])}
-            for ob in rows.values():
-                if ob["id"] in earlier:
-                    continue
-                allowed = (ob["provenance"] == "objective" and previous is None
-                           and ob["kind"] in ("criterion", "delivery")
-                           or ob["provenance"] == "user_direct" and row.get("user_revision") is True
-                           or ob["provenance"] == "project_policy" and isinstance(ob.get("source", {}).get("base"), str)
-                           or ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance", "correction")
-                           and ob.get("parent") in rows)
-                if not allowed or ob.get("adopts") in proposals and ob["provenance"] not in ("user_direct",
-                                                                                               "project_policy"):
-                    findings["scope_inflation"].append({"record": index, "obligation": ob["id"]})
-            findings["serialization"] += [{"record": index, **flag}
-                                          for flag in serialization_flags(previous, current)]
-            satisfied = {ob["id"] for ob in rows.values() if ob["state"] == "satisfied"}
-            previous = current
-        elif row["kind"] == "admission":
-            admissions += 1
-            rows = {ob["id"]: ob for ob in (previous or {}).get("obligations", [])}
-            serves = row.get("serves") or []
-            if row.get("accepted") is True:
-                if not serves or any(rows.get(item) is None or rows[item]["state"] in TERMINAL for item in serves):
-                    findings["slot_filling"].append({"record": index, "serves": serves})
-                if row.get("role") == "review" and any(item in satisfied for item in serves):
-                    findings["amplification"].append({"record": index, "serves": serves})
-        else:
-            for item in row.get("serves") or []:
-                settled[item] = settled.get(item, 0) + 1
-    findings["churn"] = [{"obligation": key, "settled": count} for key, count in sorted(settled.items())
-                         if count >= CHURN_THRESHOLD and key not in satisfied]
-    failed = bool(findings["slot_filling"] or findings["amplification"] or findings["scope_inflation"])
-    return {"schema": TRACE_SCHEMA, "label": record["label"], "evaluable": True,
-            "checks": {name: ("FLAGGED" if name in ("serialization", "churn") and rows else
-                              "FAILED" if rows else "PASS") for name, rows in findings.items()},
-            "findings": findings,
-            "observations": {**(record.get("observations") or {}), "admissions": admissions},
-            "failed": failed}
+from .assurance import (_source_entries, _dependencies, _evidence_record, _stamp_evidence,
+                        binding_current, review_completed, _reuse_valid, _bind_reuse, evidence_valid,
+                        _accepted_assurance_current, triage, label_qualification)
+from .traces import evaluate_trace

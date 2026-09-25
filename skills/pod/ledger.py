@@ -8,10 +8,10 @@ import fcntl
 import os
 from pathlib import Path
 import re
-import subprocess
 from typing import Callable, Iterator
 
 from .errors import PodError
+from . import gitio
 from .installer import STATE_SCHEMAS, superseded_objectives, superseded_schemas
 from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
 
@@ -94,6 +94,15 @@ def binding_valid(binding: object) -> bool:
             return False
     terminal = binding.get("terminalHandle")
     return terminal is None or isinstance(terminal, str) and bool(terminal)
+
+
+def bound_assignments(state: dict | None, *, include_closed: bool = False) -> tuple[dict, ...]:
+    if not isinstance(state, dict):
+        return ()
+    states = ("bound", "closed") if include_closed else ("bound",)
+    return tuple(row for row in state.get("admissions", {}).values()
+                 if isinstance(row, dict) and row.get("state") in states
+                 and binding_valid(row.get("native_binding")))
 
 
 _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "request",
@@ -231,8 +240,7 @@ def require_authority(project: Path, objective: str, *, owner: str,
             raise PodError("native_authority_unverified", "Current coordinator Run is unavailable")
         refs = {current["id"]: first["runtime"]}
     selected = (run_id,) if run_id is not None else tuple(sorted(refs))
-    assignments = tuple(row for row in state.get("admissions", {}).values()
-                        if row.get("state") == "bound" and binding_valid(row.get("native_binding")))
+    assignments = bound_assignments(state)
     native = port.read_native(owner, authority_runs=selected, assignments=assignments)
     if (native.get("authoritative") is not True or native.get("owner") != owner
             or native.get("scope") != "objective_assignments" or native.get("complete") is not True
@@ -320,281 +328,13 @@ def _check_bound_sources_locked(project: Path, path: Path, state: dict,
 
 # --------------------------------------------------------------------------- kernel facts
 
-_BASE_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
-_OBJECT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+# Governance policy and currency live in the dedicated module.
+from .governance import (MAX_GOVERNANCE_HISTORY, _governance_history, _governance_target,
+                         _independent_governance, _resolve_commit, _retain_governance_history,
+                         governance_observation, require_governance_current, user_direct_revision)
 
-
-def _git(root: Path, argv: list[str], *, binary: bool = False) -> subprocess.CompletedProcess | None:
-    """One bounded Git read; optional locks are off so a read never refreshes the index."""
-    try:
-        return subprocess.run(["git", "--no-optional-locks", "-C", str(root), *argv], capture_output=True,
-                              text=not binary, timeout=30, check=False, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def _resolve_commit(root: Path, ref: str) -> str | None:
-    if not isinstance(ref, str) or not _BASE_REF.fullmatch(ref) or ".." in ref:
-        return None
-    completed = _git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}"])
-    value = completed.stdout.strip() if completed is not None and completed.returncode == 0 else ""
-    return value if _OBJECT.fullmatch(value) else None
-
-
-def _symbolic_ref(root: Path, ref: str) -> str | None:
-    found = _git(root, ["symbolic-ref", "-q", ref])
-    value = found.stdout.strip() if found is not None and found.returncode == 0 else ""
-    return value if value.startswith(("refs/heads/", "refs/remotes/")) else None
-
-
-def _governance_target(project: Path, proposed: str | None, *, user_direct: bool,
-                       bound_ref: str | None) -> tuple[str | None, str | None]:
-    """Select a branch identity independently of the proposed policy citation."""
-    if bound_ref is not None:
-        return bound_ref, None
-    default = _symbolic_ref(project, "refs/remotes/origin/HEAD")
-    if default is not None and (not default.startswith("refs/remotes/origin/")
-                                or default == "refs/remotes/origin/HEAD"):
-        default = None
-    if proposed is None:
-        return (default, None) if default is not None else (None, "target_selection_required")
-    if not isinstance(proposed, str) or not _BASE_REF.fullmatch(proposed) or ".." in proposed:
-        return None, "target_ref_invalid"
-    named = _git(project, ["rev-parse", "--symbolic-full-name", "--verify", "--quiet",
-                           "--end-of-options", proposed])
-    selected = named.stdout.strip() if named is not None and named.returncode == 0 else ""
-    if (proposed == "HEAD" or selected not in (default,)
-            and not selected.startswith(("refs/heads/", "refs/remotes/"))):
-        return None, "candidate_or_nonbranch_ref"
-    if default is not None and (selected == default or
-                                selected == "refs/heads/" + default.removeprefix("refs/remotes/origin/")
-                                and _resolve_commit(project, selected) == _resolve_commit(project, default)):
-        return default, None
-    if not user_direct:
-        return None, "target_selection_required"
-    return selected, None
-
-
-def governance_observation(project: Path, base_ref: str | None, *, at: str | None = None,
-                           user_direct: bool = False, bound_ref: str | None = None,
-                           selection: str | None = None) -> dict:
-    """Read governance from the independently selected target, never the candidate."""
-    from .github import repository_context
-    from .obligations import GOVERNANCE_PATHS, MAX_GOVERNANCE_TEXT
-    try:
-        context = repository_context(project)
-    except PodError:
-        return {"status": "unavailable", "reason": "repository_unreadable"}
-    if context["repo_key"] is None:
-        return {"status": "no_repository"}
-    target, reason = _governance_target(project, base_ref, user_direct=user_direct, bound_ref=bound_ref)
-    if target is None:
-        return {"status": "unavailable", "reason": reason}
-    default = _symbolic_ref(project, "refs/remotes/origin/HEAD")
-    chosen_by = selection or ("default" if target == default else "user_direct")
-    if chosen_by == "default" and default != target:
-        return {"status": "unavailable", "reason": "default_target_changed", "target_ref": target}
-    current = _resolve_commit(project, target)
-    commit = at if at is not None else current
-    if commit is None or not _OBJECT.fullmatch(commit):
-        return {"status": "unavailable", "reason": "base_ref_unresolved", "target_ref": target,
-                "current": current}
-    texts: dict[str, str | None] = {}
-    for path in GOVERNANCE_PATHS:
-        listed = _git(project, ["ls-tree", "-z", commit, "--", path])
-        if listed is None or listed.returncode != 0:
-            return {"status": "unavailable", "reason": "tree_unreadable", "current": current}
-        entry = listed.stdout.split("\0")[0]
-        if not entry:
-            texts[path] = None
-            continue
-        meta, _, _name = entry.partition("\t")
-        parts = meta.split()
-        if len(parts) != 3 or parts[1] != "blob":
-            return {"status": "unavailable", "reason": "source_not_blob", "current": current}
-        size = _git(project, ["cat-file", "-s", parts[2]])
-        if size is None or size.returncode != 0 or not size.stdout.strip().isdigit() \
-                or int(size.stdout.strip()) > MAX_GOVERNANCE_TEXT:
-            return {"status": "unavailable", "reason": "source_oversized", "current": current}
-        blob = _git(project, ["cat-file", "blob", parts[2]], binary=True)
-        if blob is None or blob.returncode != 0:
-            return {"status": "unavailable", "reason": "source_unreadable", "current": current}
-        try:
-            texts[path] = blob.stdout.decode("utf-8")
-        except UnicodeError:
-            return {"status": "unavailable", "reason": "source_not_text", "current": current}
-    return {"status": "observed", "target_ref": target, "selection": chosen_by, "commit": commit,
-            "current": current, "texts": texts}
-
-
-MAX_GOVERNANCE_HISTORY = 64
-
-
-def _governance_history(prior: dict | None) -> dict:
-    """Kernel-owned bounded history; never accept a caller's replacement."""
-    history = (prior or {}).get("governance_history", {"candidates": [], "decisions": []})
-    if (not isinstance(history, dict) or set(history) != {"candidates", "decisions"}
-            or any(not isinstance(history[key], list) or len(history[key]) > MAX_GOVERNANCE_HISTORY
-                   for key in ("candidates", "decisions"))
-            or any(not isinstance(value, str) or not value or len(value) > 512
-                   for value in history["candidates"])):
-        raise PodError("state_unsupported", "Governance history is malformed")
-    for row in history["decisions"]:
-        if (not isinstance(row, dict)
-                or set(row) != {"seq", "base_ref", "base", "provenance", "instruction", "kind"}
-                or type(row["seq"]) is not int or row["seq"] < 1
-                or not isinstance(row["base_ref"], str) or not _BASE_REF.fullmatch(row["base_ref"])
-                or not isinstance(row["base"], str) or not _OBJECT.fullmatch(row["base"])
-                or row["provenance"] != "user_direct" or row["kind"] not in ("initial", "snapshot", "retarget")
-                or not isinstance(row["instruction"], str) or not 1 <= len(row["instruction"]) <= 1024):
-            raise PodError("state_unsupported", "Governance decision history is malformed")
-    return {"candidates": list(history["candidates"]),
-            "decisions": [dict(row) for row in history["decisions"]]}
-
-
-def _checkpoint_candidate(project: Path, candidate: str | None) -> str:
-    identity = _resolve_commit(project, candidate)
-    if identity is None:
-        raise PodError("invalid_checkpoint",
-                       "A mapped Git checkpoint candidate must resolve to a commit. "
-                       "Next: name the current available candidate commit before writing the checkpoint",
-                       {"detail": "candidate_identity_unavailable", "candidate": candidate})
-    return identity
-
-
-def _retain_governance_history(project: Path, map_state: dict, prior: dict | None,
-                               candidate: str, proposed: dict, *, snapshot_authorized: bool) -> None:
-    if map_state["governance"].get("base") is None:
-        return
-    history = _governance_history(prior)
-    # Resolve aliases now, before a later checkout or ref movement changes their meaning.
-    identity = _checkpoint_candidate(project, candidate)
-    bounded_text(identity, name="candidate history", limit=512)
-    if identity not in history["candidates"]:
-        history["candidates"].append(identity)
-    authority = proposed.get("revision_authority")
-    old = (prior or {}).get("governance", {})
-    current = map_state["governance"]
-    if (isinstance(authority, dict) and authority.get("provenance") == "user_direct"
-            and (prior is None or snapshot_authorized or old.get("base_ref") != current["base_ref"])):
-        decision = {"base_ref": current["base_ref"], "base": current["base"],
-                    "provenance": "user_direct", "instruction": authority["instruction"],
-                    "kind": "initial" if prior is None else "snapshot" if snapshot_authorized else "retarget"}
-        if not any({key: value for key, value in row.items() if key != "seq"} == decision
-                   for row in history["decisions"]):
-            history["decisions"].append({"seq": map_state["seq"], **decision})
-    if any(len(history[key]) > MAX_GOVERNANCE_HISTORY for key in ("candidates", "decisions")):
-        raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
-                       {"detail": "governance_history_full",
-                        "next_action": "preserve the objective and report its governance history capacity",
-                        "referent": {"limit": MAX_GOVERNANCE_HISTORY}})
-    map_state["governance_history"] = history
-
-
-def _independent_governance(project: Path, observed: dict, candidate: str | None,
-                            admissions: dict, *, established: dict | None,
-                            previous_candidate: str | None = None,
-                            known_candidates: list[str] | None = None,
-                            snapshot_authorized: bool = False) -> dict:
-    """Preserve the selected baseline; reject adoption of known objective work.
-
-    Initial target selection is the trusted authority input, including candidate
-    equality. Git cannot prove pre-intake authorship. Later target observations
-    are checked against that baseline, regardless of ref reuse or policy bytes.
-    Adopting known objective work requires direct authority for the exact new
-    snapshot; it does not prove that the project merged or authored that work.
-    """
-    if observed.get("status") != "observed" or established is None:
-        return observed
-    current_candidate = _checkpoint_candidate(project, candidate)
-    base = established.get("base")
-    if observed["commit"] == base:
-        return observed
-
-    # Exact user adoption establishes this snapshot even when older objects are
-    # unavailable. It does not erase history or authorize a different later base.
-    if snapshot_authorized:
-        return observed
-
-    def unavailable(reason: str, identity: str | None = None) -> dict:
-        action = ("restore the missing Git evidence or obtain a fresh direct user decision for "
-                  "this exact target snapshot, then write governance_refresh with "
-                  "revision_authority and governance.base_ref/base")
-        raise PodError("governance_unavailable", f"Governance comparison is unavailable: {reason}. Next: {action}",
-                       {"detail": "governance_unavailable", "next_action": action,
-                        "referent": {"reason": reason, "identity": identity,
-                                     "base_ref": observed["target_ref"], "base": observed["commit"]}})
-
-    if base is None or _resolve_commit(project, base) is None:
-        return unavailable("bound_base_unavailable", base)
-    values = [current_candidate, *(known_candidates or [])]
-    if previous_candidate is not None:
-        values.append(previous_candidate)
-    for row in admissions.values():
-        result = row.get("result") or {}
-        values.extend(value for value in (row.get("candidate"), result.get("base"), result.get("head"),
-                                          (row.get("report") or {}).get("result_commit"))
-                      if value is not None)
-    identities = set()
-    for value in values:
-        resolved = _resolve_commit(project, value)
-        if resolved is None:
-            return unavailable("objective_identity_unavailable", value)
-        identities.add(resolved)
-    target = observed["commit"]
-    contains_work = False
-    for identity in sorted(identities):
-        baseline = git_is_ancestor(project, identity, base)
-        if baseline is None:
-            return unavailable("target_relation_unavailable", identity)
-        if baseline:
-            continue
-        common = _git(project, ["merge-base", "--all", identity, target])
-        if common is None or common.returncode not in (0, 1):
-            return unavailable("target_relation_unavailable", identity)
-        shared_commits = common.stdout.splitlines()
-        if bool(shared_commits) != (common.returncode == 0):
-            return unavailable("target_relation_unavailable", identity)
-        for shared in shared_commits:
-            if not _OBJECT.fullmatch(shared):
-                return unavailable("target_relation_unavailable", identity)
-            in_baseline = git_is_ancestor(project, shared, base)
-            if in_baseline is None:
-                return unavailable("target_relation_unavailable", shared)
-            if not in_baseline:
-                contains_work = True
-    if contains_work:
-        action = ("obtain a fresh direct user decision for this exact target snapshot, then write "
-                  "governance_refresh with revision_authority and governance.base_ref/base")
-        raise PodError("governance_unavailable",
-                       "The changed governance target contains known objective work beyond its bound base. "
-                       f"Next: {action}",
-                       {"detail": "governance_unavailable", "next_action": action,
-                        "referent": {"reason": "candidate_policy_target", "base_ref": observed["target_ref"],
-                                     "base": target, "previous_base": base}})
-    return observed
-
-
-def require_governance_current(project: Path, map_state: dict | None) -> None:
-    """Before new admission or a governed effect: the bound base is still the target's base."""
-    if not isinstance(map_state, dict) or map_state.get("obligations") is None:
-        return
-    from .obligations import refuse
-    governance = map_state["governance"]
-    if governance.get("base_ref") is None:
-        return
-    if (governance.get("selection") == "default"
-            and _symbolic_ref(project, "refs/remotes/origin/HEAD") != governance["base_ref"]):
-        raise refuse("governance_changed", "governance_changed",
-                     "the default target branch changed; a direct user revision must select a new target")
-    current = _resolve_commit(project, governance["base_ref"])
-    if current is None:
-        raise refuse("governance_unavailable", "governance_unavailable",
-                     "the governance base cannot be resolved; new work holds", base_ref=governance["base_ref"])
-    if current != governance["base"]:
-        raise refuse("governance_changed", "governance_changed",
-                     "the target branch moved since governance was bound", bound=governance["base"][:12],
-                     current=current[:12])
+_OBJECT = gitio.OBJECT_ID
+_git = gitio.read
 
 
 def git_result(worktree: str | None, base: str | None, commit: str | None = None) -> dict:
@@ -609,14 +349,7 @@ def git_result(worktree: str | None, base: str | None, commit: str | None = None
     status = _git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if diff is None or diff.returncode != 0 or status is None or status.returncode != 0:
         return {"status": "unavailable", "reason": "git_unreadable"}
-    changed: set[str] = set()
-    fields = diff.stdout.split("\0")
-    index = 0
-    while index < len(fields) and fields[index]:
-        code = fields[index]
-        width = 2 if code[:1] in ("R", "C") else 1
-        changed.update(item for item in fields[index + 1:index + 1 + width] if item)
-        index += 1 + width
+    changed = gitio.name_status_paths(diff.stdout)
     entries = status.stdout.split("\0")
     index = 0
     while index < len(entries) and entries[index]:
@@ -642,15 +375,7 @@ def git_head(worktree: str | None) -> str | None:
 
 
 def git_is_ancestor(project: Path, commit: str, candidate: str) -> bool | None:
-    if not _OBJECT.fullmatch(commit or "") or not isinstance(candidate, str):
-        return None
-    target = _resolve_commit(project, candidate)
-    if target is None:
-        return None
-    completed = _git(project, ["merge-base", "--is-ancestor", commit, target])
-    if completed is None or completed.returncode not in (0, 1):
-        return None
-    return completed.returncode == 0
+    return gitio.is_ancestor(project, commit, candidate, resolve=_resolve_commit)
 
 
 def git_delta(project: Path, source: str, target: str) -> list[str] | None:
@@ -661,13 +386,7 @@ def git_delta(project: Path, source: str, target: str) -> list[str] | None:
     completed = _git(project, ["diff", "--name-status", "-z", "-M", "--no-ext-diff", first, second])
     if completed is None or completed.returncode != 0:
         return None
-    fields = completed.stdout.split("\0")
-    changed, index = set(), 0
-    while index < len(fields) and fields[index]:
-        width = 2 if fields[index][:1] in ("R", "C") else 1
-        changed.update(item for item in fields[index + 1:index + 1 + width] if item)
-        index += 1 + width
-    return sorted(changed)
+    return sorted(gitio.name_status_paths(completed.stdout))
 
 
 def map_of(state: dict | None) -> dict | None:
@@ -826,12 +545,10 @@ def _require_open(state: dict) -> None:
                      closure_revision=map_state["closure"]["revision"])
 
 
-def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
-    """Persist one validated checkpoint; while a map exists, every write is a map transition."""
-    from .bundle import running_identity
+def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
+                      native: dict) -> tuple[dict, dict, list]:
     from .config import effective
-    from .obligations import MAP_INPUT, accept_write, disposition, refuse, report_projection
-    from .obligations import MAP_STORED
+    from .obligations import MAP_INPUT, MAP_STORED, refuse
     bounded_text(owner, name="owner")
     # A coordinator may round-trip the stored map; Pod recomputes every stamped field.
     value = {key: item for key, item in value.items() if key not in MAP_STORED - MAP_INPUT}
@@ -864,6 +581,89 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
     dispositions = proposed.pop("dispositions", [])
     if not isinstance(dispositions, list) or len(dispositions) > 16:
         raise refuse("obligation_unaccounted", "disposition_invalid", "dispositions are a bounded list")
+    return core, proposed, dispositions
+
+
+def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
+                               core: dict, previous: dict, proposed: dict, dispositions: list,
+                               native: dict) -> tuple[dict, dict | None]:
+    from .obligations import accept_write, disposition, refuse
+    prior_map = map_of(state)
+    map_state: dict = {}
+    ctx = None
+    if proposed or prior_map is not None:
+        refresh = proposed.get("governance_refresh") is True
+        if prior_map is not None and not refresh:
+            require_governance_current(project, prior_map)
+        if prior_map is None:
+            declared = proposed.get("governance")
+            base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
+            observed = governance_observation(
+                project, base_ref,
+                user_direct=user_direct_revision(proposed.get("revision_authority")))
+        else:
+            base_ref = prior_map["governance"]["base_ref"]
+            declared = proposed.get("governance")
+            change = isinstance(declared, dict) and declared.get("base_ref", base_ref) != base_ref
+            if change:
+                # Normalize only an alias of the already trusted target. This
+                # comparison grants no authority to select a different target;
+                # keep the original declaration for exact-snapshot consent below.
+                canonical, _ = _governance_target(project, declared["base_ref"],
+                                                   user_direct=True, bound_ref=None)
+                if canonical is not None and canonical == base_ref:
+                    proposed = {**proposed, "governance": {**declared, "base_ref": base_ref}}
+                    change = False
+            if change and refresh:
+                observed = governance_observation(
+                        project, declared["base_ref"],
+                        user_direct=user_direct_revision(proposed.get("revision_authority")))
+            else:
+                at = None if refresh else prior_map["governance"]["base"]
+                observed = (governance_observation(project, base_ref, at=at, bound_ref=base_ref,
+                                                   selection=prior_map["governance"].get("selection"))
+                            if base_ref is not None
+                        else governance_observation(project, None))
+        history = _governance_history(prior_map)
+        snapshot_authorized = (refresh
+            and user_direct_revision(proposed.get("revision_authority"))
+            and isinstance(declared, dict)
+            and declared.get("base_ref") == observed.get("target_ref")
+            and declared.get("base") == observed.get("commit"))
+        observed = _independent_governance(
+            project, observed, core["candidate"], state["admissions"],
+            established=(prior_map or {}).get("governance"),
+            previous_candidate=previous.get("candidate"),
+            known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized)
+        ctx = kernel_context(project, objective, state, authority.get("native"),
+                             candidate=core["candidate"], criteria=core["criteria"],
+                             governance=observed, delegation=native.get("delegation"),
+                             verification=core.get("verification"))
+        if dispositions:
+            if prior_map is None:
+                raise refuse("obligation_unaccounted", "disposition_invalid",
+                             "dispositions follow admissions under a map")
+            if prior_map.get("closure"):
+                raise refuse("objective_closed", "objective_closed", "the objective is closed",
+                             closure_revision=prior_map["closure"]["revision"])
+            for request in dispositions:
+                key = request.get("admission") if isinstance(request, dict) else None
+                row = state["admissions"].get(key) if isinstance(key, str) else None
+                if row is None:
+                    raise refuse("obligation_unaccounted", "disposition_invalid",
+                                 "a disposition names a recorded admission")
+                row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
+        map_state = accept_write(prior_map, proposed, ctx)
+        _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,
+                                   snapshot_authorized=snapshot_authorized)
+    return map_state, ctx
+
+
+def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
+    """Persist one validated checkpoint; while a map exists, every write is a map transition."""
+    from .bundle import running_identity
+    from .obligations import report_projection
+    core, proposed, dispositions = _checkpoint_input(project, objective, owner, value, native)
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -886,76 +686,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if "verification" not in core and "verification" in previous:
             # Like the map, the verification context carries forward until it is restated.
             core["verification"] = previous["verification"]
-        prior_map = map_of(state)
-        map_state: dict = {}
-        ctx = None
-        if proposed or prior_map is not None:
-            refresh = proposed.get("governance_refresh") is True
-            if prior_map is not None and not refresh:
-                require_governance_current(project, prior_map)
-            if prior_map is None:
-                declared = proposed.get("governance")
-                base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
-                observed = governance_observation(
-                    project, base_ref,
-                    user_direct=isinstance(proposed.get("revision_authority"), dict)
-                    and proposed["revision_authority"].get("provenance") == "user_direct")
-            else:
-                base_ref = prior_map["governance"]["base_ref"]
-                declared = proposed.get("governance")
-                change = isinstance(declared, dict) and declared.get("base_ref", base_ref) != base_ref
-                if change:
-                    # Normalize only an alias of the already trusted target. This
-                    # comparison grants no authority to select a different target;
-                    # keep the original declaration for exact-snapshot consent below.
-                    canonical, _ = _governance_target(project, declared["base_ref"],
-                                                       user_direct=True, bound_ref=None)
-                    if canonical is not None and canonical == base_ref:
-                        proposed = {**proposed, "governance": {**declared, "base_ref": base_ref}}
-                        change = False
-                if change and refresh:
-                    observed = governance_observation(
-                        project, declared["base_ref"], user_direct=isinstance(proposed.get("revision_authority"), dict)
-                        and proposed["revision_authority"].get("provenance") == "user_direct")
-                else:
-                    at = None if refresh else prior_map["governance"]["base"]
-                    observed = (governance_observation(project, base_ref, at=at, bound_ref=base_ref,
-                                                       selection=prior_map["governance"].get("selection"))
-                                if base_ref is not None
-                            else governance_observation(project, None))
-            history = _governance_history(prior_map)
-            snapshot_authorized = (refresh
-                and isinstance(proposed.get("revision_authority"), dict)
-                and proposed["revision_authority"].get("provenance") == "user_direct"
-                and isinstance(declared, dict)
-                and declared.get("base_ref") == observed.get("target_ref")
-                and declared.get("base") == observed.get("commit"))
-            observed = _independent_governance(
-                project, observed, core["candidate"], state["admissions"],
-                established=(prior_map or {}).get("governance"),
-                previous_candidate=previous.get("candidate"),
-                known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized)
-            ctx = kernel_context(project, objective, state, authority.get("native"),
-                                 candidate=core["candidate"], criteria=core["criteria"],
-                                 governance=observed, delegation=native.get("delegation"),
-                                 verification=core.get("verification"))
-            if dispositions:
-                if prior_map is None:
-                    raise refuse("obligation_unaccounted", "disposition_invalid",
-                                 "dispositions follow admissions under a map")
-                if prior_map.get("closure"):
-                    raise refuse("objective_closed", "objective_closed", "the objective is closed",
-                                 closure_revision=prior_map["closure"]["revision"])
-                for request in dispositions:
-                    key = request.get("admission") if isinstance(request, dict) else None
-                    row = state["admissions"].get(key) if isinstance(key, str) else None
-                    if row is None:
-                        raise refuse("obligation_unaccounted", "disposition_invalid",
-                                     "a disposition names a recorded admission")
-                    row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
-            map_state = accept_write(prior_map, proposed, ctx)
-            _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,
-                                       snapshot_authorized=snapshot_authorized)
+        map_state, ctx = _checkpoint_map_transition(
+            project, objective, state, authority, core, previous, proposed, dispositions, native)
         state["owner"] = owner
         identity = running_identity()
         if identity["bundle_digest"] is None:
@@ -1035,6 +767,90 @@ def _native_assignment_settled(shown: dict) -> bool:
             and projection.get("taskId") == dispatch["taskId"])
 
 
+def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dict,
+                   requested: dict, task_id: str, moment: datetime, projection: dict,
+                   failures: list, reuse_of: str | None, native: dict) -> dict:
+    from .config import load
+    from .selection import validate_choice, worker_ceiling
+    # The personal file is read after every other check under the objective lock.
+    snapshot = load(project)
+    if snapshot["policy_revision"] != checkpoint_value.get("policy_revision"):
+        raise PodError("policy_revision_mismatch", "Governor policy changed since checkpoint")
+    if body.get("policy_revision") != snapshot["policy_revision"]:
+        raise PodError("policy_revision_mismatch", "Packet Governor policy changed")
+    revision_changed = body.get("route", {}).get("preference_revision") != snapshot["revision"]
+    ceiling = worker_ceiling(snapshot, state["constraints"])
+    if len(projection["outstanding"]) >= ceiling:
+        raise PodError("logical_capacity_full", "Objective logical worker ceiling is occupied")
+    if "delegate" in body.get("actions", []) and not any(
+            c["kind"] == "allow_delegation" and c["provenance"] == "user_direct" and c.get("active", True)
+            for c in state["constraints"]):
+        raise PodError("delegation_unauthorized", "Worker delegation lacks direct user intent")
+    checked = validate_choice(snapshot, state["constraints"], failures, requested,
+                              task=task_id, role=body.get("responsibility"), now=moment)
+    if not checked["allowed"]:
+        if revision_changed:
+            raise PodError("preference_changed",
+                           f"Preferences changed before dispatch and route is no longer allowed: {checked['code']}")
+        raise PodError(checked["code"],
+                       f"Proposed route is not allowed at the current preference revision: {checked['code']}")
+    if revision_changed:
+        raise PodError("preference_revision_stale",
+                       "Preferences changed before dispatch; reread them and record a fresh decision")
+    if reuse_of is not None:
+        prior = state["admissions"].get(reuse_of)
+        if (prior is None or prior["state"] not in ("bound", "closed")
+                or not binding_valid(prior.get("native_binding"))
+                or not prior["native_binding"]["terminalHandle"]):
+            raise PodError("reuse_unavailable", "Terminal reuse needs a settled, known prior attempt")
+        matches = [a for a in native["assignments"] if a.get("admission_id") == reuse_of]
+        if len(matches) != 1 or matches[0].get("settled") is not True:
+            raise PodError("reuse_unavailable", "Prior attempt has not settled natively")
+        effective_route = prior["route_decision"].get("effective", {})
+        if any(effective_route.get(key) in (None, "unknown")
+               or requested[key] != effective_route[key] for key in ("agent", "model", "effort")):
+            raise PodError("reuse_route_changed", "Terminal reuse cannot switch the prior effective model")
+    return snapshot
+
+
+def _reserve_record(project: Path, objective: str, owner: str, admission_id: str,
+                    requested: dict, snapshot: dict, state: dict, body: dict, checkpoint_value: dict,
+                    map_state: dict,
+                    ctx: dict, placement_binding: dict, moment: datetime, native: dict,
+                    run_id: str, task_id: str, plan_revision: str, packet_id: str,
+                    worktree: str, reuse_of: str | None, accompanying: dict | None) -> tuple[dict, dict]:
+    from . import __version__
+    from .obligations import admit, reserved_admission_shape
+    stamp = moment.isoformat()
+    decision = {"agent": requested["agent"], "model": requested["model"],
+                "requested_effort": requested["effort"], "requested_context": requested["context"],
+                "reason": requested["reason"], "preference_revision": snapshot["revision"],
+                "policy_revision": snapshot["policy_revision"], "mode": snapshot["mode"],
+                "constraint_refs": [c.get("id") for c in state["constraints"] if c.get("active", True)],
+                "pod_version": __version__, "effective": {"agent": "unknown", "model": "unknown",
+                "effort": "unknown", "context": "unknown"},
+                "route_mismatch": False, "effective_unknown": True}
+    new_map = admit(map_state, body, ctx, admission_id=admission_id, accompanying=accompanying)
+    shape = reserved_admission_shape(body, ctx, map_state)
+    worktree_path = placement_binding.get("path") if isinstance(placement_binding, dict) else None
+    result = ({"base": git_head(worktree_path), "head": None, "worktree": worktree_path}
+              if body["role"] == "implement" else None)
+    row = {"schema": ADMISSION_SCHEMA, "admission_id": admission_id,
+           "objective": objective, "owner": owner, "request": requested,
+           "route_decision": decision, "effective_evidence": {}, "runtime": native["runtime"],
+           "request_uuid": None, "run_id": run_id, "task_id": task_id,
+           "plan_revision": plan_revision, "packet_id": packet_id, "worktree": worktree,
+           "reuse_of": reuse_of, "native_binding": None,
+           "recovery": {"checkpoint_binding": {key: checkpoint_value.get(key) for key in
+                                             ("candidate", "criteria", "plan_revision", "policy_revision",
+                                              "objective_source", "worktree")},
+                        "placement_binding": placement_binding},
+           "error": None, "failures": [], "created_at": stamp, "updated_at": stamp,
+           **shape, "map_revision": body["map_revision"], "result": result,
+           "boundary_exceeded": [], "admitted_seq": new_map["seq"]}
+    return row, new_map
+
+
 def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             requested: dict, native_reader: Callable[[dict], dict], run_id: str,
             task_id: str, plan_revision: str, packet_id: str, worktree: str,
@@ -1046,9 +862,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
     The served obligations become active in the same locked write that persists the
     admission row, so a map can never name an admission that was not recorded.
     """
-    from . import __version__
-    from .config import load
-    from .selection import validate_choice, worker_ceiling
+    from .selection import failure_active
     moment = now or datetime.now(timezone.utc)
     path = _path(project, objective)
     with _lock(path):
@@ -1109,7 +923,6 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         if any(f.get("kind") == "safety_refusal" and f.get("task") == task_id and not f.get("cleared_at")
                for f in failures):
             raise PodError("safety_refusal", "A safety refusal bars another model on this Task")
-        from .selection import failure_active
         for prior in state["admissions"].values():
             if prior["request"].get("model") == requested.get("model"):
                 continue
@@ -1121,79 +934,19 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                        if item.get("admission_id") == prior["admission_id"]]
             if len(matches) != 1 or matches[0].get("settled") is not True:
                 raise PodError("failed_attempt_unsettled", "Settle the failed attempt before an alternative route")
-        from .obligations import admission_binding, admission_refusal, admit, packet_binding as packet_boundary
+        from .obligations import admission_refusal
         # The caller verified launch-preference capability for this runtime before reserving.
         ctx = kernel_context(project, objective, state, native, candidate=checkpoint_value.get("candidate"),
                              delegation="available")
         admission_refusal(map_state, body, ctx, admission_id=admission_id)
         require_governance_current(project, map_state)
-        # The personal file is read after every other check under the objective lock.
-        snapshot = load(project)
-        if snapshot["policy_revision"] != checkpoint_value.get("policy_revision"):
-            raise PodError("policy_revision_mismatch", "Governor policy changed since checkpoint")
-        if body.get("policy_revision") != snapshot["policy_revision"]:
-            raise PodError("policy_revision_mismatch", "Packet Governor policy changed")
-        revision_changed = body.get("route", {}).get("preference_revision") != snapshot["revision"]
-        ceiling = worker_ceiling(snapshot, state["constraints"])
-        if len(projection["outstanding"]) >= ceiling:
-            raise PodError("logical_capacity_full", "Objective logical worker ceiling is occupied")
-        if "delegate" in body.get("actions", []) and not any(
-                c["kind"] == "allow_delegation" and c["provenance"] == "user_direct" and c.get("active", True)
-                for c in state["constraints"]):
-            raise PodError("delegation_unauthorized", "Worker delegation lacks direct user intent")
-        checked = validate_choice(snapshot, state["constraints"], failures, requested,
-                                  task=task_id, role=body.get("responsibility"), now=moment)
-        if not checked["allowed"]:
-            if revision_changed:
-                raise PodError("preference_changed",
-                               f"Preferences changed before dispatch and route is no longer allowed: {checked['code']}")
-            raise PodError(checked["code"],
-                           f"Proposed route is not allowed at the current preference revision: {checked['code']}")
-        if revision_changed:
-            raise PodError("preference_revision_stale",
-                           "Preferences changed before dispatch; reread them and record a fresh decision")
-        if reuse_of is not None:
-            prior = state["admissions"].get(reuse_of)
-            if (prior is None or prior["state"] not in ("bound", "closed")
-                    or not binding_valid(prior.get("native_binding"))
-                    or not prior["native_binding"]["terminalHandle"]):
-                raise PodError("reuse_unavailable", "Terminal reuse needs a settled, known prior attempt")
-            matches = [a for a in native["assignments"] if a.get("admission_id") == reuse_of]
-            if len(matches) != 1 or matches[0].get("settled") is not True:
-                raise PodError("reuse_unavailable", "Prior attempt has not settled natively")
-            effective_route = prior["route_decision"].get("effective", {})
-            if any(effective_route.get(key) in (None, "unknown")
-                   or requested[key] != effective_route[key] for key in ("agent", "model", "effort")):
-                raise PodError("reuse_route_changed", "Terminal reuse cannot switch the prior effective model")
-        stamp = moment.isoformat()
-        decision = {"agent": requested["agent"], "model": requested["model"],
-                    "requested_effort": requested["effort"], "requested_context": requested["context"],
-                    "reason": requested["reason"], "preference_revision": snapshot["revision"],
-                    "policy_revision": snapshot["policy_revision"], "mode": snapshot["mode"],
-                    "constraint_refs": [c.get("id") for c in state["constraints"] if c.get("active", True)],
-                    "pod_version": __version__, "effective": {"agent": "unknown", "model": "unknown",
-                    "effort": "unknown", "context": "unknown"},
-                    "route_mismatch": False, "effective_unknown": True}
-        new_map = admit(map_state, body, ctx, admission_id=admission_id, accompanying=accompanying)
-        served = {key: body[key] for key in ("serves", "role", "map_revision")}
-        worktree_path = placement_binding.get("path") if isinstance(placement_binding, dict) else None
-        result = ({"base": git_head(worktree_path), "head": None, "worktree": worktree_path}
-                  if body["role"] == "implement" else None)
-        row = {"schema": ADMISSION_SCHEMA, "state": "reserved", "admission_id": admission_id,
-               "objective": objective, "owner": owner, "request": requested,
-               "route_decision": decision, "effective_evidence": {}, "runtime": native["runtime"],
-               "request_uuid": None, "run_id": run_id, "task_id": task_id,
-               "plan_revision": plan_revision, "packet_id": packet_id, "worktree": worktree,
-               "reuse_of": reuse_of, "native_binding": None,
-               "recovery": {"checkpoint_binding": {key: checkpoint_value.get(key) for key in
-                                                 ("candidate", "criteria", "plan_revision", "policy_revision",
-                                                  "objective_source", "worktree")},
-                            "placement_binding": placement_binding},
-               "error": None, "failures": [], "created_at": stamp, "updated_at": stamp,
-               **served, "boundary": packet_boundary(body)["boundary"],
-               "candidate": checkpoint_value.get("candidate"), "result": result,
-               "changed_paths": None, "boundary_exceeded": [], "disposition": None, "report": None,
-               "binding": admission_binding(body, ctx, map_state), "admitted_seq": new_map["seq"]}
+        snapshot = _reserve_route(project, checkpoint_value, body, state, requested, task_id,
+                                  moment, projection, failures, reuse_of, native)
+        row, new_map = _reserve_record(
+            project, objective, owner, admission_id, requested, snapshot, state, body,
+            checkpoint_value, map_state,
+            ctx, placement_binding, moment, native, run_id, task_id, plan_revision, packet_id,
+            worktree, reuse_of, accompanying)
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
@@ -1222,6 +975,33 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
         return row
 
 
+def _stored_ingestion(row: dict) -> dict:
+    if row["role"] != "implement":
+        return {"status": "not_applicable"}
+    result = row.get("result") or {}
+    if result.get("paths_status") == "over_limit":
+        return {"status": "over_limit", "reason": "changed_paths_limit", "count": result["path_count"]}
+    return {"status": "recorded", "changed_paths": row["changed_paths"],
+            "boundary_exceeded": row["boundary_exceeded"]}
+
+
+def _ingest_result(row: dict, result_commit: str | None) -> dict:
+    from .obligations import exceeded
+    base = (row.get("result") or {}).get("base")
+    observed = git_result((row.get("result") or {}).get("worktree"), base, result_commit)
+    if observed["status"] == "observed":
+        row["result"] = {**row["result"], "head": observed["head"], "paths_status": "observed"}
+        row["changed_paths"] = observed["changed_paths"]
+        row["boundary_exceeded"] = exceeded(observed["changed_paths"], row["boundary"])
+        return {"status": "recorded", "changed_paths": row["changed_paths"],
+                "boundary_exceeded": row["boundary_exceeded"], "head": observed["head"],
+                "committed": observed["head"] != base}
+    if observed["status"] == "over_limit":
+        row["result"] = {**row["result"], "head": observed["head"],
+                         "paths_status": "over_limit", "path_count": observed["count"]}
+    return observed
+
+
 def consume_report(project: Path, objective: str, *, owner: str, admission_id: str,
                    observation: dict, accompanying: dict | None = None, findings: list | None = None,
                    proposals: list | None = None, result_commit: str | None = None) -> dict:
@@ -1231,7 +1011,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
     report; findings and discoveries become corrections or proposals by the coordinator's
     triage; nothing in the report changes a criterion, gate or authorization.
     """
-    from .obligations import accept_write, exceeded, refuse, report_projection, triage
+    from .obligations import accept_write, refuse, report_projection, triage
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -1254,15 +1034,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                                          or prior_report.get("result_commit") != result_commit):
             raise PodError("report_conflict", "A consumed Dispatch report or result cannot be replaced")
         if prior_report is not None and not accompanying and not findings and not proposals:
-            result = row.get("result") or {}
-            ingestion = {"status": "not_applicable"}
-            if row["role"] == "implement":
-                if result.get("paths_status") == "over_limit":
-                    ingestion = {"status": "over_limit", "reason": "changed_paths_limit",
-                                 "count": result["path_count"]}
-                else:
-                    ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
-                                 "boundary_exceeded": row["boundary_exceeded"]}
+            ingestion = _stored_ingestion(row)
             return {"ingestion": ingestion, "settled": True,
                     "map": {"seq": map_state["seq"], "revision": map_state["revision"],
                             "quiescence": map_state["quiescence"]},
@@ -1270,31 +1042,11 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         ingestion = {"status": "not_applicable"}
         if row["role"] == "implement":
             if prior_report is not None:
-                result = row.get("result") or {}
-                ingestion = ({"status": "over_limit", "reason": "changed_paths_limit",
-                              "count": result["path_count"]} if result.get("paths_status") == "over_limit"
-                             else {"status": "recorded", "changed_paths": row["changed_paths"],
-                                   "boundary_exceeded": row["boundary_exceeded"]})
+                ingestion = _stored_ingestion(row)
             elif row["changed_paths"] is not None:
-                ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
-                             "boundary_exceeded": row["boundary_exceeded"]}
+                ingestion = _stored_ingestion(row)
             else:
-                base = (row.get("result") or {}).get("base")
-                observed = git_result((row.get("result") or {}).get("worktree"), base, result_commit)
-                if observed["status"] == "observed":
-                    row["result"] = {**row["result"], "head": observed["head"],
-                                     "paths_status": "observed"}
-                    row["changed_paths"] = observed["changed_paths"]
-                    row["boundary_exceeded"] = exceeded(observed["changed_paths"], row["boundary"])
-                    ingestion = {"status": "recorded", "changed_paths": row["changed_paths"],
-                                 "boundary_exceeded": row["boundary_exceeded"], "head": observed["head"],
-                                 "committed": observed["head"] != base}
-                elif observed["status"] == "over_limit":
-                    row["result"] = {**row["result"], "head": observed["head"],
-                                     "paths_status": "over_limit", "path_count": observed["count"]}
-                    ingestion = observed
-                else:
-                    ingestion = observed
+                ingestion = _ingest_result(row, result_commit)
         if prior_report is None:
             row["report"] = {"outcome": report_value.get("outcome"), "status": observation.get("status"),
                              "attempt": report_value.get("attempt"),

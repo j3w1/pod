@@ -6,14 +6,14 @@ from unittest.mock import patch
 from pod.errors import PodError
 from pod import ledger
 from pod.ledger import read
-from tests import test_governance_refresh as refresh
-from tests import test_kernel_boundaries as boundaries
+from tests import kernel_support as refresh
+from tests import kernel_support as boundaries
 
 
 class GovernanceHistoryTests(boundaries.KernelCase):
-    commit = refresh.GovernanceRefreshTests.commit
-    policy = refresh.GovernanceRefreshTests.policy
-    guarded_refresh = refresh.GovernanceRefreshTests.guarded_refresh
+    commit = refresh.governance_commit
+    policy = refresh.governance_policy
+    guarded_refresh = refresh.governance_guarded_refresh
 
     def authorize(self, target, rows=None, instruction="Adopt this exact target snapshot"):
         return self.write(self.stored() if rows is None else rows, governance_refresh=True,

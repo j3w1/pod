@@ -20,169 +20,18 @@ from pod.ledger import (checkpoint, constraints_update, objective_root, read, ro
 from pod.operations import OrcaPort, guarded_start
 from pod.records import packet
 from tests.common import VERIFICATION, fake_authority, fixture, proof
-from tests.test_operations import FakePort, ROUTE
 
-AGENTS = ("# Project rules\n\nEvery change to src/ receives a fresh candidate-bound review.\n"
-          "Reviews bind to a frozen candidate.\nDocs are optional.\n")
-
-
-def git(project: Path, *argv: str) -> str:
-    return subprocess.run(["git", "-C", str(project), *argv], capture_output=True, text=True,
-                          check=True).stdout.strip()
-
-
-class KernelCase(unittest.TestCase):
-    def setUp(self):
-        self.temp = fixture(); self.root = self.temp.__enter__()
-        self.addCleanup(self.temp.__exit__, None, None, None)
-        self.env = patch.dict(os.environ, {"XDG_STATE_HOME": str(self.root / "state"),
-                                           "XDG_CONFIG_HOME": str(self.root / "config")})
-        self.env.__enter__(); self.addCleanup(self.env.__exit__, None, None, None)
-        self.project = self.root / "project"
-        self.project.mkdir()
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.project)], check=True)
-        git(self.project, "config", "user.name", "Fixture")
-        git(self.project, "config", "user.email", "fixture@example.invalid")
-        (self.project / "AGENTS.md").write_text(AGENTS)
-        (self.project / "src").mkdir()
-        (self.project / "src" / "old.py").write_text("old\n")
-        (self.project / "README.md").write_text("readme\n")
-        git(self.project, "add", ".")
-        git(self.project, "commit", "-q", "-m", "base")
-        git(self.project, "branch", "target")
-        self.base = git(self.project, "rev-parse", "HEAD")
-        git(self.project, "update-ref", "refs/remotes/origin/target", self.base)
-        git(self.project, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/target")
-        write_defaults(self.root / "config" / "pod" / "config.yaml")
-        self.port = FakePort()
-        context = repository_context(self.project)
-        self.port.placement = {"repository": None, "repo_key": context["repo_key"],
-                               "path": context["worktree"], "branch": "main", "runtime": "runtime"}
-        authority = patch("pod.ledger.require_authority",
-                          side_effect=lambda *args, **kwargs: fake_authority(self.port)(*args, **kwargs))
-        authority.start(); self.addCleanup(authority.stop)
-        self.candidate = self.base
-
-    def core(self, **extra) -> dict:
-        return {"schema": "pod-checkpoint/v3", "criteria": ["PoD#1"], "plan_revision": "plan",
-                "candidate": self.candidate, "policy_revision": effective(self.project)["revision"],
-                "native_refs": [], "assignments": [], "questions": [], "verification_gaps": [],
-                "next_safe_action": "continue", "verification": dict(VERIFICATION), **extra}
-
-    def proof(self, obligation, **extra):
-        state = read(self.project, "objective")
-        definition = (next(row for row in self.stored() if row["id"] == obligation)
-                      if state else self.criterion())
-        return proof(obligation, self.candidate, definition=definition,
-                     policy_revision=effective(self.project)["revision"], **extra)
-
-    def write(self, obligations, objective="objective", **fields) -> dict:
-        return checkpoint(self.project, objective, owner="owner",
-                          value=self.core(obligations=obligations, **fields),
-                          native={"runtime": "runtime", "delegation": "available"})
-
-    def intake(self, *rows, **fields) -> dict:
-        return self.write([self.criterion(), *rows], governance={"base_ref": "target"}, **fields)
-
-    @staticmethod
-    def criterion(state="active", **fields):
-        row = {"id": "O1", "kind": "criterion", "provenance": "objective", "source": {"ref": "PoD#1"},
-               "check": "PoD#1 passes", "state": state}
-        if state == "active":
-            row["executor"] = "coordinator"
-        row.update(fields)
-        return row
-
-    @staticmethod
-    def sub(key, state="waiting", **fields):
-        row = {"id": key, "kind": "subgoal", "provenance": "coordinator", "parent": "O1",
-               "check": f"{key} is delivered", "state": state}
-        if state == "waiting":
-            row["wait"] = {"class": "sequenced", "referent": "O1"}
-        row.update(fields)
-        return row
-
-    def stored(self, objective="objective"):
-        return [dict(row) for row in read(self.project, objective)["checkpoint"]["obligations"]]
-
-    def packet(self, serves, *, role="implement", boundary=None, revision=None, **extra):
-        from pod.config import load
-        snapshot = load(self.project)
-        state = read(self.project, "objective")
-        return packet({"schema": "pod-packet/v3", "objective": "objective", "criteria": ["PoD#1"],
-                       "responsibility": "writer", "scope": ["src"], "actions": ["edit"],
-                       "candidate": self.candidate, "context": [], "dependencies": [],
-                       "route": {**ROUTE, "preference_revision": snapshot["revision"]},
-                       "policy_revision": snapshot["policy_revision"], "plan_revision": "plan",
-                       "report_contract": "checks", "sources": [], "serves": serves, "role": role,
-                       "boundary": boundary or {"paths": [], "surfaces": []},
-                       "map_revision": revision or state["checkpoint"]["revision"], **extra})
-
-    def start(self, task, frozen, accompanying=None):
-        return guarded_start(self.project, "objective", owner="owner", run="run", task=task,
-                             plan_revision="plan", frozen_packet=frozen, worktree="current",
-                             port=self.port, accompanying=accompanying)
-
-    def refused(self, code, detail, call, *args, **kwargs):
-        with self.assertRaises(PodError) as caught:
-            call(*args, **kwargs)
-        self.assertEqual(caught.exception.code, code, str(caught.exception))
-        if detail is not None:
-            self.assertEqual(caught.exception.detail["detail"], detail, str(caught.exception))
-        return caught.exception
-
-    def settle(self, admission):
-        self.port.workers[admission["native_binding"]["dispatchId"]]["outcome"] = "succeeded"
-
-    def report(self, admission, frozen, *, outcome="succeeded", scope=("src",), **extra):
-        body = {"schema": "pod-report/v1", "assignment": frozen["packet_id"],
-                "attempt": admission["native_binding"]["dispatchId"], "candidate": self.candidate,
-                "outcome": outcome, "scope": list(scope), "files": ["src/new.py"], "checks": ["unit"],
-                "failures": [] if outcome == "succeeded" else ["review not completed"], "evidence": [],
-                "uncertainty": [], "questions": []}
-        with patch.object(OrcaPort, "show_worker", autospec=True,
-                          side_effect=lambda _port, dispatch: self.port.show_worker(dispatch)):
-            return internal_run("report", {"project": str(self.project), "objective": "objective",
-                                           "admission_id": admission["admission_id"], "packet": frozen,
-                                           "report": body, **extra})
+from tests.kernel_support import (AGENTS, git, KernelCase, ROUTE, governance_policy,
+                                  assurance_review, assurance_satisfied, assurance_label, assurance_waiting)
 
 
 class ProofIntegrityBoundaryTests(KernelCase):
     authority = {"provenance": "user_direct", "instruction": "verify the revised security requirement"}
 
-    def review(self, task="review", **packet_fields):
-        frozen = self.packet(["A"], role="review", **packet_fields)
-        admission = self.start(task, frozen)["admission"]
-        self.settle(admission)
-        rows = self.stored()
-        a = next(row for row in rows if row["id"] == "A")
-        a.pop("executor")
-        a.update(state="satisfied", evidence=[{"attempt": admission["admission_id"]}])
-        self.report(admission, frozen, map={"obligations": rows})
-        return admission
-
-    def satisfied(self, **packet_fields):
-        self.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
-                     "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
-                     "candidate": self.base, "existing_evidence": "tests", "insufficiency": "no review",
-                     "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}})
-        return self.review(**packet_fields)
-
-    def label(self):
-        with patch.object(OrcaPort, "read_native", autospec=True,
-                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
-            return internal_run("acceptance", {
-                "project": str(self.project), "objective": "objective", "criteria": ["PoD#1"],
-                "evidence_rows": [], "candidate": self.candidate, "policy_revision": "p", "sources": [],
-                "dependencies": [], "environment": "fixture", "review_required": False,
-                "hosted_required": False})["independently_reviewed"]
-
-    def waiting(self):
-        rows = deepcopy(self.stored())
-        a = next(row for row in rows if row["id"] == "A")
-        a.pop("evidence", None); a.pop("reuse", None)
-        a.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
-        return rows
+    review = assurance_review
+    satisfied = assurance_satisfied
+    label = assurance_label
+    waiting = assurance_waiting
 
     def test_c06_checkpoint_cannot_erase_accepted_review_or_start_repeat(self):
         self.satisfied()
@@ -402,14 +251,7 @@ class ProofIntegrityBoundaryTests(KernelCase):
 
 
 class GovernanceTests(KernelCase):
-    def policy(self, key="PA", lines="3", **fields):
-        row = {"id": key, "kind": "assurance", "provenance": "project_policy",
-               "source": {"path": "AGENTS.md", "lines": lines}, "check": "fresh review",
-               "scope": {"paths": ["src"]}, "question": "is src correct?", "candidate": self.base,
-               "existing_evidence": "unit tests", "insufficiency": "no independent review",
-               "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
-        row.update(fields)
-        return row
+    policy = governance_policy
 
     def test_policy_cites_governance_at_the_base_never_the_candidate(self):
         state = self.intake(self.policy())

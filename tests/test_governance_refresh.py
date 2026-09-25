@@ -5,27 +5,16 @@ from unittest.mock import patch
 
 from pod.internal import run as internal_run
 from pod.ledger import read
-from tests import test_kernel_boundaries as boundaries
+from tests import kernel_support as boundaries
 
 
-USER = {"provenance": "user_direct", "instruction": "Select this target for this objective"}
+from tests.kernel_support import USER, governance_commit, governance_guarded_refresh, governance_policy
 
 
 class GovernanceRefreshTests(boundaries.KernelCase):
-    def policy(self, key="PA", lines="3"):
-        return boundaries.GovernanceTests.policy(self, key, lines)
-
-    def commit(self, path, text, message):
-        (self.project / path).write_text(text)
-        boundaries.git(self.project, "add", path)
-        boundaries.git(self.project, "commit", "-qm", message)
-        return boundaries.git(self.project, "rev-parse", "HEAD")
-
-    def guarded_refresh(self, rows=None, **fields):
-        before = read(self.project, "objective")
-        self.refused("governance_unavailable", "governance_unavailable", self.write,
-                     self.stored() if rows is None else rows, governance_refresh=True, **fields)
-        self.assertEqual(read(self.project, "objective"), before)
+    policy = governance_policy
+    commit = governance_commit
+    guarded_refresh = governance_guarded_refresh
 
     def test_missing_default_explicit_selection_allows_initial_baseline(self):
         boundaries.git(self.project, "branch", "other-target")
