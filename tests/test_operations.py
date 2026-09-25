@@ -665,8 +665,9 @@ class AdmissionTests(unittest.TestCase):
         self.assertIsNone(_assignment_evidence(other,started)['placement']['tab'])
         owned=deepcopy(shown);owned['result']['terminalResource']={'ownerDispatchId':binding['dispatchId']}
         self.assertEqual(_assignment_evidence(owned,started)['placement']['tab'],'native-tab')
-        reused=deepcopy(shown);reused['result']['terminalResource']={'ownerDispatchId':'ctx_follow_up'}
-        self.assertIsNone(_assignment_evidence(reused,started)['placement']['tab'])
+        for resource in ({'ownerDispatchId':'ctx_follow_up'},{'ownerDispatchId':None},{},'unexpected'):
+            reused=deepcopy(shown);reused['result']['terminalResource']=resource
+            self.assertIsNone(_assignment_evidence(reused,started)['placement']['tab'],resource)
         self.assertEqual(_assignment_evidence(other,started)['settled'],
                          _assignment_evidence(shown,started)['settled'])
 
