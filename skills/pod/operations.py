@@ -113,9 +113,14 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
     worker = result["worker"]
     handle = binding.get("terminalHandle")
     terminal = result.get("terminal")
+    resource = result.get("terminalResource")
+    # After terminal reuse Orca transfers ownership to the follow-up Dispatch; its tab
+    # then belongs to that Dispatch, not to this one.
+    owner = resource.get("ownerDispatchId") if isinstance(resource, dict) else None
     terminal = terminal if (isinstance(terminal, dict) and handle is not None
                             and terminal.get("handle") == handle
-                            and terminal.get("worktreeId") == binding["worktreeId"]) else {}
+                            and terminal.get("worktreeId") == binding["worktreeId"]
+                            and owner in (None, binding["dispatchId"])) else {}
     facts = {"worktree": binding["worktreeId"], "tab": terminal.get("tabId"),
              "native_worker_state": worker.get("state"), "terminal": handle,
              "placement_readback": "observed", "surfaces": [], "warnings": [],

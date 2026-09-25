@@ -663,6 +663,10 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(),before)
         other=deepcopy(shown);other['result']['terminal']['handle']='unrelated'
         self.assertIsNone(_assignment_evidence(other,started)['placement']['tab'])
+        owned=deepcopy(shown);owned['result']['terminalResource']={'ownerDispatchId':binding['dispatchId']}
+        self.assertEqual(_assignment_evidence(owned,started)['placement']['tab'],'native-tab')
+        reused=deepcopy(shown);reused['result']['terminalResource']={'ownerDispatchId':'ctx_follow_up'}
+        self.assertIsNone(_assignment_evidence(reused,started)['placement']['tab'])
         self.assertEqual(_assignment_evidence(other,started)['settled'],
                          _assignment_evidence(shown,started)['settled'])
 
