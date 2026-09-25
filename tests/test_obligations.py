@@ -917,7 +917,7 @@ class LifecycleTests(unittest.TestCase):
         refused(self, "obligation_unaccounted", "closure_unfinished", accept_write, state,
                 write(state, rows, close=True), ctx(governor_pending=True))
         closed = accept_write(state, write(state, rows, close=True), ctx())
-        self.assertEqual(closed["closure"]["report"]["status"], "open")
+        self.assertEqual(closed["closure"]["report"]["status"], "closed")
         self.assertEqual(closed["closure"]["report"]["withdrawn"][0]["reason"], "folded into O1")
         self.assertEqual(closed["closure"]["report"]["label"]["label"], "WITHHELD")
         refused(self, "objective_closed", "objective_closed", admission_refusal, closed, packet(["S"]), ctx(),

@@ -1368,8 +1368,8 @@ def _close(state: dict, ctx: dict) -> dict:
     if ctx.get("governor_pending"):
         raise refuse("obligation_unaccounted", "closure_unfinished",
                      "closure waits for pending governed effects to settle")
-    return {"seq": state["seq"], "revision": state["revision"],
-            "report": report_projection(state, ctx)}
+    closure = {"seq": state["seq"], "revision": state["revision"]}
+    return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
 
 
 def brief_map(criteria: list[str], value: Any, ctx: dict) -> dict:
