@@ -194,7 +194,9 @@ def evidence_record(value: Any) -> dict:
         raise PodError("invalid_evidence", "Invalid evidence schema or status")
     if "definition" in e and not _sha256(e["definition"]):
         raise PodError("invalid_evidence", "Evidence definition is a SHA256 fingerprint")
-    return e
+    from .util import normalize_timestamp
+    return {**e, "timestamp": normalize_timestamp(e["timestamp"], field="Evidence timestamp",
+                                                    code="invalid_evidence")}
 
 
 def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str,

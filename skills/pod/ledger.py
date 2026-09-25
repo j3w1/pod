@@ -433,13 +433,17 @@ def _governor_pending(project: Path, objective: str) -> bool:
 
 def _authorization_granted(project: Path, objective: str):
     def granted(scope: str, candidate: str) -> bool:
-        from .governor import _read_journal, _record_path
+        from .governor import _read_journal, _record_path, validate_authorization
         try:
             journal = _read_journal(_record_path(project, objective))
         except PodError:
             return False
-        return any(row["decision"] == "ALLOW" and row["action"]["kind"] == scope
+        kinds = ("push", "pr_update") if scope == "publish" else (scope,)
+        return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
                    and candidate in (row["action"]["candidate"], row.get("commit"), row.get("candidate_id"))
+                   and validate_authorization(row["action"].get("authorization"),
+                                              candidate=row.get("commit") or row["action"]["candidate"],
+                                              kind=scope) is not None
                    for row in journal["actions"])
     return granted
 
@@ -1219,12 +1223,8 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
     if kind == "safety_refusal" and retry_after is not None:
         raise PodError("invalid_route_failure", "Safety refusal has no timed retry")
     if retry_after is not None:
-        try:
-            parsed = datetime.fromisoformat(retry_after.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise PodError("invalid_route_failure", "Retry-after must be an ISO timestamp") from exc
-        if parsed.tzinfo is None:
-            raise PodError("invalid_route_failure", "Retry-after needs a timezone")
+        from .util import normalize_timestamp
+        retry_after = normalize_timestamp(retry_after, field="Retry-after", code="invalid_route_failure")
     def apply(row: dict) -> None:
         if clear:
             if cleared_by not in ("user", "runtime_change"):

@@ -39,7 +39,7 @@ TRIAGE = ("required_correction", "advisory")
 PROPOSAL_SOURCES = ("worker_report", "reviewer_advisory", "issue", "repository",
                     "fetched_documentation", "coordinator_caution")
 GOVERNANCE_PATHS = (".pod/config.yaml", "AGENTS.md", "CLAUDE.md")
-AUTHORIZED_SCOPES = ("merge", "release", "deploy")
+AUTHORIZED_SCOPES = ("publish", "merge", "release", "deploy")
 MAX_OBLIGATIONS = 96
 MAX_PROPOSALS = 64
 MAX_SERVES = 16

@@ -26,11 +26,13 @@ from .config import GOVERNED_KINDS, effective, validate_effects
 from .errors import PodError
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
-from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact, route_summary
+from .util import (MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact,
+                   normalize_timestamp, route_summary)
 
 SCHEMA = "pod-governor/v2"
 KINDS = GOVERNED_KINDS
 AUTHORIZED_KINDS = ("merge", "release", "deploy")
+AUTHORIZATION_SCOPES = ("publish", *AUTHORIZED_KINDS)
 VALIDATION_KINDS = ("workflow_dispatch", "validation_rerun")
 PUBLICATION_KINDS = ("push", "pr_update")
 DISPATCH_KINDS = ("workflow_dispatch", "remote_diagnostic")
@@ -58,7 +60,7 @@ _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
 _GIT_ID = gitio.OBJECT_ID
 NEXT_ACTIONS = {
-    "authorization_missing": "supply the owner authorization record naming this candidate, tree and scope",
+    "authorization_missing": "obtain the owner's delivery decision (merge remotely / keep local / defer) for this exact candidate",
     "unit_unknown": "prepare the delivery unit's candidate with the governor-prepare helper",
     "unit_unbound": "prepare the delivery unit's candidate and branch with the governor-prepare helper",
     "candidate_unbound": "checkpoint a candidate, or prepare one for the delivery unit",
@@ -202,19 +204,6 @@ def _compact(journal: dict) -> None:
 AUTHORIZATION_SCHEMA = "pod-authorization/v1"
 AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
 _GIT_OBJECT_ID = gitio.OBJECT_ID
-_UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\Z")
-
-
-def _utc_timestamp(value: object) -> bool:
-    if not isinstance(value, str) or _UTC_TIMESTAMP.fullmatch(value) is None:
-        return False
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError:
-        return False
-    return parsed.utcoffset() is not None and parsed.utcoffset().total_seconds() == 0
-
-
 def validate_authorization(value: object, *, candidate: str | None = None, tree: str | None = None,
                            kind: str | None = None) -> dict | None:
     """Accept only a complete owner authorization for a governed merge, release or deploy.
@@ -233,11 +222,10 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
                 for key in ("candidate", "tree"))
             or len(record["candidate"]) != len(record["tree"])):
         raise PodError("invalid_authorization", "Authorization candidate and tree must be Git object ids")
-    if not _utc_timestamp(record["utc"]):
-        raise PodError("invalid_authorization", "Authorization timestamp must be canonical UTC")
+    utc = normalize_timestamp(record["utc"], field="Authorization timestamp", code="invalid_authorization")
     scope = record["scope"]
     if (not isinstance(scope, list) or not scope or len(scope) > 8
-            or any(item not in AUTHORIZED_KINDS for item in scope)):
+            or any(item not in AUTHORIZATION_SCOPES for item in scope)):
         raise PodError("invalid_authorization", "Authorization scope is unsupported")
     if candidate is not None and record["candidate"] != candidate:
         return None
@@ -245,7 +233,7 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
         return None
     if kind is not None and kind not in record["scope"]:
         return None
-    return record
+    return {**record, "utc": utc}
 
 
 def _validate_diagnostic(value: object) -> dict:
@@ -495,17 +483,26 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
     scopes = set()
     if kind in AUTHORIZED_KINDS:
         scopes.add(kind)
+    if kind in PUBLICATION_KINDS:
+        scopes.add("publish")
     if deploys:
         scopes.add("deploy")
     if releases:
         scopes.add("release")
     for scope in sorted(scopes):
-        authorized = validate_authorization(action.get("authorization"),
-                                            candidate=binding["commit"] if binding else action["candidate"],
-                                            tree=binding["tree"] if binding else None, kind=scope)
+        candidate = binding["commit"] if binding else action["candidate"]
+        tree = binding["tree"] if binding else None
+        try:
+            authorized = validate_authorization(action.get("authorization"),
+                                                candidate=candidate, tree=tree, kind=scope)
+        except PodError:
+            authorized = None
         if authorized is None:
             _reason(reasons, "authorization", "authorization_missing",
-                    f"{scope} needs an owner authorization record naming this candidate, tree and scope")
+                    f"{scope} authorization for candidate {candidate}, tree {tree or 'unbound'} is missing; "
+                    f"{NEXT_ACTIONS['authorization_missing']}")
+        else:
+            action["authorization"] = authorized
 
 
 
@@ -828,6 +825,10 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
         codes = [reason["code"] for reason in verdict["reasons"]]
         next_action = next((NEXT_ACTIONS[code] for code in codes if code in NEXT_ACTIONS), None)
+        missing = next((reason for reason in verdict["reasons"]
+                        if reason["code"] == "authorization_missing"), None)
+        if missing is not None:
+            next_action = missing["detail"]
         record_id = digest({"action": proposal, "at": moment, "revision": journal["revision"]})
         counters = journal["counters"]
         _count(counters["decisions"], decision)
