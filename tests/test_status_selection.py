@@ -65,6 +65,28 @@ class StatusSelectionTests(KernelCase):
             "workers": [worker], "complete": True})
         self.assertEqual(hidden["retained_terminals"], [])
 
+    def test_active_assignment_shows_orca_attention_or_unknown_without_writes(self):
+        self.intake()
+        frozen = self.packet(["O1"])
+        admission = self.start("work", frozen)["admission"]
+        dispatch = admission["native_binding"]["dispatchId"]
+        path = objective_root(self.project, "objective") / "context.json"
+        before = path.read_bytes()
+        for attention, note in (({"categories": ["input"], "requiresAction": True}, "needs a human answer"),
+                                ({"categories": ["failure"], "requiresAction": True}, "needs attention: failure"),
+                                (None, "attention unknown")):
+            worker = {"dispatchId": dispatch, "projection": {} if attention is None else {"attention": attention}}
+            observed = self.status("--objective", "objective", workers={
+                "runtime": "runtime", "scope": {"source": "flag", "run": "run"},
+                "workers": [worker], "complete": True})
+            with self.subTest(note=note):
+                self.assertEqual(observed["assignments"]["active"][0]["attention"],
+                                 "unknown" if attention is None else
+                                 {"categories": attention["categories"], "requires_action": True})
+                self.assertTrue(any(line.startswith("waiting for implement delivery") and note in line
+                                    for line in observed["progress"]), observed["progress"])
+        self.assertEqual(path.read_bytes(), before)
+
 
 if __name__ == "__main__":
     import unittest

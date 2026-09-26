@@ -164,7 +164,7 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 - <a id="a139"></a>**A139** — The six model rows and guide-profile labels remain readable from wide to 40×12 terminals; Details is always present, uses labelled sections at 80×24, pages at 40×12 and other short heights without skipping a line, keeps essential roles legible in 16-colour light and dark palettes, and exposes dated AA records and source caveats. Strict frames sweep widths 40–200 and height 6 without line overflow; `LANG=C` uses ASCII.
 - <a id="a140"></a>**A140** — State edits save immediately, All models toggles back to saved choices across restarts/external edits, and browsing, sorting, filtering and paging never write.
 - <a id="a142"></a>**A142** — A new install and explicit update leave ordinary agent sessions and running workers unchanged; coordinators reload before new starts.
-- <a id="a175"></a>**A175** — Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments, gates, progress and next action without writes or invented telemetry.
+- <a id="a175"></a>**A175** — Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments with Orca's own attention for each active one (`unknown` when Orca gives none), gates, progress and next action without writes or invented telemetry.
 - <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
 
 

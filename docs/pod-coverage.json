@@ -1618,7 +1618,8 @@
       "offline_test": [
         "tests.test_status_selection.StatusSelectionTests.test_shared_run_requires_objective_choice_then_selects_without_writes",
         "tests.test_status_selection.StatusSelectionTests.test_gates_and_hosted_progress_are_derived",
-        "tests.test_status_selection.StatusSelectionTests.test_retained_terminal_requires_live_native_readback_of_settled_attempt"
+        "tests.test_status_selection.StatusSelectionTests.test_retained_terminal_requires_live_native_readback_of_settled_attempt",
+        "tests.test_status_selection.StatusSelectionTests.test_active_assignment_shows_orca_attention_or_unknown_without_writes"
       ],
       "status": "NOT_RUN"
     },

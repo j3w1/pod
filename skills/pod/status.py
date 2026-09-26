@@ -14,6 +14,27 @@ from .term import clean
 from .util import route_summary
 
 
+def _attention(native: dict | None) -> dict | str:
+    """Orca's own attention for one exact Dispatch; absent means unknown, never "not waiting"."""
+    projection = native.get("projection") if isinstance(native, dict) else None
+    attention = projection.get("attention") if isinstance(projection, dict) else None
+    if not isinstance(attention, dict) or not isinstance(attention.get("categories"), list):
+        return "unknown"
+    return {"categories": [str(item) for item in attention["categories"]][:8],
+            "requires_action": attention.get("requiresAction") is True}
+
+
+def _attention_note(attention: dict | str) -> str:
+    if attention == "unknown":
+        return "; attention unknown"
+    categories = attention["categories"]
+    if {"input", "approval"} & set(categories):
+        return f"; needs a human answer (Orca attention: {', '.join(categories)})"
+    if "guidance" in categories:
+        return "; needs the coordinator's guidance"
+    return f"; needs attention: {', '.join(categories)}" if attention["requires_action"] else ""
+
+
 def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
     checkpoint = state["checkpoint"]
     map_state = view["map"] if isinstance(view, dict) else None
@@ -28,6 +49,8 @@ def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
         item = {"admission": key, "role": row["role"], "serves": list(row["serves"]),
                 "route": row["route_decision"], "dispatch": binding.get("dispatchId"),
                 "state": row["state"]}
+        if key in outstanding:
+            item["attention"] = _attention(native_rows.get(binding.get("dispatchId")))
         (active if key in outstanding else settled).append(item)
         native = native_rows.get(binding.get("dispatchId")) if key not in outstanding else None
         projection = native.get("projection") if isinstance(native, dict) else None
@@ -54,7 +77,8 @@ def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
             attempt = by_admission.get(ob["executor"])
             if attempt:
                 dispatch = attempt["dispatch"] or "pending"
-                progress.append(f"waiting for {attempt['role']} delivery (dispatch {dispatch})")
+                progress.append(f"waiting for {attempt['role']} delivery (dispatch {dispatch})"
+                                + _attention_note(attempt["attention"]))
         elif ob["state"] == "blocked_external":
             progress.append(f"waiting for {ob['external']['party']}: {ob['external']['need']}")
     for gate in remaining:

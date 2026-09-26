@@ -9,8 +9,7 @@ Admission serializes logical reservations. A mapped packet serves current
 unsatisfied obligations with role and boundary; its row atomically activates
 them and refuses overlapping ownership. It validates coordinator authority,
 packet, placement, sources, version, eligibility, constraints, route and
-ceiling. Read preferences under the objective lock before recording the row;
-release the lock before `worker-start`. A changed choice refuses
+ceiling. A changed choice refuses
 `preference_changed` without a write. Later edits affect later starts.
 
 Exact native settlement frees the logical slot even with a retained terminal. Reserved and unresolved requests remain outstanding. Never count other objectives or infer physical occupancy.
@@ -19,7 +18,9 @@ Normal workers use native worker-start and Orca's new-agent-tab setting.
 Report Task/Dispatch, worktree, terminal/tab references and native placement
 warnings through status/readback. `surface: background` and discoverability
 warnings describe native placement; terminal presence/absence proves neither
-rendering nor focus. Diagnose missing tabs with the existing worker. Invent no visibility flag. Focus requires
+rendering nor focus. Diagnose missing tabs with the existing worker.
+`pod status` shows Orca attention per assignment; a missing "Needs you" proves
+nothing; ask owner questions plainly. Invent no visibility flag. Focus requires
 supported behavior and user request. Preserve reports; follow Delivery/release
 ordering. Reuse only for immediate follow-up; retain protected/uncertain resources.
 
@@ -35,8 +36,8 @@ checkpoint core. It does not re-check preferences or make a new model choice.
 Terminal reuse requires a settled prior attempt with a known
 terminal, copies its effective route and rechecks eligibility. Native
 `worker-start --terminal` carries no model or effort flag. New model+effort and
-model-with-omitted-effort starts use only Orca's documented launch preferences.
-Only delegation requires this capability.
+model-with-omitted-effort starts use only Orca's documented launch preferences,
+which only delegation requires.
 
 Requested/effective model and effort differ. Missing values stay `unknown`; an exact bound attempt with a mismatch is marked
 `route_mismatch` and blocks acceptance. Orca currently has no per-worker
