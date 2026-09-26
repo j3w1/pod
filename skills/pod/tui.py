@@ -20,7 +20,7 @@ from .errors import PodError
 from .orca import MAX_OUTPUT, _envelope, executable
 from .term import Capabilities, capabilities, display_width
 from .tui_render import Frame, frame
-from .tui_state import State, initial, reduce, refresh, with_notice, with_runtime
+from .tui_state import State, initial, reduce, refresh, with_notice, with_runtime, with_viewport
 
 TICK_MS = 200
 PROBE_TIMEOUT_S = 2.0
@@ -137,9 +137,11 @@ def _styles(caps: Capabilities) -> dict[str, int]:
                 fg = {role: base for role in roles}
                 for role in ("heading", "label", "key"):
                     fg[role] = accent
+                # Yellow, green and cyan are unreadable on a light background (about 1.2-2.6:1); magenta and
+                # blue keep essential metrics, caveats and badges above 4:1 there.
                 for role in ("metric", "advisory", "badge_preferred"):
-                    fg[role] = curses.COLOR_YELLOW
-                fg["badge_available"] = curses.COLOR_GREEN
+                    fg[role] = curses.COLOR_MAGENTA if caps.light_background else curses.COLOR_YELLOW
+                fg["badge_available"] = curses.COLOR_BLUE if caps.light_background else curses.COLOR_GREEN
                 fg["error"] = curses.COLOR_RED
                 focus_bg = curses.COLOR_WHITE if caps.light_background else curses.COLOR_BLUE
             for index, role in enumerate(roles, 1):
@@ -232,6 +234,7 @@ def _screen(window, project: Path, document: dict) -> int:
                 columns, rows = window.getmaxyx()[1], window.getmaxyx()[0]
                 picture = frame(state, columns, rows, caps, datetime.now(timezone.utc))
                 _draw(window, picture, caps, styles)
+                state = with_viewport(state, picture.scroll, picture.page)
                 dirty = False
             try:
                 raw = window.getch()

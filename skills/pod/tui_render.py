@@ -45,6 +45,9 @@ class Frame:
     lines: tuple[Line, ...]
     columns: int
     rows: int
+    # The first Details (or help) line shown and the Page Up/Down step that keeps pages contiguous.
+    scroll: int = 0
+    page: int = 8
 
     @property
     def plain(self) -> str:
@@ -363,15 +366,21 @@ def _details(state: State, width: int, caps: Capabilities, now: datetime, *, blo
     return _inline_details(state, model_id, width, caps, now)
 
 
-def _page(lines: list[Line], count: int, width: int, caps: Capabilities, scroll: int) -> list[Line]:
-    """A scrolled page; a cut page says how to see the rest instead of appending ellipses."""
+def _page(lines: list[Line], count: int, width: int, caps: Capabilities,
+          scroll: int) -> tuple[list[Line], int, int]:
+    """A scrolled page, its clamped start and the step to the next page.
+
+    A cut page gives its last row to a "more" hint, so the step is the content it shows; every line is
+    reachable at any height, and the final page ends at the last line instead of past it.
+    """
     if count <= 0:
-        return []
-    start = max(0, min(scroll, max(0, len(lines) - 1)))
+        return [], 0, 1
+    start = max(0, min(scroll, len(lines) - count))
     page = lines[start:start + count]
-    if len(lines) > start + count and count >= 3:
+    marked = count >= 3
+    if len(lines) > start + count and marked:
         page[-1] = Line(_fit(("v" if caps.ascii_only else "↓") + " more: Page Down", width, caps), "advisory")
-    return page
+    return page, start, count - 1 if marked else count
 
 
 # --------------------------------------------------------------------------- frame parts
@@ -469,7 +478,8 @@ def _focused(state: State) -> str | None:
     return state.focus_id if state.focus_id in visible else (visible[0] if visible else None)
 
 
-def _split(state: State, width: int, rows: int, caps: Capabilities, now: datetime) -> list[Line]:
+def _split(state: State, width: int, rows: int, caps: Capabilities,
+           now: datetime) -> tuple[list[Line], int, int]:
     right_width = max(44, min(60, width // 3 - 1))
     left_width = width - right_width - 3
     body_rows = rows - 2
@@ -478,13 +488,15 @@ def _split(state: State, width: int, rows: int, caps: Capabilities, now: datetim
     right = [_details_title(state, _focused(state), right_width, caps)]
     detail = _details(state, right_width, caps, now, block=True)
     scroll = state.help_scroll if state.help_open else state.detail_scroll
-    right += _page(detail, body_rows - 1, right_width, caps, scroll)
+    page, start, step = _page(detail, body_rows - 1, right_width, caps, scroll)
+    right += page
     return [_join(_clip_line(left[index], left_width, caps) if index < len(left) else Line(""),
                   right[index] if index < len(right) else Line(""), left_width, caps)
-            for index in range(body_rows)]
+            for index in range(body_rows)], start, step
 
 
-def _stacked(state: State, width: int, rows: int, caps: Capabilities, now: datetime) -> list[Line]:
+def _stacked(state: State, width: int, rows: int, caps: Capabilities,
+             now: datetime) -> tuple[list[Line], int, int]:
     focused = _focused(state)
     ids = visible_ids(state) if not (state.expanded or state.help_open) else ([focused] if focused else [])
     lines = _table(state, width, caps, ids)
@@ -492,12 +504,13 @@ def _stacked(state: State, width: int, rows: int, caps: Capabilities, now: datet
     room = rows - 2 - len(lines)
     detail = _details(state, width, caps, now, block=False, tiny=room <= 3)
     scroll = state.help_scroll if state.help_open else state.detail_scroll
-    lines += _page(detail, room, width, caps, scroll)
+    page, start, step = _page(detail, room, width, caps, scroll)
+    lines += page
     spare = room - len(detail)
     pool = _pool(state, width, caps)
     if not (state.help_open or state.expanded) and spare > len(pool):
         lines += [Line("")] + pool
-    return lines
+    return lines, start, step
 
 
 def frame(state: State, cols: int, rows: int, caps: Capabilities, now: datetime, *, strict: bool = False) -> Frame:
@@ -508,14 +521,14 @@ def frame(state: State, cols: int, rows: int, caps: Capabilities, now: datetime,
     if cols < 40 or rows < 12:
         return Frame((Line(_fit("Terminal too small", width, caps), "error"),
                       Line(_fit("Resize or press q to quit", width, caps))), cols, rows)
-    body = (_split if cols >= SPLIT_COLUMNS else _stacked)(state, width, rows, caps, now)
+    body, scroll, page = (_split if cols >= SPLIT_COLUMNS else _stacked)(state, width, rows, caps, now)
     lines = [_title(state, width, caps), *body]
     lines += [Line("") for _ in range(max(0, rows - 1 - len(lines)))]
     lines = lines[:rows - 1] + [_footer(state, width, caps)]
     overflow = [line.text for line in lines if display_width(line.text) > width]
     if overflow and strict:
         raise ValueError(f"frame line exceeds {width} columns: {overflow[0]!r}")
-    return Frame(tuple(_clip_line(line, width, caps) for line in lines), cols, rows)
+    return Frame(tuple(_clip_line(line, width, caps) for line in lines), cols, rows, scroll, page)
 
 
 def summary(preferences: dict) -> str:

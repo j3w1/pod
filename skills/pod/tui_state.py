@@ -26,6 +26,8 @@ class State:
     help_open: bool = False
     help_scroll: int = 0
     detail_scroll: int = 0
+    # The rendered page step; the loop feeds it back from each frame so paging never skips a line.
+    page_step: int = 8
     notice: str = ""
     runtime: str = "Unknown"
     save_at: datetime | None = None
@@ -36,6 +38,14 @@ class Effect:
     kind: str
     model_id: str | None = None
     value: str | None = None
+
+
+def with_viewport(state: State, scroll: int, page: int) -> State:
+    """Adopt the start and step the renderer actually used, so Page Up works at once from the end."""
+    field = "help_scroll" if state.help_open else "detail_scroll"
+    if getattr(state, field) == scroll and state.page_step == page:
+        return state
+    return replace(state, **{field: scroll, "page_step": max(1, page)})
 
 
 def initial(catalog: dict, preferences: dict) -> State:
@@ -123,14 +133,16 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         if key in ("DOWN", "j"):
             return replace(state, help_scroll=min(40, state.help_scroll + 1)), None
         if key in ("PAGE_DOWN", "PAGE_UP"):
-            return replace(state, help_scroll=max(0, state.help_scroll + (8 if key == "PAGE_DOWN" else -8))), None
+            step = state.page_step if key == "PAGE_DOWN" else -state.page_step
+            return replace(state, help_scroll=max(0, state.help_scroll + step)), None
         return state, None
     if key == "/":
         return replace(state, searching=True, query=""), None
     if key == "ENTER":
         return replace(state, expanded=True, detail_scroll=0), None
     if key in ("PAGE_DOWN", "PAGE_UP"):
-        return replace(state, detail_scroll=max(0, state.detail_scroll + (8 if key == "PAGE_DOWN" else -8))), None
+        step = state.page_step if key == "PAGE_DOWN" else -state.page_step
+        return replace(state, detail_scroll=max(0, state.detail_scroll + step)), None
     if key == "s":
         return replace(state, sort_index=(state.sort_index + 1) % len(SORTS)), None
     if key == "f":

@@ -9,7 +9,7 @@ from pod.catalog import IDS, by_id, format_latency, format_usd, load, record
 from pod.config import DEFAULT, load as preferences
 from pod.term import capabilities, display_width
 from pod.tui_render import SPLIT_COLUMNS, frame, summary
-from pod.tui_state import initial, reduce, refresh, visible_ids, with_notice
+from pod.tui_state import initial, reduce, refresh, visible_ids, with_notice, with_viewport
 
 SECTIONS = ('BEST FOR', 'USE WHEN', 'TRADE-OFF', 'EXAMPLE', 'YOUR PREFERENCE', 'RUNTIME / ACCESS',
             'BENCHMARK SOURCE')
@@ -100,6 +100,53 @@ class TuiRenderTests(unittest.TestCase):
             with self.subTest(key=key):
                 _, effect = reduce(self.state, key)
                 self.assertIsNone(effect)
+
+    def pages(self, size, state=None):
+        """Page Down to the end the way the loop does, feeding each frame's viewport back."""
+        state = state or self.state
+        frames = []
+        for _ in range(60):
+            picture = self.picture(state, size)
+            state = with_viewport(state, picture.scroll, picture.page)
+            if frames and picture.scroll == frames[-1].scroll:
+                return state, frames, '\n'.join(frame.plain for frame in frames)
+            frames.append(picture)
+            state, effect = reduce(state, 'PAGE_DOWN')
+            self.assertIsNone(effect)
+        self.fail(f'paging never reached the end at {size}')
+
+    def test_paging_reaches_every_details_line_at_any_height(self):
+        for size in ((40, 12), (80, 12), (40, 18), (40, 24), (80, 24), (60, 20), (160, 20)):
+            with self.subTest(size=size):
+                state, frames, text = self.pages(size)
+                # Each page starts no later than where the previous page's content ended.
+                for before, after in zip(frames, frames[1:]):
+                    self.assertLessEqual(after.scroll, before.scroll + before.page)
+                    self.assertGreater(after.scroll, before.scroll)
+                self.assertNotIn('more: Page Down', frames[-1].plain)
+                flat = ' '.join(text.replace('│', ' ').split())
+                for heading in SECTIONS + STAGES:
+                    self.assertIn(heading, flat)
+                if len(frames) > 1:
+                    self.assertEqual(reduce(state, 'PAGE_UP')[0].detail_scroll,
+                                     max(0, frames[-1].scroll - frames[-1].page))
+
+    def test_sixteen_colour_light_palette_keeps_essential_roles_readable(self):
+        from unittest.mock import patch
+        from pod import tui
+        from pod.term import Capabilities
+        pairs = {}
+        with patch.multiple(tui.curses, start_color=lambda: None, use_default_colors=lambda: None,
+                            init_pair=lambda index, fg, bg: pairs.__setitem__(index, fg),
+                            color_pair=lambda index: index << 8, COLORS=16, create=True):
+            for light in (True, False):
+                pairs.clear()
+                tui._styles(Capabilities(ascii_only=False, color=True, light_background=light))
+                faint = {tui.curses.COLOR_YELLOW, tui.curses.COLOR_GREEN, tui.curses.COLOR_CYAN,
+                         tui.curses.COLOR_WHITE} if light else {tui.curses.COLOR_BLACK}
+                with self.subTest(light=light):
+                    self.assertTrue(pairs)
+                    self.assertFalse(faint & set(pairs.values()))
 
     def test_all_six_rows_and_layouts(self):
         for size in ((160, 45), (140, 40), (120, 36), (100, 30), (80, 24), (60, 20), (40, 12)):

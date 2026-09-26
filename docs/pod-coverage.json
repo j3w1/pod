@@ -1209,7 +1209,11 @@
         "pty_subprocess",
         "independent_review"
       ],
-      "offline_test": "tests.test_tui_pty.TuiPtyTests.test_all_six_guidance_panels_change_on_focus",
+      "offline_test": [
+        "tests.test_tui_pty.TuiPtyTests.test_all_six_guidance_panels_change_on_focus",
+        "tests.test_tui_render.TuiRenderTests.test_paging_reaches_every_details_line_at_any_height",
+        "tests.test_tui_render.TuiRenderTests.test_sixteen_colour_light_palette_keeps_essential_roles_readable"
+      ],
       "status": "NOT_RUN"
     },
     {
