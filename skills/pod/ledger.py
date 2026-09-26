@@ -442,18 +442,25 @@ def _governor_pending(project: Path, objective: str) -> bool:
 
 def _authorization_granted(project: Path, objective: str):
     def granted(scope: str, candidate: str) -> bool:
-        from .governor import _read_journal, _record_path, validate_authorization
+        from .governor import _read_journal, _record_path, merge_target_name, validate_authorization
         try:
             journal = _read_journal(_record_path(project, objective))
         except PodError:
             return False
         kinds = ("push", "pr_update") if scope == "publish" else (scope,)
+
+        def valid(row: dict) -> bool:
+            # The same tree and, for merge, the same target the unit binds now; a retarget needs fresh consent.
+            unit = journal.get("units", {}).get(row["action"].get("unit")) or {}
+            bound = unit.get("candidate") or {}
+            tree = bound.get("tree") if bound.get("commit") == row.get("commit") else None
+            return validate_authorization(row["action"].get("authorization"),
+                                          candidate=row.get("commit") or row["action"]["candidate"], tree=tree,
+                                          kind=scope,
+                                          target=merge_target_name(unit) if scope == "merge" else None) is not None
         return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
                    and candidate in (row["action"]["candidate"], row.get("commit"), row.get("candidate_id"))
-                   and validate_authorization(row["action"].get("authorization"),
-                                              candidate=row.get("commit") or row["action"]["candidate"],
-                                              kind=scope) is not None
-                   for row in journal["actions"])
+                   and valid(row) for row in journal["actions"])
     return granted
 
 

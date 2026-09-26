@@ -1494,7 +1494,9 @@
       "offline_test": [
         "tests.test_delivery.DeliveryAuthorizationTests.test_candidate_tree_and_wrong_scope_never_inherit_consent",
         "tests.test_delivery.DeliveryAuthorizationTests.test_a_published_push_cannot_grant_merge_authority",
-        "tests.test_delivery.AdmittedMergeTargetTests.test_merge_decision_binds_the_prepared_target_that_delivery_checks"
+        "tests.test_delivery.AdmittedMergeTargetTests.test_merge_decision_binds_the_prepared_target_that_delivery_checks",
+        "tests.test_delivery.AdmittedMergeTargetTests.test_a_branchless_unit_cannot_merge",
+        "tests.test_delivery.AdmittedMergeTargetTests.test_a_retarget_leaves_no_recorded_merge_consent"
       ],
       "status": "NOT_RUN"
     },
@@ -1552,7 +1554,8 @@
         "tests.test_cleanup_plan.CleanupPlanTests.test_ignored_data_and_stash_are_unique_even_when_worktree_looks_clean",
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_branch_shared_with_another_worktree_is_protected_and_changes_expect",
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_prepared_but_unpublished_remote_branch_is_not_offered",
-        "tests.test_cleanup_plan.CleanupPlanTests.test_a_retargeted_publication_never_claims_a_foreign_remote_branch"
+        "tests.test_cleanup_plan.CleanupPlanTests.test_a_retargeted_publication_never_claims_a_foreign_remote_branch",
+        "tests.test_cleanup_plan.CleanupPlanTests.test_an_older_publication_row_never_settles_on_a_retargeted_branch"
       ],
       "status": "NOT_RUN"
     },

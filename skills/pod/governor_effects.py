@@ -294,7 +294,8 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
 def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port: GitHubPort | None = None,
               now: datetime | None = None) -> dict:
     """Settle an UNKNOWN or pending row from provider readback only; never resubmit."""
-    from .governor import DISPATCH_KINDS, PUBLICATION_KINDS, _owned_state, _find_row, _read_journal, _record_path
+    from .governor import (DISPATCH_KINDS, PUBLICATION_KINDS, _owned_state, _find_row, _read_journal, _record_path,
+                           pushed_branch)
     bounded_text(owner, name="owner")
     bounded_text(record_id, name="record_id", limit=128)
     context_path = _path(project, objective)
@@ -315,9 +316,11 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
     provider = row["receipt"].get("provider") or {}
     moment = now or datetime.now(timezone.utc)
     if kind in PUBLICATION_KINDS:
-        branch = row.get("branch") or unit["branch"]
-        head = remote.branch_head(remote=branch["remote"], branch=branch["branch"])
-        if commit is not None and head == commit:
+        branch = pushed_branch(row, unit)
+        head = remote.branch_head(remote=branch["remote"], branch=branch["branch"]) if branch else None
+        if branch is None:
+            outcome, detail = "UNKNOWN", "the unit no longer names the branch this row pushed"
+        elif commit is not None and head == commit:
             outcome, detail = "PASS", "remote branch carries the candidate commit"
             provider = {**provider, "remote_head": head, "branch": branch["remote"] + "/" + branch["branch"],
                         "triggered": _triggered_runs(remote, row, commit)}

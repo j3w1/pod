@@ -225,6 +225,37 @@ class CleanupPlanTests(KernelCase):
         self.assertNotIn("origin/foreign", unit["published"])
         self.assertNotIn("remote_branch:origin/foreign", [row["id"] for row in self.observed()["resources"]])
 
+    def test_an_older_publication_row_never_settles_on_a_retargeted_branch(self):
+        from tests.kernel_support import GovernorFakePort, action, authorization
+        from pod.governor import (execute, observe_candidate, prepare_candidate, reconcile, _read_journal,
+                                  _write_journal)
+        bare = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+        git(self.project, "remote", "add", "origin", str(bare))
+        git(self.project, "push", "-q", "origin", "refs/heads/objective:refs/heads/foreign")
+        observed = observe_candidate(self.project, base_ref="refs/remotes/origin/target")
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
+                          branch={"remote": "origin", "base": "target", "branch": "objective"})
+        port = GovernorFakePort(lost=("push",))
+        admitted = execute(self.project, "objective", owner="owner", port=port,
+                           native_projection={"outstanding": []},
+                           action=action(unit="delivery", candidate=observed["commit"], target="origin/objective",
+                                         effects=[], authorization=authorization(
+                                             candidate=observed["commit"], tree=observed["tree"],
+                                             scope=("publish",))))
+        # A row admitted before rows recorded their pushed branch.
+        journal_path = _record_path(self.project, "objective")
+        journal = _read_journal(journal_path)
+        next(row for row in journal["actions"] if row["record_id"] == admitted["record_id"]).pop("branch")
+        _write_journal(journal_path, journal)
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
+                          branch={"remote": "origin", "base": "target", "branch": "foreign"})
+        port.heads["origin/foreign"] = observed["commit"]
+        found = reconcile(self.project, "objective", owner="owner", record_id=admitted["record_id"], port=port)
+        self.assertEqual(found["status"], "UNKNOWN")
+        self.assertNotIn("origin/foreign", _read_journal(journal_path)["units"]["delivery"]["published"])
+        self.assertNotIn("remote_branch:origin/foreign", [row["id"] for row in self.observed()["resources"]])
+
     def test_a_prepared_but_unpublished_remote_branch_is_not_offered(self):
         bare = self.root / "origin.git"
         subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)

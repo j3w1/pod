@@ -348,9 +348,8 @@ class VerifiedDeliveryTests(KernelCase):
 
 
 class AdmittedMergeTargetTests(KernelCase):
-    def test_merge_decision_binds_the_prepared_target_that_delivery_checks(self):
-        from pod.governor import decide, observe_candidate, prepare_candidate, record_outcome
-        from tests.kernel_support import action
+    def observed_candidate(self):
+        from pod.governor import observe_candidate
         self.intake()
         git(self.project, "remote", "add", "origin", str(self.project))
         git(self.project, "checkout", "-qb", "candidate")
@@ -359,26 +358,59 @@ class AdmittedMergeTargetTests(KernelCase):
         git(self.project, "commit", "-qm", "candidate")
         self.candidate = git(self.project, "rev-parse", "HEAD")
         self.write(self.stored())
-        observed = observe_candidate(self.project, base_ref="refs/remotes/origin/target")
+        return observe_candidate(self.project, base_ref="refs/remotes/origin/target")
+
+    def merge(self, observed, target, consent_target="origin/target"):
+        from pod.governor import decide
+        from tests.kernel_support import action
+        consent = authorization(candidate=observed["commit"], tree=observed["tree"], scope=("merge",),
+                                target=consent_target)
+        return decide(self.project, "objective", owner="owner",
+                      action=action(kind="merge", candidate=observed["commit"], target=target, unit="delivery",
+                                    effects=[], authorization=consent),
+                      native_projection={"outstanding": []})
+
+    def test_a_branchless_unit_cannot_merge(self):
+        from pod.governor import prepare_candidate
+        observed = self.observed_candidate()
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed)
+        for target in ("origin/other", "other", "refs/remotes/origin/other"):
+            with self.subTest(target=target):
+                held = self.merge(observed, target)
+                self.assertEqual(held["decision"], "DEFER")
+                self.assertIn("unit_unbound", [row["code"] for row in held["reasons"]])
+
+    def test_a_retarget_leaves_no_recorded_merge_consent(self):
+        from pod.governor import prepare_candidate, record_outcome, status
+        observed = self.observed_candidate()
         prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
                           branch={"remote": "origin", "base": "target", "branch": "candidate"})
-        def merge(target, consent_target="origin/target"):
-            consent = authorization(candidate=observed["commit"], tree=observed["tree"], scope=("merge",),
-                                    target=consent_target)
-            return decide(self.project, "objective", owner="owner",
-                          action=action(kind="merge", candidate=observed["commit"], target=target,
-                                        unit="delivery", effects=[], authorization=consent),
-                          native_projection={"outstanding": []})
+        row = self.merge(observed, "origin/target")
+        self.assertEqual(row["decision"], "ALLOW")
+        record_outcome(self.project, "objective", owner="owner", record_id=row["record_id"], outcome="FAILED")
+        self.assertEqual(status(self.project, "objective")["units"]["delivery"]["authorization"]["merge"],
+                         "RECORDED")
+        git(self.project, "update-ref", "refs/remotes/origin/other", self.base)
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
+                          branch={"remote": "origin", "base": "other", "branch": "candidate"})
+        self.assertEqual(status(self.project, "objective")["units"]["delivery"]["authorization"]["merge"],
+                         "MISSING")
+        self.assertFalse(_authorization_granted(self.project, "objective")("merge", observed["commit"]))
 
+    def test_merge_decision_binds_the_prepared_target_that_delivery_checks(self):
+        from pod.governor import prepare_candidate, record_outcome
+        observed = self.observed_candidate()
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
+                          branch={"remote": "origin", "base": "target", "branch": "candidate"})
         # Another target, another spelling of this target, or consent given for another target all hold.
         for target, consent_target, code in (("other-target", "origin/target", "merge_target_mismatch"),
                                              ("target", "origin/target", "merge_target_mismatch"),
                                              ("origin/target", "origin/other", "authorization_missing")):
             with self.subTest(target=target, consent=consent_target):
-                held = merge(target, consent_target)
+                held = self.merge(observed, target, consent_target)
                 self.assertEqual(held["decision"], "DEFER")
                 self.assertIn(code, [row["code"] for row in held["reasons"]])
-        row = merge("origin/target")
+        row = self.merge(observed, "origin/target")
         self.assertEqual(row["decision"], "ALLOW")
         git(self.project, "checkout", "-q", "target")
         git(self.project, "merge", "--no-ff", "-qm", "merge", "candidate")

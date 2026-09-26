@@ -538,10 +538,26 @@ def merge_target_name(unit: dict | None) -> str | None:
     return f"{target['remote']}/{target['base']}" if target else None
 
 
+def pushed_branch(row: dict, unit: dict | None) -> dict | None:
+    """The branch a publication row pushed: its own snapshot, or for a row admitted before snapshots, the unit's
+    branch only while that still names the row's own target."""
+    if isinstance(row.get("branch"), dict):
+        return row["branch"]
+    branch = (unit or {}).get("branch")
+    if isinstance(branch, dict) and f"{branch.get('remote')}/{branch.get('branch')}" == row["action"].get("target"):
+        return branch
+    return None
+
+
 def _check_merge_target(action: dict, unit: dict | None, reasons: list[dict]) -> None:
     """A merge names the unit's own target, so its consent and any delivery record bind one branch."""
+    if action["kind"] != "merge":
+        return
     name = merge_target_name(unit)
-    if action["kind"] == "merge" and name is not None and action["target"] != name:
+    if name is None:
+        _reason(reasons, "correctness", "unit_unbound",
+                "a merge needs the unit's prepared remote and base, which its consent and target name")
+    elif action["target"] != name:
         _reason(reasons, "correctness", "merge_target_mismatch",
                 f"merge target {action['target']} is not the prepared unit target; name {name} as the merge target")
 
@@ -1001,7 +1017,7 @@ def _settle(journal: dict, row: dict, *, outcome: str, provider: dict | None, ev
         row["receipt"]["detail"] = detail
     if outcome == "PASS" and row["action"]["kind"] in PUBLICATION_KINDS:
         unit = journal["units"].get(row["action"]["unit"])
-        branch = row.get("branch") or (unit or {}).get("branch")
+        branch = pushed_branch(row, unit)
         if unit and branch and row.get("commit"):
             # What the branch carries is what the recorded pushes landed, whichever
             # generation they belonged to.
@@ -1474,9 +1490,9 @@ def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
                 if row["action"]["kind"] not in kinds or row.get("commit") != binding["commit"]:
                     continue
                 try:
-                    granted = validate_authorization(row["action"].get("authorization"),
-                                                     candidate=binding["commit"], tree=binding["tree"],
-                                                     kind=scope) is not None
+                    granted = validate_authorization(
+                        row["action"].get("authorization"), candidate=binding["commit"], tree=binding["tree"],
+                        kind=scope, target=merge_target_name(unit) if scope == "merge" else None) is not None
                 except PodError:
                     granted = False
                 if granted:
