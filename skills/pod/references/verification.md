@@ -1,27 +1,7 @@
 # Verification and reporting
 
-Bind checks to obligation, candidate, source, Governor policy, dependencies,
-environment, command, time and reviewer attempt. Invalid inputs reopen affected
-proof; unchanged evidence needs explicit candidate REUSE with the Git delta.
-Project rules govern reuse; model edits do not change the Governor candidate.
+Bind proof to obligation, candidate, sources, Governor policy, dependencies, environment, command, time and reviewer attempt. Changed inputs reopen affected proof; unaffected proof needs explicit candidate REUSE with Git delta. Project rules govern reuse; preference edits alone do not change Governor candidates.
 
-Run project checks. Substantial or risky work requires independent-review assurance even when project policy is silent.
-Bind trusted final-audit rules at intake as cited `project_policy` assurance.
-Record scope, question, candidate, existing proof and insufficiency; model constraints cannot replace assurance.
-Retain it through checkpoint/report/delivery; unavailable review stays incomplete.
-Only scoped user waiver or genuinely removed trusted source withdraws policy; waiver is not passing review.
-Give fresh independent reviewers exact candidate evidence without
-priming. Triage findings as required corrections or advisory proposals;
-downgraded blocker or major findings need reasons. Corrections affecting scope,
-assumptions, dependencies or governance, or with unknown impact, reopen affected
-scope for delta review. Repeat review of valid bindings is refused. Zero or
-all-withdrawn assurance withholds the independent-review label.
+Run project checks. Substantial or risky work requires independent-review assurance even without project policy. Required final audits enter intake as cited `project_policy` assurances with scope, question, candidate, existing proof and insufficiency; model constraints cannot substitute. Retain them through checkpoint/report/delivery; unavailable review remains incomplete. Only scoped user waiver or genuine removal of that trusted requirement allows policy withdrawal; waiver is not passing review. Give fresh independent reviewers exact candidate evidence without priming. Triage findings into required corrections or advisory proposals; downgrading blocker/major findings needs reasons. Changed scope, assumptions, dependencies, governance or unknown impact requires delta review. Refuse repeat review of valid bindings. Zero/all-withdrawn assurance withholds the review label.
 
-Report satisfied and withdrawn obligations, provenance, external blocks,
-proposals, boundary exceedances, triage downgrades, checks, uncertainty,
-remaining gates and unresolved native references. Quiescence means an incomplete
-interim report; closure needs terminal obligations and a report. Only direct
-user revision reopens closure. Keep worker success, local checks, independent
-review, hosted CI, live proof and project acceptance separate. Synthetic
-proof never certifies live behavior; unobserved usage and cost stay unknown.
-See [the Governor](governor.md) for remote decisions.
+Report satisfied/withdrawn obligations, provenance, external blocks, proposals, boundary exceedances, triage downgrades, checks, uncertainty, remaining gates and unresolved native references. Quiescence is incomplete; closure needs terminal obligations and a report. Only direct user revision reopens closure. Separate worker success, local checks, independent review, hosted CI, live proof and project acceptance. Synthetic proof never certifies live behavior; unobserved usage/cost stays unknown. See [the Governor](governor.md).

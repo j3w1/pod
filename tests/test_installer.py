@@ -138,7 +138,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_tty_partial_copy_reports_exit_three_and_recovery(self):
         self.installed()
-        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n<!-- changed -->\n"
+        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n"
         newer = archive_tree(self.root / "tty-partial.tar.gz", changes={"skills/pod/SKILL.md": changed})
         env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri(),
                "POD_TEST_NPX_MODE": "partial_fail", "TERM": "xterm-256color"}
@@ -365,7 +365,8 @@ class InstallerTests(unittest.TestCase):
         self.installed()
         prior = json.loads(self.receipt.read_text())["target"]["digest"]
         skill = (ROOT / "skills/pod/SKILL.md").read_bytes()
-        changed = skill + b"\n<!-- catalog copy updated -->\n"
+        # Change bundle bytes without making a valid skill exceed its word budget.
+        changed = skill + b"\n"
         newer = archive_tree(self.root / "newer.tar.gz", changes={"skills/pod/SKILL.md": changed})
         env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri()}
         result = run_pod(env, "update")
@@ -429,7 +430,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("PyYAML installation failed", failed.stderr)
         self.assertEqual(self.receipt.read_bytes(), before)
         self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT / "VERSION").read_text().strip())
-        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n<!-- changed -->\n"
+        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n"
         newer = archive_tree(self.root / "changed.tar.gz", changes={"skills/pod/SKILL.md": changed})
         env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri(), "POD_TEST_NPX_MODE": "half_copy"}
         process = subprocess.Popen([str(self.launcher), "update"], env=env, cwd=self.root / "work",
@@ -555,7 +556,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_partial_copy_returns_three_and_integrity_gate_is_json(self):
         self.installed()
-        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n<!-- changed -->\n"
+        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n"
         newer = archive_tree(self.root / "partial.tar.gz", changes={"skills/pod/SKILL.md": changed})
         failed = run_install({**self.env, "POD_INSTALL_SOURCE": newer.as_uri(),
                               "POD_TEST_NPX_MODE": "partial_fail"})
