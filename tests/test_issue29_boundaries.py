@@ -111,6 +111,8 @@ class RequiredAuditTests(ks.KernelCase):
         frozen = self.packet(['PA'], role='review')
         admission = self.start('fresh-review', frozen)['admission']
         self.assertEqual(admission['route_decision']['pinned_model'], 'gpt-6-sol')
+        self.assertIn('personal pin selected the model', admission['route_decision']['reason'])
+        self.assertIn('review-route', admission['route_decision']['constraint_refs'])
         self.settle(admission)
         bad = self.stored()[:1]
         with self.assertRaises(PodError): self.report(admission, frozen, map={'obligations':bad})

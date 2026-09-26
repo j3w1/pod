@@ -1431,6 +1431,8 @@ class AdmissionTests(unittest.TestCase):
         first = self.recovery_case()
         decision = first['route_decision']
         self.assertEqual(decision['pinned_model'], 'gpt-6-sol')
+        self.assertIn('personal pin selected the model', decision['reason'])
+        self.assertNotIn('overrides repository', decision['reason'])
         set_pin(self.personal, 'gpt-6-luna', displayed=load_config(self.project))
         self.port.state = 'pending'
         replay = self.recover(first)

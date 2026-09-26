@@ -137,7 +137,7 @@ Reactive failure records are attempt-local, preserving observed source, stage ev
 - <a id="a178"></a>**A178** — The v2 catalog validates six ids and paired AA records; config JSON supplies `suggested_use` and `ladder`, while the TUI shows guide-profile data and adaptive Details from 160×45 through 40×12, including a split view from 140 columns, without a model call or dispatch.
 - <a id="a179"></a>**A179** — An unpinned suitable non-Preferred worker assignment records a brief task-specific reason; a stricter repository model restriction is recorded with `repository` provenance and its source, while the running coordinator is unchanged.
 
-- <a id="a181"></a>**A181** — Missing/null pin preserves no-pin behavior; one eligible id moves/clears atomically and survives restart, sparse/all/custom modes, comments and unrelated edits. Unknown, malformed, ineligible, stale-target, invalid YAML and failed saves never widen routing or silently drop the pin; old no-pin files stay unchanged and old parsers refuse the new field.
+- <a id="a181"></a>**A181** — Missing/null pin preserves no-pin behavior; one eligible id moves/clears atomically and survives restart, sparse/all/custom modes, comments and unrelated edits. Unknown, malformed, ineligible, stale-target, invalid YAML and failed saves never widen routing or silently drop the pin. Safely parsed invalid pins remain visible as bounded diagnostic data; refusal reasons distinguish creating an ineligible pin from invalidating one, including All→custom edits. Old no-pin files stay unchanged and old parsers refuse the new field.
 - <a id="a182"></a>**A182** — Every supported Pod role and delegated correction obeys the pin with supported adaptive effort, despite repository model mandates; direct user and non-model restrictions still hold. Selection/final admission bind current preferences, while submitted/pending replay retains its original route; the coordinator and outside helpers remain outside the pin.
 - <a id="a184"></a>**A184** — Temporary unavailable evidence holds immediate equivalent starts, honors meaningful native retry-after or a 60-second local fallback, and expires only for a subsequent coordinator decision. Relevant successful reuse clears suppression without erasing history or changing preferences. Earlier failures impose no permanent ban; uncertain requests require reconciliation, alternatives require settlement/no-start, pins never fallback, and real auth/capacity/permission/safety protections remain. Readiness alone leaves cause unknown.
 
@@ -186,6 +186,13 @@ for a fresh action. A 0.4.0-shaped file with the same `pod/v1` schema is rejecte
 by shape, not converted. Pin edits use the same atomic targeted-key path. Pin replacement/clear preserves saved model states and mode; invalidating state/mode edits are refused without dropping the pin. Upgrades preserve existing no-pin bytes. Older parsers reject the new key rather than ignore it. The personal file's SHA-256 byte revision is
 `preference_revision`; `policy_revision` is the digest of effective Governor
 policy alone. Model edits do not open a Governor candidate generation.
+
+Invalid preferences block all new delegation and remain byte-preserved. Config,
+status, doctor and the read-only TUI retain a bounded diagnostic `pinned_model`
+from the same safe parse: a string identifies the pin, while malformed types
+use a descriptive placeholder. This is display data, never a usable route.
+Unsafe YAML has no extracted pin; it is not reparsed for diagnosis. The TUI
+names `pod config edit` for invalid-file recovery.
 
 The sole manually maintained bundled catalog holds exact model identity, agent,
 documented efforts and native context information, attributed official guidance,

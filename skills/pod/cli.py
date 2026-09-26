@@ -147,7 +147,7 @@ def _doctor(project: Path) -> dict:
                          "ownership": launcher_ownership},
             "placements": inspect_placements(project), "skills_cli": skills_cli_entry(),
             "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
-                                                           "max_active", "errors", "policy_revision")},
+                                                           "max_active", "errors", "policy_revision", "pinned_model")},
             "catalog": {"models": list(by_id()), "ranks_of_six": ranks(),
                         "benchmark_age_days": age()},
             "orca": {"status": snapshot.get("status"), "capabilities": snapshot.get("capabilities", {}),

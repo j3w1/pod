@@ -113,6 +113,8 @@ because a cached `main` endpoint can lag the SHA-pinned CI endpoint.
 An update trial begins with an installed 0.6.5 copy in a scrubbed disposable
 home, applies the 0.6.6 installer, checks user-file preservation and verifies
 the installed bundle, launcher and receipt.
+The exact public 0.6.5 parser and upgrade tests read genuine Git objects;
+hosted checkout uses `fetch-depth: 0` to make that history available.
 
 Issue 29 focused regressions cover normal sourced final-audit intake through production checkpoint/admission/report/acceptance, pin storage/atomic edits and every supported role, immutable pending replay, and controlled-time local failure reconsideration/success. PTY tests cover moving/clearing the radio group, focus, restart, hidden pins, all/custom refusal, concurrency, resize and ASCII/monochrome. Existing `tests.tui_snapshot.render` accepts the normal configured PTY screen for visual review; no special pin capture framework is needed.
 

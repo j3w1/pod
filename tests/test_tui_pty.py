@@ -249,6 +249,55 @@ class TuiPtyTests(unittest.TestCase):
         session.wait_for('Unpin or replace')
         self.assertEqual(self.config.read_bytes(), before)
 
+    def test_hidden_pin_survives_persistent_refusal_and_save_error_notices(self):
+        for cols, rows in ((80, 24), (40, 12)):
+            for failure in ('refusal', 'save_error'):
+                with self.subTest(cols=cols, failure=failure):
+                    fixture_config(self.config)
+                    session = self.open(cols=cols, rows=rows, LC_ALL='C', NO_COLOR='1')
+                    session.send('\x1bOBp')
+                    session.wait_for(lambda s:'(*) GPT-6 Astra' in s.text())
+                    if failure == 'refusal':
+                        session.send(' ')
+                        session.wait_for(lambda _s:load_config(personal=self.config)['saved']['gpt-6-astra']=='preferred')
+                    before = self.config.read_bytes()
+                    try:
+                        if failure == 'save_error':
+                            self.config.parent.chmod(0o500)
+                        session.send(' ' if failure == 'refusal' else 'p')
+                        session.wait_for('Not saved')
+                        session.send('f')
+                        session.wait_for(lambda s:'Pin gpt-6-astra' in s.text() and '(*)' not in s.text())
+                        session.settle(quiet=.8, timeout=1)
+                        self.assertIn('Pin gpt-6-astra', session.text())
+                        self.assertIn('Not saved', session.text())
+                        self.assertEqual(load_config(personal=self.config)['pinned_model'], 'gpt-6-astra')
+                        self.assertEqual(self.config.read_bytes(), before)
+                    finally:
+                        self.config.parent.chmod(0o700)
+                        session.close()
+
+    def test_invalid_pin_is_visible_read_only_and_names_editor_recovery(self):
+        import yaml
+        for pin in ('gpt-6-sol', 'unknown', []):
+            with self.subTest(pin=pin):
+                fixture_config(self.config)
+                document = yaml.safe_load(self.config.read_text())
+                document['pinned_model'] = pin
+                document['models']['gpt-6-sol'] = 'disabled'
+                self.config.write_text(yaml.safe_dump(document))
+                before = self.config.read_bytes()
+                session = self.open()
+                expected = '<invalid list pin>' if isinstance(pin, list) else pin
+                session.wait_for('Pin ' + expected)
+                session.wait_for('READ-ONLY')
+                session.wait_for('pod config edit')
+                session.send('p r')
+                session.settle()
+                self.assertIn('Pin ' + expected, session.text())
+                self.assertEqual(self.config.read_bytes(), before)
+                session.close()
+
     def test_ascii_monochrome_pin_and_concurrent_pin_conflict(self):
         first = self.open(LC_ALL='C', NO_COLOR='1')
         second = self.open(LC_ALL='C', NO_COLOR='1')

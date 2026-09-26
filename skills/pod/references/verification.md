@@ -5,11 +5,12 @@ environment, command, time and reviewer attempt. Invalid inputs reopen affected
 proof; unchanged evidence needs explicit candidate REUSE with the Git delta.
 Project rules govern reuse; model edits do not change the Governor candidate.
 
-Run project checks. Bind trusted final-audit rules at intake as cited `project_policy` assurance
-obligations with scope, question, candidate, proof and insufficiency. A model
-constraint cannot replace them. Keep them through checkpoint/report/delivery;
-unavailable review remains incomplete. Only scoped user waiver or genuinely
-removed trusted source withdraws policy; a waiver is not passing review. Give fresh independent reviewers exact candidate evidence without
+Run project checks. Substantial or risky work requires independent-review assurance even when project policy is silent.
+Bind trusted final-audit rules at intake as cited `project_policy` assurance.
+Record scope, question, candidate, existing proof and insufficiency; model constraints cannot replace assurance.
+Retain it through checkpoint/report/delivery; unavailable review stays incomplete.
+Only scoped user waiver or genuinely removed trusted source withdraws policy; waiver is not passing review.
+Give fresh independent reviewers exact candidate evidence without
 priming. Triage findings as required corrections or advisory proposals;
 downgraded blocker or major findings need reasons. Corrections affecting scope,
 assumptions, dependencies or governance, or with unknown impact, reopen affected

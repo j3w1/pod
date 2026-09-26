@@ -366,10 +366,15 @@ def _details(state: State, width: int, caps: Capabilities, now: datetime, *, blo
         return [_heading("NO MODELS MATCH", width, caps), Line("Esc clears the search or filter.", "advisory")]
     model_id = state.focus_id if state.focus_id in visible else visible[0]
     if state.expanded:
-        return _expanded_details(state, model_id, width, caps)
-    if block or (width < 60 and not tiny):
-        return _block_details(state, model_id, width, caps, now)
-    return _inline_details(state, model_id, width, caps, now)
+        lines = _expanded_details(state, model_id, width, caps)
+    elif block or (width < 60 and not tiny):
+        lines = _block_details(state, model_id, width, caps, now)
+    else:
+        lines = _inline_details(state, model_id, width, caps, now)
+    if state.notice.startswith("Not saved"):
+        # Keep the full failure reachable by paging when the title is too narrow.
+        lines = [*_wrapped(state.notice, width, caps, "error"), *lines]
+    return lines
 
 
 def _page(lines: list[Line], count: int, width: int, caps: Capabilities,
@@ -402,7 +407,7 @@ def _title(state: State, width: int, caps: Capabilities) -> Line:
         left[2:2] = [("Pin " + pin, "value"), (dot, "label")]
     if state.notice:
         failed = state.notice.startswith(("Not saved", "Preferences unavailable"))
-        left[2:2] = [(state.notice, "error" if failed else "advisory"), (dot, "label")]
+        left += [(dot, "label"), (state.notice, "error" if failed else "advisory")]
     elif state.preferences["mode"] == "all" and not errors:
         left += [(dot, "label"), ("your choices are saved (r restores)", "advisory")]
     controls = f"Sort {SORTS[state.sort_index]}{dot}Filter {FILTERS[state.filter_index]}"

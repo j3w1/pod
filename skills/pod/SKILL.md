@@ -33,10 +33,11 @@ Preserve unrelated work. Read
 
 ## Select and admit
 
-Read `pod config --json` before each delegated assignment. A valid pin controls
+Read `pod config --json` before each assignment. The pin controls
 all Pod-routed roles, overriding repository model-selection rules; effort stays
 adaptive. It excludes this coordinator, direct work and host-created helpers.
-Without a pin, choose a suitable eligible model. Record a short
+Assess reasoning, ambiguity, risk, breadth, duration, capabilities, verification
+and useful context. Without a pin, choose a suitable eligible model. Record the
 reason, supported effort or `native_default`, and context `native_default`.
 Preferred is a modest tie-breaker; review needs independent judgment.
 Read [models and constraints](references/models.md).
@@ -55,8 +56,7 @@ installed launcher. The deterministic boundary validates the proposed route,
 current preferences, authority, logical ceiling, sources, version and native
 capability; it does not choose a model. A changed preference requires a fresh
 choice, at most twice before reporting the conflict. Once a native start is
-submitted, keep its admitted route and recover that exact request rather than
-starting a replacement. A pending same-request replay does not re-read model
+submitted, keep its route and recover that exact request. Pending replay does not re-read model
 preferences. Actual failures need settlement before an alternate route; never
 switch models to bypass a safety refusal.
 
@@ -73,9 +73,9 @@ selected models after faster-model advisories. Unknown or permission prompts
 block; never blindly accept. Workers use Orca's agent-tab setting. Report
 native placement; rendering and focus need UI evidence. Preserve the report, then follow
 native Delivery acknowledgment and release order promptly. Reuse requires an
-immediate supported follow-up. Check objective workers before reporting. Read [verification](references/verification.md).
+immediate supported follow-up. Check exact objective workers before final reporting. Read [verification](references/verification.md).
 
-Run focused checks and project milestone gates. Record findings and candidate bindings; review affected corrections by delta and
+Run focused checks and project milestone gates. Record assurance needs, findings and candidate bindings; review affected corrections by delta and
 explicitly REUSE unaffected proof under project rules. Quiescent objectives
 remain open with incomplete reports; closure requires all obligations terminal
 and a report. Before Pod-mediated Git, CI or deployment activity,
@@ -95,4 +95,4 @@ Do not run a source-checkout helper or create another configuration source.
 Final reporting distinguishes implementation, local checks, independent review,
 hosted CI, live native proof, project acceptance and merge. Name uncertainty,
 unresolved native references and the next safe action. Never infer savings from
-model labels.
+model labels or worker count.

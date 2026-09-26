@@ -168,7 +168,7 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 - <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
 
 
-- <a id="a183"></a>**A183** — Real PTY pin/move/unpin uses one radio marker, distinct focus and preserved base states. Restart, sorting, filtering, resize, all/custom, narrow/wide and ASCII/monochrome retain identity and expose a hidden pin. Invalidating edits, stale concurrent pin edits and persistence failures change no settings; no action starts workers.
+- <a id="a183"></a>**A183** — Real PTY pin/move/unpin uses one radio marker, distinct focus and preserved base states. Restart, sorting, filtering, resize, all/custom, narrow/wide and ASCII/monochrome retain identity and expose a hidden pin, including persistent refusal/save-error notices at 80×24 and 40×12. Full failure feedback remains reachable through Details paging. Invalidating edits, stale concurrent pin edits and persistence failures change no settings; no action starts workers.
 
 ## Public interfaces
 

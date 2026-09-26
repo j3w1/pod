@@ -948,7 +948,7 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
     stamp = moment.isoformat()
     decision = {"agent": requested["agent"], "model": requested["model"],
                 "requested_effort": requested["effort"], "requested_context": requested["context"],
-                "reason": requested["reason"] + ("; personal pin overrides repository model selection"
+                "reason": requested["reason"] + ("; personal pin selected the model"
                           if snapshot.get("pinned_model") else ""),
                 "preference_revision": snapshot["revision"],
                 "policy_revision": snapshot["policy_revision"], "mode": snapshot["mode"],

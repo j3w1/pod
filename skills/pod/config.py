@@ -96,7 +96,18 @@ def _read_bytes(path: Path) -> bytes | None:
         os.close(fd)
 
 
-def _parse(data: bytes | None, *, project: bool = False) -> dict | None:
+def _pin_diagnostic(value: Any) -> str | None:
+    """Bounded display data only; never a validated routing preference."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        from .term import clean
+        text = clean(value)
+        return text[:125] + "..." if len(text) > 128 else text or "<empty pin>"
+    return f"<invalid {type(value).__name__} pin>"
+
+
+def _parse(data: bytes | None, *, project: bool = False, diagnostic: dict | None = None) -> dict | None:
     if data is None:
         return None
     try:
@@ -108,6 +119,8 @@ def _parse(data: bytes | None, *, project: bool = False) -> dict | None:
         where = f" at line {mark.line + 1}" if mark is not None else ""
         raise PodError("invalid_yaml", f"Configuration cannot be safely decoded{where}") from exc
     _shape(value)
+    if diagnostic is not None and isinstance(value, dict):
+        diagnostic["pinned_model"] = _pin_diagnostic(value.get("pinned_model"))
     return validate(value, project=project)
 
 
@@ -210,10 +223,13 @@ def validate(value: Any, *, project: bool = False) -> dict:
                 raise PodError("invalid_config", f"models.{model_id} must be preferred, available or disabled")
         pin = doc.get("pinned_model")
         if pin is not None:
-            if not isinstance(pin, str) or pin not in IDS:
-                raise PodError("invalid_pin", "pinned_model must be a supported model id or null")
+            if not isinstance(pin, str):
+                raise PodError("invalid_pin", f"pinned_model must be a supported model id or null; got {_pin_diagnostic(pin)}")
+            if pin not in IDS:
+                raise PodError("invalid_pin", f"pinned_model {_pin_diagnostic(pin)!r} is not a supported model id")
             if doc["selection"] != "all" and models.get(pin) not in ("available", "preferred"):
-                raise PodError("pin_ineligible", "Unpin or replace the pin before making it ineligible")
+                state = "Disabled" if models.get(pin) == "disabled" else "Not set"
+                raise PodError("pin_ineligible", f"Pinned model {pin} is {state} in My selection; make it Available/Preferred or clear the pin with pod config edit")
         workers = exact(doc["workers"], {"max_active"}, {"max_active"}, name="workers")
         if type(workers["max_active"]) is not int or not 0 <= workers["max_active"] <= 8:
             raise PodError("invalid_config", "workers.max_active must be 0 through 8")
@@ -290,12 +306,13 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
     file_stamp = (f"{metadata.st_dev}:{metadata.st_ino}:{metadata.st_ctime_ns}"
                   if metadata is not None else None)
     errors = []
+    diagnostic = {}
     if data is not None and (metadata is None or not stat.S_ISREG(metadata.st_mode)):
         document = None
         errors.append({"code": "unsafe_config", "message": "Configuration metadata is unavailable"})
     else:
         try:
-            document = _parse(data)
+            document = _parse(data, diagnostic=diagnostic)
         except PodError as exc:
             document = None
             errors.append({"code": exc.code, "message": str(exc)})
@@ -312,7 +329,7 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
     return {"path": str(path.resolve(strict=False)), "revision": revision, "mode": mode,
             "file_stamp": file_stamp,
             "saved": saved, "effective": effective_states, "eligible": eligible,
-            "not_set": not_set, "pinned_model": document.get("pinned_model") if document else None,
+            "not_set": not_set, "pinned_model": document.get("pinned_model") if document else diagnostic.get("pinned_model"),
             "max_active": document["workers"]["max_active"] if document else 0,
             "errors": errors, "policy_revision": policy_revision,
             "waste_governor": governor, "provenance": provenance}
@@ -437,7 +454,19 @@ def _save(path: Path, *, model_id: str | None = None, state: str | None = None,
             document["models"][model_id] = state
         if pin_edit:
             document["pinned_model"] = pin
-        validate(document)
+        try:
+            validate(document)
+        except PodError as exc:
+            if exc.code != "pin_ineligible":
+                raise
+            pinned = document["pinned_model"]
+            state_name = "Disabled" if document["models"].get(pinned) == "disabled" else "Not set"
+            if pin_edit:
+                reason = f"Cannot pin {pinned}: {state_name} in My selection; choose Available/Preferred first"
+            else:
+                transition = "switching to My selection would make" if next_mode == "custom" else "this edit would make"
+                reason = f"Unpin or replace {pinned} first: {transition} the pin {state_name} (ineligible)"
+            raise PodError("pin_ineligible", reason) from exc
         encoded, preserved = _surgical(raw, document, model_id=model_id, state=state, mode=next_mode,
                                        pin_edit=pin_edit)
         _replace(path, encoded)

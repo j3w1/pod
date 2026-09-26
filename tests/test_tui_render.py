@@ -86,6 +86,20 @@ class TuiRenderTests(unittest.TestCase):
                 self.assertNotIn('more: Page Down', text)
                 self.assertNotIn('…', text.split('Details')[1])
 
+    def test_hidden_pin_and_full_failure_remain_reachable_at_compact_sizes(self):
+        prefs = {**self.state.preferences, 'pinned_model': 'gpt-6-astra'}
+        for notice in ('Not saved — Unpin or replace gpt-6-astra first: this edit would make the pin Disabled (ineligible); file unchanged',
+                       'Not saved — ' + 'storage error ' * 12 + '; file unchanged'):
+            view = with_notice(replace(self.state, preferences=prefs, filter_index=1), notice)
+            for size in ((80, 24), (40, 12)):
+                with self.subTest(size=size, notice=notice):
+                    first = self.picture(view, size)
+                    self.assertIn('Pin gpt-6-astra', first.lines[0].text)
+                    self.assertIn('Not saved', first.plain)
+                    _, _, pages = self.pages(size, view)
+                    flat = ' '.join(pages.split())
+                    self.assertIn('file unchanged', flat)
+
     def test_sorts_keep_identity_and_unknown_last(self):
         self.assertEqual(visible_ids(self.state)[0], 'gpt-6-sol')
         self.assertEqual(visible_ids(replace(self.state, sort_index=1))[0], 'claude-fable-5-1')

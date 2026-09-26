@@ -1693,6 +1693,10 @@
         "tests.test_pin.PinTests.test_pin_switch_clear_comments_and_concurrent_target",
         "tests.test_pin.PinTests.test_invalid_pins_and_effective_all_custom_eligibility",
         "tests.test_pin.PinTests.test_save_failure_invalid_yaml_and_precise_route_refusal",
+        "tests.test_pin.PinTests.test_invalid_pin_diagnosis_is_bounded_single_parse_and_preserves_bytes",
+        "tests.test_pin.PinTests.test_pin_creation_and_invalidating_edits_name_different_reasons",
+        "tests.test_cli.CliTests.test_config_status_and_doctor_expose_valid_and_invalid_pins_passively",
+        "tests.test_tui_pty.TuiPtyTests.test_invalid_pin_is_visible_read_only_and_names_editor_recovery",
         "tests.test_installer.InstallerTests.test_exact_public_065_upgrade_preserves_no_pin_and_066_preserves_a_pin"
       ],
       "status": "NOT_RUN"
@@ -1720,7 +1724,9 @@
       "offline_test": [
         "tests.test_tui_pty.TuiPtyTests.test_pin_radio_moves_clears_and_survives_restart_filter_sort_resize",
         "tests.test_tui_pty.TuiPtyTests.test_pin_invalidating_edit_and_all_custom_mode_are_atomic",
-        "tests.test_tui_pty.TuiPtyTests.test_ascii_monochrome_pin_and_concurrent_pin_conflict"
+        "tests.test_tui_pty.TuiPtyTests.test_ascii_monochrome_pin_and_concurrent_pin_conflict",
+        "tests.test_tui_pty.TuiPtyTests.test_hidden_pin_survives_persistent_refusal_and_save_error_notices",
+        "tests.test_tui_render.TuiRenderTests.test_hidden_pin_and_full_failure_remain_reachable_at_compact_sizes"
       ],
       "status": "NOT_RUN"
     },

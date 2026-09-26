@@ -92,6 +92,61 @@ class PinTests(unittest.TestCase):
         self.path.write_text(yaml.safe_dump(invalid))
         self.assertEqual(validate_choice(self.snapshot(), [], [], choice())['code'], 'invalid_pin')
 
+    def test_invalid_pin_diagnosis_is_bounded_single_parse_and_preserves_bytes(self):
+        for pin, expected in [('unknown', 'unknown'), (True, '<invalid bool pin>'),
+                              ([], '<invalid list pin>'), ({}, '<invalid dict pin>'),
+                              ('', '<empty pin>'), ('x' * 4000, 'x' * 125 + '...'),
+                              ('bad\x1b\nmodel', 'badmodel'), ('gpt-6-sol', 'gpt-6-sol')]:
+            with self.subTest(pin=expected):
+                document = {**deepcopy(DEFAULT), 'pinned_model': pin}
+                document['models']['gpt-6-sol'] = 'disabled'
+                self.path.write_text(yaml.safe_dump(document))
+                original = self.path.read_bytes()
+                with patch('pod.config.yaml.load', wraps=yaml.load) as parse:
+                    snapshot = self.snapshot()
+                self.assertEqual(parse.call_count, 1)
+                self.assertEqual(snapshot['pinned_model'], expected)
+                self.assertFalse(snapshot['eligible'])
+                self.assertTrue(snapshot['errors'])
+                self.assertIn(expected, snapshot['errors'][0]['message'])
+                for role in ('implement', 'investigate', 'review', 'correction'):
+                    self.assertFalse(validate_choice(snapshot, [], [], choice(), role=role)['allowed'])
+                with self.assertRaises(PodError):
+                    set_pin(self.path, None, displayed=snapshot)
+                self.assertEqual(self.path.read_bytes(), original)
+        # Unsafe syntax is never reparsed to scrape a diagnostic pin.
+        for raw in ('pinned_model: unknown\nmodels: [\n',
+                    'pinned_model: unknown\npinned_model: gpt-6-sol\n',
+                    'pinned_model: &pin unknown\nmodels: *pin\n'):
+            self.path.write_text(raw)
+            with patch('pod.config.yaml.load', wraps=yaml.load) as parse:
+                snapshot = self.snapshot()
+            self.assertEqual(parse.call_count, 1)
+            self.assertIsNone(snapshot['pinned_model'])
+            self.assertFalse(snapshot['eligible'])
+            self.assertEqual(self.path.read_text(), raw)
+
+    def test_pin_creation_and_invalidating_edits_name_different_reasons(self):
+        sparse = {**deepcopy(DEFAULT), 'models': {'gpt-6-sol': 'disabled'}}
+        self.path.write_text(yaml.safe_dump(sparse))
+        original = self.path.read_bytes()
+        for pin, state in [('gpt-6-sol', 'Disabled'), ('gpt-6-luna', 'Not set')]:
+            with self.assertRaises(PodError) as caught:
+                set_pin(self.path, pin, displayed=self.snapshot())
+            self.assertIn(f'Cannot pin {pin}: {state} in My selection', str(caught.exception))
+            self.assertEqual(self.path.read_bytes(), original)
+        set_mode(self.path, 'all', displayed=self.snapshot())
+        set_pin(self.path, 'gpt-6-luna', displayed=self.snapshot())
+        original = self.path.read_bytes()
+        for action in (lambda: set_mode(self.path, 'custom', displayed=self.snapshot()),
+                       lambda: set_model(self.path, 'gpt-6-sol', 'available', displayed=self.snapshot())):
+            with self.assertRaises(PodError) as caught:
+                action()
+            self.assertIn('Unpin or replace gpt-6-luna', str(caught.exception))
+            self.assertIn('switching to My selection', str(caught.exception))
+            self.assertIn('Not set', str(caught.exception))
+            self.assertEqual(self.path.read_bytes(), original)
+
     def test_all_pod_roles_repository_precedence_adaptive_effort_and_hard_constraints(self):
         set_pin(self.path, 'gpt-6-sol', displayed=self.snapshot())
         snapshot = self.snapshot()
