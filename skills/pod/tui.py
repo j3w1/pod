@@ -18,9 +18,9 @@ from .catalog import load as load_catalog
 from .config import _read_bytes, load as load_preferences, set_mode, set_model
 from .errors import PodError
 from .orca import MAX_OUTPUT, _envelope, executable
-from .term import Capabilities, capabilities, pad
+from .term import Capabilities, capabilities, display_width
 from .tui_render import Frame, frame
-from .tui_state import State, initial, reduce, refresh, with_notice, with_runtime
+from .tui_state import State, initial, reduce, refresh, with_notice, with_runtime, with_viewport
 
 TICK_MS = 200
 PROBE_TIMEOUT_S = 2.0
@@ -78,7 +78,7 @@ def _probe_runtime(results: queue.SimpleQueue[str]) -> None:
             results.put("Unsupported")
             return
         supported = "orchestration.worker-launch-preferences.v1" in advertised
-        results.put("Not checked" if supported else "Unsupported")
+        results.put("Supported" if supported else "Unsupported")
     except (OSError, ValueError, AttributeError, PodError):
         results.put("Offline")
 
@@ -108,27 +108,48 @@ def _key(raw: int) -> str:
 
 
 def _styles(caps: Capabilities) -> dict[str, int]:
-    styles = {"normal": 0, "focus": curses.A_REVERSE | curses.A_BOLD,
-              "title": curses.A_BOLD, "heading": curses.A_BOLD,
-              "header": curses.A_BOLD, "footer": curses.A_DIM, "notice": curses.A_BOLD,
-              "preferred": curses.A_BOLD, "available": 0,
-              "disabled": curses.A_DIM, "unknown": curses.A_DIM}
+    roles = ("body", "heading", "label", "value", "metric", "advisory", "error",
+             "badge_preferred", "badge_available", "badge_disabled", "badge_unset",
+             "key", "title", "focus")
+    bold = {"heading", "error", "badge_preferred", "title", "focus", "key"}
+    styles = {role: (curses.A_BOLD if role in bold else 0) for role in roles}
     if caps.color:
         try:
             curses.start_color()
             curses.use_default_colors()
             rich = curses.COLORS >= 256
-            curses.init_pair(1, 30 if rich else curses.COLOR_CYAN, -1)
-            curses.init_pair(2, 37 if rich else curses.COLOR_CYAN, -1)
-            curses.init_pair(3, 214 if rich else curses.COLOR_YELLOW, -1)
-            curses.init_pair(4, 244 if rich else curses.COLOR_WHITE, -1)
-            styles["title"] |= curses.color_pair(1)
-            styles["heading"] |= curses.color_pair(1)
-            styles["header"] |= curses.color_pair(2)
-            styles["available"] |= curses.color_pair(1)
-            styles["preferred"] |= curses.color_pair(3)
-            styles["disabled"] |= curses.color_pair(4)
-            styles["unknown"] |= curses.color_pair(4)
+            if rich:
+                fg = {"body": 252, "heading": 117, "label": 110, "value": 255,
+                      "metric": 215, "advisory": 222, "error": 203,
+                      "badge_preferred": 220, "badge_available": 121,
+                      "badge_disabled": 246, "badge_unset": 246,
+                      "key": 117, "title": 255, "focus": 255}
+                if caps.light_background:
+                    fg.update(body=238, heading=24, label=25, value=232,
+                              metric=94, advisory=130, error=124,
+                              badge_preferred=94, badge_available=22,
+                              badge_disabled=242, badge_unset=242,
+                              key=24, title=232, focus=232)
+                focus_bg = 254 if caps.light_background else 236
+            else:
+                base = curses.COLOR_BLACK if caps.light_background else curses.COLOR_WHITE
+                fg = {role: base for role in roles}
+                # These hues are the terminal's own; many light palettes make every one of them faint, so a
+                # light background keeps the dark body colour and bold emphasis.
+                if not caps.light_background:
+                    for role in ("heading", "label", "key"):
+                        fg[role] = curses.COLOR_CYAN
+                    for role in ("metric", "advisory", "badge_preferred"):
+                        fg[role] = curses.COLOR_YELLOW
+                    fg["badge_available"] = curses.COLOR_GREEN
+                fg["error"] = curses.COLOR_RED
+                focus_bg = curses.COLOR_WHITE if caps.light_background else curses.COLOR_BLUE
+            for index, role in enumerate(roles, 1):
+                curses.init_pair(index, fg[role], -1)
+                styles[role] |= curses.color_pair(index)
+            for index, role in enumerate(roles, len(roles)+1):
+                curses.init_pair(index, fg[role], focus_bg)
+                styles[role + "_focused"] = (curses.A_BOLD if role in bold else 0) | curses.color_pair(index)
         except curses.error:
             pass
     return styles
@@ -136,23 +157,25 @@ def _styles(caps: Capabilities) -> dict[str, int]:
 
 def _draw(window, picture: Frame, caps: Capabilities, styles: dict[str, int]) -> None:
     window.clear()
-    for index, line in enumerate(picture.lines):
-        if index >= picture.rows:
-            break
-        text = line.text
-        if line.role == "focus":
-            text = pad(text, max(0, picture.columns - 1), ascii_only=caps.ascii_only)
-        try:
-            window.addnstr(index, 0, text, max(0, picture.columns - 1), styles.get(line.role, 0))
-            if line.state and line.state_width:
-                start = 1
-                state_text = text[start:start + line.state_width]
-                style = styles.get(line.state, styles["unknown"])
-                if line.role == "focus":
-                    style |= curses.A_REVERSE | curses.A_BOLD
-                window.addnstr(index, start, state_text, line.state_width, style)
-        except curses.error:
-            pass
+    limit = max(0, picture.columns - 1)
+    for row, line in enumerate(picture.lines[:picture.rows]):
+        focused = bool(line.styled and line.styled[0].role == "focus")
+        column = 0
+        for span in line.styled:
+            if column >= limit:
+                break
+            attr = styles.get(span.role + ("_focused" if focused else ""), styles.get(span.role, styles["body"]))
+            try:
+                window.addnstr(row, column, span.text, limit-column, attr)
+            except curses.error:
+                pass
+            column += display_width(span.text)
+        if focused and column < limit:
+            try:
+                window.addnstr(row, column, " " * (limit-column), limit-column,
+                               styles.get("body_focused", styles["body"]))
+            except curses.error:
+                pass
     window.noutrefresh()
     curses.doupdate()
 
@@ -211,6 +234,7 @@ def _screen(window, project: Path, document: dict) -> int:
                 columns, rows = window.getmaxyx()[1], window.getmaxyx()[0]
                 picture = frame(state, columns, rows, caps, datetime.now(timezone.utc))
                 _draw(window, picture, caps, styles)
+                state = with_viewport(state, picture.scroll, picture.page)
                 dirty = False
             try:
                 raw = window.getch()
@@ -273,7 +297,20 @@ def run(project: Path | None = None) -> int:
     except locale.Error:
         locale.setlocale(locale.LC_ALL, "C")
     curses.set_escdelay(25)
+    original_term = os.environ.get("TERM")
+    mono_term = False
+    if "NO_COLOR" in os.environ and (original_term or "").startswith("xterm"):
+        try:
+            curses.setupterm("xterm-mono", fd=1)
+        except curses.error:
+            pass
+        else:
+            os.environ["TERM"] = "xterm-mono"
+            mono_term = True
     try:
         return curses.wrapper(_screen, project, document)
     except KeyboardInterrupt:
         return 0
+    finally:
+        if mono_term and original_term is not None:
+            os.environ["TERM"] = original_term

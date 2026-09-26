@@ -18,6 +18,7 @@ This installs the Pod skill for Codex and Claude Code, a user-local `pod` comman
 - [The basic workflow](#the-basic-workflow)
 - [Plan, direct work, and continuation](#plan-direct-work-and-continuation)
 - [Models and the terminal view](#models-and-the-terminal-view)
+- [Delivery and cleanup](#delivery-and-cleanup)
 - [Troubleshooting](#troubleshooting)
 - [What's inside](#whats-inside)
 - [Philosophy](#philosophy)
@@ -51,15 +52,21 @@ A small task can finish with zero workers. Missing Orca delegation support block
 
 ## Models and the terminal view
 
-`pod` opens an optional model TUI in a terminal; without a TTY it prints a short summary. The TUI shows the six supported base models, focus-driven Details, native capability information, and a dated Artificial Analysis reference. Space cycles Available, Preferred, and Disabled; `r` switches My selection and All models while retaining saved choices. Search, sort, and provider filters affect display only.
+`pod` opens an optional model TUI in a terminal; without a TTY it prints a short summary. The TUI shows six supported base models, a focus-driven guide with suggested uses and effort examples, native capability information, and dated Artificial Analysis records. All six rows stay visible at supported sizes. Wide terminals split the pool and guide with a POOL legend; compact terminals stack labelled guide sections, and the narrowest view pages Details. Runtime launch capability and unverified model access are shown separately. Space cycles Available, Preferred, and Disabled; `r` switches My selection and All models while retaining saved choices. Search, sort, and provider filters affect display only.
 
 The personal YAML at `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` is the single model preference authority. `pod config --json` shows the effective pool and path; `pod config edit` opens that file in your editor. A custom map can leave a model unset, which means not eligible. The six exact model ids are `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`.
 
 The coordinator chooses a suitable eligible model and supported effort for each assignment. Preferred is only a modest tie-breaker. Orca has per-worker model and effort preferences but no scoped context flag, so Pod omits a context flag and records `native_default`. Catalog benchmarks are reference data, not a promise of native availability, billing, or the model Pod will choose.
 
+## Delivery and cleanup
+
+Before the first remote Git change without applicable authorization, Pod asks once whether to merge remotely, keep the result local, or defer. The decision shows the repository, target and exact candidate commit/tree. Merge consent includes publication, required CI, merge of that candidate and the stated post-merge verification. A changed candidate or target needs a new decision. Local-only performs no remote mutation and reports hosted checks as not run.
+
+After an authorized merge, Pod verifies the exact delivery record before closing the objective. For cleanup, `pod internal cleanup-plan` reports this objective's integrated, unique and protected resources without deleting them. Deletion needs scoped consent and a fresh guarded plan; unique work is retained or archived and verified first, unless separately confirmed for discard. Native worker settlement and release proceed as usual.
+
 ## Troubleshooting
 
-`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, catalog age, and available Orca capability without starting a worker. `pod status --json` shows objective scope, constraints, native references, route decisions, blockers, and the next safe action. A missing or invalid preference file leaves no eligible models; use `pod config edit` to correct it.
+`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, catalog age, and available Orca capability without starting a worker. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. When a Run has several objectives, status lists choices instead of picking one. A missing or invalid preference file leaves no eligible models; use `pod config edit` to correct it.
 
 Lost worker-start replies retain the same Orca request for reconciliation. A known effect-free refusal is deferred; an uncertain response remains unresolved until exact native readback. A provider safety refusal never triggers a same-Task model switch. See [installation troubleshooting](docs/installation.md) for PATH, duplicate skills, and interrupted installs.
 

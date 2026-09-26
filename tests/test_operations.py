@@ -21,94 +21,7 @@ from pod.records import packet, source_identity
 from tests.common import (fake_authority, fixture, kernel_binding, kernel_map, modified_bundle, receipt,
                           restated_map, stored_map)
 
-REQUEST='11111111-1111-4111-8111-111111111111'
-OTHER='22222222-2222-4222-8222-222222222222'
-ROUTE={'agent':'codex','model':'gpt-6-sol','effort':'medium','context':'native_default',
-       'reason':'bounded implementation with tests'}
-
-
-class FakePort:
-    def __init__(self):
-        self.runtime='runtime'; self.starts=[]; self.workers={}; self.receipt=None
-        self.state='completed'; self.request_id=REQUEST; self.request_receipt=None
-        self.find_rows=None; self.show_failure=None; self.effective=None
-        self.before_native=None; self.placement=None; self.capable=True
-        self.headless=False
-
-    def capability(self):
-        if not self.capable:
-            raise PodError('launch_preferences_unavailable','no launch preference support')
-        return {'status':'observed','runtime':self.runtime,
-                'capabilities':{'launch_preferences_v1':True}}
-
-    def resolve_worktree(self, selector):
-        if self.placement is None:
-            raise PodError('worktree_resolution_unavailable','no placement fixture')
-        return dict(self.placement)
-
-    def read_native(self, owner, *, authority_runs=(), assignments=()):
-        if self.before_native:
-            callback=self.before_native; self.before_native=None; callback()
-        evidence=[]
-        for row in assignments:
-            binding=row['native_binding']
-            if binding['dispatchId'] in self.workers:
-                evidence.append(_assignment_evidence(self.show_worker(binding['dispatchId']),row))
-        return {'runtime':self.runtime,'owner':owner if authority_runs else None,
-                'authoritative':bool(authority_runs),'scope':'objective_assignments',
-                'complete':True,'assignments':evidence,'physical_capacity':'unavailable'}
-
-    def start_worker(self, *, run, task, owner, route, worktree='current', retry_request=None, terminal=None):
-        self.starts.append({'run':run,'task':task,'route':route.copy(),'worktree':worktree,
-                            'retry_request':retry_request,'terminal':terminal})
-        if self.receipt is not None:
-            return dict(self.receipt)
-        dispatch='dispatch-'+str(len(self.workers)+1)
-        self.workers[dispatch]={'run':run,'task':task,'route':route.copy(),'worktree':worktree,
-                                'state':'ready','outcome':'in_progress',
-                                'terminal':None if self.headless else terminal or 'term-'+dispatch}
-        return {'runtime':self.runtime,'request_uuid':retry_request or REQUEST,
-                'runId':run,'taskId':task,'dispatchId':dispatch,'state':'ready',
-                'launch':{'requested':self._launch(route),'effective':self._launch(route)}}
-
-    @staticmethod
-    def _launch(route):
-        data={key:route[key] for key in ('agent','model')}
-        if route['effort']!='native_default': data['effort']=route['effort']
-        return data
-
-    def show_worker(self, dispatch):
-        if self.show_failure: raise self.show_failure
-        item=self.workers[dispatch]
-        effective=self.effective if self.effective is not None else self._launch(item['route'])
-        status=('completed' if item['outcome']=='succeeded' else
-                'failed' if item['outcome'] in ('failed','stopped') else 'running')
-        return {'runtime':self.runtime,'result':{
-            'dispatch':{'id':dispatch,'runId':item['run'],'taskId':item['task'],'status':status},
-            'projection':{'id':'worker-'+dispatch,'dispatchId':dispatch,'runId':item['run'],
-                          'taskId':item['task'],'outcome':item['outcome'],
-                          'stage':{'dispatch':status,
-                                   'detail':'settled' if item['outcome']!='in_progress' else 'input_accepted'}},
-            'worker':{'dispatchId':dispatch,'worktreeId':item['worktree'],'state':item['state'],
-                      'agentTerminalHandle':item['terminal'],
-                      'startOptions':{'launch':{'requested':self._launch(item['route']),
-                                                'effective':effective}}}}}
-
-    def request_show(self, request_uuid):
-        receipt=self.request_receipt
-        if receipt is None and self.workers:
-            dispatch,item=next(iter(self.workers.items()))
-            receipt={'runId':item['run'],'taskId':item['task'],'dispatchId':dispatch,
-                     'launch':{'requested':self._launch(item['route']),
-                               'effective':self._launch(item['route'])}}
-        result={'requestId':self.request_id,'state':self.state,'receipt':receipt}
-        if self.state!='absent': result['method']='orchestration.workerStart'
-        return {'runtime':self.runtime,'result':result}
-
-    def find_worker(self, *, run, task):
-        if self.find_rows is not None: return list(self.find_rows)
-        return [{'dispatchId':dispatch} for dispatch,item in self.workers.items()
-                if item['run']==run and item['task']==task]
+from tests.kernel_support import REQUEST, OTHER, ROUTE, FakePort
 
 
 class AdmissionTests(unittest.TestCase):
@@ -198,7 +111,7 @@ class AdmissionTests(unittest.TestCase):
     def test_missing_benchmark_row_cannot_block_admission(self):
         from pod.catalog import load as load_catalog
         document=deepcopy(load_catalog())
-        del document['reference_benchmark']['models']['gpt-6-luna']
+        del document['benchmarks']['models']['gpt-6-luna']
         with patch('pod.catalog.load',return_value=document):
             result=self.start()
         self.assertEqual(result['status'],'bound')

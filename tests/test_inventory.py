@@ -1,8 +1,10 @@
+import ast
 import json
 from pathlib import Path
 import re
 import subprocess
 import unittest
+from urllib.parse import unquote
 
 from pod.errors import PodError
 from pod.skill_validation import validate_skill
@@ -53,9 +55,36 @@ def assert_test_reference_exists(root: Path, path: str) -> None:
     file = root.joinpath(*module.split(".")).with_suffix(".py")
     if not file.is_file():
         raise ValueError(f"offline_test module does not exist: {path}")
-    text = file.read_text()
-    if f"class {cls}" not in text or f"def {method}" not in text:
+    tree = ast.parse(file.read_text(), filename=str(file))
+    # The method must be defined in the named class itself, not merely somewhere in the module.
+    exists = any(isinstance(node, ast.ClassDef) and node.name == cls
+                 and any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method
+                         for child in node.body)
+                 for node in tree.body)
+    if not exists:
         raise ValueError(f"offline_test case does not exist: {path}")
+
+
+def spec_text(root: Path) -> str:
+    paths = [root / "docs" / "pod-spec.md", *sorted((root / "docs" / "spec").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
+def spec_inventory(root: Path):
+    text = spec_text(root)
+    requirements = re.findall(r"^### (R\d{2}) — .*\n\nType: ([BHI,]+) · Scenarios: (.*)$",
+                              text, flags=re.M)
+    scenarios = re.findall(r'^- <a id="(a\d{2,3})"></a>\*\*(A\d{2,3})\*\*',
+                           text, flags=re.M)
+    return requirements, scenarios
+
+
+def markdown_anchors(text: str) -> set[str]:
+    anchors = set(re.findall(r'<a id="([^"]+)"', text))
+    for heading in re.findall(r"^#{1,6} (.+)$", text, flags=re.M):
+        slug = re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+        anchors.add(slug)
+    return anchors
 
 
 class InventoryIntegrityTests(unittest.TestCase):
@@ -92,13 +121,17 @@ class InventoryIntegrityTests(unittest.TestCase):
                 validate_skill(skill)
     def test_spec_and_coverage_ids_are_complete(self):
         root = Path(__file__).resolve().parents[1]
-        spec = (root / "docs" / "pod-spec.md").read_text()
         coverage = json.loads((root / "docs" / "pod-coverage.json").read_text())
-        requirements = re.findall(r"^\| (R\d{2}) \|", spec, flags=re.M)
-        scenarios = re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M)
-        self.assertEqual(requirements, [f"R{i:02}" for i in range(1, len(requirements) + 1)])
-        self.assertEqual(scenarios, [f"A{i:02}" for i in range(1, len(scenarios) + 1)])
-        self.assertEqual([row["id"] for row in coverage["scenarios"]], scenarios)
+        requirements, scenarios = spec_inventory(root)
+        ids = [id for id, _, _ in requirements]
+        scenario_ids = [id for _, id in scenarios]
+        self.assertEqual(sorted(ids), [f"R{i:02}" for i in range(1, len(ids) + 1)])
+        self.assertEqual(sorted(scenario_ids, key=lambda id: int(id[1:])),
+                         [f"A{i:02}" for i in range(1, len(scenario_ids) + 1)])
+        self.assertEqual([anchor for anchor, id in scenarios], [id.lower() for id in scenario_ids])
+        self.assertEqual(sorted(row["id"] for row in coverage["scenarios"]), sorted(scenario_ids))
+        for _, kind, _ in requirements:
+            self.assertTrue(set(kind.split(",")) <= {"B", "H", "I"})
         for row in coverage["scenarios"]:
             with self.subTest(row=row["id"]):
                 self.assertTrue(row["required_evidence"])
@@ -106,21 +139,29 @@ class InventoryIntegrityTests(unittest.TestCase):
 
     def test_requirement_scenario_references_resolve(self):
         root = Path(__file__).resolve().parents[1]
-        spec = (root / "docs" / "pod-spec.md").read_text()
-        scenarios = set(re.findall(r"^\| (A\d{2,3}) \|", spec, flags=re.M))
+        requirements, rows = spec_inventory(root)
+        scenarios = {id for _, id in rows}
         referenced = set()
-        for requirement, refs in re.findall(r"^\| (R\d{2}) \| [^|]* \| .* \| ([^|]*) \|$", spec, flags=re.M):
+        for requirement, _, refs in requirements:
             with self.subTest(requirement=requirement):
-                for ref in (item.strip() for item in refs.split(",") if item.strip()):
-                    if "–" in ref:
-                        first, last = ref.split("–")
-                        self.assertIn(first, scenarios)
-                        self.assertIn(last, scenarios)
-                        referenced.update(f"A{i:02}" for i in range(int(first[1:]), int(last[1:]) + 1))
-                    else:
-                        self.assertIn(ref, scenarios)
-                        referenced.add(ref)
+                for ref in re.findall(r"\[(A\d{2,3})\]\([^)]*\)", refs):
+                    self.assertIn(ref, scenarios)
+                    referenced.add(ref)
         self.assertEqual(referenced, scenarios)
+
+    def test_relative_document_links_and_anchors_resolve(self):
+        root = Path(__file__).resolve().parents[1]
+        for source in (root / "docs").rglob("*.md"):
+            text = source.read_text()
+            for destination in re.findall(r"(?<!!)\[[^]]+\]\(([^)]+)\)", text):
+                if re.match(r"[a-z]+://|mailto:", destination):
+                    continue
+                path, _, fragment = unquote(destination).partition("#")
+                target = (source.parent / path).resolve() if path else source
+                with self.subTest(source=source.relative_to(root), link=destination):
+                    self.assertTrue(target.is_file(), f"missing link target: {destination}")
+                    if fragment:
+                        self.assertIn(fragment, markdown_anchors(target.read_text()))
 
     def test_evidence_kinds_are_exact(self):
         root = Path(__file__).resolve().parents[1]
@@ -133,12 +174,19 @@ class InventoryIntegrityTests(unittest.TestCase):
 
     def test_current_contract_names_the_new_boundaries(self):
         root = Path(__file__).resolve().parents[1]
-        spec = (root / "docs" / "pod-spec.md").read_text()
+        spec = spec_text(root)
         validation = (root / "docs" / "validation.md").read_text()
         for phrase in ("All models", "My selection", "preference_changed",
                        "Pending same-UUID replay", "native_default", "pod-context/v4",
-                       "focus-driven Details", "one-shot installer"):
+                       "one-shot installer", "cleanup-plan", "--match-head-commit",
+                       "delivery: {record}", "selection_required", "critical-path"):
             self.assertIn(phrase, spec)
+        guidance = "\n".join(path.read_text() for path in
+                             (root / "skills" / "pod" / "references").glob("*.md"))
+        for phrase in ("publish", "merge_commit", "cleanup-plan", "`expect`",
+                       "`pod internal map`", "Optimize time to a verified result",
+                       "Preferred is a small tie-breaker"):
+            self.assertIn(phrase, guidance)
         for phrase in ("POD_REQUIRE_PTY=1", "pod.catalog --check", "SHA-pinned public install",
                        "independent review", "live native"):
             self.assertIn(phrase, validation)

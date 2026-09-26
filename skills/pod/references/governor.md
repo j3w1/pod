@@ -1,89 +1,29 @@
 # Governor
 
-The Governor evaluates expensive Pod-mediated actions at decision boundaries,
-with no model calls or background process. It owns candidate and remote-action
-evidence. Orca owns worker lifecycle.
+The Governor evaluates Pod-mediated remote actions at decision boundaries without model calls. Orca owns workers; project governance owns acceptance.
 
-## Prepare a candidate
+## Candidate and readiness
 
-Governor mutations require this terminal to own a stable native current Run that
-the objective checkpoint or admissions reference on the same runtime, with the
-same existing Pod owner. Establish or adopt that Run explicitly through Orca's
-installed guide; Pod never creates or adopts one implicitly. Without this proof,
-safe direct work and read-only `internal governor-status` remain available.
-Authority joins only the stable current-Run binding and exact objective
-assignment evidence when relevant. It never requires an all-Run or worker-fleet
-scan.
+Governor mutation requires this terminal's stable native current Run, referenced by the objective checkpoint or admissions on the same runtime, and the existing Pod owner. Establish/adopt it through Orca. Missing proof permits direct work and read-only status. Join only this objective's exact assignments.
 
-Group related corrections into a delivery unit: the work reviewed and delivered
-together. Use `internal governor-prepare` to name its Tasks, branch, base,
-workflow files and verification commands. The helper reads Git and freezes commit,
-tree, base, workflow digests, toolchain, environment and policy revision.
-Changed inputs create a new generation; unchanged inputs reuse it.
+Group corrections in one delivery unit. `internal governor-prepare` names its Tasks, branch, base, workflows and checks; it freezes commit, tree, base, workflow digests, toolchain, environment and policy. Changed inputs open a generation. `internal governor-preflight` records configured local checks. Project preflight names checks and triggers map effects. A CI-triggering push is validation. Tracked dirt leaves the candidate unfrozen.
 
-Record configured local checks through `internal governor-preflight`. Project
-`waste_governor.preflight` names the checks; `waste_governor.triggers` maps
-downstream effects. An action may declare its effects explicitly. A push that
-starts CI is judged as validation. Uncommitted tracked changes leave the
-candidate unfrozen.
+Before each push, PR update, workflow dispatch, rerun, diagnostic, merge, release, deployment or cancellation, ask Governor: `ALLOW` permits the exact action, `REUSE` attaches equivalent work/proof, `DEFER` names a hold. It checks authority, candidate/effects, equivalent work, supersedence, readiness and failures. Review need not precede CI. Validation may overlap a read-only review of the same candidate; merge/release/deploy waits for both valid results.
 
-## Decide and execute
+`internal governor-execute` performs supported push, PR, workflow, rerun and cancellation actions against the bound commit. A prior reservation must not be duplicated. Merge, release and deployment remain project-governed. A lost response stays `UNKNOWN`; `internal governor-reconcile` reads provider state without resubmission. Publication records triggered validation.
 
-Before push, pull-request update, workflow dispatch, rerun, remote diagnostic,
-merge, release, deployment or cancellation, obtain a Governor decision:
+## One delivery decision
 
-- `ALLOW`: perform the exact bound action.
-- `REUSE`: attach to equivalent running work or use matching passing evidence.
-- `DEFER`: resolve the reported reason before acting.
+Before the first remote Git mutation without applicable consent, ask once: **merge remotely, keep local, or defer**. Show repository, target, exact candidate commit/tree and `publish`/`merge` scope. For merge remotely, record `pod-authorization/v1` for `publish` and `merge` bound to that commit/tree; `merge` and the merge action name target `<remote>/<base>`. Consent includes push/PR, required CI, reruns, diagnostics and cancellation, merge of that exact candidate using `--match-head-commit`, and the stated post-merge install/verification. Routine validation and post-merge checks need no further prompt. Candidate or target movement requires fresh consent. Deployments, new provider effects and spending remain outside it. Keep local records a `user_direct` delivery revision; every remote kind defers and hosted checks report `NOT_RUN`; defer records `user_hold`. A previous explicit exact-scope instruction counts.
 
-Warnings annotate these decisions. Checks proceed through authority, candidate
-and effects, equivalent work, supersedence and unresolved actions, readiness,
-then failure history. Readiness uses this unit's fresh native observations,
-admission holds, corrections and preflight. Independent units can proceed
-separately. Review is not a universal prerequisite for CI.
+After merge, record `governor-outcome` with provider `merge_commit`; checkpoint `delivery: {record}`. Pod verifies authorization, exact result/tree, target identity and readback, retaining trusted governance and valid proof. Do not refresh governance unless Pod says the target moved. See [verification](verification.md).
 
-Use `internal governor-execute` for supported push, pull-request, workflow,
-rerun and cancellation actions. It admits and performs one action against the
-bound commit. Calling `internal governor` separately can reserve that action;
-a later execution must not duplicate the reservation. Merge, release and
-deployment remain project-governed actions.
+## Objective cleanup
 
-A lost response remains `UNKNOWN`; `internal governor-reconcile` uses provider
-readback without resubmitting. Each row retains its candidate, including after
-supersedence. Successful publication records the validation it triggers so a
-later workflow request can attach to that run.
+`internal cleanup-plan` is read-only and objective-scoped. It classifies worktrees and branches as integrated, merged remote head, unique or protected, showing dirty data, stashes, other worktrees, refs and observed terminals. One batched confirmation covers deletion classes; an exact-scope instruction counts. Retain unique work, verify an archive bundle before deleting its refs, or obtain separate discard consent. Rerun with `expect` immediately before deletion; changed facts stop cleanup. Execute only listed guarded Orca/Git commands, with exact ref tips and remote leases. Never add `--force` or delete a directory directly. Protected and uncertain resources stay. Native settlement, Delivery acknowledgment and release remain automatic.
 
-## Failures and supersedence
+## Failures and reporting
 
-Classify a failed remote action with `internal governor-classify` before another
-attempt:
+Classify failure with `internal governor-classify`: `code_defect` returns to correction; `remote_only` names a bounded discriminating check and stop condition; `transient` uses policy's bounded retry; `external` names a dependency. Unclassified failures defer. Supersedence cancels only pending cancel-safe older validation when policy permits; its result cannot approve a new candidate.
 
-- `code_defect`: return to local correction and the existing diagnosis rule.
-- `remote_only`: name the question, local limitation, discriminating remote
-  check and stopping condition.
-- `transient`: use the configured bounded retry.
-- `external`: report the dependency blocking progress.
-
-Unclassified failures defer. Repeated corrections retain their history.
-Supersedence may cancel only pending, cancel-safe validation of the older
-candidate in the same unit, when policy permits. Its result cannot approve the
-new candidate.
-
-A journal in another schema is refused, never upgraded.
-
-## Authority and reporting
-
-An efficiency exception is scoped to the candidate and records who applied it
-and why. It cannot lift authorization or correctness holds.
-Observe mode converts only efficiency deferrals into warnings. Project policy
-may narrow these controls.
-
-Enforcement is advisory unless personal policy names host controls; that claim
-remains owner configuration. `internal governor-status` reports candidates,
-preflight, decisions, pending validation and counters. Workflow trigger proposals
-are suggestions until explicitly configured.
-
-Unknown authority, candidate or effects defer; unobserved cost stays unknown. Verification
-gaps block merge, release or deployment. Local checks do not replace independently
-required hosted proof. Follow the project's required-check and merge-queue
-contract; distinct validation contexts need their own evidence.
+A scoped efficiency exception cannot lift authority or correctness. Observe mode turns only efficiency deferrals into warnings. Enforcement is advisory unless personal policy names host controls. `internal governor-status` reports candidates, preflight, decisions, validation and counters. Workflow proposals are suggestions until configured. Unknown authority, candidate or effects defer. Unobserved cost stays unknown; local checks cannot replace required hosted proof. Follow the project's required checks and merge queue.

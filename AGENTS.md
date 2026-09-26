@@ -1,6 +1,7 @@
 # Pod contributor instructions
 
-Read `docs/pod-spec.md` and `docs/validation.md` before implementation. Inspect Git state
+Read `docs/pod-spec.md`, the linked domain file for your change, and
+`docs/validation.md` before implementation. Inspect Git state
 and preserve unrelated work. Pod is a skill plus bounded Python helpers over Orca; Orca owns
 native Runs, Tasks, Dispatches, environments and worker lifecycle, and project governance
 owns authority and acceptance.

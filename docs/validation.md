@@ -1,6 +1,6 @@
-# Pod validation
+# 0.6.5 verification contract
 
-This is the 0.6.4 verification contract. Every result names the exact commit,
+ Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
 PTY/subprocess behavior, installed-bundle proof, hosted CI, live native proof,
 visual review and independent review are separate labels. A check not exercised
@@ -12,7 +12,7 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | --- | --- | --- |
 | Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Current behavior with disposable synthetic fixtures. |
 | Explicit incidents | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident cases are discovered. |
-| Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check` | Local syntax and changed-file whitespace. |
+| Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check $(git hash-object -t tree /dev/null) HEAD` | Local syntax and whole-candidate whitespace. |
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Bundle inventory, root VERSION link, frontmatter, launcher forms and word budgets. |
 | Catalog check | `PYTHONPATH=skills python -m pod.catalog --check` | Six exact identities, efforts, attributed guidance and coherent dated reference metrics. |
 | Source hygiene | `python tools/source_audit.py .` | Tracked-source privacy and removed-mechanism guard; no Pod package, tag or release path. |
@@ -27,6 +27,16 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | Orca delegation | Real worker through each advertised adapter | Request construction, launch identity/effective values, messaging, settlement, Delivery and release. |
 | Project acceptance | Owner decision, merge and `main` checks | External acceptance and merged truth. |
 | Post-merge public command | Literally run `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh \| sh` in a clean disposable home and on the intended host | `main` distribution, installed version and receipt match the merged commit. |
+
+`python tools/gates.py --output DIR` runs the local command-table gates with the
+current interpreter and `PYTHONPATH=skills`, writing a JSON summary (its checkout's
+commit and dirty state, host and UTC time) and per-gate logs. `--sigint-ignored` runs each child with SIGINT ignored. The table above
+defines the gates; the runner is a convenience for a checkout.
+
+The inventory check reads `docs/pod-spec.md` and `docs/spec/*.md` together. It
+requires one definition per requirement and scenario, valid B/H/I types,
+resolving scenario and relative document links, complete coverage rows and real
+offline test pointers. A document assertion cannot certify a behavioral scenario.
 
 The 0.6 kernel has focused boundary tests for R81–R91 and A143–A163:
 provenance, independently selected target governance and base-revision refresh;
@@ -62,7 +72,7 @@ unavailable delegation suppresses that flag.
 Live Codex and Claude trials additionally exercise A143, A150, A158 and A159
 in disposable objectives. A missing live case remains `NOT_RUN`. Stage-1
 review is the fresh final independent audit under the mechanism installed
-before 0.6. After merge and installation, a separate 0.6 disposable objective
+before 0.6.5. After merge and installation, a separate 0.6.5 disposable objective
 records an assurance obligation, review attempt, triage and label decision as
 self-hosting evidence; it cannot promote stage-1 evidence.
 
@@ -70,7 +80,7 @@ If stage 2 fails, preserve the failing exact evidence and keep the objective
 incomplete. Classify product defects separately from environment or trial
 faults and do not retry blindly. A product defect creates a linked corrective
 delivery unit and follow-up PR from current `main`; the first post-merge patch
-is 0.6.1. Review the correction independently under the mechanism installed
+uses the next root `VERSION`. Review the correction independently under the mechanism installed
 before it, run full milestone gates plus affected regressions, obtain fresh
 candidate authorization and hosted CI, reinstall corrected public `main`,
 then repeat failed and affected live and self-hosting cases. If the defective
@@ -85,8 +95,11 @@ monochrome output, no results, help, invalid/missing YAML, save failure,
 concurrent TUIs, toggle across restart and a non-TTY summary. The latency
 measurement records p50/p95/max for focus/save and external refresh with kernel,
 CPU, Python, ncurses, TERM, locale and terminal size; focus/save p95 must be
-under 500 ms and refresh within one second. Visual review examines actual TUI
-and installer terminal output, including the multi-orca banner.
+under 500 ms and refresh within one second. Visual review examines `tests/tui_snapshot.py` SVG/PNG output at 160×45,
+100×30, 80×24, 60×20 and 40×12 in pink, dark and light palettes, plus
+NO_COLOR, ASCII, expanded detail and help. `frame(strict=True)` and a
+40–200-column, 6-line-height sweep check that no line overflows. Inspect actual TUI and installer
+terminal output, including the multi-orca banner.
 
 The installer suite uses scrubbed disposable homes, a local tarball and HTTP
 server, an offline PyYAML wheel and an npx test double; it makes no external
@@ -97,6 +110,9 @@ concurrent installers and recovery. It does not touch ordinary host profiles.
 The installed copy must match the bundle; an incomplete installation reports a
 recoverable failure. The post-merge literal command is checked separately
 because a cached `main` endpoint can lag the SHA-pinned CI endpoint.
+An update trial begins with an installed 0.6.4 copy in a scrubbed disposable
+home, applies the 0.6.5 installer, checks user-file preservation and verifies
+the installed bundle, launcher and receipt.
 
 ## Boundaries and evidence
 

@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from pod.errors import PodError
 from pod.ledger import _validate_admission, read, update_admission
-from tests import test_kernel_boundaries as boundaries
+from tests import kernel_support as boundaries
 
 
 class AdmissionOrderTests(boundaries.KernelCase):

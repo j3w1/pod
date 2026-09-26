@@ -16,6 +16,7 @@ from .util import bounded_text, digest, exact
 
 import re
 
+# Integration observations retain the existing SHA-1-only contract.
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 
 PACKET_SCHEMA = "pod-packet/v3"
@@ -193,7 +194,9 @@ def evidence_record(value: Any) -> dict:
         raise PodError("invalid_evidence", "Invalid evidence schema or status")
     if "definition" in e and not _sha256(e["definition"]):
         raise PodError("invalid_evidence", "Evidence definition is a SHA256 fingerprint")
-    return e
+    from .util import normalize_timestamp
+    return {**e, "timestamp": normalize_timestamp(e["timestamp"], field="Evidence timestamp",
+                                                    code="invalid_evidence")}
 
 
 def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str,
@@ -288,27 +291,30 @@ def verify_sources(root: Path, bound: list[dict]) -> None:
 
 def integration_observation(project: Path, candidate: str, *, base_ref: str = "origin/main") -> dict:
     """Read Git for whether a candidate is merged and tagged. It changes nothing."""
-    import subprocess
+    from .gitio import read as git_read
 
     record = {"schema": "pod-integration-observation/v1", "candidate": candidate,
               "base_ref": base_ref, "ancestor_of_base": None, "tags": [], "reason": None}
     if not isinstance(candidate, str) or not _HEX40.fullmatch(candidate or ""):
         raise PodError("invalid_candidate", "Candidate must be a full Git commit id")
-    def run(argv):
-        return subprocess.run(["git", "-C", str(project), *argv], capture_output=True,
-                              text=True, timeout=30, check=False)
+    ancestor = git_read(project, ["merge-base", "--is-ancestor", candidate, base_ref])
+    if ancestor is None:
+        record["reason"] = "git_unavailable"
+        return record
     try:
-        ancestor = run(["merge-base", "--is-ancestor", candidate, base_ref])
         if ancestor.returncode == 0:
             record["ancestor_of_base"] = True
         elif ancestor.returncode == 1:
             record["ancestor_of_base"] = False
         else:
             record["reason"] = "base_ref_unavailable"
-        tags = run(["tag", "--points-at", candidate])
+        tags = git_read(project, ["tag", "--points-at", candidate])
+        if tags is None:
+            record["reason"] = "git_unavailable"
+            return record
         if tags.returncode == 0:
             record["tags"] = sorted(line.strip() for line in tags.stdout.splitlines() if line.strip())[:16]
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError):
         record["reason"] = "git_unavailable"
     return record
 

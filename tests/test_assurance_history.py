@@ -4,14 +4,14 @@ from copy import deepcopy
 
 from pod.ledger import read
 from pod.obligations import label_qualification
-from tests import test_kernel_boundaries as boundaries
+from tests import kernel_support as boundaries
 
 
 class AssuranceHistoryTests(boundaries.KernelCase):
-    review = boundaries.ProofIntegrityBoundaryTests.review
-    satisfied = boundaries.ProofIntegrityBoundaryTests.satisfied
-    label = boundaries.ProofIntegrityBoundaryTests.label
-    waiting = boundaries.ProofIntegrityBoundaryTests.waiting
+    review = boundaries.assurance_review
+    satisfied = boundaries.assurance_satisfied
+    label = boundaries.assurance_label
+    waiting = boundaries.assurance_waiting
 
     def assurance(self):
         return next(row for row in self.stored() if row["id"] == "A")

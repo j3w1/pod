@@ -626,6 +626,21 @@ def _duplicates(paths: dict[str, Path]) -> list[str]:
     return found
 
 
+def doctor_snapshot() -> dict:
+    """Read installation facts without changing the installed tree."""
+    paths = _paths()
+    receipt_path = paths["data"] / "install.json"
+    receipt = read_receipt(receipt_path)
+    venv = _venv_path(paths)
+    launcher = paths["launcher"]
+    return {"paths": paths, "receipt_path": receipt_path, "receipt": receipt,
+            "canonical_digest": optional_digest(paths["canonical"]), "venv": venv,
+            "venv_ready": _venv_ready(venv), "launcher": launcher,
+            "launcher_ownership": launcher_info(
+                launcher, _launcher_template(venv / "bin/python", paths["canonical"])),
+            "duplicates": _duplicates(paths)}
+
+
 def _preferences(paths: dict[str, Path], python: Path) -> tuple[str, str | None]:
     config = paths["config"] / "config.yaml"
     env = os.environ.copy()

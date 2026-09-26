@@ -23,7 +23,7 @@ def main(argv: list[str]) -> int:
         return 2
     sys.path.insert(0, str(ROOT / "skills"))
     from pod.errors import PodError
-    from pod.obligations import evaluate_trace
+    from pod.traces import evaluate_trace
     failed = False
     results = {}
     for name in argv[1:]:

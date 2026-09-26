@@ -25,156 +25,10 @@ from pod.governor import (classify_failure, decide, discover_triggers, enforceme
 from pod.ledger import checkpoint
 from tests.common import fixture, modified_bundle
 
-NOW = datetime(2026, 9, 21, tzinfo=timezone.utc)
-COMMIT, TREE = "a" * 40, "c" * 40
-COMMIT2, TREE2 = "b" * 40, "d" * 40
-COMMIT3, TREE3 = "e" * 40, "f" * 40
-BASE = "1" * 40
-WORKFLOW = "2" * 64
-BRANCH = {"remote": "origin", "branch": "agent/release", "base": "main"}
-TARGET = "origin/agent/release"
-# ci.yml is what a push triggers under PROJECT_CONFIG; release.yml is only ever dispatched.
-RELEASE = "release.yml"
-PROJECT_CONFIG = """schema: pod/v1
-waste_governor:
-  preflight: [unit, workflow-lint]
-  triggers:
-    push: ["workflow:ci.yml"]
-    pr_update: ["workflow:ci.yml"]
-"""
-
-
-def authorization(candidate=COMMIT, tree=TREE, scope=("merge", "release")):
-    return {"schema": "pod-authorization/v1", "candidate": candidate, "tree": tree,
-            "scope": list(scope), "authorized_by": "owner", "utc": "2026-09-21T00:00:00Z",
-            "reference": "tasks/pod/authorization.md"}
-
-
-def action(kind="push", candidate=COMMIT, target=TARGET, unit="release", **extra):
-    return {"kind": kind, "candidate": candidate, "target": target, "unit": unit,
-            "reason": "converged candidate", **extra}
-
-
-def dispatch(candidate=COMMIT, target="ci.yml", **extra):
-    return action(kind="workflow_dispatch", candidate=candidate, target=target, **extra)
-
-
-def diagnostic(candidate=COMMIT, check="permission probe", **extra):
-    return action(kind="remote_diagnostic", candidate=candidate, target="probe.yml",
-                  diagnostic={"question": "can the workflow actor read the ruleset field?",
-                              "local_limitation": "local credentials do not represent that actor",
-                              "check": check, "stopping_condition": "record the result; no unchanged repeat"},
-                  **extra)
-
-
-def body(candidate=COMMIT, gaps=()):
-    return {"schema": "pod-checkpoint/v3", "criteria": ["works"], "plan_revision": "p",
-            "candidate": candidate, "policy_revision": "r", "native_refs": [], "assignments": [],
-            "questions": [], "verification_gaps": list(gaps), "next_safe_action": "inspect"}
-
-
-def observation(commit=COMMIT, tree=TREE, *, dirty=0, workflows=None, verification=("unit",),
-                policy="r", base=BASE, environment=None):
-    return {"schema": "pod-candidate-observation/v1", "commit": commit, "tree": tree, "dirty_paths": dirty,
-            "base": {"ref": "origin/main", "commit": base, "merge_base": base} if base else None,
-            "workflows": {".github/workflows/ci.yml": WORKFLOW} if workflows is None else workflows,
-            "verification": list(verification), "toolchain": {"python": "3.13.0"},
-            "environment": environment or {}, "policy_revision": policy}
-
-
-def correction(key, criterion="works"):
-    return {"criterion_id": criterion, "failure_id": key, "obligation": "make the release boundary pass",
-            "failing_example": "release-boundary test fails on the runner", "hypothesis": "an off-by-one",
-            "last_meaningful_evidence": "the failing assertion",
-            "next_discriminating_check": "run the single test", "correction_key": key}
-
-
-class FakePort:
-    """A remote that records what it was asked and can lose a response after acting."""
-
-    def __init__(self, *, lost=(), rejected=(), delay=0.0, auto_ci=(), broken=(), blind=False):
-        self.calls = []
-        self.auto_ci = tuple(auto_ci)
-        self.broken = set(broken)
-        # A blind port starts runs but its readback sees none of them yet.
-        self.blind = blind
-        self.heads = {}
-        self.prs = {}
-        self.runs_by = {}
-        self.run_status = {}
-        self.next_run = 100
-        self.lost = set(lost)
-        self.rejected = set(rejected)
-        self.delay = delay
-
-    def branch_head(self, *, remote, branch):
-        return self.heads.get(f"{remote}/{branch}")
-
-    def push(self, *, remote, branch, commit, expected):
-        self.calls.append(("push", remote, branch, commit, expected))
-        key = f"{remote}/{branch}"
-        if "push" in self.rejected or (expected is not None and self.heads.get(key) not in (expected, None)):
-            return {"status": "rejected", "remote_head": self.heads.get(key)}
-        self.heads[key] = commit
-        for workflow in self.auto_ci:
-            self._start(workflow, commit, event="push")
-        if "push" in self.lost:
-            raise PodError("remote_effect_uncertain", "lost")
-        return {"status": "pushed", "remote_head": commit}
-
-    def _start(self, workflow, commit, *, event):
-        run = {"id": str(self.next_run), "status": "in_progress", "conclusion": None,
-               "created_at": "2026-09-21T00:00:01+00:00", "url": "https://example.invalid/run",
-               "event": event}
-        self.next_run += 1
-        self.runs_by.setdefault((workflow, commit), []).append(run)
-        self.run_status[run["id"]] = run
-        return run
-
-    def pull_request(self, *, head, base):
-        self.calls.append(("pr_list", head, base))
-        if "pull_request" in self.broken:
-            return "not a mapping"
-        return self.prs.get((head, base))
-
-    def open_pull_request(self, *, head, base, title, body):
-        self.calls.append(("pr_create", head, base, title))
-        record = {"number": 7, "url": "https://example.invalid/pull/7", "head_sha": None, "draft": False}
-        self.prs[(head, base)] = record
-        return record
-
-    def dispatch(self, *, workflow, ref, inputs):
-        self.calls.append(("dispatch", workflow, ref, dict(inputs)))
-        if self.delay:
-            time.sleep(self.delay)
-        self._start(workflow, self.heads.get(f"origin/{ref}"), event="workflow_dispatch")
-        if "dispatch" in self.lost:
-            raise PodError("remote_effect_uncertain", "lost")
-        return {"status": "dispatched"}
-
-    def runs(self, *, workflow, commit):
-        self.calls.append(("runs", workflow, commit))
-        if self.blind:
-            return []
-        return [dict(run) for run in self.runs_by.get((workflow, commit), [])]
-
-    def run(self, *, run_id):
-        return dict(self.run_status[run_id])
-
-    def rerun(self, *, run_id, failed_only):
-        self.calls.append(("rerun", run_id, failed_only))
-        self.run_status[run_id].update({"status": "in_progress", "conclusion": None})
-        return {"status": "rerun_requested"}
-
-    def cancel(self, *, run_id):
-        self.calls.append(("cancel", run_id))
-        if "cancel" in self.broken:
-            raise PodError("gh_unavailable", "gh is not on PATH")
-        self.run_status[run_id].update({"status": "completed", "conclusion": "cancelled"})
-        return {"status": "cancel_requested"}
-
-    def complete(self, run_id, conclusion):
-        self.run_status[run_id].update({"status": "completed", "conclusion": conclusion})
+from tests.kernel_support import (NOW, COMMIT, TREE, COMMIT2, TREE2, COMMIT3, TREE3, BASE,
+                                  WORKFLOW, BRANCH, TARGET, RELEASE, PROJECT_CONFIG,
+                                  authorization, action, dispatch, diagnostic, body, observation,
+                                  correction, GovernorFakePort as FakePort)
 
 
 class GovernorCase(unittest.TestCase):
@@ -222,7 +76,20 @@ class GovernorCase(unittest.TestCase):
                              check=check, status=status, now=NOW)
 
     def decide(self, request, **extra):
-        return decide(self.project, "objective", owner="owner", action=request, now=NOW, **extra)
+        return decide(self.project, "objective", owner="owner",
+                      action=self.with_publish_authorization(request), now=NOW, **extra)
+
+    def with_publish_authorization(self, request):
+        # Every governed remote kind except merge, release and deploy needs the owner's publish consent;
+        # these fixtures model a remote delivery decision already taken for the prepared candidate.
+        if request["kind"] in ("merge", "release", "deploy") or "authorization" in request:
+            return request
+        from pod.governor import _read_journal, _record_path
+        unit = _read_journal(_record_path(self.project, "objective"))["units"].get(request["unit"])
+        binding = unit.get("candidate") if unit else None
+        return {**request, "authorization": authorization(
+            candidate=binding["commit"] if binding else request["candidate"],
+            tree=binding["tree"] if binding else "c" * len(request["candidate"]), scope=("publish",))}
 
     def codes(self, result):
         return [reason["code"] for reason in result["reasons"]]
@@ -528,10 +395,10 @@ class DecisionTests(GovernorCase):
         for grant in (None, authorization(tree=TREE2), authorization(candidate=COMMIT2),
                       authorization(scope=("deploy",))):
             with self.subTest(grant=grant and (grant["candidate"][:2], grant["tree"][:2], grant["scope"])):
-                held = self.decide(action(kind="merge", target="main", candidate=binding["id"],
+                held = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"],
                                           authorization=grant))
                 self.assertEqual((held["decision"], self.codes(held)), ("DEFER", ["authorization_missing"]))
-        clear = self.decide(action(kind="merge", target="main", candidate=binding["id"],
+        clear = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"],
                                    authorization=authorization()))
         self.assertEqual((clear["decision"], clear["phase"]), ("ALLOW", "candidate"))
         gapped = self.prepared(gaps=("live matrix",), unit="other")["candidate"]
@@ -549,7 +416,7 @@ class DecisionTests(GovernorCase):
         held = self.decide(action(candidate=binding["id"], effects=["deploy:preview"]))
         self.assertEqual((held["purpose"], self.codes(held)), ("release", ["authorization_missing"]))
         allowed = self.decide(action(candidate=binding["id"], effects=["deploy:preview"],
-                                     authorization=authorization(scope=("deploy",))))
+                                     authorization=authorization(scope=("publish", "deploy"))))
         self.assertEqual(allowed["decision"], "ALLOW")
 
     def test_unrelated_work_does_not_block_an_independent_unit(self):
@@ -772,12 +639,12 @@ waste_governor:
                 self.decide(dispatch(candidate=binding["id"]), exception=bad)
             self.assertEqual(unbound.exception.code, "exception_grant_required")
         with self.assertRaises(PodError) as kind:
-            self.decide(action(kind="merge", target="main", candidate=binding["id"]),
+            self.decide(action(kind="merge", target="origin/main", candidate=binding["id"]),
                         exception={"grant": "g1", "reason": "ship it", "by": "owner"})
         self.assertEqual(kind.exception.code, "exception_grant_required")
         merge_grant = self.GRANT.replace("[workflow_dispatch]", "[merge, workflow_dispatch]")
         self.configure(personal_yaml=merge_grant)
-        held = self.decide(action(kind="merge", target="main", candidate=binding["id"]),
+        held = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"]),
                            exception={"grant": "g1", "reason": "ship it", "by": "owner"})
         self.assertEqual((held["decision"], held["exception"]["ignored_because"]), ("DEFER", "authorization"))
         self.assertEqual(status(self.project, "objective")["counters"]["exceptions_applied"], 1)
@@ -809,7 +676,7 @@ waste_governor:
                          ("ALLOW", "observe", True))
         self.assertEqual([w["code"] for w in observed["warnings"] if w.get("softened_by") == "observe_mode"],
                          ["local_preflight_missing"])
-        held = self.decide(action(kind="merge", target="main", candidate=binding["id"]))
+        held = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"]))
         self.assertEqual(held["decision"], "DEFER")
         projection = status(self.project, "objective")
         self.assertEqual(projection["counters"]["observed_deferrals"], 1)
@@ -859,7 +726,8 @@ class ExecutorTests(GovernorCase):
         return binding, remote
 
     def execute(self, request, port, **extra):
-        return execute(self.project, "objective", owner="owner", action=request, port=port, now=NOW, **extra)
+        return execute(self.project, "objective", owner="owner",
+                       action=self.with_publish_authorization(request), port=port, now=NOW, **extra)
 
     def test_execution_targets_the_bound_commit_and_reuses_the_pull_request(self):
         binding, port = self.published()
@@ -882,7 +750,7 @@ class ExecutorTests(GovernorCase):
             self.execute(action(candidate=second["id"], target="origin/other"), port)
         self.assertEqual(wrong.exception.code, "target_mismatch")
         with self.assertRaises(PodError) as governance:
-            self.execute(action(kind="merge", target="main", candidate=second["id"], authorization=authorization()), port)
+            self.execute(action(kind="merge", target="origin/main", candidate=second["id"], authorization=authorization()), port)
         self.assertEqual(governance.exception.code, "invalid_action")
         moved = FakePort(rejected=("push",))
         third = prepare_candidate(self.project, "objective", owner="owner", unit="release",
@@ -953,7 +821,7 @@ class ExecutorTests(GovernorCase):
         pushed = self.execute(action(candidate=binding["id"]), port)
         running = self.execute(dispatch(candidate=binding["id"], target=RELEASE), port)
         deploying = self.decide(dispatch(candidate=binding["id"], target="deploy.yml", effects=["deploy:preview"],
-                                         authorization=authorization(scope=("deploy",))))
+                                         authorization=authorization(scope=("publish", "deploy"))))
         self.assertEqual(deploying["decision"], "ALLOW")
         second = prepare_candidate(self.project, "objective", owner="owner", unit="release",
                                    observation=observation(commit=COMMIT2, tree=TREE2), now=NOW)
@@ -980,6 +848,20 @@ class ExecutorTests(GovernorCase):
         kept = self.execute(action(candidate=third["candidate"]["id"]), port)
         self.assertEqual(kept["cancellations"], [])
         self.assertIn("superseded_validation_pending", [w["code"] for w in kept["warnings"]])
+
+    def test_a_cancellation_reaches_only_older_work_of_its_own_unit(self):
+        first, port = self.published()
+        self.execute(action(candidate=first["id"]), port)
+        running = self.execute(dispatch(candidate=first["id"], target=RELEASE), port)
+        other = prepare_candidate(self.project, "objective", owner="owner", unit="independent",
+                                  observation=observation(commit=COMMIT2, tree=TREE2),
+                                  branch={"remote": "origin", "base": "main", "branch": "other"}, now=NOW)
+        for unit, candidate in (("independent", other["candidate"]["id"]), ("release", first["id"])):
+            with self.subTest(unit=unit), self.assertRaises(PodError) as refused:
+                self.execute(action(kind="cancel_validation", unit=unit, candidate=candidate,
+                                    target=running["record_id"]), port)
+            self.assertEqual(refused.exception.code, "cancel_unsafe")
+        self.assertNotIn(("cancel", "100"), port.calls)
 
     def test_execution_needs_a_prepared_unit(self):
         self.configure()
@@ -1122,10 +1004,11 @@ class RecoveryTests(GovernorCase):
         binding = self.prepared()["candidate"]
         self.preflight(binding["id"])
         for broken in ({**authorization(), "candidate": "short"},
-                       {**authorization(), "utc": "2026-09-21T00:00:00+00:00"},
-                       {**authorization(), "scope": ["publish"]}):
+                       {**authorization(), "utc": "2026-09-21T00:00:00"},
+                       {**authorization(), "scope": ["unsupported"]}):
             with self.subTest(broken=str(broken["scope"])):
                 with self.assertRaises(PodError):
                     validate_authorization(broken, candidate=COMMIT, tree=TREE)
-                with self.assertRaises(PodError):
-                    self.decide(action(kind="merge", target="main", candidate=binding["id"], authorization=broken))
+                result = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"],
+                                            authorization=broken))
+                self.assertIn("authorization_missing", self.codes(result))

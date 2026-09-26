@@ -24,12 +24,15 @@ import yaml
 
 from .config import GOVERNED_KINDS, effective, validate_effects
 from .errors import PodError
+from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
-from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact
+from .util import (MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact,
+                   normalize_timestamp, route_summary)
 
 SCHEMA = "pod-governor/v2"
 KINDS = GOVERNED_KINDS
 AUTHORIZED_KINDS = ("merge", "release", "deploy")
+AUTHORIZATION_SCOPES = ("publish", *AUTHORIZED_KINDS)
 VALIDATION_KINDS = ("workflow_dispatch", "validation_rerun")
 PUBLICATION_KINDS = ("push", "pr_update")
 DISPATCH_KINDS = ("workflow_dispatch", "remote_diagnostic")
@@ -55,9 +58,10 @@ MAX_WORKFLOWS = 32
 _UNIT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
-_GIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_GIT_ID = gitio.OBJECT_ID
 NEXT_ACTIONS = {
-    "authorization_missing": "supply the owner authorization record naming this candidate, tree and scope",
+    "merge_target_mismatch": "name the prepared unit target (<remote>/<base>) as the merge target",
+    "authorization_missing": "obtain the owner's delivery decision (merge remotely / keep local / defer) for this exact candidate",
     "unit_unknown": "prepare the delivery unit's candidate with the governor-prepare helper",
     "unit_unbound": "prepare the delivery unit's candidate and branch with the governor-prepare helper",
     "candidate_unbound": "checkpoint a candidate, or prepare one for the delivery unit",
@@ -200,22 +204,9 @@ def _compact(journal: dict) -> None:
 
 AUTHORIZATION_SCHEMA = "pod-authorization/v1"
 AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
-_GIT_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
-_UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\Z")
-
-
-def _utc_timestamp(value: object) -> bool:
-    if not isinstance(value, str) or _UTC_TIMESTAMP.fullmatch(value) is None:
-        return False
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError:
-        return False
-    return parsed.utcoffset() is not None and parsed.utcoffset().total_seconds() == 0
-
-
+_GIT_OBJECT_ID = gitio.OBJECT_ID
 def validate_authorization(value: object, *, candidate: str | None = None, tree: str | None = None,
-                           kind: str | None = None) -> dict | None:
+                           kind: str | None = None, target: str | None = None) -> dict | None:
     """Accept only a complete owner authorization for a governed merge, release or deploy.
 
     The owner supplies this record for the governed project's own action. It is never
@@ -223,20 +214,20 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     """
     if value is None:
         return None
-    record = exact(value, AUTHORIZATION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
+    record = exact(value, AUTHORIZATION_FIELDS | {"target"}, AUTHORIZATION_FIELDS, name="authorization")
     if record["schema"] != AUTHORIZATION_SCHEMA:
         raise PodError("invalid_authorization", "Authorization schema is unsupported")
-    for field in ("authorized_by", "reference"):
-        bounded_text(record[field], name=field, limit=512)
+    for field in ("authorized_by", "reference", "target"):
+        if field in record:
+            bounded_text(record[field], name=field, limit=512)
     if (not all(isinstance(record[key], str) and _GIT_OBJECT_ID.fullmatch(record[key])
                 for key in ("candidate", "tree"))
             or len(record["candidate"]) != len(record["tree"])):
         raise PodError("invalid_authorization", "Authorization candidate and tree must be Git object ids")
-    if not _utc_timestamp(record["utc"]):
-        raise PodError("invalid_authorization", "Authorization timestamp must be canonical UTC")
+    utc = normalize_timestamp(record["utc"], field="Authorization timestamp", code="invalid_authorization")
     scope = record["scope"]
     if (not isinstance(scope, list) or not scope or len(scope) > 8
-            or any(item not in AUTHORIZED_KINDS for item in scope)):
+            or any(item not in AUTHORIZATION_SCOPES for item in scope)):
         raise PodError("invalid_authorization", "Authorization scope is unsupported")
     if candidate is not None and record["candidate"] != candidate:
         return None
@@ -244,7 +235,9 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
         return None
     if kind is not None and kind not in record["scope"]:
         return None
-    return record
+    if target is not None and record.get("target") != target:
+        return None
+    return {**record, "utc": utc}
 
 
 def _validate_diagnostic(value: object) -> dict:
@@ -371,7 +364,8 @@ def _unit_tasks(unit: dict | None) -> list[str] | None:
     return None if unit is None else list(unit.get("tasks", []))
 
 
-def _active(native_projection: dict | None, tasks: list[str] | None = None) -> list[str]:
+def _active(native_projection: dict | None, tasks: list[str] | None = None, *,
+            project: Path | None = None, ignore_review_commit: str | None = None) -> list[str]:
     """Objective-local logical assignments supplied at the governor boundary."""
     if not isinstance(native_projection, dict):
         return []
@@ -384,6 +378,12 @@ def _active(native_projection: dict | None, tasks: list[str] | None = None) -> l
             raise PodError("native_assignment_unverified", "Governor logical projection is malformed")
         task = row.get("task")
         if tasks is not None and task is not None and task not in tasks:
+            continue
+        # Only a review admitted on this exact commit id overlaps validation. A ref name is not resolved
+        # here: it may have moved since admission, and an older review must not count for a newer candidate.
+        if (ignore_review_commit is not None and row.get("role") == "review"
+                and isinstance(row.get("candidate"), str) and gitio.OBJECT_ID.fullmatch(row["candidate"])
+                and row["candidate"] == ignore_review_commit):
             continue
         active.append(str(index) + ":" + str(task or "unbound"))
     return active
@@ -417,6 +417,18 @@ def _assert_authority(project: Path, objective: str, owner: str, state: dict) ->
     require_authority(project, objective, owner=owner, state=state)
 
 
+def _owned_state(project: Path, objective: str, owner: str, context_path: Path,
+                 *, version: bool = False) -> dict:
+    """Read and join ownership inside the caller's existing lock when it holds one."""
+    state = _read(context_path)
+    if version:
+        _require_version(state)
+    if state["owner"] not in (None, owner):
+        raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+    _assert_authority(project, objective, owner, state)
+    return state
+
+
 def _checkpoint(state: dict) -> dict:
     value = state.get("checkpoint")
     return value if isinstance(value, dict) else {}
@@ -434,13 +446,15 @@ def _inputs(state: dict) -> str:
 
 
 def _phase(state: dict, actions: list[dict], unit: dict | None, candidate: str | None,
-           native_projection: dict | None = None) -> str:
+           native_projection: dict | None = None, *, project: Path | None = None,
+           ignore_review_commit: str | None = None, all_outstanding: bool = False) -> str:
     checkpoint = _checkpoint(state)
     if native_projection is None and state.get("admissions"):
         raise PodError("native_assignment_unverified",
                        "Governor needs exact objective assignment evidence for native-bound work")
-    tasks = _unit_tasks(unit)
-    if not candidate or _active(native_projection, tasks):
+    tasks = None if all_outstanding else _unit_tasks(unit)
+    if not candidate or _active(native_projection, tasks, project=project,
+                                ignore_review_commit=ignore_review_commit):
         return "working"
     name = unit["name"] if unit else None
     if _pending_interventions(state, name, tasks):
@@ -475,52 +489,83 @@ def _warn(warnings: list[dict], code: str, detail: str) -> None:
     warnings.append({"code": code, "detail": detail})
 
 
-def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
-              managed: bool = False, native_projection: dict | None = None) -> dict:
-    """Apply the decision order and return reasons, warnings, reuse and bindings."""
-    reasons: list[dict] = []
-    warnings: list[dict] = []
+def _check_authority(action: dict, binding: dict | None, deploys: bool, releases: bool,
+                     reasons: list[dict], merge_into: str | None = None) -> None:
     kind = action["kind"]
-    unit = journal["units"].get(action["unit"])
-    binding = unit.get("candidate") if unit else None
-    if managed and (unit is None or (kind != "cancel_validation"
-                                     and (binding is None or unit.get("branch") is None))):
-        _reason(reasons, "correctness", "unit_unbound",
-                "managed execution needs the unit's prepared candidate and its remote, branch and base")
-    checkpoint = _checkpoint(state)
-    if any(row.get("route_decision", {}).get("route_mismatch")
-           for row in state.get("admissions", {}).values()):
-        _reason(reasons, "correctness", "route_mismatch", "a bound worker used a different route")
-    elif any(row.get("route_decision", {}).get("effective_unknown")
-             for row in state.get("admissions", {}).values() if row.get("state") in ("bound", "closed")):
-        _reason(reasons, "correctness", "effective_unknown", "worker launch readback lacks effective values")
-    effects, source = _effects(action, governor_policy)
-    validates = kind in VALIDATION_KINDS or bool(effects and any(e.startswith("workflow:") for e in effects))
-    deploys = kind == "deploy" or bool(effects and any(e.startswith("deploy:") for e in effects))
-    releases = kind == "release" or bool(effects and any(e.startswith("release:") for e in effects))
-    purpose = _purpose(kind, validates=validates, deploys=deploys, releases=releases)
-    if action.get("purpose") not in (None, purpose):
-        raise PodError("invalid_action", f"This action's triggers make its purpose {purpose}")
-    names_current = binding is not None and action["candidate"] in (binding["id"], binding["commit"])
-    candidate_id = binding["id"] if names_current else None
-    candidate_ids = {action["candidate"]} | ({binding["id"], binding["commit"]} if names_current else set())
-
     # 1. Authority and project requirements.
     scopes = set()
     if kind in AUTHORIZED_KINDS:
         scopes.add(kind)
+    else:
+        # Every other governed kind is a remote effect for this candidate (push, PR, CI dispatch or
+        # rerun, remote diagnostic, cancellation). Without the owner's publish consent none runs, which
+        # is what makes a local-only delivery hold every remote kind.
+        scopes.add("publish")
     if deploys:
         scopes.add("deploy")
     if releases:
         scopes.add("release")
     for scope in sorted(scopes):
-        authorized = validate_authorization(action.get("authorization"),
-                                            candidate=binding["commit"] if binding else action["candidate"],
-                                            tree=binding["tree"] if binding else None, kind=scope)
+        candidate = binding["commit"] if binding else action["candidate"]
+        tree = binding["tree"] if binding else None
+        target = merge_into if scope == "merge" else None
+        try:
+            authorized = validate_authorization(action.get("authorization"),
+                                                candidate=candidate, tree=tree, kind=scope, target=target)
+        except PodError:
+            authorized = None
         if authorized is None:
             _reason(reasons, "authorization", "authorization_missing",
-                    f"{scope} needs an owner authorization record naming this candidate, tree and scope")
+                    f"{scope} authorization for candidate {candidate}, tree {tree or 'unbound'}"
+                    f"{', target ' + target if target else ''} is missing; {NEXT_ACTIONS['authorization_missing']}")
+        else:
+            action["authorization"] = authorized
 
+
+
+def merge_target(unit: dict | None) -> dict | None:
+    """The canonical branch a merge of this unit lands on, from its prepared remote and base."""
+    branch = unit.get("branch") if isinstance(unit, dict) else None
+    if not isinstance(branch, dict) or not all(isinstance(branch.get(key), str) for key in ("remote", "base")):
+        return None
+    return {"remote": branch["remote"], "base": branch["base"],
+            "ref": f"refs/remotes/{branch['remote']}/{branch['base']}"}
+
+
+def merge_target_name(unit: dict | None) -> str | None:
+    """The one spelling a merge action and its consent use for the unit's target: <remote>/<base>."""
+    target = merge_target(unit)
+    return f"{target['remote']}/{target['base']}" if target else None
+
+
+def pushed_branch(row: dict, unit: dict | None) -> dict | None:
+    """The branch a publication row pushed: its own snapshot, or for a row admitted before snapshots, the unit's
+    branch only while that still names the row's own target."""
+    if isinstance(row.get("branch"), dict):
+        return row["branch"]
+    branch = (unit or {}).get("branch")
+    if isinstance(branch, dict) and f"{branch.get('remote')}/{branch.get('branch')}" == row["action"].get("target"):
+        return branch
+    return None
+
+
+def _check_merge_target(action: dict, unit: dict | None, reasons: list[dict]) -> None:
+    """A merge names the unit's own target, so its consent and any delivery record bind one branch."""
+    if action["kind"] != "merge":
+        return
+    name = merge_target_name(unit)
+    if name is None:
+        _reason(reasons, "correctness", "unit_unbound",
+                "a merge needs the unit's prepared remote and base, which its consent and target name")
+    elif action["target"] != name:
+        _reason(reasons, "correctness", "merge_target_mismatch",
+                f"merge target {action['target']} is not the prepared unit target; name {name} as the merge target")
+
+
+def _check_binding(action: dict, unit: dict | None, binding: dict | None, checkpoint: dict,
+                   effects: list[str] | None, validates: bool, purpose: str, kind: str,
+                   journal: dict, candidate_id: str | None, reasons: list[dict],
+                   warnings: list[dict]) -> tuple[bool, str | None, list[dict]]:
     # 2. Bind the request to the current candidate and its context.
     if action["unit"] != DEFAULT_UNIT and unit is None:
         _reason(reasons, "correctness", "unit_unknown", f"no delivery unit named {action['unit']} is prepared")
@@ -556,24 +601,13 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
             _reason(reasons, "correctness", "candidate_unpublished",
                     f"{key} does not carry the candidate commit according to recorded pushes")
 
-    logical_key = _logical_key(action, candidate_id)
-    same = [row for row in journal["actions"] if row["logical_key"] == logical_key and row["decision"] == "ALLOW"]
-    latest = same[-1] if same else None
+    return superseded, current, starting
+
+
+def _check_equivalent(action: dict, latest: dict | None, starting: list[dict],
+                      candidate_id: str | None, kind: str, purpose: str, superseded: bool,
+                      binding: dict | None, reasons: list[dict], warnings: list[dict]) -> dict | None:
     reuse = None
-
-    def verdict(phase: str, stale_pending: list[str]) -> dict:
-        return {"reasons": reasons, "warnings": warnings, "reuse": reuse, "phase": phase,
-                "logical_key": logical_key, "candidate_id": candidate_id, "candidate_ids": candidate_ids,
-                "commit": binding["commit"] if names_current else None,
-                "effects": effects, "effect_source": source, "purpose": purpose,
-                "cancel_safe": purpose in ("validation", "diagnostic") and not deploys and not releases,
-                "attempt": (latest["attempt"] + 1) if latest is not None else 1,
-                "unit": unit, "binding": binding, "stale_pending": stale_pending}
-
-    if superseded and kind != "remote_diagnostic":
-        # Nothing after the binding step is about this request; it names the wrong candidate.
-        return verdict(_phase(state, journal["actions"], unit, current, native_projection), [])
-
     # 3. An equivalent action already running, or valid evidence already recorded.
     if latest is None and kind in VALIDATION_KINDS and candidate_id is not None:
         # A push or pull-request update that triggers this workflow journals a derived
@@ -604,6 +638,14 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
             _reason(reasons, "correctness", "effect_unresolved",
                     f"attempt {latest['attempt']} of this action has no known outcome")
 
+    return reuse
+
+
+def _check_unresolved(action: dict, journal: dict, logical_key: str,
+                      candidate_id: str | None, state: dict, unit: dict | None, current: str | None,
+                      native_projection: dict | None, validates: bool, purpose: str, kind: str,
+                      project: Path | None, binding: dict | None,
+                      reasons: list[dict], warnings: list[dict]) -> tuple[list[str], str]:
     # 4. Supersedence and unresolved prior effects in this unit.
     for row in journal["actions"]:
         if (row["action"]["unit"] == action["unit"] and row["decision"] == "ALLOW"
@@ -619,7 +661,10 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
     if stale_pending:
         _warn(warnings, "superseded_validation_pending",
               f"{len(stale_pending)} validation run(s) for a superseded candidate are still pending")
-    phase = _phase(state, journal["actions"], unit, current, native_projection)
+    phase = _phase(state, journal["actions"], unit, current, native_projection,
+                   project=project,
+                   ignore_review_commit=binding["commit"] if purpose == "validation" and binding else None,
+                   all_outstanding=purpose == "release")
     if (validates or purpose == "release") and kind != "remote_diagnostic" and phase in ("working", "converging"):
         pending = _pending_interventions(state, action["unit"], _unit_tasks(unit))
         if phase == "converging" and "unit:" + action["unit"] in pending:
@@ -630,6 +675,12 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
                     "objective assignments are still outstanding" if phase == "working"
                     else "corrections are still unsettled")
 
+    return stale_pending, phase
+
+
+def _check_readiness(checkpoint: dict, unit: dict | None, candidate_id: str | None,
+                     binding: dict | None, purpose: str, governor_policy: dict,
+                     reasons: list[dict], warnings: list[dict]) -> None:
     # 5. Readiness, or the diagnostic exception.
     if purpose == "validation" or purpose == "release":
         configured = list(governor_policy.get("preflight", []))
@@ -656,6 +707,11 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         else:
             _warn(warnings, "verification_gaps", f"{len(gaps)} verification gap(s) remain in the checkpoint")
 
+
+
+def _check_failure(latest: dict | None, reuse: dict | None, superseded: bool,
+                   state: dict, kind: str, governor_policy: dict, same: list[dict],
+                   reasons: list[dict], warnings: list[dict]) -> None:
     # 6. Repeated failure.
     if latest is not None and latest["outcome"] == "FAILED" and reuse is None and not superseded:
         classification = latest.get("classification")
@@ -688,6 +744,77 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         pass
     elif kind == "remote_diagnostic" and latest is None:
         _warn(warnings, "early_diagnostic", "supplies information unavailable locally")
+
+
+
+def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
+              managed: bool = False, native_projection: dict | None = None,
+              project: Path | None = None) -> dict:
+    """Apply the decision order and return reasons, warnings, reuse and bindings."""
+    reasons: list[dict] = []
+    warnings: list[dict] = []
+    kind = action["kind"]
+    unit = journal["units"].get(action["unit"])
+    binding = unit.get("candidate") if unit else None
+    if managed and (unit is None or (kind != "cancel_validation"
+                                     and (binding is None or unit.get("branch") is None))):
+        _reason(reasons, "correctness", "unit_unbound",
+                "managed execution needs the unit's prepared candidate and its remote, branch and base")
+    checkpoint = _checkpoint(state)
+    mismatch, unknown = route_summary(list(state.get("admissions", {}).values()),
+                                      unknown_states=("bound", "closed"))
+    if mismatch:
+        _reason(reasons, "correctness", "route_mismatch", "a bound worker used a different route")
+    elif unknown:
+        _reason(reasons, "correctness", "effective_unknown", "worker launch readback lacks effective values")
+    effects, source = _effects(action, governor_policy)
+    validates = kind in VALIDATION_KINDS or bool(effects and any(e.startswith("workflow:") for e in effects))
+    deploys = kind == "deploy" or bool(effects and any(e.startswith("deploy:") for e in effects))
+    releases = kind == "release" or bool(effects and any(e.startswith("release:") for e in effects))
+    purpose = _purpose(kind, validates=validates, deploys=deploys, releases=releases)
+    if action.get("purpose") not in (None, purpose):
+        raise PodError("invalid_action", f"This action's triggers make its purpose {purpose}")
+    names_current = binding is not None and action["candidate"] in (binding["id"], binding["commit"])
+    candidate_id = binding["id"] if names_current else None
+    candidate_ids = {action["candidate"]} | ({binding["id"], binding["commit"]} if names_current else set())
+
+    _check_authority(action, binding, deploys, releases, reasons,
+                     merge_into=merge_target_name(unit) if kind == "merge" else None)
+    _check_merge_target(action, unit, reasons)
+
+    superseded, current, starting = _check_binding(action, unit, binding, checkpoint, effects,
+                                                    validates, purpose, kind, journal, candidate_id,
+                                                    reasons, warnings)
+
+    logical_key = _logical_key(action, candidate_id)
+    same = [row for row in journal["actions"] if row["logical_key"] == logical_key and row["decision"] == "ALLOW"]
+    latest = same[-1] if same else None
+    reuse = None
+
+    def verdict(phase: str, stale_pending: list[str]) -> dict:
+        return {"reasons": reasons, "warnings": warnings, "reuse": reuse, "phase": phase,
+                "logical_key": logical_key, "candidate_id": candidate_id, "candidate_ids": candidate_ids,
+                "commit": binding["commit"] if names_current else None,
+                "effects": effects, "effect_source": source, "purpose": purpose,
+                "cancel_safe": purpose in ("validation", "diagnostic") and not deploys and not releases,
+                "attempt": (latest["attempt"] + 1) if latest is not None else 1,
+                "unit": unit, "binding": binding, "stale_pending": stale_pending}
+
+    if superseded and kind != "remote_diagnostic":
+        # Nothing after the binding step is about this request; it names the wrong candidate.
+        return verdict(_phase(state, journal["actions"], unit, current, native_projection), [])
+
+    reuse = _check_equivalent(action, latest, starting, candidate_id, kind, purpose,
+                              superseded, binding, reasons, warnings)
+
+    stale_pending, phase = _check_unresolved(action, journal, logical_key, candidate_id, state,
+                                              unit, current, native_projection, validates, purpose,
+                                              kind, project, binding, reasons, warnings)
+
+    _check_readiness(checkpoint, unit, candidate_id, binding, purpose, governor_policy,
+                     reasons, warnings)
+
+    _check_failure(latest, reuse, superseded, state, kind, governor_policy, same, reasons, warnings)
 
     return verdict(phase, stale_pending)
 
@@ -750,21 +877,21 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
     record_path = _record_path(project, objective)
     moment = now.isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         from .ledger import map_of, require_governance_current
         require_governance_current(project, map_of(state))
         journal = _read_journal(record_path)
         verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
-                            native_projection=native_projection)
+                            native_projection=native_projection, project=project)
         exception_record = _exception_grant(governor_policy, supplied, action=proposal, objective=objective,
                                             candidate_ids=verdict["candidate_ids"], now=now)
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
         codes = [reason["code"] for reason in verdict["reasons"]]
         next_action = next((NEXT_ACTIONS[code] for code in codes if code in NEXT_ACTIONS), None)
+        missing = next((reason for reason in verdict["reasons"]
+                        if reason["code"] == "authorization_missing"), None)
+        if missing is not None:
+            next_action = missing["detail"]
         record_id = digest({"action": proposal, "at": moment, "revision": journal["revision"]})
         counters = journal["counters"]
         _count(counters["decisions"], decision)
@@ -793,6 +920,12 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
                    "receipt": {"started_at": moment, "finished_at": None, "observed_elapsed_s": None,
                                "provider": None, "evidence": list(proposal["evidence"]), "detail": None},
                    "classification": None, "classifications": [], "derived_from": None}
+            if proposal["kind"] in PUBLICATION_KINDS and verdict["unit"] and verdict["unit"].get("branch"):
+                # Readback and settlement use the branch this push targeted, even if the unit is re-prepared.
+                row["branch"] = dict(verdict["unit"]["branch"])
+            if proposal["kind"] == "merge" and merge_target(verdict["unit"]) is not None:
+                # The admitted target, not the unit's later state, is what a delivery record must match.
+                row["target_binding"] = merge_target(verdict["unit"])
             journal["actions"].append(row)
         elif decision == "REUSE":
             # Reuse is a decision about an existing row, not a new action; it is counted and
@@ -849,6 +982,10 @@ def _validate_provider(value: object, *, nested: bool = True) -> dict | None:
     for key, item in value.items():
         if not isinstance(key, str) or len(key) > 64:
             raise PodError("invalid_provider", "Provider receipt keys are short names")
+        if key == "merge_commit" and (not isinstance(item, str) or not _GIT_OBJECT_ID.fullmatch(item)):
+            raise PodError("invalid_provider", "Provider merge_commit is a full Git commit id")
+        if key == "method" and item not in ("merge", "squash", "fast-forward"):
+            raise PodError("invalid_provider", "Provider merge method is merge, squash or fast-forward")
         if isinstance(item, dict) and nested:
             _validate_provider(item, nested=key == "triggered")
         elif not (item is None or isinstance(item, (str, int, bool))) or (isinstance(item, str) and len(item) > 512):
@@ -880,10 +1017,11 @@ def _settle(journal: dict, row: dict, *, outcome: str, provider: dict | None, ev
         row["receipt"]["detail"] = detail
     if outcome == "PASS" and row["action"]["kind"] in PUBLICATION_KINDS:
         unit = journal["units"].get(row["action"]["unit"])
-        if unit and unit.get("branch") and row.get("commit"):
+        branch = pushed_branch(row, unit)
+        if unit and branch and row.get("commit"):
             # What the branch carries is what the recorded pushes landed, whichever
             # generation they belonged to.
-            unit["published"][unit["branch"]["remote"] + "/" + unit["branch"]["branch"]] = row["commit"]
+            unit["published"][branch["remote"] + "/" + branch["branch"]] = row["commit"]
         _derive_validation(journal, row, moment)
 
 
@@ -944,10 +1082,7 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if row["decision"] != "ALLOW":
@@ -987,11 +1122,7 @@ def classify_failure(project: Path, objective: str, *, owner: str, record_id: st
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         if row["outcome"] != "FAILED":
@@ -1030,11 +1161,7 @@ def record_correction(project: Path, objective: str, *, owner: str, unit: str, c
         raise PodError("invalid_unit", "Delivery unit names are bounded identifiers")
     context_path = _path(project, objective)
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         result = _intervention_locked(project, objective, state, task=None, unit=unit,
                                       correction=correction, diagnosis=diagnosis)
         _write(context_path, state)
@@ -1044,11 +1171,10 @@ def record_correction(project: Path, objective: str, *, owner: str, unit: str, c
 # --------------------------------------------------------------------------- candidates
 
 def _git(project: Path, argv: list[str]) -> subprocess.CompletedProcess:
-    try:
-        return subprocess.run(["git", "-C", str(project), *argv], capture_output=True, text=True,
-                              timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise PodError("git_unavailable", "Git could not observe the candidate") from exc
+    result = gitio.read(project, argv)
+    if result is None:
+        raise PodError("git_unavailable", "Git could not observe the candidate")
+    return result
 
 
 def _bounded_mapping(value: object, *, name: str, limit: int = 16) -> dict:
@@ -1191,11 +1317,7 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         journal = _read_journal(record_path)
         existing = journal["units"].get(unit)
         if existing is None:
@@ -1255,11 +1377,7 @@ def record_preflight(project: Path, objective: str, *, owner: str, unit: str, ca
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
     with _lock(context_path):
-        state = _read(context_path)
-        _require_version(state)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
+        state = _owned_state(project, objective, owner, context_path, version=True)
         journal = _read_journal(record_path)
         record = journal["units"].get(unit)
         binding = record.get("candidate") if record else None
@@ -1278,350 +1396,8 @@ def record_preflight(project: Path, objective: str, *, owner: str, unit: str, ca
 
 # --------------------------------------------------------------------------- execution
 
-def _uncertain(exc: PodError) -> bool:
-    return exc.code in ("remote_effect_uncertain", "remote_read_failed")
-
-
-def _outcome_from_run(run: dict) -> tuple[str, str | None]:
-    status = run.get("status")
-    conclusion = run.get("conclusion")
-    if status != "completed":
-        return "pending", None
-    if conclusion == "success":
-        return "PASS", None
-    if conclusion == "cancelled":
-        return "CANCELED", None
-    if conclusion == "skipped":
-        return "FAILED", "skipped: a skipped required check leaves the check pending, not passed"
-    return "FAILED", str(conclusion) if conclusion is not None else "completed without a conclusion"
-
-
-def _provider_run(run: dict) -> dict:
-    return {"run_id": str(run.get("id")), "url": run.get("url"), "status": run.get("status"),
-            "conclusion": run.get("conclusion"), "created_at": run.get("created_at")}
-
-
-def _pick_run(runs: list[dict], *, since: str) -> dict | None:
-    """The newest run of this workflow for this commit created at or after the submission."""
-    try:
-        # GitHub reports run creation to the second; the floor must not be finer.
-        floor = datetime.fromisoformat(since).replace(microsecond=0)
-    except (TypeError, ValueError):
-        floor = None
-    candidates = []
-    for run in runs:
-        created = run.get("created_at")
-        try:
-            stamp = datetime.fromisoformat(str(created).replace("Z", "+00:00")) if created else None
-        except ValueError:
-            stamp = None
-        if floor is not None and stamp is not None and stamp.tzinfo is not None and floor.tzinfo is not None \
-                and stamp < floor:
-            continue
-        candidates.append((stamp or datetime.min.replace(tzinfo=timezone.utc), run))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda item: item[0])[1]
-
-
-def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
-             pull_request: dict | None) -> tuple[str, dict | None, str | None]:
-    """Perform the admitted action against the row's own bound commit. Returns outcome, provider, detail."""
-    kind = row["action"]["kind"]
-    branch = unit.get("branch")
-    commit = row.get("commit")
-    if branch is None and kind != "cancel_validation":
-        raise PodError("unit_branch_required", "Managed execution needs the unit's remote, branch and base")
-    if commit is None and kind != "cancel_validation":
-        raise PodError("candidate_unbound", "The admitted row carries no candidate commit")
-    if kind in PUBLICATION_KINDS:
-        target = branch["remote"] + "/" + branch["branch"]
-        if row["action"]["target"] != target:
-            raise PodError("target_mismatch", f"Publication target must be {target}")
-        expected = unit["published"].get(target)
-        try:
-            pushed = port.push(remote=branch["remote"], branch=branch["branch"], commit=commit, expected=expected)
-        except PodError as exc:
-            if _uncertain(exc):
-                return "UNKNOWN", None, "push response was lost"
-            raise
-        if pushed.get("status") != "pushed":
-            return "FAILED", {"remote_head": pushed.get("remote_head")}, "branch_moved: the remote branch was not at the expected commit"
-        provider = {"remote_head": commit, "branch": target}
-        provider["triggered"] = _triggered_runs(port, row, commit)
-        if kind == "push":
-            return "PASS", provider, None
-        try:
-            found = port.pull_request(head=branch["branch"], base=branch["base"])
-            if found is None:
-                title = (pull_request or {}).get("title") or row["action"]["reason"]
-                body = (pull_request or {}).get("body") or ""
-                bounded_text(title, name="title", limit=256)
-                if len(body) > 16 * 1024:
-                    raise PodError("invalid_pull_request", "Pull request body is too large")
-                found = port.open_pull_request(head=branch["branch"], base=branch["base"], title=title, body=body)
-                provider["pr_reused"] = False
-            else:
-                provider["pr_reused"] = True
-        except PodError as exc:
-            if _uncertain(exc):
-                return "UNKNOWN", provider, "pull request state is unknown after the push"
-            raise
-        provider.update({"pr": found.get("number"), "pr_url": found.get("url")})
-        return "PASS", provider, None
-    if kind in DISPATCH_KINDS:
-        workflow = row["action"]["target"]
-        if not _WORKFLOW.fullmatch(workflow):
-            raise PodError("invalid_workflow", "Dispatch target must be a workflow file name")
-        try:
-            port.dispatch(workflow=workflow, ref=branch["branch"], inputs=row["action"].get("inputs") or {})
-        except PodError as exc:
-            if _uncertain(exc):
-                return "UNKNOWN", None, "dispatch response was lost"
-            raise
-        # A validation run must sit on the candidate commit; a diagnostic ran at whatever the
-        # branch carried, which the recorded pushes know. The commit looked up is recorded so
-        # a later readback looks in the same place.
-        if kind == "remote_diagnostic":
-            commit = unit["published"].get(branch["remote"] + "/" + branch["branch"]) or commit
-        lookup = {"ref_commit": commit}
-        try:
-            run = _pick_run(port.runs(workflow=workflow, commit=commit), since=row["receipt"]["started_at"])
-        except PodError as exc:
-            if _uncertain(exc):
-                return "pending", lookup, "dispatched; run identity not read back yet"
-            raise
-        if run is None:
-            return "pending", lookup, "dispatched; no run visible yet"
-        return "pending", {**lookup, **_provider_run(run)}, None
-    if kind == "validation_rerun":
-        failed = [other for other in journal["actions"]
-                  if other["action"]["unit"] == unit["name"] and other["decision"] == "ALLOW"
-                  and other["outcome"] == "FAILED" and other["action"]["target"] == row["action"]["target"]
-                  and other.get("candidate_id") == row.get("candidate_id")
-                  and (other["receipt"].get("provider") or {}).get("run_id")]
-        if not failed:
-            raise PodError("rerun_unbound", "No failed run with a provider identity binds this candidate and workflow")
-        run_id = str(failed[-1]["receipt"]["provider"]["run_id"])
-        try:
-            port.rerun(run_id=run_id, failed_only=True)
-        except PodError as exc:
-            if _uncertain(exc):
-                return "UNKNOWN", {"run_id": run_id}, "rerun response was lost"
-            raise
-        return "pending", {"run_id": run_id, "rerun": True}, None
-    if kind == "cancel_validation":
-        target = _find_row(journal, row["action"]["target"])
-        run_id = (target["receipt"].get("provider") or {}).get("run_id")
-        if target["outcome"] != "pending" or not target.get("cancel_safe") or not run_id:
-            raise PodError("cancel_unsafe", "Only a pending, cancel-safe validation with a run identity is canceled")
-        try:
-            port.cancel(run_id=str(run_id))
-        except PodError as exc:
-            if _uncertain(exc):
-                return "UNKNOWN", {"run_id": str(run_id)}, "cancel response was lost"
-            raise
-        return "PASS", {"run_id": str(run_id), "canceled_record": target["record_id"]}, None
-    raise PodError("invalid_action", f"{kind} is decided by the governor but performed by project governance")
-
-
-def _triggered_runs(port: GitHubPort, row: dict, commit: str) -> dict:
-    """The runs a landed publication started, by workflow, as far as a readback can see them."""
-    triggered = {}
-    for effect in row.get("effects") or []:
-        if not effect.startswith("workflow:"):
-            continue
-        workflow = effect[len("workflow:"):]
-        try:
-            run = _pick_run(port.runs(workflow=workflow, commit=commit), since=row["receipt"]["started_at"])
-        except PodError as exc:
-            if _uncertain(exc):
-                continue
-            raise
-        if run is not None:
-            triggered[workflow] = run
-    return triggered
-
-
-def _record_execution(project: Path, objective: str, *, owner: str, record_id: str, outcome: str,
-                      provider: dict | None, detail: str | None, now: datetime) -> dict:
-    context_path = _path(project, objective)
-    record_path = _record_path(project, objective)
-    moment = now.isoformat()
-    with _lock(context_path):
-        state = _read(context_path)
-        if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-        _assert_authority(project, objective, owner, state)
-        journal = _read_journal(record_path)
-        row = _find_row(journal, record_id)
-        if outcome == "pending":
-            # A submission whose response was lost and whose run is now visible is running,
-            # not unknown; the readback settles the identity, never a resubmission.
-            if row["outcome"] == "UNKNOWN":
-                row["outcome"] = "pending"
-            if provider is not None:
-                row["receipt"]["provider"] = {**(row["receipt"].get("provider") or {}), **provider}
-            if detail is not None:
-                row["receipt"]["detail"] = detail
-        else:
-            _settle(journal, row, outcome=outcome, provider=provider, evidence=[], detail=detail, moment=moment)
-            if outcome == "PASS" and row["action"]["kind"] == "cancel_validation":
-                target = _find_row(journal, row["action"]["target"])
-                if target["outcome"] == "pending":
-                    _settle(journal, target, outcome="CANCELED", provider=None, evidence=[],
-                            detail="superseded by candidate " + str(row.get("candidate_id"))[:12], moment=moment)
-                    _count(journal["counters"], "cancellations")
-        _write_journal(record_path, journal)
-        return dict(row)
-
-
-def execute(project: Path, objective: str, *, owner: str, action: dict, exception: object = None,
-            port: GitHubPort | None = None, pull_request: dict | None = None,
-            now: datetime | None = None, native_projection: dict | None = None) -> dict:
-    """Admit and perform one action as a single managed step.
-
-    The decision and the execution are one path: the journal records the admitted
-    intention before the remote call, the call targets the bound candidate commit rather
-    than whatever HEAD points to, and a lost response leaves an UNKNOWN row that only a
-    provider readback can settle. The lock is never held across the remote call.
-    """
-    moment = now or datetime.now(timezone.utc)
-    if validate_action(action)["kind"] not in EXECUTABLE_KINDS:
-        raise PodError("invalid_action", "Merge, release and deployment are decided here and performed by project governance")
-    admitted = _admit(project, objective, owner=owner, action=action, exception=exception, now=moment,
-                      managed=True, native_projection=native_projection)
-    result = {key: value for key, value in admitted.items() if not key.startswith("_")}
-    result["cancellations"] = []
-    if admitted["decision"] != "ALLOW":
-        return result
-    unit = admitted["_unit"]
-    binding = admitted["_binding"]
-    remote = port or GhPort(project)
-    policy = admitted["_policy"]
-    later = (lambda: datetime.now(timezone.utc)) if now is None else (lambda: now)
-    kind = admitted["_kind"]
-    # A cancellation never cancels on its own behalf; supersedence is handled once, by the
-    # action that follows it.
-    if (kind != "cancel_validation" and policy.get("cancel_superseded_validation")
-            and admitted["superseded_validation"]):
-        journal = _read_journal(_record_path(project, objective))
-        for stale in admitted["superseded_validation"]:
-            stale_row = _find_row(journal, stale)
-            if not (stale_row["receipt"].get("provider") or {}).get("run_id"):
-                # Nothing to cancel remotely; the row settles by readback or stays superseded.
-                result["cancellations"].append({"target": stale, "record_id": None, "decision": "DEFER",
-                                                "outcome": None, "detail": "no run identity to cancel"})
-                continue
-            try:
-                canceled = execute(
-                    project, objective, owner=owner, port=remote, now=moment,
-                    native_projection=native_projection,
-                    action={"kind": "cancel_validation", "unit": unit["name"], "candidate": binding["id"],
-                            "target": stale, "reason": "superseded by a newer candidate generation"})
-                result["cancellations"].append({**canceled, "target": stale})
-            except PodError as exc:
-                # The cancel's own row is settled by its execute; the primary action proceeds.
-                result["cancellations"].append({"target": stale, "record_id": None, "decision": "ALLOW",
-                                                "outcome": "FAILED", "detail": exc.code})
-            except BaseException:
-                _record_execution(project, objective, owner=owner, record_id=admitted["record_id"],
-                                  outcome="FAILED", provider=None, detail="not_attempted", now=later())
-                raise
-    journal = _read_journal(_record_path(project, objective))
-    row = _find_row(journal, admitted["record_id"])
-    try:
-        outcome, provider, detail = _perform(remote, row, unit, journal, pull_request)
-    except PodError as exc:
-        _record_execution(project, objective, owner=owner, record_id=admitted["record_id"],
-                          outcome="UNKNOWN" if _uncertain(exc) else "FAILED", provider=None,
-                          detail=exc.code, now=later())
-        raise
-    except BaseException as exc:
-        # A port that answered in an unexpected shape, or a defect here, leaves the remote
-        # state unknown; the row must say so rather than stay pending forever.
-        _record_execution(project, objective, owner=owner, record_id=admitted["record_id"],
-                          outcome="UNKNOWN", provider=None, detail=type(exc).__name__, now=later())
-        raise
-    settled = _record_execution(project, objective, owner=owner, record_id=admitted["record_id"],
-                                outcome=outcome, provider=provider, detail=detail, now=later())
-    result.update({"outcome": settled["outcome"], "receipt": settled["receipt"]})
-    return result
-
-
-def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port: GitHubPort | None = None,
-              now: datetime | None = None) -> dict:
-    """Settle an UNKNOWN or pending row from provider readback only; never resubmit."""
-    bounded_text(owner, name="owner")
-    bounded_text(record_id, name="record_id", limit=128)
-    context_path = _path(project, objective)
-    record_path = _record_path(project, objective)
-    state = _read(context_path)
-    if state["owner"] not in (None, owner):
-        raise PodError("coordinator_conflict", "Another coordinator owns this objective")
-    _assert_authority(project, objective, owner, state)
-    journal = _read_journal(record_path)
-    row = _find_row(journal, record_id)
-    if row["outcome"] not in ("UNKNOWN", "pending"):
-        return {"status": row["outcome"], "record_id": record_id, "action": "none", "receipt": row["receipt"]}
-    unit = journal["units"].get(row["action"]["unit"])
-    if unit is None:
-        raise PodError("unit_unbound", "No delivery unit binds this row")
-    # The row carries the commit it was admitted for. A superseded generation is looked up
-    # by that commit, never by whatever the unit's current candidate happens to be.
-    commit = row.get("commit")
-    remote = port or GhPort(project)
-    kind = row["action"]["kind"]
-    provider = row["receipt"].get("provider") or {}
-    moment = now or datetime.now(timezone.utc)
-    if kind in PUBLICATION_KINDS:
-        branch = unit["branch"]
-        head = remote.branch_head(remote=branch["remote"], branch=branch["branch"])
-        if commit is not None and head == commit:
-            outcome, detail = "PASS", "remote branch carries the candidate commit"
-            provider = {**provider, "remote_head": head, "branch": branch["remote"] + "/" + branch["branch"],
-                        "triggered": _triggered_runs(remote, row, commit)}
-        elif head is not None and head == unit["published"].get(branch["remote"] + "/" + branch["branch"]):
-            outcome, detail = "FAILED", "not_pushed: the remote branch is still at the previously recorded commit"
-        else:
-            outcome, detail = "UNKNOWN", "remote branch head is " + (head[:12] if head else "absent")
-        settled = _record_execution(project, objective, owner=owner, record_id=record_id, outcome=outcome,
-                                    provider=provider, detail=detail, now=moment) if outcome != "UNKNOWN" else row
-        return {"status": settled["outcome"], "record_id": record_id, "action": "readback", "receipt": settled["receipt"]}
-    if kind in DISPATCH_KINDS or kind == "validation_rerun":
-        run_id = provider.get("run_id")
-        lookup = provider.get("ref_commit") or commit
-        if run_id:
-            run = remote.run(run_id=str(run_id))
-        elif lookup is None:
-            return {"status": row["outcome"], "record_id": record_id, "action": "hold",
-                    "reason": "the row carries neither a run identity nor a commit to look up",
-                    "receipt": row["receipt"]}
-        else:
-            run = _pick_run(remote.runs(workflow=row["action"]["target"], commit=lookup),
-                            since=row["receipt"]["started_at"])
-        if run is None:
-            return {"status": "UNKNOWN", "record_id": record_id, "action": "hold",
-                    "reason": "no run for this workflow and commit is visible since the submission",
-                    "receipt": row["receipt"]}
-        outcome, detail = _outcome_from_run(run)
-        settled = _record_execution(project, objective, owner=owner, record_id=record_id, outcome=outcome,
-                                    provider={**({"ref_commit": lookup} if lookup else {}), **_provider_run(run)},
-                                    detail=detail, now=moment)
-        return {"status": settled["outcome"], "record_id": record_id, "action": "readback", "receipt": settled["receipt"]}
-    if kind == "cancel_validation":
-        run_id = provider.get("run_id")
-        if not run_id:
-            return {"status": "UNKNOWN", "record_id": record_id, "action": "hold", "receipt": row["receipt"]}
-        run = remote.run(run_id=str(run_id))
-        status = run.get("status")
-        if status == "completed":
-            outcome = "PASS" if run.get("conclusion") == "cancelled" else "FAILED"
-            settled = _record_execution(project, objective, owner=owner, record_id=record_id, outcome=outcome,
-                                        provider=_provider_run(run), detail=None, now=moment)
-            return {"status": settled["outcome"], "record_id": record_id, "action": "readback", "receipt": settled["receipt"]}
-        return {"status": "UNKNOWN", "record_id": record_id, "action": "hold", "receipt": row["receipt"]}
-    raise PodError("invalid_action", f"{kind} has no provider readback")
+from .governor_effects import (execute, reconcile, _perform, _record_execution, _uncertain,
+                               _outcome_from_run, _provider_run, _pick_run, _triggered_runs)
 
 
 # --------------------------------------------------------------------------- projection
@@ -1699,6 +1475,36 @@ def discover_triggers(project: Path) -> dict:
     return proposal
 
 
+def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
+    """Whether this unit's current candidate holds publish/merge consent, and its hosted-check state.
+
+    Consent counts only when an ALLOW row for the exact prepared commit carries an authorization that still
+    validates for that commit, tree and scope; hosted checks are what the journal recorded, never inferred.
+    """
+    binding = unit.get("candidate")
+    authorization = {}
+    for scope, kinds in (("publish", PUBLICATION_KINDS), ("merge", ("merge",))):
+        granted = False
+        if isinstance(binding, dict) and binding.get("commit") and binding.get("tree"):
+            for row in rows:
+                if row["action"]["kind"] not in kinds or row.get("commit") != binding["commit"]:
+                    continue
+                try:
+                    granted = validate_authorization(
+                        row["action"].get("authorization"), candidate=binding["commit"], tree=binding["tree"],
+                        kind=scope, target=merge_target_name(unit) if scope == "merge" else None) is not None
+                except PodError:
+                    granted = False
+                if granted:
+                    break
+        authorization[scope] = "RECORDED" if granted else "MISSING"
+    validations = [row for row in rows if row["action"]["kind"] in VALIDATION_KINDS]
+    hosted = ("RECORDED_PASS_UNVERIFIED" if any(row["outcome"] == "PASS" for row in validations)
+              else "PENDING" if any(row["outcome"] in ("pending", "UNKNOWN") for row in validations)
+              else "NOT_RUN" if not validations else "FAILED")
+    return {"authorization": authorization, "hosted_checks": hosted}
+
+
 def _unit_projection(unit: dict, actions: list[dict]) -> dict:
     binding = unit.get("candidate")
     rows = [row for row in actions if row["action"]["unit"] == unit["name"] and row["decision"] == "ALLOW"]
@@ -1706,6 +1512,7 @@ def _unit_projection(unit: dict, actions: list[dict]) -> dict:
                "provider": row["receipt"].get("provider")} for row in rows if row["outcome"] == "pending"]
     unresolved = [row["record_id"] for row in rows if row["outcome"] == "UNKNOWN"]
     last = unit.get("last_decision")
+    delivery = _unit_delivery(unit, rows)
     return {"generation": unit["generation"], "branch": unit.get("branch"), "tasks": unit.get("tasks", []),
             "candidate": ({key: binding[key] for key in ("id", "commit", "tree", "dirty_paths", "prepared_at",
                                                           "policy_revision")}
@@ -1717,7 +1524,25 @@ def _unit_projection(unit: dict, actions: list[dict]) -> dict:
             "last_decision": last,
             "blocker": (last.get("codes") or None) if last and last.get("decision") == "DEFER" else None,
             "next_action": last.get("next_action") if last else None,
-            "active_validation": active, "unresolved": unresolved}
+            "active_validation": active, "unresolved": unresolved, **delivery}
+
+
+def objective_delivery_reporting(project: Path, objective: str) -> dict:
+    """Read only exact Governor evidence for the obligation report."""
+    try:
+        journal = _read_journal(_record_path(project, objective))
+    except PodError:
+        return {"units": {}, "hosted_checks": "UNAVAILABLE"}
+    units = {}
+    for name, unit in journal["units"].items():
+        rows = [row for row in journal["actions"] if row["action"]["unit"] == unit.get("name", name)
+                and row["decision"] == "ALLOW"]
+        units[name] = _unit_delivery(unit, rows)
+    statuses = [unit["hosted_checks"] for unit in units.values()]
+    hosted = ("RECORDED_PASS_UNVERIFIED" if "RECORDED_PASS_UNVERIFIED" in statuses
+              else "PENDING" if "PENDING" in statuses else "FAILED" if "FAILED" in statuses
+              else "NOT_RUN")
+    return {"units": {name: unit["authorization"] for name, unit in units.items()}, "hosted_checks": hosted}
 
 
 def status_at(root: Path, *, project: Path | None = None,

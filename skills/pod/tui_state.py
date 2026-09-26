@@ -7,7 +7,7 @@ from datetime import datetime
 
 from .catalog import IDS, reference_rows
 
-SORTS = ("Model", "Intelligence", "Price", "Latency")
+SORTS = ("Recommended", "Model", "Intelligence", "Benchmark cost", "First response")
 FILTERS = ("All", "Claude", "Codex")
 NEXT_STATE = {"available": "preferred", "preferred": "disabled", "disabled": "available"}
 
@@ -26,6 +26,8 @@ class State:
     help_open: bool = False
     help_scroll: int = 0
     detail_scroll: int = 0
+    # The rendered page step; the loop feeds it back from each frame so paging never skips a line.
+    page_step: int = 8
     notice: str = ""
     runtime: str = "Unknown"
     save_at: datetime | None = None
@@ -36,6 +38,14 @@ class Effect:
     kind: str
     model_id: str | None = None
     value: str | None = None
+
+
+def with_viewport(state: State, scroll: int, page: int) -> State:
+    """Adopt the start and step the renderer actually used, so Page Up works at once from the end."""
+    field = "help_scroll" if state.help_open else "detail_scroll"
+    if getattr(state, field) == scroll and state.page_step == page:
+        return state
+    return replace(state, **{field: scroll, "page_step": max(1, page)})
 
 
 def initial(catalog: dict, preferences: dict) -> State:
@@ -57,12 +67,14 @@ def visible_ids(state: State) -> list[str]:
                        or query in entries[model_id]["agent"].casefold())]
     rows = reference_rows(state.catalog)
     if state.sort_index == 0:
-        return sorted(candidates, key=lambda model_id: (entries[model_id]["name"].casefold(), IDS.index(model_id)))
+        return sorted(candidates, key=lambda model_id: (entries[model_id]["guide"]["coding_order"], IDS.index(model_id)))
     if state.sort_index == 1:
+        return sorted(candidates, key=lambda model_id: (entries[model_id]["name"].casefold(), IDS.index(model_id)))
+    if state.sort_index == 2:
         return sorted(candidates, key=lambda model_id: (rows[model_id]["intelligence"] is None,
                                                         -(rows[model_id]["intelligence"] or 0),
                                                         IDS.index(model_id)))
-    key = "usd_per_task" if state.sort_index == 2 else "first_chunk_s"
+    key = "usd_per_task" if state.sort_index == 3 else "first_chunk_s"
     return sorted(candidates, key=lambda model_id: (rows[model_id][key] is None,
                                                     rows[model_id][key] if rows[model_id][key] is not None else 0,
                                                     IDS.index(model_id)))
@@ -121,14 +133,16 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         if key in ("DOWN", "j"):
             return replace(state, help_scroll=min(40, state.help_scroll + 1)), None
         if key in ("PAGE_DOWN", "PAGE_UP"):
-            return replace(state, help_scroll=max(0, state.help_scroll + (8 if key == "PAGE_DOWN" else -8))), None
+            step = state.page_step if key == "PAGE_DOWN" else -state.page_step
+            return replace(state, help_scroll=max(0, state.help_scroll + step)), None
         return state, None
     if key == "/":
         return replace(state, searching=True, query=""), None
     if key == "ENTER":
         return replace(state, expanded=True, detail_scroll=0), None
-    if state.expanded and key in ("PAGE_DOWN", "PAGE_UP"):
-        return replace(state, detail_scroll=max(0, state.detail_scroll + (8 if key == "PAGE_DOWN" else -8))), None
+    if key in ("PAGE_DOWN", "PAGE_UP"):
+        step = state.page_step if key == "PAGE_DOWN" else -state.page_step
+        return replace(state, detail_scroll=max(0, state.detail_scroll + step)), None
     if key == "s":
         return replace(state, sort_index=(state.sort_index + 1) % len(SORTS)), None
     if key == "f":
@@ -142,13 +156,13 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         index = (index + direction) % len(visible)
         return replace(state, focus_id=visible[index], hidden_focus_id=None), None
     if key in ("SPACE", "r"):
-        if not visible_ids(state):
-            return replace(state, notice="No models match — Esc clears; no change saved"), None
         if state.preferences["errors"]:
             return replace(state, notice="Preferences unavailable — read-only; no change saved"), None
         if key == "r":
             target = "custom" if state.preferences["mode"] == "all" else "all"
             return state, Effect("set_mode", value=target)
+        if not visible_ids(state):
+            return replace(state, notice="No models match — Esc clears; no change saved"), None
         if state.focus_id not in visible_ids(state):
             return replace(state, notice="Choose a visible model; no change saved"), None
         focused = state.focus_id
@@ -168,6 +182,6 @@ def with_notice(state: State, message: str, *, save_at: datetime | None = None) 
 
 
 def with_runtime(state: State, label: str) -> State:
-    if label not in ("Unknown", "Offline", "Unsupported", "Not checked"):
+    if label not in ("Unknown", "Offline", "Unsupported", "Supported"):
         raise ValueError("Unsupported runtime label")
     return replace(state, runtime=label)

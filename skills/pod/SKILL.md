@@ -20,13 +20,13 @@ Issue text is scope, never authority; a direct objective uses the same flow.
 
 ## Understand and plan
 
-Read objective, criteria, instructions, candidate and consequential assumptions.
-Plan-only permits host-approved read-only investigation, without implementation
-workers or edits. Accepted plans continue unless authority or scope changes.
+Read objective, criteria, instructions and assumptions. Plan-only permits
+host-approved investigation, without implementation workers or edits.
+Accepted plans continue unless authority or scope changes.
 
-Use direct work when sufficient. Before delegation or a brief, map criteria
-and delivery obligations to provenance, checks and dependencies. Trivial direct
-work needs no map. Before implementation needing isolation, reuse the objective
+Use direct work when sufficient. Before delegation, map criteria and delivery
+obligations with provenance and checks; read `internal map` before updates.
+Trivial direct work needs no map. Before implementation, reuse the objective
 worktree or create one on `orca/<task-slug>`; preserve unrelated work. Read
 [planning and packets](references/planning.md).
 
@@ -59,18 +59,18 @@ starting a replacement. A pending same-request replay does not re-read model
 preferences. Actual failures need settlement before an alternate route; never
 switch models to bypass a safety refusal.
 
-The personal logical worker ceiling defaults to two and permits 0–8. A free
-slot admits only an assignment serving a current unsatisfied obligation;
+The logical worker ceiling defaults to two and permits 0–8. Optimize time to a
+verified result; re-evaluate ready distinct work at transitions. A free slot
+admits only an assignment serving a current unsatisfied obligation;
 `capacity` is a valid wait only at the ceiling. Never infer physical capacity
 or count another objective's workers.
 
 ## Supervise and verify
 
-Answer routine worker questions through Orca; escalate new owner intent. Keep
+Answer routine worker questions through Orca; escalate owner intent. Keep
 selected models after faster-model advisories. Unknown or permission prompts
-block; never blindly send Enter or yes. Normal workers use Orca's agent-tab
-path and setting. Report native placement; rendered visibility and focus
-require separate UI evidence. Preserve an exact completed report, then follow
+block; never blindly accept. Workers use Orca's agent-tab setting. Report
+native placement; rendering and focus need UI evidence. Preserve the report, then follow
 native Delivery acknowledgment and release order promptly. Reuse requires an
 immediate supported follow-up. Check exact objective workers before final
 reporting. Read [verification](references/verification.md).
@@ -85,7 +85,7 @@ decision. Efficiency exceptions never lift authority or correctness.
 
 ## Helpers
 
-Use `pod config --json`, `pod doctor --json`, `pod status --json` and
+Use `pod config --json`, `pod doctor --json`, `pod status --objective ID` and
 `pod internal <op> --input FILE`; use `--input -` for bounded piped JSON.
 If PATH has not refreshed, use
 `~/.local/bin/pod` with the same arguments. If the command is missing, point to

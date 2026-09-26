@@ -99,6 +99,15 @@ class PtySession:
     def text(self) -> str:
         return "\n".join(self.lines())
 
+    def cell(self, row: int, column: int) -> dict[str, object]:
+        """Decoded terminal cell, including foreground and background semantics."""
+        char = self.screen.buffer[row][column]
+        return {"text": char.data, "fg": char.fg, "bg": char.bg,
+                "bold": char.bold, "reverse": char.reverse}
+
+    def cells(self, row: int) -> list[dict[str, object]]:
+        return [self.cell(row, column) for column in range(self.cols)]
+
     def poll(self, timeout: float = .05) -> None:
         if self.closed:
             return
@@ -209,7 +218,7 @@ def measure() -> dict:
         with PtySession(home=home, cwd=work) as session:
             session.wait_for("Details", timeout=4)
             for index in range(50):
-                target = "Claude Sonnet 5" if index % 2 == 0 else "Claude Opus 5.5"
+                target = "GPT-6 Astra" if index % 2 == 0 else "Claude Opus 5.5"
                 session.send("\x1bOB" if index % 2 == 0 else "\x1bOA")
                 focus.append(session.wait_for(lambda s: target in next(
                     (line for line in s.lines() if "Details" in line), ""), timeout=2))
