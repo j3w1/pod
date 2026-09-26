@@ -25,14 +25,16 @@ Never embed personal paths, runtime identifiers, credentials, private source pac
 local bookkeeping in committed files. Captured third-party output under `tests/fixtures/` is
 sanitized before it is tracked.
 
-The main implementation owner is Sol at high effort. Use Sol xhigh for bounded
-milestone review and difficult implementation knots; Astra xhigh only for a demonstrated
-architecture contradiction or an unresolved rescue. A fresh Sol xhigh reviewer performs the
-final independent audit. Use native Orca orchestration for supervised workers. These
-bootstrap choices are project governance, not Pod's product model catalog.
+Choose implementation and review workers for each task based on its complexity, risk,
+size, uncertainty, verifiability, required capabilities and available context. A fresh
+independent reviewer performs the final audit. Use native Orca orchestration for
+supervised workers. These worker selection and audit rules are project governance,
+not Pod's product model catalog.
 
 One writer owns overlapping source changes. Reviews bind to a frozen candidate; reviewers
-report findings and do not repair. Consolidate corrections and preserve prior findings.
+report findings and do not repair; implementers make corrections. Consolidate corrections
+and preserve prior findings. Apply affected-scope delta review and explicit evidence reuse
+under the existing rules in `docs/validation.md`.
 Worker success, local verification, hosted CI, independent review and external project
 acceptance are distinct facts and are reported separately.
 
