@@ -29,8 +29,8 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | Post-merge public command | Literally run `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh \| sh` in a clean disposable home and on the intended host | `main` distribution, installed version and receipt match the merged commit. |
 
 `python tools/gates.py --output DIR` runs the local command-table gates with the
-current interpreter and `PYTHONPATH=skills`, writing a JSON summary and per-gate
-logs. `--sigint-ignored` runs each child with SIGINT ignored. The table above
+current interpreter and `PYTHONPATH=skills`, writing a JSON summary (its checkout's
+commit and dirty state, host and UTC time) and per-gate logs. `--sigint-ignored` runs each child with SIGINT ignored. The table above
 defines the gates; the runner is a convenience for a checkout.
 
 The inventory check reads `docs/pod-spec.md` and `docs/spec/*.md` together. It

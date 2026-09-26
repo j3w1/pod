@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import platform
 import signal
 import subprocess
 import sys
 import time
 
 
-def git(*args: str, input_bytes: bytes | None = None) -> str:
-    result = subprocess.run(["git", *args], input=input_bytes, capture_output=True,
+def git(root: Path, *args: str, input_bytes: bytes | None = None) -> str:
+    # Always the checkout whose gates run, never the caller's current directory.
+    result = subprocess.run(["git", "-C", str(root), *args], input=input_bytes, capture_output=True,
                             check=True)
     return result.stdout.decode().strip()
 
@@ -55,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parents[1]
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    empty_tree = git("hash-object", "-t", "tree", "--stdin", input_bytes=b"")
+    empty_tree = git(root, "hash-object", "-t", "tree", "--stdin", input_bytes=b"")
     selected = commands(sys.executable, empty_tree)
     if args.gate:
         selected = {name: command for name, command in selected.items()
@@ -63,8 +66,10 @@ def main(argv: list[str] | None = None) -> int:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = "skills"
     summary = {
-        "candidate": git("rev-parse", "HEAD"),
-        "dirty": bool(git("status", "--porcelain")),
+        "candidate": git(root, "rev-parse", "HEAD"),
+        "dirty": bool(git(root, "status", "--porcelain")),
+        "host": platform.node(),
+        "utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "interpreter": sys.executable,
         "gates": {},
     }
