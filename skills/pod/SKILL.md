@@ -37,7 +37,7 @@ all Pod-routed roles, overriding repository model-selection rules; effort stays
 adaptive. It excludes this coordinator, direct work and host-created helpers.
 Assess reasoning, ambiguity, risk, breadth, duration, capabilities, verification
 and useful context. Without a pin, choose a suitable eligible agent/model. Record
-reason, supported effort or `native_default`, and context `native_default`.
+assignment-specific reason, supported effort or `native_default`, and context `native_default`.
 Preferred is a small tie-breaker. Review needs independent judgment, not automatically expensive models.
 Read [models and constraints](references/models.md).
 
