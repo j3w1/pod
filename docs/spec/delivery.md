@@ -28,9 +28,9 @@ Govern expensive Pod-mediated remote actions with one deterministic kernel insid
 
 ### R92 — Delivery decision
 
-Type: H · Scenarios: [A164](#a164), [A165](#a165), [A166](#a166)
+Type: H · Scenarios: [A164](#a164), [A165](#a165), [A166](#a166), [A186](#a186)
 
-Before the first remote Git mutation, obtain the one three-way delivery decision in R59 unless exact applicable authorization already exists. A `publish` authorization binds push/PR, workflow dispatch, rerun, remote diagnostic and cancellation to the prepared candidate commit and tree, and `merge` binds merge to that same pair and the unit's prepared target. Both retain the stated continuation; candidate or target movement invalidates consent. Local-only and defer authorize no remote effect, and routine post-merge checks do not create a separate approval step.
+Before the first remote Git mutation, obtain the one three-way delivery decision in R59 unless exact applicable authorization already exists. A `publish` authorization binds push/PR, workflow dispatch, rerun, remote diagnostic and cancellation to the prepared candidate commit and tree, and `merge` binds merge to that same pair and the unit's prepared target. Both retain the stated continuation; candidate or target movement invalidates consent. Release-purpose admission preserves applicable non-withdrawn project_policy audits using existing candidate proof validity; missing/invalid proof defers with correctness `assurance_unbound`. Scoped waivers/trusted source removal remain distinct from passing review, while publication/validation can overlap required review and optional coordinator assurance gains no new gate. Status and authority-wait readers use the same applicable-target truth: an unbound/missing unit has no applicable merge consent even with an older target-less row. Actual merge refusal remains unchanged. Local-only and defer authorize no remote effect, and routine post-merge checks do not create a separate approval step.
 
 ### R93 — Verified delivery record
 
@@ -68,6 +68,8 @@ Type: H · Scenarios: [A170](#a170), [A171](#a171), [A172](#a172)
 - <a id="a170"></a>**A170** — A read-only cleanup plan classifies this objective's clean integrated resources, merged remote head, unique data and protected/shared/active/unknown-terminal resources without changing refs, files, journals or Orca state.
 - <a id="a171"></a>**A171** — After exact-scope consent, unique work is retained, or a bundle is verified by `git bundle verify`, `list-heads` and restoration before guarded removal; a separately confirmed discard is the only unarchived unique-work deletion path.
 - <a id="a172"></a>**A172** — Changed ref or plan digest refuses `cleanup_changed`; deletion uses the plan's no-force Orca worktree command, exact-tip `git update-ref -d` or remote `--force-with-lease`, and protects the default and target branches, main checkout, shared branches and terminals that are not currently owned by a settled objective Dispatch.
+
+- <a id="a186"></a>**A186** — Target-less journals written by exact released 0.6.4 source in isolated fixtures cannot show applicable merge consent or resolve a genuine checkpoint authority wait for an unbound or missing unit. Bound matching consent still works; missing/stale/wrong-target/target-less consent does not. Synthetic controls are distinguished from released-writer fixtures, neither proves live owner-state exposure, and actual unbound merges remain refused without migration/backfill.
 
 ## Governance delivery baseline
 

@@ -9,7 +9,7 @@ from .config import load as load_config
 from .errors import PodError
 from .ledger import context_root_for_run, contexts_for_run
 from .orca import current_run, worker_rows
-from .selection import active_constraints
+from .selection import active_constraints, failure_active
 from .term import clean
 from .util import route_summary
 
@@ -113,7 +113,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     result = {"schema": "pod-cli/v4", "status": "selection_required", "run": run,
               "bundle_identity": {"running": running, "checkpoint": None, "drift": None},
               "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
-                                                               "max_active", "errors")},
+                                                               "max_active", "errors", "pinned_model")},
               "constraints": [], "route_decisions": [], "route_mismatch": False,
               "active_constraints": [],
               "effective_unknown": False,
@@ -211,6 +211,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                    "source": checkpoint.get("objective_source", "direct_objective") if checkpoint else None,
                    "selected_worktree": checkpoint.get("worktree") if checkpoint else None,
                    "constraints": state["constraints"] if state else [],
+                   "route_failures": [{"admission": key, **failure, "active": failure_active(failure)}
+                                      for key, row in (state or {}).get("admissions", {}).items()
+                                      for failure in row["failures"]],
                    "active_constraints": active_constraints(state["constraints"], preferences) if state else [],
                    "route_decisions": [row["route_decision"] for row in admissions[:64]],
                    "native_references": native_references,

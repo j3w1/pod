@@ -442,7 +442,7 @@ def _governor_pending(project: Path, objective: str) -> bool:
 
 def _authorization_granted(project: Path, objective: str):
     def granted(scope: str, candidate: str) -> bool:
-        from .governor import _read_journal, _record_path, merge_target_name, validate_authorization
+        from .governor import _read_journal, _record_path, applicable_authorization
         try:
             journal = _read_journal(_record_path(project, objective))
         except PodError:
@@ -454,10 +454,9 @@ def _authorization_granted(project: Path, objective: str):
             unit = journal.get("units", {}).get(row["action"].get("unit")) or {}
             bound = unit.get("candidate") or {}
             tree = bound.get("tree") if bound.get("commit") == row.get("commit") else None
-            return validate_authorization(row["action"].get("authorization"),
-                                          candidate=row.get("commit") or row["action"]["candidate"], tree=tree,
-                                          kind=scope,
-                                          target=merge_target_name(unit) if scope == "merge" else None) is not None
+            return applicable_authorization(unit, row["action"].get("authorization"),
+                                            candidate=row.get("commit") or row["action"]["candidate"],
+                                            tree=tree, scope=scope)
         return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
                    and candidate in (row["action"]["candidate"], row.get("commit"), row.get("candidate_id"))
                    and valid(row) for row in journal["actions"])
@@ -916,7 +915,9 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
             raise PodError("preference_changed",
                            f"Preferences changed before dispatch and route is no longer allowed: {checked['code']}")
         raise PodError(checked["code"],
-                       f"Proposed route is not allowed at the current preference revision: {checked['code']}")
+                       f"Proposed route is not allowed at the current preference revision: {checked['code']}"
+                       + (f"; reconsider at {checked['reconsider_at']} (no automatic start)"
+                          if checked.get("reconsider_at") else ""))
     if revision_changed:
         raise PodError("preference_revision_stale",
                        "Preferences changed before dispatch; reread them and record a fresh decision")
@@ -947,8 +948,11 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
     stamp = moment.isoformat()
     decision = {"agent": requested["agent"], "model": requested["model"],
                 "requested_effort": requested["effort"], "requested_context": requested["context"],
-                "reason": requested["reason"], "preference_revision": snapshot["revision"],
+                "reason": requested["reason"] + ("; personal pin overrides repository model selection"
+                          if snapshot.get("pinned_model") else ""),
+                "preference_revision": snapshot["revision"],
                 "policy_revision": snapshot["policy_revision"], "mode": snapshot["mode"],
+                "pinned_model": snapshot.get("pinned_model"),
                 "constraint_refs": [c.get("id") for c in state["constraints"] if c.get("active", True)],
                 "pod_version": __version__, "effective": {"agent": "unknown", "model": "unknown",
                 "effort": "unknown", "context": "unknown"},
@@ -1186,6 +1190,16 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             _map_refusal_context(exc, state)
             raise
         state["checkpoint"] = {**state["checkpoint"], **new_map}
+        if observation.get("status") == "validated_observation" and report_value.get("outcome") == "succeeded":
+            for prior in state["admissions"].values():
+                if prior["admission_id"] == admission_id or prior["runtime"] != row["runtime"]:
+                    continue
+                for failure in prior["failures"]:
+                    if (failure.get("kind") == "unavailable" and not failure.get("cleared_at")
+                            and failure.get("model") == row["request"]["model"]
+                            and failure.get("recorded_at", "") <= row["created_at"]):
+                        failure["cleared_at"] = row["report"]["consumed_at"]
+                        failure["cleared_by"] = admission_id
         _write(path, state)
         return {"ingestion": ingestion, "settled": settled,
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
@@ -1341,7 +1355,7 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
                   kind: str, source: str, retry_after: str | None = None,
                   clear: bool = False, cleared_by: str | None = None,
                   native_reader: Callable[[dict], dict] | None = None) -> dict:
-    from .selection import FAILURE_KINDS
+    from .selection import FAILURE_KINDS, TEMPORARY_RECONSIDERATION_SECONDS
     if kind not in FAILURE_KINDS or not isinstance(source, str) or not source or len(source) > 256:
         raise PodError("invalid_route_failure", "Failure kind and source are required")
     if kind == "safety_refusal" and retry_after is not None:
@@ -1382,9 +1396,16 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
                                    "Record actual failure only after exact native settlement") from exc
             if len(row["failures"]) >= 16:
                 raise PodError("route_failure_full", "Attempt failure record is full")
+            observed = datetime.now(timezone.utc)
+            reconsider_at = retry_after
+            if kind == "unavailable" and (retry_after is None or
+                    datetime.fromisoformat(retry_after.replace("Z", "+00:00")) <= observed):
+                from datetime import timedelta
+                reconsider_at = (observed + timedelta(seconds=TEMPORARY_RECONSIDERATION_SECONDS)).isoformat()
             row["failures"].append({"kind": kind, "source": source, "retry_after": retry_after,
+                                    "reconsider_at": reconsider_at,
                                     "model": row["request"]["model"], "task": row["task_id"],
-                                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                                    "recorded_at": observed.isoformat(),
                                     "cleared_at": None, "cleared_by": None})
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply,
                             open_required=True)

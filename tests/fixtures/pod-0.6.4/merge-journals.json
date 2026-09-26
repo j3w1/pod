@@ -1,0 +1,372 @@
+{
+  "A_prepared_unit_no_branch": {
+    "actions": [
+      {
+        "action": {
+          "authorization": {
+            "authorized_by": "owner",
+            "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference": "fixture/authorization.md",
+            "schema": "pod-authorization/v1",
+            "scope": [
+              "merge"
+            ],
+            "tree": "cccccccccccccccccccccccccccccccccccccccc",
+            "utc": "2026-09-21T00:00:00Z"
+          },
+          "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+          "diagnostic": null,
+          "effects": null,
+          "inputs": {},
+          "kind": "merge",
+          "reason": "owner-approved merge",
+          "target": "main",
+          "unit": "release"
+        },
+        "at": "2026-09-21T00:00:00+00:00",
+        "attempt": 1,
+        "cancel_safe": false,
+        "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "classification": null,
+        "classifications": [],
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "decision": "ALLOW",
+        "derived_from": null,
+        "effects": [
+          "merge:main"
+        ],
+        "exception": null,
+        "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+        "logical_key": "b74aa1ee9bd4b643f7bf7a134346e577f03206cfca144763851635a378b713c2",
+        "outcome": "pending",
+        "phase": "candidate",
+        "purpose": "release",
+        "reasons": [],
+        "receipt": {
+          "detail": null,
+          "evidence": [],
+          "finished_at": null,
+          "observed_elapsed_s": null,
+          "provider": null,
+          "started_at": "2026-09-21T00:00:00+00:00"
+        },
+        "record_id": "62e51cdda311983261df4770a0d76498863bd301f1d1e8bb3cd07f9e6a8fc8be",
+        "warnings": []
+      }
+    ],
+    "counters": {
+      "attachments": 0,
+      "cancellations": 0,
+      "decisions": {
+        "ALLOW": 1,
+        "DEFER": 0,
+        "REUSE": 0
+      },
+      "deferrals": {},
+      "evidence_reused": 0,
+      "exceptions_applied": 0,
+      "failures_interrupted": 0,
+      "observed_deferrals": 0,
+      "outcomes": {
+        "CANCELED": 0,
+        "FAILED": 0,
+        "PASS": 0,
+        "UNKNOWN": 0
+      },
+      "warnings": {}
+    },
+    "revision": 4,
+    "schema": "pod-governor/v2",
+    "units": {
+      "release": {
+        "branch": null,
+        "candidate": {
+          "base": {
+            "commit": "1111111111111111111111111111111111111111",
+            "merge_base": "1111111111111111111111111111111111111111",
+            "ref": "origin/main"
+          },
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "dirty_paths": 0,
+          "environment": {},
+          "generation": 1,
+          "id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+          "policy_revision": "r",
+          "prepared_at": "2026-09-21T00:00:00+00:00",
+          "schema": "pod-candidate/v1",
+          "supersedes": null,
+          "toolchain": {
+            "python": "3.13.0"
+          },
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "unit": "release",
+          "verification": [
+            "unit"
+          ],
+          "workflows": {
+            ".github/workflows/ci.yml": "2222222222222222222222222222222222222222222222222222222222222222"
+          }
+        },
+        "generation": 1,
+        "history": [
+          "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde"
+        ],
+        "last_decision": {
+          "at": "2026-09-21T00:00:00+00:00",
+          "codes": [],
+          "decision": "ALLOW",
+          "kind": "merge",
+          "next_action": null,
+          "record_id": "62e51cdda311983261df4770a0d76498863bd301f1d1e8bb3cd07f9e6a8fc8be",
+          "target": "main"
+        },
+        "name": "release",
+        "preflight": {
+          "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde": {
+            "unit": {
+              "at": "2026-09-21T00:00:00+00:00",
+              "report": null,
+              "status": "PASS"
+            },
+            "workflow-lint": {
+              "at": "2026-09-21T00:00:00+00:00",
+              "report": null,
+              "status": "PASS"
+            }
+          }
+        },
+        "published": {},
+        "tasks": []
+      }
+    }
+  },
+  "B_default_unit_checkpoint_only": {
+    "actions": [
+      {
+        "action": {
+          "authorization": {
+            "authorized_by": "owner",
+            "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference": "fixture/authorization.md",
+            "schema": "pod-authorization/v1",
+            "scope": [
+              "merge"
+            ],
+            "tree": "cccccccccccccccccccccccccccccccccccccccc",
+            "utc": "2026-09-21T00:00:00Z"
+          },
+          "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diagnostic": null,
+          "effects": null,
+          "inputs": {},
+          "kind": "merge",
+          "reason": "owner-approved merge",
+          "target": "main",
+          "unit": "default"
+        },
+        "at": "2026-09-21T00:00:00+00:00",
+        "attempt": 1,
+        "cancel_safe": false,
+        "candidate_id": null,
+        "classification": null,
+        "classifications": [],
+        "commit": null,
+        "decision": "ALLOW",
+        "derived_from": null,
+        "effects": [
+          "merge:main"
+        ],
+        "exception": null,
+        "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+        "logical_key": "a310cca4919279b31dd77ba1be3b3f66ef240e32012bea06e8ce6c3d25adf55f",
+        "outcome": "pending",
+        "phase": "candidate",
+        "purpose": "release",
+        "reasons": [],
+        "receipt": {
+          "detail": null,
+          "evidence": [],
+          "finished_at": null,
+          "observed_elapsed_s": null,
+          "provider": null,
+          "started_at": "2026-09-21T00:00:00+00:00"
+        },
+        "record_id": "c8ef58cfadfbe6efb73e35e28078ab388671d26e85936e53418a498be039923e",
+        "warnings": [
+          "context_unbound"
+        ]
+      }
+    ],
+    "counters": {
+      "attachments": 0,
+      "cancellations": 0,
+      "decisions": {
+        "ALLOW": 1,
+        "DEFER": 0,
+        "REUSE": 0
+      },
+      "deferrals": {},
+      "evidence_reused": 0,
+      "exceptions_applied": 0,
+      "failures_interrupted": 0,
+      "observed_deferrals": 0,
+      "outcomes": {
+        "CANCELED": 0,
+        "FAILED": 0,
+        "PASS": 0,
+        "UNKNOWN": 0
+      },
+      "warnings": {
+        "context_unbound": 1
+      }
+    },
+    "revision": 1,
+    "schema": "pod-governor/v2",
+    "units": {}
+  },
+  "C_control_bound_branch": {
+    "actions": [
+      {
+        "action": {
+          "authorization": {
+            "authorized_by": "owner",
+            "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference": "fixture/authorization.md",
+            "schema": "pod-authorization/v1",
+            "scope": [
+              "merge"
+            ],
+            "tree": "cccccccccccccccccccccccccccccccccccccccc",
+            "utc": "2026-09-21T00:00:00Z"
+          },
+          "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+          "diagnostic": null,
+          "effects": null,
+          "inputs": {},
+          "kind": "merge",
+          "reason": "owner-approved merge",
+          "target": "main",
+          "unit": "release"
+        },
+        "at": "2026-09-21T00:00:00+00:00",
+        "attempt": 1,
+        "cancel_safe": false,
+        "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "classification": null,
+        "classifications": [],
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "decision": "ALLOW",
+        "derived_from": null,
+        "effects": [
+          "merge:main"
+        ],
+        "exception": null,
+        "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+        "logical_key": "b74aa1ee9bd4b643f7bf7a134346e577f03206cfca144763851635a378b713c2",
+        "outcome": "pending",
+        "phase": "candidate",
+        "purpose": "release",
+        "reasons": [],
+        "receipt": {
+          "detail": null,
+          "evidence": [],
+          "finished_at": null,
+          "observed_elapsed_s": null,
+          "provider": null,
+          "started_at": "2026-09-21T00:00:00+00:00"
+        },
+        "record_id": "62e51cdda311983261df4770a0d76498863bd301f1d1e8bb3cd07f9e6a8fc8be",
+        "warnings": []
+      }
+    ],
+    "counters": {
+      "attachments": 0,
+      "cancellations": 0,
+      "decisions": {
+        "ALLOW": 1,
+        "DEFER": 0,
+        "REUSE": 0
+      },
+      "deferrals": {},
+      "evidence_reused": 0,
+      "exceptions_applied": 0,
+      "failures_interrupted": 0,
+      "observed_deferrals": 0,
+      "outcomes": {
+        "CANCELED": 0,
+        "FAILED": 0,
+        "PASS": 0,
+        "UNKNOWN": 0
+      },
+      "warnings": {}
+    },
+    "revision": 4,
+    "schema": "pod-governor/v2",
+    "units": {
+      "release": {
+        "branch": {
+          "base": "main",
+          "branch": "agent/release",
+          "remote": "origin"
+        },
+        "candidate": {
+          "base": {
+            "commit": "1111111111111111111111111111111111111111",
+            "merge_base": "1111111111111111111111111111111111111111",
+            "ref": "origin/main"
+          },
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "dirty_paths": 0,
+          "environment": {},
+          "generation": 1,
+          "id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+          "policy_revision": "r",
+          "prepared_at": "2026-09-21T00:00:00+00:00",
+          "schema": "pod-candidate/v1",
+          "supersedes": null,
+          "toolchain": {
+            "python": "3.13.0"
+          },
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "unit": "release",
+          "verification": [
+            "unit"
+          ],
+          "workflows": {
+            ".github/workflows/ci.yml": "2222222222222222222222222222222222222222222222222222222222222222"
+          }
+        },
+        "generation": 1,
+        "history": [
+          "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde"
+        ],
+        "last_decision": {
+          "at": "2026-09-21T00:00:00+00:00",
+          "codes": [],
+          "decision": "ALLOW",
+          "kind": "merge",
+          "next_action": null,
+          "record_id": "62e51cdda311983261df4770a0d76498863bd301f1d1e8bb3cd07f9e6a8fc8be",
+          "target": "main"
+        },
+        "name": "release",
+        "preflight": {
+          "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde": {
+            "unit": {
+              "at": "2026-09-21T00:00:00+00:00",
+              "report": null,
+              "status": "PASS"
+            },
+            "workflow-lint": {
+              "at": "2026-09-21T00:00:00+00:00",
+              "report": null,
+              "status": "PASS"
+            }
+          }
+        },
+        "published": {},
+        "tasks": []
+      }
+    }
+  }
+}

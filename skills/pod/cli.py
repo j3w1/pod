@@ -72,6 +72,7 @@ def _config(project: Path, *, edit: bool) -> dict:
     document = load_catalog()
     result.update({"schema": "pod-cli/v4", "path": snapshot["path"],
                    "revision": snapshot["revision"], "mode": snapshot["mode"],
+                   "pinned_model": snapshot["pinned_model"],
                    "saved": snapshot["saved"], "effective": snapshot["effective"],
                    "eligible": snapshot["eligible"], "not_set": snapshot["not_set"],
                    "not_set_meaning": "not set (not eligible)",
@@ -207,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Pod {version()}: {len(result['eligible'])} eligible models, "
                   f"{result['mode']} selection, maximum {result['max_active']} workers")
             print(f"Preferences: {result['path']}")
+            print(f"Pinned worker: {result.get('pinned_model') or 'none'}")
             if result["not_set"]:
                 print("Not set (not eligible): " + ", ".join(result["not_set"]))
     elif result["status"] == "blocked":

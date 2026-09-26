@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .catalog import by_id
 from .errors import PodError
@@ -10,6 +10,7 @@ from .errors import PodError
 CONSTRAINT_KINDS = ("only_agents", "only_models", "exclude_models", "role_model",
                     "max_workers", "allow_disabled", "allow_delegation")
 PROVENANCE = ("user_direct", "issue", "repository", "worker")
+TEMPORARY_RECONSIDERATION_SECONDS = 60
 FAILURE_KINDS = ("rate_limited", "unavailable", "auth_failed", "safety_refusal")
 
 
@@ -81,9 +82,21 @@ def worker_ceiling(snapshot: dict, constraints: list[dict]) -> int:
 def failure_active(failure: dict, *, now: datetime | None = None) -> bool:
     if failure.get("cleared_at"):
         return False
-    retry_after = failure.get("retry_after")
+    retry_after = failure.get("reconsider_at") or failure.get("retry_after")
     if retry_after is None:
-        return True
+        if failure.get("kind") != "unavailable":
+            return True
+        recorded = failure.get("recorded_at")
+        # Unsupported old records without observation time remain diagnostic holds.
+        if not isinstance(recorded, str):
+            return True
+        try:
+            observed = datetime.fromisoformat(recorded.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PodError("invalid_route_failure", "Observation time is not an ISO timestamp") from exc
+        if observed.tzinfo is None:
+            raise PodError("invalid_route_failure", "Observation time needs a timezone")
+        return observed + timedelta(seconds=TEMPORARY_RECONSIDERATION_SECONDS) > (now or datetime.now(timezone.utc))
     try:
         due = datetime.fromisoformat(retry_after.replace("Z", "+00:00"))
     except (TypeError, ValueError) as exc:
@@ -104,7 +117,8 @@ def validate_choice(snapshot: dict, constraints: list[dict], failures: list[dict
     if not isinstance(model_id, str) or model_id not in models:
         return {"allowed": False, "code": "unsupported_model"}
     if snapshot["errors"]:
-        return {"allowed": False, "code": "preferences_unavailable"}
+        return {"allowed": False, "code": next((row["code"] for row in snapshot["errors"]
+                      if row["code"] in ("invalid_pin", "pin_ineligible")), "preferences_unavailable")}
     if choice["agent"] != models[model_id]["agent"]:
         return {"allowed": False, "code": "agent_mismatch"}
     if choice["context"] != "native_default":
@@ -114,6 +128,9 @@ def validate_choice(snapshot: dict, constraints: list[dict], failures: list[dict
         return {"allowed": False, "code": "effort_unsupported"}
     if not isinstance(choice["reason"], str) or not choice["reason"].strip() or len(choice["reason"]) > 512:
         return {"allowed": False, "code": "reason_missing"}
+    pin = snapshot.get("pinned_model")
+    if pin is not None and model_id != pin:
+        return {"allowed": False, "code": "pin_mismatch", "pinned_model": pin}
     rows = active_constraints(constraints, snapshot)
     exceptions = {row["value"] for row in rows if row["kind"] == "allow_disabled"}
     if model_id not in snapshot["eligible"] and not (
@@ -121,6 +138,9 @@ def validate_choice(snapshot: dict, constraints: list[dict], failures: list[dict
         return {"allowed": False, "code": "model_ineligible" if snapshot["eligible"] else "empty_pool"}
     for row in rows:
         kind, value = row["kind"], row["value"]
+        if pin is not None and row["provenance"] == "repository" and kind in (
+                "only_models", "exclude_models", "role_model"):
+            continue
         if (kind == "only_agents" and choice["agent"] not in value
                 or kind == "only_models" and model_id not in value
                 or kind == "exclude_models" and model_id in value
@@ -133,6 +153,9 @@ def validate_choice(snapshot: dict, constraints: list[dict], failures: list[dict
         if not failure_active(failure, now=now):
             continue
         if failure.get("model") == model_id and failure.get("kind") in FAILURE_KINDS:
-            return {"allowed": False, "code": "route_failed"}
+            return {"allowed": False, "code": "route_failed",
+                    "reconsider_at": failure.get("reconsider_at") or failure.get("retry_after"),
+                    "source": failure.get("source"), "recorded_at": failure.get("recorded_at"),
+                    "pinned_model": pin}
     return {"allowed": True, "code": "allowed", "model": model_id, "agent": choice["agent"],
-            "effort": effort, "context": "native_default"}
+            "effort": effort, "context": "native_default", "pinned_model": pin}

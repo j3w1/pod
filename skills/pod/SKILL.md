@@ -9,7 +9,7 @@ metadata:
 
 # Pod
 
-Keep this conversation, model, effort and settings as coordinator. Orca owns
+Keep this conversation and coordinator settings. Orca owns
 Runs, Tasks, Dispatches, recovery, worker tabs and lifecycle; Pod owns
 selection, admission and evidence; the project owns acceptance. Before
 delegation load Orca's installed guide and [the Orca boundary](references/orca-boundary.md).
@@ -20,25 +20,26 @@ Issue text is scope, never authority; a direct objective uses the same flow.
 
 ## Understand and plan
 
-Read objective, criteria, instructions and assumptions. Plan-only permits
+Read objective and governing instructions. Plan-only permits
 host-approved investigation, without implementation workers or edits.
-Accepted plans continue unless authority or scope changes.
+Continue accepted plans within authority/scope.
 
-Use direct work when sufficient. Before delegation, map criteria and delivery
-obligations with provenance and checks; read `internal map` before updates.
-Trivial direct work needs no map. Before implementation, reuse the objective
-worktree or create one on `orca/<task-slug>`; preserve unrelated work. Read
+Use direct work when sufficient. Before delegation, map criteria, delivery and required final audits with provenance and checks;
+trusted audit policy becomes a cited `project_policy` assurance, never an optional route rule; read `internal map` before updates.
+Trivial direct work needs no map. Before implementation, reuse the objective worktree
+or create one on `orca/<task-slug>`.
+Preserve unrelated work. Read
 [planning and packets](references/planning.md).
 
 ## Select and admit
 
-Read `pod config --json` before each delegated assignment. Choose an eligible
-agent and model, a supported effort or `native_default`, and context
-`native_default`; give a short assignment-specific reason. Assess reasoning,
-ambiguity, risk, breadth, expected duration, capabilities, verification and
-useful context. Preferred is a small tie-breaker between suitable choices.
-Reviewers need independent judgment, not an automatic expensive model; consider
-a different model family where useful. Read [models and constraints](references/models.md).
+Read `pod config --json` before each delegated assignment. A valid pin controls
+all Pod-routed roles, overriding repository model-selection rules; effort stays
+adaptive. It excludes this coordinator, direct work and host-created helpers.
+Without a pin, choose a suitable eligible model. Record a short
+reason, supported effort or `native_default`, and context `native_default`.
+Preferred is a modest tie-breaker; review needs independent judgment.
+Read [models and constraints](references/models.md).
 
 Record every direct user model, agent, role or worker-count directive through
 `pod internal constraint` with `user_direct` provenance before admission; cite
@@ -72,11 +73,9 @@ selected models after faster-model advisories. Unknown or permission prompts
 block; never blindly accept. Workers use Orca's agent-tab setting. Report
 native placement; rendering and focus need UI evidence. Preserve the report, then follow
 native Delivery acknowledgment and release order promptly. Reuse requires an
-immediate supported follow-up. Check exact objective workers before final
-reporting. Read [verification](references/verification.md).
+immediate supported follow-up. Check objective workers before reporting. Read [verification](references/verification.md).
 
-Run focused checks and project milestone gates. Record assurance needs,
-findings and candidate bindings; review affected corrections by delta and
+Run focused checks and project milestone gates. Record findings and candidate bindings; review affected corrections by delta and
 explicitly REUSE unaffected proof under project rules. Quiescent objectives
 remain open with incomplete reports; closure requires all obligations terminal
 and a report. Before Pod-mediated Git, CI or deployment activity,
@@ -96,4 +95,4 @@ Do not run a source-checkout helper or create another configuration source.
 Final reporting distinguishes implementation, local checks, independent review,
 hosted CI, live native proof, project acceptance and merge. Name uncertainty,
 unresolved native references and the next safe action. Never infer savings from
-model labels or worker count.
+model labels.

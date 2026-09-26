@@ -155,7 +155,7 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         index = visible.index(state.focus_id) if state.focus_id in visible else (-1 if direction > 0 else 0)
         index = (index + direction) % len(visible)
         return replace(state, focus_id=visible[index], hidden_focus_id=None), None
-    if key in ("SPACE", "r"):
+    if key in ("SPACE", "r", "p"):
         if state.preferences["errors"]:
             return replace(state, notice="Preferences unavailable — read-only; no change saved"), None
         if key == "r":
@@ -166,6 +166,9 @@ def reduce(state: State, key: str) -> tuple[State, Effect | None]:
         if state.focus_id not in visible_ids(state):
             return replace(state, notice="Choose a visible model; no change saved"), None
         focused = state.focus_id
+        if key == "p":
+            pin = state.preferences.get("pinned_model")
+            return state, Effect("set_pin", value=None if pin == focused else focused)
         current = state.preferences["saved"].get(focused)
         if current is None:
             return replace(state, focus_id=focused), Effect("set_model", model_id=focused,

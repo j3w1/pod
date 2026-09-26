@@ -1,4 +1,4 @@
-# 0.6.5 verification contract
+# 0.6.6 verification contract
 
  Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
@@ -72,7 +72,7 @@ unavailable delegation suppresses that flag.
 Live Codex and Claude trials additionally exercise A143, A150, A158 and A159
 in disposable objectives. A missing live case remains `NOT_RUN`. Stage-1
 review is the fresh final independent audit under the mechanism installed
-before 0.6.5. After merge and installation, a separate 0.6.5 disposable objective
+before 0.6.6. After merge and installation, a separate 0.6.6 disposable objective
 records an assurance obligation, review attempt, triage and label decision as
 self-hosting evidence; it cannot promote stage-1 evidence.
 
@@ -110,9 +110,13 @@ concurrent installers and recovery. It does not touch ordinary host profiles.
 The installed copy must match the bundle; an incomplete installation reports a
 recoverable failure. The post-merge literal command is checked separately
 because a cached `main` endpoint can lag the SHA-pinned CI endpoint.
-An update trial begins with an installed 0.6.4 copy in a scrubbed disposable
-home, applies the 0.6.5 installer, checks user-file preservation and verifies
+An update trial begins with an installed 0.6.5 copy in a scrubbed disposable
+home, applies the 0.6.6 installer, checks user-file preservation and verifies
 the installed bundle, launcher and receipt.
+
+Issue 29 focused regressions cover normal sourced final-audit intake through production checkpoint/admission/report/acceptance, pin storage/atomic edits and every supported role, immutable pending replay, and controlled-time local failure reconsideration/success. PTY tests cover moving/clearing the radio group, focus, restart, hidden pins, all/custom refusal, concurrency, resize and ASCII/monochrome. Existing `tests.tui_snapshot.render` accepts the normal configured PTY screen for visual review; no special pin capture framework is needed.
+
+Public 0.6.4 consent fixtures under `tests/fixtures/pod-0.6.4/` were emitted by exact public main `372bcfc60845b5d49aa2f355023e33c47212aaf4` with native-authority/Git-observation stubs. They prove released-writer representability, not an installed-launcher/live/owner-state reproduction. Production current checkpoint/wait tests cover both unbound prepared and default/missing units; synthetic current-target controls remain labeled separately. Existing A147 tests retain legitimate trusted source removal and history controls. No migration or policy parser is introduced.
 
 ## Boundaries and evidence
 

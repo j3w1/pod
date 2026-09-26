@@ -1419,3 +1419,91 @@ class AdmissionTests(unittest.TestCase):
         other=guarded_start(self.project,'second',owner='owner',run='run',task='other',
                             plan_revision='plan',frozen_packet=second_packet,port=self.port)
         self.assertEqual(other['status'],'bound')
+
+    def test_pin_final_boundary_and_pending_replay_keep_their_distinct_routes(self):
+        from pod.config import set_pin
+        frozen = self.frozen()
+        set_pin(self.personal, 'gpt-6-luna', displayed=load_config(self.project))
+        with self.assertRaises(PodError) as caught: self.start(frozen=frozen)
+        self.assertEqual(caught.exception.code, 'preference_changed')
+        self.assertFalse(read(self.project, 'objective')['admissions'])
+        set_pin(self.personal, 'gpt-6-sol', displayed=load_config(self.project))
+        first = self.recovery_case()
+        decision = first['route_decision']
+        self.assertEqual(decision['pinned_model'], 'gpt-6-sol')
+        set_pin(self.personal, 'gpt-6-luna', displayed=load_config(self.project))
+        self.port.state = 'pending'
+        replay = self.recover(first)
+        self.assertEqual(replay['status'], 'bound')
+        self.assertEqual(self.port.starts[-1]['route']['model'], 'gpt-6-sol')
+        self.assertEqual(self.port.starts[-1]['retry_request'], REQUEST)
+        self.assertEqual(replay['admission']['route_decision'], decision)
+        with self.assertRaises(PodError) as mismatch:
+            self.start(task='new-task')
+        self.assertEqual(mismatch.exception.code, 'pin_mismatch')
+
+    def test_temporary_failure_reconsideration_then_success_retains_history(self):
+        from datetime import timedelta
+        from pod.config import set_pin
+        from pod.selection import failure_active
+        set_pin(self.personal, 'gpt-6-sol', displayed=load_config(self.project))
+        preferences = self.personal.read_bytes()
+        first = self.start()['admission']
+        self.port.workers[first['native_binding']['dispatchId']]['outcome'] = 'failed'
+        moment = datetime(2026, 9, 26, tzinfo=timezone.utc)
+        with patch('pod.ledger.datetime') as clock:
+            clock.now.return_value = moment
+            self.record_failure(first, kind='unavailable', source='native readiness timeout; cause unknown')
+        state = read(self.project, 'objective')
+        failure = state['admissions'][first['admission_id']]['failures'][0]
+        self.assertEqual(failure['retry_after'], None)
+        self.assertEqual(datetime.fromisoformat(failure['reconsider_at']), moment + timedelta(seconds=60))
+        self.assertTrue(failure_active(failure, now=moment + timedelta(seconds=59)))
+        self.assertFalse(failure_active(failure, now=moment + timedelta(seconds=60)))
+        self.discard(first)
+        with patch('pod.ledger.datetime') as clock:
+            clock.now.return_value = moment + timedelta(seconds=59)
+            with self.assertRaises(PodError) as held: self.start(task='replacement-task')
+        self.assertEqual(held.exception.code, 'route_failed')
+        self.assertIn('reconsider at', str(held.exception))
+        with patch('pod.ledger.datetime') as clock:
+            clock.now.return_value = moment + timedelta(seconds=60)
+            frozen = self.frozen(task='replacement-task')
+            second = self.start(task='replacement-task', frozen=frozen)['admission']
+        self.assertEqual(len(self.port.starts), 2)
+        self.port.workers[second['native_binding']['dispatchId']]['outcome'] = 'succeeded'
+        report = {'schema':'pod-report/v1','assignment':frozen['packet_id'],
+                  'attempt':second['native_binding']['dispatchId'],'candidate':'candidate','outcome':'succeeded',
+                  'scope':['notes.txt'],'files':[],'checks':['unit passed'],'failures':[],
+                  'evidence':[],'uncertainty':[],'questions':[]}
+        with patch.object(OrcaPort, 'show_worker', autospec=True,
+                          side_effect=lambda _port, dispatch:self.port.show_worker(dispatch)):
+            internal_run('report', {'project':str(self.project),'objective':'objective',
+                                   'admission_id':second['admission_id'],'packet':frozen,
+                                   'report':report,'map':self.restated()})
+        prior_failure = read(self.project, 'objective')['admissions'][first['admission_id']]['failures'][0]
+        self.assertEqual(prior_failure['source'], failure['source'])
+        self.assertEqual(prior_failure['recorded_at'], failure['recorded_at'])
+        self.assertEqual(prior_failure['cleared_by'], second['admission_id'])
+        self.assertFalse(failure_active(prior_failure, now=moment))
+        self.assertEqual(self.personal.read_bytes(), preferences)
+
+    def test_native_retry_after_and_readiness_do_not_become_authentication_faults(self):
+        from datetime import timedelta
+        from pod.selection import failure_active
+        first = self.start()['admission']
+        self.port.workers[first['native_binding']['dispatchId']]['outcome'] = 'failed'
+        moment = datetime(2026, 9, 26, tzinfo=timezone.utc)
+        for delay in (120, -1):
+            native_due = (moment + timedelta(seconds=delay)).isoformat()
+            with patch('pod.ledger.datetime') as clock:
+                clock.now.return_value = moment
+                clock.fromisoformat.side_effect = datetime.fromisoformat
+                self.record_failure(first, kind='unavailable', source='native readiness', retry_after=native_due)
+            failure = read(self.project, 'objective')['admissions'][first['admission_id']]['failures'][-1]
+            self.assertEqual(datetime.fromisoformat(failure['retry_after'].replace('Z','+00:00')),
+                             datetime.fromisoformat(native_due))
+            self.assertEqual(failure['kind'], 'unavailable')
+            self.assertEqual(datetime.fromisoformat(failure['reconsider_at']),
+                             moment + timedelta(seconds=max(60, delay)))
+            self.assertTrue(failure_active(failure, now=moment + timedelta(seconds=59)))

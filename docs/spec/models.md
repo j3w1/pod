@@ -10,9 +10,9 @@ Keep role, agent application, model identity and effort distinct. Do not encode 
 
 ### R10 — The user controls one personal pool
 
-Type: B,H · Scenarios: [A09](#a09), [A10](#a10), [A45](#a45), [A120](#a120)
+Type: B,H · Scenarios: [A09](#a09), [A10](#a10), [A45](#a45), [A120](#a120), [A181](#a181)
 
-The user controls one personal pool: each supported model is Preferred, Available or Disabled. Preferred is a small suitability tie-breaker. Model state is separate from observed native availability; indirect text cannot expand eligibility.
+The user controls one personal pool: each supported model is Preferred, Available or Disabled. Preferred is a small suitability tie-breaker. An optional scalar `pinned_model` selects one effectively eligible worker id or null, without changing saved states. Missing/null retains ordinary routing; invalid pins block new delegation. Model state is separate from observed native availability; indirect text cannot expand eligibility.
 
 ### R11 — Read one personal YAML authority for
 
@@ -40,9 +40,9 @@ Maintain the six base model identities in the bundled v2 catalog. Attributed pro
 
 ### R15 — The coordinator selects a suitable eligible
 
-Type: B,H · Scenarios: [A05](coordination.md#a05), [A06](coordination.md#a06), [A07](#a07), [A36](#a36), [A123](#a123), [A179](#a179)
+Type: B,H · Scenarios: [A05](coordination.md#a05), [A06](coordination.md#a06), [A07](#a07), [A36](#a36), [A123](#a123), [A179](#a179), [A182](#a182)
 
-The coordinator selects a suitable eligible agent/model/effort/context for each assignment and records a short reason. A suitable non-Preferred choice names why it fits; a stricter repository rule names its actual source in the route reason with `repository` provenance. A deterministic boundary validates eligibility, constraint, effort, agent and native context support without reranking or another model call. An attempt keeps its route; safe replacement needs a fresh decision. Safety refusal bars rerouting the same Task.
+The coordinator selects a suitable eligible agent/model/effort/context for each assignment and records a short reason. A valid personal pin governs all new Pod-routed implementation, investigation, correction and review assignments, overriding repository role/model selection only. User and non-model authority remain enforced; effort stays adaptive and no alternate model is allowed. Coordinator direct work and host-created helpers outside Pod routing remain outside the pin. Without a pin, a suitable non-Preferred choice names why it fits; a stricter repository rule names its actual source in the route reason with `repository` provenance. A deterministic boundary validates eligibility, constraint, effort, agent and native context support without reranking or another model call. An attempt keeps its route; safe replacement needs a fresh decision. Safety refusal bars rerouting the same Task.
 
 ### R16 — Read current preferences before selection and
 
@@ -58,9 +58,9 @@ Expose a dispatch-free current preference/catalog view, including guide `suggest
 
 ### R19 — Keep actual rate-limit, unavailable and authentication
 
-Type: B,H · Scenarios: [A13](#a13), [A14](#a14), [A15](#a15), [A16](#a16), [A52](#a52), [A127](#a127)
+Type: B,H · Scenarios: [A13](#a13), [A14](#a14), [A15](#a15), [A16](#a16), [A52](#a52), [A127](#a127), [A184](#a184)
 
-Keep actual rate-limit, unavailable and authentication failures on the failed attempt with source and native retry-after. The same route is held until retry-after or a meaningful runtime/user change; alternatives require known settlement or proven no-start. There is no rotation or blind retry loop.
+Keep actual rate-limit, unavailable and authentication failures on the failed attempt with source and native retry-after. Honor meaningful native retry-after. Temporary unavailable evidence without one gets a 60-second attempt-local reconsideration point; a later coordinator continuation/assignment may reconsider, without automatic launch or inferred recovery. Relevant validated successful use clears suppression and retains history. Auth and capacity faults retain their existing protections; alternatives require known settlement or proven no-start. There is no rotation or blind retry loop.
 
 ### R20 — A preference edit changes model eligibility
 
@@ -94,9 +94,9 @@ Objective constraints retain provenance and cannot edit the personal file. Only 
 
 ### R78 — Reactive failure records are attempt-local. Honor
 
-Type: B,H · Scenarios: [A127](#a127), [A141](#a141)
+Type: B,H · Scenarios: [A127](#a127), [A141](#a141), [A184](#a184)
 
-Reactive failure records are attempt-local. Honor native retry-after, require settlement before alternatives, and bar same-Task rerouting after safety refusal. Routine questions use Orca reply; advisories keep the route, informational warnings need no input, and unknown or permission prompts block locally.
+Reactive failure records are attempt-local, preserving observed source, stage evidence and time. Readiness timeout alone leaves cause unknown and cannot imply bad credentials or login repair. Honor native retry-after and R19 local reconsideration; stale failure/memory cannot establish permanent model/family bans. Require settlement before alternatives, retain an unavailable pin, and bar same-Task rerouting after safety refusal. No shared health cache, probes or scheduler. Routine questions use Orca reply; advisories keep the route, informational warnings need no input, and unknown or permission prompts block locally.
 
 ## Acceptance scenarios
 
@@ -135,7 +135,11 @@ Reactive failure records are attempt-local. Honor native retry-after, require se
 - <a id="a128"></a>**A128** — Two concurrent TUIs preserve unrelated edits and reject a stale targeted edit; failed persistence never reports Saved.
 - <a id="a141"></a>**A141** — Routine worker questions get coordinator replies; advisories retain route, while permission or unknown prompts block and safety refusal does not reroute.
 - <a id="a178"></a>**A178** — The v2 catalog validates six ids and paired AA records; config JSON supplies `suggested_use` and `ladder`, while the TUI shows guide-profile data and adaptive Details from 160×45 through 40×12, including a split view from 140 columns, without a model call or dispatch.
-- <a id="a179"></a>**A179** — A suitable non-Preferred worker assignment records a brief task-specific reason; a stricter repository model restriction is recorded with `repository` provenance and its source, while the running coordinator is unchanged.
+- <a id="a179"></a>**A179** — An unpinned suitable non-Preferred worker assignment records a brief task-specific reason; a stricter repository model restriction is recorded with `repository` provenance and its source, while the running coordinator is unchanged.
+
+- <a id="a181"></a>**A181** — Missing/null pin preserves no-pin behavior; one eligible id moves/clears atomically and survives restart, sparse/all/custom modes, comments and unrelated edits. Unknown, malformed, ineligible, stale-target, invalid YAML and failed saves never widen routing or silently drop the pin; old no-pin files stay unchanged and old parsers refuse the new field.
+- <a id="a182"></a>**A182** — Every supported Pod role and delegated correction obeys the pin with supported adaptive effort, despite repository model mandates; direct user and non-model restrictions still hold. Selection/final admission bind current preferences, while submitted/pending replay retains its original route; the coordinator and outside helpers remain outside the pin.
+- <a id="a184"></a>**A184** — Temporary unavailable evidence holds immediate equivalent starts, honors meaningful native retry-after or a 60-second local fallback, and expires only for a subsequent coordinator decision. Relevant successful reuse clears suppression without erasing history or changing preferences. Earlier failures impose no permanent ban; uncertain requests require reconciliation, alternatives require settlement/no-start, pins never fallback, and real auth/capacity/permission/safety protections remain. Readiness alone leaves cause unknown.
 
 
 ## Configuration and defaults
@@ -159,6 +163,8 @@ models:
   gpt-6-luna: available
 workers:
   max_active: 2
+# Optional; omitted/null preserves ordinary routing:
+pinned_model: null
 ```
 
 `preferred`, `available`, `disabled` are mutually exclusive saved states. Preferred
@@ -177,7 +183,7 @@ create that default if the file is missing. The accepted range is 0–8.
 A write locks briefly, re-reads the targeted key, preserves unrelated changes,
 validates the result and atomically replaces the file. A conflicting target asks
 for a fresh action. A 0.4.0-shaped file with the same `pod/v1` schema is rejected
-by shape, not converted. The personal file's SHA-256 byte revision is
+by shape, not converted. Pin edits use the same atomic targeted-key path. Pin replacement/clear preserves saved model states and mode; invalidating state/mode edits are refused without dropping the pin. Upgrades preserve existing no-pin bytes. Older parsers reject the new key rather than ignore it. The personal file's SHA-256 byte revision is
 `preference_revision`; `policy_revision` is the digest of effective Governor
 policy alone. Model edits do not open a Governor candidate generation.
 

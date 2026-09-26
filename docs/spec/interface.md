@@ -18,7 +18,7 @@ Maintain one canonical inline skill policy with generated host metadata and rele
 
 Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models.md#a49), [A71](#a71), [A133](#a133), [A175](#a175)
 
-Read-only status and doctor report preferences, resolved paths, current native work, constraints, decisions, mismatches, installed bundle identity drift, catalog/benchmark age, blockers and next actions. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
+Read-only status and doctor report preferences including the pin, resolved paths, current native work, constraints, decisions, mismatches, installed bundle identity drift, catalog/benchmark age, blockers and next actions. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
 
 ### R49 — The one-shot installer places both agent
 
@@ -100,9 +100,9 @@ Keep SKILL at most 750 words, each conditional reference at most 700 words and a
 
 ### R73 — The TUI shows all six models
 
-Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140), [A178](models.md#a178)
+Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140), [A178](models.md#a178), [A183](#a183)
 
-The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed provider guidance, Pod guide examples and effort ladder, native/default details and dated AA reference records. State edits save immediately; `r` reversibly toggles All models and My selection without erasing saved choices. Suggested-use and guide-profile columns adapt to width; a split view starts at 140 columns and a POOL legend fills space beneath its table. AA is informational.
+The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed provider guidance, Pod guide examples and effort ladder, native/default details and dated AA reference records. State edits save immediately; `p` moves or clears one radio-style pin, distinct from focus and base state, with ASCII/monochrome equivalents and hidden-pin summary. Invalidating edits are refused atomically. `r` reversibly toggles All models and My selection without erasing saved choices. Suggested-use and guide-profile columns adapt to width; a split view starts at 140 columns and a POOL legend fills space beneath its table. AA is informational.
 
 ### R74 — The TUI works on ordinary Linux
 
@@ -118,7 +118,7 @@ Each focused model has an always-present Details guide with a 20–70 word attri
 
 ### R76 — Preference edits save immediately with lock
 
-Type: B,H · Scenarios: [A128](models.md#a128), [A140](#a140)
+Type: B,H · Scenarios: [A128](models.md#a128), [A140](#a140), [A183](#a183)
 
 Preference edits save immediately with lock, targeted compare-and-swap, validation, atomic replacement and honest success/failure feedback. Open TUIs reload external changes promptly without blocking keys on runtime reads; a conflict never overwrites another editor's targeted value.
 
@@ -168,6 +168,8 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 - <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
 
 
+- <a id="a183"></a>**A183** — Real PTY pin/move/unpin uses one radio marker, distinct focus and preserved base states. Restart, sorting, filtering, resize, all/custom, narrow/wide and ASCII/monochrome retain identity and expose a hidden pin. Invalidating edits, stale concurrent pin edits and persistence failures change no settings; no action starts workers.
+
 ## Public interfaces
 
 These elaborate the requirements above; there is one command implementation in the installed bundle.
@@ -175,7 +177,7 @@ These elaborate the requirements above; there is one command implementation in t
 | Command | Contract |
 | --- | --- |
 | `pod` | Opens the model TUI on a TTY; otherwise prints a concise plain summary. |
-| `pod config [--json]` | Read personal path, byte revision, mode, saved/effective states, eligible ids, worker ceiling and compact catalog guidance. |
+| `pod config [--json]` | Read personal path, byte revision, mode, pin, saved/effective states, eligible ids, worker ceiling and compact catalog guidance. |
 | `pod config edit` | Opens the personal YAML in `$VISUAL` or `$EDITOR`, validates afterward, retains invalid edits and reports them. |
 | `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments, gates, progress, blockers and next action. Shared Runs require explicit selection. |
 | `pod doctor [--json]` | Read-only installation, catalog, preference, runtime capability and version diagnostics. |

@@ -201,3 +201,69 @@ class TuiPtyTests(unittest.TestCase):
         os.kill(second.pid,signal.SIGTERM)
         second.wait_for(lambda s:s.closed,timeout=2)
         self.assertEqual(self.config.read_bytes(),before)
+
+    def test_pin_radio_moves_clears_and_survives_restart_filter_sort_resize(self):
+        session = self.open(cols=100, rows=30)
+        saved = load_config(personal=self.config)['saved']
+        session.send('p')
+        session.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='claude-opus-5-5')
+        session.wait_for(lambda s:s.text().count('●') == 1)
+        self.assertIn('● Claude Opus 5.5', session.text())
+        session.send('\x1bOBp')
+        session.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='gpt-6-astra')
+        session.wait_for(lambda s:'● GPT-6 Astra' in s.text() and s.text().count('●') == 1)
+        session.send('sf')
+        session.wait_for(lambda s:'Pin gpt-6-astra' in s.text() and '●' not in s.text())
+        session.resize(40, 12)
+        session.wait_for(lambda s:'Pin gpt-6-astra' in s.text())
+        self.assertEqual(load_config(personal=self.config)['saved'], saved)
+        session.close()
+        restarted = self.open(cols=80, rows=24)
+        self.assertIn('● GPT-6 Astra', restarted.text())
+        # Recommended order starts at Opus; Down reaches Astra. Pressing p clears its pin.
+        restarted.send('\x1bOBp')
+        restarted.wait_for(lambda _s:load_config(personal=self.config)['pinned_model'] is None)
+        restarted.wait_for(lambda s:'●' not in s.text())
+        self.assertEqual(load_config(personal=self.config)['saved'], saved)
+
+    def test_pin_invalidating_edit_and_all_custom_mode_are_atomic(self):
+        session = self.open()
+        session.send('p ')
+        session.wait_for(lambda _s:load_config(personal=self.config)['saved']['claude-opus-5-5']=='preferred')
+        before = self.config.read_bytes()
+        session.send(' ')
+        session.wait_for('Unpin or replace')
+        self.assertEqual(self.config.read_bytes(), before)
+        session.send('pr')
+        session.wait_for(lambda _s:load_config(personal=self.config)['mode']=='all')
+        from pod.config import set_pin
+        # A valid All-mode pin may point at a saved Disabled row.
+        import yaml
+        document = yaml.safe_load(self.config.read_text())
+        document['models']['gpt-6-astra'] = 'disabled'
+        self.config.write_text(yaml.safe_dump(document,sort_keys=False))
+        set_pin(self.config, 'gpt-6-astra', displayed=load_config(personal=self.config))
+        session.wait_for('Pin gpt-6-astra')
+        before = self.config.read_bytes()
+        session.send('r')
+        session.wait_for('Unpin or replace')
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_ascii_monochrome_pin_and_concurrent_pin_conflict(self):
+        first = self.open(LC_ALL='C', NO_COLOR='1')
+        second = self.open(LC_ALL='C', NO_COLOR='1')
+        os.kill(second.pid, signal.SIGSTOP)
+        try:
+            second.send('p')
+            first.send('p')
+            first.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='claude-opus-5-5')
+        finally:
+            os.kill(second.pid, signal.SIGCONT)
+        second.wait_for('changed elsewhere')
+        self.assertEqual(load_config(personal=self.config)['pinned_model'], 'claude-opus-5-5')
+        first.wait_for(lambda s:s.text().count('(*)') == 1)
+        self.assertTrue(first.text().isascii())
+        second.send('\x1bOBp')
+        second.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='gpt-6-astra')
+        first.wait_for('(*) GPT-6 Astra')
+        self.assertEqual(first.text().count('(*)'), 1)

@@ -115,10 +115,10 @@ def _state_badge(state: State, model_id: str, caps: Capabilities) -> tuple[str, 
 
 def _columns(width: int) -> tuple[Column, ...]:
     """Columns for a drawable width. AA numbers never appear without their profile."""
-    state, model = Column("state", "State", 11), Column("model", "Model", 16)
+    state, model = Column("state", "State", 11), Column("model", "Pin / Model", 20)
     index, cost = Column("index", "AA index", 8), Column("cost", "AA $/task", 9)
     if width >= 96:
-        wide = width >= 110
+        wide = width >= 114
         profile = Column("profile", "Guide profile", 18)
         first = Column("first", "AA first response", 17) if wide else Column("first", "AA 1st resp", 11)
         fixed = (state, model, profile, index, cost, first)
@@ -126,9 +126,9 @@ def _columns(width: int) -> tuple[Column, ...]:
         use = Column("use", "Suggested use", min(24, width - used))
         return (state, model, use, profile, index, cost, first)
     profile = Column("profile", "Guide profile", 15)
-    if width >= 76:
+    if width >= 80:
         return (state, model, profile, index, cost, Column("first", "AA 1st resp", 11))
-    if width >= 56:
+    if width >= 60:
         return (state, model, profile, index)
     return (state, model)
 
@@ -152,7 +152,9 @@ def _table_row(state: State, model_id: str, columns: tuple[Column, ...], caps: C
     model = by_id(state.catalog)[model_id]
     row = reference_rows(state.catalog)[model_id]
     badge, badge_role = _state_badge(state, model_id, caps)
-    values = {"state": (badge, badge_role), "model": (model["name"], "value"),
+    pinned = state.preferences.get("pinned_model") == model_id
+    marker = ("(*)" if pinned else "( )") if caps.ascii_only else ("●" if pinned else "○")
+    values = {"state": (badge, badge_role), "model": (marker + " " + model["name"], "value"),
               "use": (model["guide"]["suggested_use"], "body"),
               "profile": (None, "value"),
               "index": ("unknown" if row["intelligence"] is None else str(row["intelligence"]), "metric"),
@@ -186,6 +188,9 @@ def _preference_text(state: State, model_id: str) -> str:
                "available": "Available: eligible for new worker starts.",
                "disabled": "Disabled: not eligible for new worker starts."}
     text = meaning.get(saved, "Not set: not eligible in My selection; All models makes it available.")
+    pin = state.preferences.get("pinned_model")
+    if pin:
+        text += f" Pin: {pin}; Pod workers use it with adaptive effort."
     return text + " The running coordinator's model is unchanged."
 
 
@@ -329,6 +334,7 @@ def _help(state: State, width: int, caps: Capabilities) -> list[Line]:
     lines = [_heading("Help: model pool preferences", width, caps)]
     for text in ("Up/Down or j/k move focus. Space changes the saved state and saves at once: "
                  "Available > Preferred > Disabled.",
+                 "p moves the pin to this eligible model, or clears its pin; effort stays adaptive.",
                  "r switches My selection and All models; your saved choices come back.",
                  "/ searches model or id; Esc clears. f filters provider. s changes the sort.",
                  "Enter shows more; Page Up/Down scroll; Esc closes; ? help; q quits.",
@@ -391,9 +397,12 @@ def _title(state: State, width: int, caps: Capabilities) -> Line:
     mode = "READ-ONLY" if errors else "All models" if state.preferences["mode"] == "all" else "My selection"
     left = [("Pod", "title"), (dot, "label"), (mode, "error" if errors else "value"), (dot, "label"),
             (f"{len(state.preferences['eligible'])} eligible", "value")]
+    pin = state.preferences.get("pinned_model")
+    if pin:
+        left[2:2] = [("Pin " + pin, "value"), (dot, "label")]
     if state.notice:
         failed = state.notice.startswith(("Not saved", "Preferences unavailable"))
-        left += [(dot, "label"), (state.notice, "error" if failed else "advisory")]
+        left[2:2] = [(state.notice, "error" if failed else "advisory"), (dot, "label")]
     elif state.preferences["mode"] == "all" and not errors:
         left += [(dot, "label"), ("your choices are saved (r restores)", "advisory")]
     controls = f"Sort {SORTS[state.sort_index]}{dot}Filter {FILTERS[state.filter_index]}"
@@ -410,9 +419,11 @@ def _title(state: State, width: int, caps: Capabilities) -> Line:
 
 def _footer(state: State, width: int, caps: Capabilities) -> Line:
     """Descriptive shortcuts, dropping the least important ones until the line fits."""
-    items = [("Space", "change state"), ("s", "sort: " + SORTS[state.sort_index]), ("f", "filter"),
+    items = [("Space", "change state"), ("p", "pin/unpin"), ("s", "sort: " + SORTS[state.sort_index]), ("f", "filter"),
              ("r", "use All models" if state.preferences["mode"] != "all" else "use My selection"), ("/", "search"),
              ("Enter", "more"), ("?", "help"), ("q", "quit")]
+    if width < 60:
+        items = [("Space", "state"), ("p", "pin"), ("?", "help"), ("q", "quit")]
     if state.help_open or state.expanded:
         items = [("Esc", "back"), ("PgDn/PgUp", "scroll"), ("?", "help"), ("q", "quit")]
     drop_order = ["/", "Enter", "f", "r", "s"]
@@ -447,6 +458,7 @@ def _pool(state: State, width: int, caps: Capabilities) -> list[Line]:
     mode = "All models (saved choices kept)" if prefs["mode"] == "all" else "My selection (your saved states)"
     lines = [_heading("POOL", width, caps)]
     lines += _inline_pair("Mode", mode, width, caps)
+    lines += _inline_pair("Pin", prefs.get("pinned_model") or "None", width, caps)
     lines += _inline_pair("Eligible", f"{len(prefs['eligible'])} of 6 models; up to {prefs.get('max_active', 0)} "
                           "workers at once", width, caps)
     lines += _inline_pair("States", f"{glyph(caps, 'preferred')} Preferred = small tie-breaker; "
@@ -536,4 +548,4 @@ def summary(preferences: dict) -> str:
         return f"Pod preferences need attention: {clean(preferences['path'])}"
     mode = "All models" if preferences["mode"] == "all" else "My selection"
     return (f"Pod: {len(preferences['eligible'])} eligible models, {mode}, "
-            f"maximum {preferences['max_active']} workers\nPreferences: {clean(preferences['path'])}")
+            f"maximum {preferences['max_active']} workers; pin {preferences.get('pinned_model') or 'none'}\nPreferences: {clean(preferences['path'])}")

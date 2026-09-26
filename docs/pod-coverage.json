@@ -1681,6 +1681,89 @@
         "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A181",
+      "required_evidence": [
+        "unit",
+        "installed_bundle"
+      ],
+      "offline_test": [
+        "tests.test_pin.PinTests.test_missing_null_pin_and_old_parser_refusal",
+        "tests.test_pin.PinTests.test_pin_switch_clear_comments_and_concurrent_target",
+        "tests.test_pin.PinTests.test_invalid_pins_and_effective_all_custom_eligibility",
+        "tests.test_pin.PinTests.test_save_failure_invalid_yaml_and_precise_route_refusal",
+        "tests.test_installer.InstallerTests.test_exact_public_065_upgrade_preserves_no_pin_and_066_preserves_a_pin"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A182",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_pin.PinTests.test_all_pod_roles_repository_precedence_adaptive_effort_and_hard_constraints",
+        "tests.test_operations.AdmissionTests.test_pin_final_boundary_and_pending_replay_keep_their_distinct_routes",
+        "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_implementation_role_uses_pin",
+        "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_investigation_role_uses_pin",
+        "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_review_role_uses_pin"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A183",
+      "required_evidence": [
+        "pty_subprocess"
+      ],
+      "offline_test": [
+        "tests.test_tui_pty.TuiPtyTests.test_pin_radio_moves_clears_and_survives_restart_filter_sort_resize",
+        "tests.test_tui_pty.TuiPtyTests.test_pin_invalidating_edit_and_all_custom_mode_are_atomic",
+        "tests.test_tui_pty.TuiPtyTests.test_ascii_monochrome_pin_and_concurrent_pin_conflict"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A184",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_pin.PinTests.test_temporary_expiry_native_deadline_auth_and_safety_stay_distinct",
+        "tests.test_operations.AdmissionTests.test_temporary_failure_reconsideration_then_success_retains_history",
+        "tests.test_operations.AdmissionTests.test_native_retry_after_and_readiness_do_not_become_authentication_faults"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A185",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_normal_intake_required_audit_cannot_be_omitted_relabelled_or_withdrawn",
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_model_free_policy_pin_report_and_acceptance_preserve_audit",
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_scoped_user_waiver_is_withdrawal_not_passing_review",
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_required_audit_holds_merge_but_allows_publication_and_current_proof",
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_stale_proof_stays_held_until_explicit_scoped_waiver",
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_genuinely_removed_trusted_audit_can_be_withdrawn",
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_optional_coordinator_assurance_is_not_a_new_release_gate",
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_current_receipt_with_changed_source_is_invalidated"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A186",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_issue29_boundaries.LegacyConsentTests.test_released_writer_records_leave_real_checkpoint_authority_wait_applicable",
+        "tests.test_issue29_boundaries.LegacyConsentTests.test_synthetic_current_consent_controls_share_status_and_wait_truth"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

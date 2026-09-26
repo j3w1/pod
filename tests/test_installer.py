@@ -236,6 +236,33 @@ class InstallerTests(unittest.TestCase):
             report = json.loads(run_pod(env, "config", "--json").stdout)
             self.assertEqual(report["eligible"], [])
 
+    def test_exact_public_065_upgrade_preserves_no_pin_and_066_preserves_a_pin(self):
+        # Both installers run only in a scrubbed home with offline dependencies/npx.
+        old_tar = self.root / "public-065.tar.gz"
+        subprocess.run(["git", "archive", "--format=tar.gz", "--prefix=pod-source/",
+                        "-o", str(old_tar), "6a7b2ba79e8883946f0f880d55c8dcebe3cf086c"],
+                       cwd=ROOT, check=True)
+        old_script = self.root / "install-065.sh"
+        old_script.write_bytes(subprocess.check_output(["git", "show",
+            "6a7b2ba79e8883946f0f880d55c8dcebe3cf086c:install.sh"], cwd=ROOT))
+        old_env = {**self.env, "POD_INSTALL_SOURCE": old_tar.as_uri()}
+        result = subprocess.run(["sh", str(old_script)], env=old_env, cwd=self.root/"work",
+                                capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), "0.6.5")
+        self.assertNotIn("pinned_model", self.config.read_text())
+        before = self.config.read_bytes()
+        upgraded = run_pod(self.env, "update")
+        self.assertEqual(upgraded.returncode, 0, upgraded.stdout + upgraded.stderr)
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT/"VERSION").read_text().strip())
+        self.assertIsNone(json.loads(run_pod(self.env,"config","--json").stdout)["pinned_model"])
+        self.config.write_bytes(before + b"pinned_model: gpt-6-sol\n")
+        pinned = self.config.read_bytes()
+        self.installed()
+        self.assertEqual(self.config.read_bytes(), pinned)
+        self.assertEqual(json.loads(run_pod(self.env,"config","--json").stdout)["pinned_model"], "gpt-6-sol")
+
     def test_path_blocks_symlink_and_real_shell_resolution(self):
         self.installed()
         for file in (self.home / ".bashrc", self.home / ".profile"):
