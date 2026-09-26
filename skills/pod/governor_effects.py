@@ -151,8 +151,11 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
     if kind == "cancel_validation":
         target = _find_row(journal, row["action"]["target"])
         run_id = (target["receipt"].get("provider") or {}).get("run_id")
-        if target["outcome"] != "pending" or not target.get("cancel_safe") or not run_id:
-            raise PodError("cancel_unsafe", "Only a pending, cancel-safe validation with a run identity is canceled")
+        older_same_unit = (target["action"]["unit"] == row["action"]["unit"]
+                           and target.get("candidate_id") != row.get("candidate_id"))
+        if target["outcome"] != "pending" or not target.get("cancel_safe") or not run_id or not older_same_unit:
+            raise PodError("cancel_unsafe", "Only a pending, cancel-safe validation of an older candidate in the same "
+                                            "unit, with a run identity, is canceled")
         try:
             port.cancel(run_id=str(run_id))
         except PodError as exc:
@@ -312,7 +315,7 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
     provider = row["receipt"].get("provider") or {}
     moment = now or datetime.now(timezone.utc)
     if kind in PUBLICATION_KINDS:
-        branch = unit["branch"]
+        branch = row.get("branch") or unit["branch"]
         head = remote.branch_head(remote=branch["remote"], branch=branch["branch"])
         if commit is not None and head == commit:
             outcome, detail = "PASS", "remote branch carries the candidate commit"

@@ -395,10 +395,10 @@ class DecisionTests(GovernorCase):
         for grant in (None, authorization(tree=TREE2), authorization(candidate=COMMIT2),
                       authorization(scope=("deploy",))):
             with self.subTest(grant=grant and (grant["candidate"][:2], grant["tree"][:2], grant["scope"])):
-                held = self.decide(action(kind="merge", target="main", candidate=binding["id"],
+                held = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"],
                                           authorization=grant))
                 self.assertEqual((held["decision"], self.codes(held)), ("DEFER", ["authorization_missing"]))
-        clear = self.decide(action(kind="merge", target="main", candidate=binding["id"],
+        clear = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"],
                                    authorization=authorization()))
         self.assertEqual((clear["decision"], clear["phase"]), ("ALLOW", "candidate"))
         gapped = self.prepared(gaps=("live matrix",), unit="other")["candidate"]
@@ -639,12 +639,12 @@ waste_governor:
                 self.decide(dispatch(candidate=binding["id"]), exception=bad)
             self.assertEqual(unbound.exception.code, "exception_grant_required")
         with self.assertRaises(PodError) as kind:
-            self.decide(action(kind="merge", target="main", candidate=binding["id"]),
+            self.decide(action(kind="merge", target="origin/main", candidate=binding["id"]),
                         exception={"grant": "g1", "reason": "ship it", "by": "owner"})
         self.assertEqual(kind.exception.code, "exception_grant_required")
         merge_grant = self.GRANT.replace("[workflow_dispatch]", "[merge, workflow_dispatch]")
         self.configure(personal_yaml=merge_grant)
-        held = self.decide(action(kind="merge", target="main", candidate=binding["id"]),
+        held = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"]),
                            exception={"grant": "g1", "reason": "ship it", "by": "owner"})
         self.assertEqual((held["decision"], held["exception"]["ignored_because"]), ("DEFER", "authorization"))
         self.assertEqual(status(self.project, "objective")["counters"]["exceptions_applied"], 1)
@@ -676,7 +676,7 @@ waste_governor:
                          ("ALLOW", "observe", True))
         self.assertEqual([w["code"] for w in observed["warnings"] if w.get("softened_by") == "observe_mode"],
                          ["local_preflight_missing"])
-        held = self.decide(action(kind="merge", target="main", candidate=binding["id"]))
+        held = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"]))
         self.assertEqual(held["decision"], "DEFER")
         projection = status(self.project, "objective")
         self.assertEqual(projection["counters"]["observed_deferrals"], 1)
@@ -750,7 +750,7 @@ class ExecutorTests(GovernorCase):
             self.execute(action(candidate=second["id"], target="origin/other"), port)
         self.assertEqual(wrong.exception.code, "target_mismatch")
         with self.assertRaises(PodError) as governance:
-            self.execute(action(kind="merge", target="main", candidate=second["id"], authorization=authorization()), port)
+            self.execute(action(kind="merge", target="origin/main", candidate=second["id"], authorization=authorization()), port)
         self.assertEqual(governance.exception.code, "invalid_action")
         moved = FakePort(rejected=("push",))
         third = prepare_candidate(self.project, "objective", owner="owner", unit="release",
@@ -848,6 +848,20 @@ class ExecutorTests(GovernorCase):
         kept = self.execute(action(candidate=third["candidate"]["id"]), port)
         self.assertEqual(kept["cancellations"], [])
         self.assertIn("superseded_validation_pending", [w["code"] for w in kept["warnings"]])
+
+    def test_a_cancellation_reaches_only_older_work_of_its_own_unit(self):
+        first, port = self.published()
+        self.execute(action(candidate=first["id"]), port)
+        running = self.execute(dispatch(candidate=first["id"], target=RELEASE), port)
+        other = prepare_candidate(self.project, "objective", owner="owner", unit="independent",
+                                  observation=observation(commit=COMMIT2, tree=TREE2),
+                                  branch={"remote": "origin", "base": "main", "branch": "other"}, now=NOW)
+        for unit, candidate in (("independent", other["candidate"]["id"]), ("release", first["id"])):
+            with self.subTest(unit=unit), self.assertRaises(PodError) as refused:
+                self.execute(action(kind="cancel_validation", unit=unit, candidate=candidate,
+                                    target=running["record_id"]), port)
+            self.assertEqual(refused.exception.code, "cancel_unsafe")
+        self.assertNotIn(("cancel", "100"), port.calls)
 
     def test_execution_needs_a_prepared_unit(self):
         self.configure()
@@ -995,6 +1009,6 @@ class RecoveryTests(GovernorCase):
             with self.subTest(broken=str(broken["scope"])):
                 with self.assertRaises(PodError):
                     validate_authorization(broken, candidate=COMMIT, tree=TREE)
-                result = self.decide(action(kind="merge", target="main", candidate=binding["id"],
+                result = self.decide(action(kind="merge", target="origin/main", candidate=binding["id"],
                                             authorization=broken))
                 self.assertIn("authorization_missing", self.codes(result))

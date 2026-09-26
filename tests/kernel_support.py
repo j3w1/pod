@@ -43,10 +43,11 @@ waste_governor:
 """
 
 
-def authorization(candidate=COMMIT, tree=TREE, scope=("merge", "release")):
+def authorization(candidate=COMMIT, tree=TREE, scope=("merge", "release"), target="origin/main"):
+    # Merge consent names the target it was given for; BRANCH merges into origin/main.
     return {"schema": "pod-authorization/v1", "candidate": candidate, "tree": tree,
             "scope": list(scope), "authorized_by": "owner", "utc": "2026-09-21T00:00:00Z",
-            "reference": "tasks/pod/authorization.md"}
+            "reference": "tasks/pod/authorization.md", **({"target": target} if "merge" in scope else {})}
 
 
 def action(kind="push", candidate=COMMIT, target=TARGET, unit="release", **extra):

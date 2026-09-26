@@ -125,16 +125,13 @@ def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port) -
 
 
 def _target_branches(target_ref: object) -> set[str]:
-    """Local branch refs that are, or share the name of, the bound target; all are protected."""
-    if not isinstance(target_ref, str) or not target_ref:
+    """The bound target's local branch, or any local branch named like a suffix of its remote-tracking ref."""
+    if not isinstance(target_ref, str) or not target_ref.startswith(("refs/heads/", "refs/remotes/")):
         return set()
     if target_ref.startswith("refs/heads/"):
         return {target_ref}
-    name = target_ref.removeprefix("refs/remotes/")
-    refs = {"refs/heads/" + name}
-    if "/" in name:
-        refs.add("refs/heads/" + name.split("/", 1)[1])
-    return refs
+    parts = target_ref.removeprefix("refs/remotes/").split("/")
+    return {"refs/heads/" + "/".join(parts[index:]) for index in range(1, len(parts))}
 
 
 def _archive_verified(project: Path, value: dict) -> bool:
@@ -183,10 +180,10 @@ def _resource(kind: str, name: str, identity: dict, classification: str, reasons
             "archive_verified": archive_verified}
 
 
-def _expect_change(expect: object, resources: list[dict]) -> tuple[str, dict]:
+def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple[str, dict]:
     fingerprints = {row["id"]: digest({key: value for key, value in row.items() if key != "fingerprint"})
                     for row in resources}
-    plan_hash = digest(sorted(fingerprints.items()))
+    plan_hash = digest([sorted(fingerprints.items()), target])
     if expect is not None:
         provided = exact(expect, {"plan", "resources"}, {"plan", "resources"}, name="cleanup_expect")
         older = provided["resources"]
@@ -393,11 +390,12 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     if len(resources) > MAX_RESOURCES:
         raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     resources.sort(key=lambda row: row["id"])
-    plan_hash, fingerprints = _expect_change(expect, resources)
+    observed_target = {"ref": target_ref, "commit": target, "moved_after_delivery": moved}
+    plan_hash, fingerprints = _expect_change(expect, resources, observed_target)
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]
     return {"schema": "pod-cleanup-plan/v1", "objective": objective,
-            "target": {"ref": target_ref, "commit": target, "moved_after_delivery": moved},
+            "target": observed_target,
             "resources": resources, "digest": plan_hash,
             "expect": {"plan": plan_hash, "resources": fingerprints},
             "notes": ["Read-only plan; owner consent precedes commands.",

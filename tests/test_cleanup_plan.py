@@ -164,17 +164,20 @@ class CleanupPlanTests(KernelCase):
         maintained = self.root / "maintained-worktree"
         git(self.project, "worktree", "add", "-q", str(maintained), "maintained")
         context = repository_context(maintained)
-        self.write([self.criterion()], objective="maint-objective",
-                   governance={"base_ref": "refs/heads/maintained"},
-                   revision_authority={"provenance": "user_direct", "instruction": "Deliver onto maintained"},
-                   worktree={"repository": context["repository"], "repo_key": context["repo_key"],
-                             "path": context["worktree"], "branch": context["branch"]})
-        result = plan(self.project, "maint-objective", orca_reader=self.orca_read, native_port=self.port)
-        for kind in ("worktree", "local_branch"):
-            with self.subTest(kind=kind):
-                row = self.resource(result, kind)
-                self.assertEqual(row["class"], "protected")
-                self.assertIsNone(row["delete_argv"])
+        git(self.project, "remote", "add", "team/upstream", str(self.project))
+        git(self.project, "update-ref", "refs/remotes/team/upstream/maintained", self.base)
+        for objective, base_ref in (("local-target", "refs/heads/maintained"),
+                                    ("slash-remote-target", "refs/remotes/team/upstream/maintained")):
+            self.write([self.criterion()], objective=objective, governance={"base_ref": base_ref},
+                       revision_authority={"provenance": "user_direct", "instruction": "Deliver onto maintained"},
+                       worktree={"repository": context["repository"], "repo_key": context["repo_key"],
+                                 "path": context["worktree"], "branch": context["branch"]})
+            result = plan(self.project, objective, orca_reader=self.orca_read, native_port=self.port)
+            for kind in ("worktree", "local_branch"):
+                with self.subTest(target=base_ref, kind=kind):
+                    row = self.resource(result, kind)
+                    self.assertEqual(row["class"], "protected")
+                    self.assertIsNone(row["delete_argv"])
 
     def test_a_branch_shared_with_another_worktree_is_protected_and_changes_expect(self):
         first = self.observed()
@@ -187,6 +190,40 @@ class CleanupPlanTests(KernelCase):
         self.assertEqual((worktree["class"], worktree["delete_argv"]), ("protected", None))
         self.assertEqual(worktree["identity"]["shared_with"], [str(self.root / "foreign-worktree")])
         self.assertEqual((branch["class"], branch["delete_argv"]), ("protected", None))
+
+    def test_expect_refuses_when_the_target_moved(self):
+        first = self.observed()
+        moved = git(self.project, "commit-tree", self.base + "^{tree}", "-p", self.base, "-m", "target moved")
+        git(self.project, "update-ref", "refs/remotes/origin/target", moved)
+        with self.assertRaises(PodError) as changed:
+            self.observed(expect=first["expect"])
+        self.assertEqual(changed.exception.code, "cleanup_changed")
+
+    def test_a_retargeted_publication_never_claims_a_foreign_remote_branch(self):
+        from tests.kernel_support import GovernorFakePort, action, authorization
+        from pod.governor import execute, observe_candidate, prepare_candidate, reconcile, _read_journal
+        bare = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+        git(self.project, "remote", "add", "origin", str(bare))
+        git(self.project, "push", "-q", "origin", "refs/heads/objective:refs/heads/foreign")
+        observed = observe_candidate(self.project, base_ref="refs/remotes/origin/target")
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
+                          branch={"remote": "origin", "base": "target", "branch": "objective"})
+        port = GovernorFakePort(lost=("push",))
+        admitted = execute(self.project, "objective", owner="owner", port=port,
+                           native_projection={"outstanding": []},
+                           action=action(unit="delivery", candidate=observed["commit"], target="origin/objective",
+                                         effects=[], authorization=authorization(
+                                             candidate=observed["commit"], tree=observed["tree"],
+                                             scope=("publish",))))
+        self.assertEqual(admitted["outcome"], "UNKNOWN")
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
+                          branch={"remote": "origin", "base": "target", "branch": "foreign"})
+        port.heads["origin/foreign"] = observed["commit"]
+        reconcile(self.project, "objective", owner="owner", record_id=admitted["record_id"], port=port)
+        unit = _read_journal(_record_path(self.project, "objective"))["units"]["delivery"]
+        self.assertNotIn("origin/foreign", unit["published"])
+        self.assertNotIn("remote_branch:origin/foreign", [row["id"] for row in self.observed()["resources"]])
 
     def test_a_prepared_but_unpublished_remote_branch_is_not_offered(self):
         bare = self.root / "origin.git"

@@ -689,10 +689,6 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             if prior_map is None:
                 raise PodError("delivery_unverified", "A delivery needs a bound obligation map",
                                {"detail": "map_missing", "next_action": "checkpoint the objective map first"})
-            if refresh:
-                raise PodError("delivery_unverified", "Record delivery and refresh governance in separate writes",
-                               {"detail": "delivery_with_refresh",
-                                "next_action": "record the delivery first, or refresh governance without it"})
             record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
             verified_delivery = verify_delivery(project, objective, prior_map, record_id,
                                                 seq=prior_map["seq"] + 1)
@@ -1174,6 +1170,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                              "observation_digest": report_identity, "result_commit": result_commit,
                              "consumed_at": datetime.now(timezone.utc).isoformat()}
             row["updated_at"] = row["report"]["consumed_at"]
+        require_governance_current(project, map_state)
         try:
             value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
                                     admission_id=admission_id)

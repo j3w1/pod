@@ -84,7 +84,7 @@ def _delivery_object(project: Path, argv: list[str], *, subcode: str) -> str:
 
 def verify_delivery(project: Path, objective: str, map_state: dict, record_id: str, *, seq: int) -> dict:
     """Bind a Governor merge PASS to one exact target result without moving policy authority."""
-    from .governor import _read_journal, _record_path, merge_target_names, validate_authorization
+    from .governor import _read_journal, _record_path, validate_authorization
     if not isinstance(record_id, str) or not 1 <= len(record_id) <= 128:
         raise _delivery_refusal("record_missing", "A bounded Governor record id is required",
                                 "name the allowed merge PASS record from this objective")
@@ -133,9 +133,7 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
     governance = map_state["governance"]
     # The target admitted with the merge decision is authoritative; the unit's branch may change later.
     admitted = row.get("target_binding")
-    if (not isinstance(admitted, dict) or any(not isinstance(admitted.get(key), str) for key in ("remote", "base", "ref"))
-            or admitted["ref"] != f"refs/remotes/{admitted['remote']}/{admitted['base']}"
-            or row["action"].get("target") not in merge_target_names(admitted)):
+    if not isinstance(admitted, dict):
         raise _delivery_refusal("target_identity", "The merge row does not bind its admitted target",
                                 "decide the merge with the prepared unit target as its target", record=record_id)
     target_ref = admitted["ref"]
@@ -472,7 +470,6 @@ def require_governance_current(project: Path, map_state: dict | None) -> None:
         raise refuse("governance_changed", "governance_changed",
                      "the target moved after the recorded delivery; obtain a direct user decision "
                      "for the new snapshot", recorded=delivery["result"][:12], current=current[:12])
-    if current != governance["base"]:
-        raise refuse("governance_changed", "governance_changed",
-                     "the target branch moved since governance was bound", bound=governance["base"][:12],
-                     current=current[:12])
+    raise refuse("governance_changed", "governance_changed",
+                 "the target branch moved since governance was bound", bound=governance["base"][:12],
+                 current=current[:12])

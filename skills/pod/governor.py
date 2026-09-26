@@ -206,7 +206,7 @@ AUTHORIZATION_SCHEMA = "pod-authorization/v1"
 AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
 _GIT_OBJECT_ID = gitio.OBJECT_ID
 def validate_authorization(value: object, *, candidate: str | None = None, tree: str | None = None,
-                           kind: str | None = None) -> dict | None:
+                           kind: str | None = None, target: str | None = None) -> dict | None:
     """Accept only a complete owner authorization for a governed merge, release or deploy.
 
     The owner supplies this record for the governed project's own action. It is never
@@ -214,11 +214,12 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     """
     if value is None:
         return None
-    record = exact(value, AUTHORIZATION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
+    record = exact(value, AUTHORIZATION_FIELDS | {"target"}, AUTHORIZATION_FIELDS, name="authorization")
     if record["schema"] != AUTHORIZATION_SCHEMA:
         raise PodError("invalid_authorization", "Authorization schema is unsupported")
-    for field in ("authorized_by", "reference"):
-        bounded_text(record[field], name=field, limit=512)
+    for field in ("authorized_by", "reference", "target"):
+        if field in record:
+            bounded_text(record[field], name=field, limit=512)
     if (not all(isinstance(record[key], str) and _GIT_OBJECT_ID.fullmatch(record[key])
                 for key in ("candidate", "tree"))
             or len(record["candidate"]) != len(record["tree"])):
@@ -233,6 +234,8 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     if tree is not None and record["tree"] != tree:
         return None
     if kind is not None and kind not in record["scope"]:
+        return None
+    if target is not None and record.get("target") != target:
         return None
     return {**record, "utc": utc}
 
@@ -487,7 +490,7 @@ def _warn(warnings: list[dict], code: str, detail: str) -> None:
 
 
 def _check_authority(action: dict, binding: dict | None, deploys: bool, releases: bool,
-                     reasons: list[dict]) -> None:
+                     reasons: list[dict], merge_into: str | None = None) -> None:
     kind = action["kind"]
     # 1. Authority and project requirements.
     scopes = set()
@@ -505,15 +508,16 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
     for scope in sorted(scopes):
         candidate = binding["commit"] if binding else action["candidate"]
         tree = binding["tree"] if binding else None
+        target = merge_into if scope == "merge" else None
         try:
             authorized = validate_authorization(action.get("authorization"),
-                                                candidate=candidate, tree=tree, kind=scope)
+                                                candidate=candidate, tree=tree, kind=scope, target=target)
         except PodError:
             authorized = None
         if authorized is None:
             _reason(reasons, "authorization", "authorization_missing",
-                    f"{scope} authorization for candidate {candidate}, tree {tree or 'unbound'} is missing; "
-                    f"{NEXT_ACTIONS['authorization_missing']}")
+                    f"{scope} authorization for candidate {candidate}, tree {tree or 'unbound'}"
+                    f"{', target ' + target if target else ''} is missing; {NEXT_ACTIONS['authorization_missing']}")
         else:
             action["authorization"] = authorized
 
@@ -528,23 +532,18 @@ def merge_target(unit: dict | None) -> dict | None:
             "ref": f"refs/remotes/{branch['remote']}/{branch['base']}"}
 
 
-def merge_target_names(target: dict) -> tuple[str, str, str]:
-    """The names a merge action may give its target: the prepared remote's base in any exact spelling."""
-    return (f"{target['remote']}/{target['base']}", target["ref"], target["base"])
+def merge_target_name(unit: dict | None) -> str | None:
+    """The one spelling a merge action and its consent use for the unit's target: <remote>/<base>."""
+    target = merge_target(unit)
+    return f"{target['remote']}/{target['base']}" if target else None
 
 
 def _check_merge_target(action: dict, unit: dict | None, reasons: list[dict]) -> None:
     """A merge names the unit's own target, so its consent and any delivery record bind one branch."""
-    if action["kind"] != "merge":
-        return
-    target = merge_target(unit)
-    if target is None:
-        return
-    accepted = merge_target_names(target)
-    if action["target"] not in accepted:
+    name = merge_target_name(unit)
+    if action["kind"] == "merge" and name is not None and action["target"] != name:
         _reason(reasons, "correctness", "merge_target_mismatch",
-                f"merge target {action['target']} is not the prepared unit target {accepted[0]}; "
-                f"name {accepted[0]} as the merge target")
+                f"merge target {action['target']} is not the prepared unit target; name {name} as the merge target")
 
 
 def _check_binding(action: dict, unit: dict | None, binding: dict | None, checkpoint: dict,
@@ -763,7 +762,8 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
     candidate_id = binding["id"] if names_current else None
     candidate_ids = {action["candidate"]} | ({binding["id"], binding["commit"]} if names_current else set())
 
-    _check_authority(action, binding, deploys, releases, reasons)
+    _check_authority(action, binding, deploys, releases, reasons,
+                     merge_into=merge_target_name(unit) if kind == "merge" else None)
     _check_merge_target(action, unit, reasons)
 
     superseded, current, starting = _check_binding(action, unit, binding, checkpoint, effects,
@@ -904,6 +904,9 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
                    "receipt": {"started_at": moment, "finished_at": None, "observed_elapsed_s": None,
                                "provider": None, "evidence": list(proposal["evidence"]), "detail": None},
                    "classification": None, "classifications": [], "derived_from": None}
+            if proposal["kind"] in PUBLICATION_KINDS and verdict["unit"] and verdict["unit"].get("branch"):
+                # Readback and settlement use the branch this push targeted, even if the unit is re-prepared.
+                row["branch"] = dict(verdict["unit"]["branch"])
             if proposal["kind"] == "merge" and merge_target(verdict["unit"]) is not None:
                 # The admitted target, not the unit's later state, is what a delivery record must match.
                 row["target_binding"] = merge_target(verdict["unit"])
@@ -998,10 +1001,11 @@ def _settle(journal: dict, row: dict, *, outcome: str, provider: dict | None, ev
         row["receipt"]["detail"] = detail
     if outcome == "PASS" and row["action"]["kind"] in PUBLICATION_KINDS:
         unit = journal["units"].get(row["action"]["unit"])
-        if unit and unit.get("branch") and row.get("commit"):
+        branch = row.get("branch") or (unit or {}).get("branch")
+        if unit and branch and row.get("commit"):
             # What the branch carries is what the recorded pushes landed, whichever
             # generation they belonged to.
-            unit["published"][unit["branch"]["remote"] + "/" + unit["branch"]["branch"]] = row["commit"]
+            unit["published"][branch["remote"] + "/" + branch["branch"]] = row["commit"]
         _derive_validation(journal, row, moment)
 
 
