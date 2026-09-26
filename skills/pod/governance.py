@@ -84,7 +84,7 @@ def _delivery_object(project: Path, argv: list[str], *, subcode: str) -> str:
 
 def verify_delivery(project: Path, objective: str, map_state: dict, record_id: str, *, seq: int) -> dict:
     """Bind a Governor merge PASS to one exact target result without moving policy authority."""
-    from .governor import _read_journal, _record_path, validate_authorization
+    from .governor import _read_journal, _record_path, merge_target_names, validate_authorization
     if not isinstance(record_id, str) or not 1 <= len(record_id) <= 128:
         raise _delivery_refusal("record_missing", "A bounded Governor record id is required",
                                 "name the allowed merge PASS record from this objective")
@@ -130,16 +130,19 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
     if candidate_tree != candidate["tree"]:
         raise _delivery_refusal("candidate_mismatch", "The prepared candidate tree differs from Git",
                                 "prepare the candidate from a current Git observation", record=record_id)
-    branch = unit.get("branch")
     governance = map_state["governance"]
-    if not isinstance(branch, dict) or any(not isinstance(branch.get(key), str) for key in ("remote", "base")):
-        raise _delivery_refusal("target_identity", "The delivery unit has no exact remote and base",
-                                "prepare the unit on the bound governance target")
-    target_ref = f"refs/remotes/{branch['remote']}/{branch['base']}"
+    # The target admitted with the merge decision is authoritative; the unit's branch may change later.
+    admitted = row.get("target_binding")
+    if (not isinstance(admitted, dict) or any(not isinstance(admitted.get(key), str) for key in ("remote", "base", "ref"))
+            or admitted["ref"] != f"refs/remotes/{admitted['remote']}/{admitted['base']}"
+            or row["action"].get("target") not in merge_target_names(admitted)):
+        raise _delivery_refusal("target_identity", "The merge row does not bind its admitted target",
+                                "decide the merge with the prepared unit target as its target", record=record_id)
+    target_ref = admitted["ref"]
     if target_ref != governance.get("base_ref"):
         raise _delivery_refusal("target_identity", "The merge target differs from bound governance",
                                 "obtain a direct user decision for the intended target", target=target_ref)
-    configured = _git(project, ["config", "--get", f"remote.{branch['remote']}.url"])
+    configured = _git(project, ["config", "--get", f"remote.{admitted['remote']}.url"])
     current = _resolve_commit(project, target_ref)
     if (configured is None or configured.returncode != 0 or not configured.stdout.strip()
             or current is None):
@@ -458,12 +461,13 @@ def require_governance_current(project: Path, map_state: dict | None) -> None:
                      "the governance base cannot be resolved; new work holds", base_ref=governance["base_ref"])
     if current == governance["base"]:
         return
-    # A verified delivery result is current without adopting its policy; a later owner-approved refresh
-    # moves the bound base itself, so the base check above stays authoritative after one.
+    # A verified delivery result is current without adopting its policy, but only for the exact base and
+    # target it was verified against; a later snapshot decision or retarget ends that exception.
     delivery = map_state.get("delivery")
     if delivery is not None:
         validate_delivery_record(delivery)
-        if current == delivery["result"]:
+        if (current == delivery["result"] and delivery["base"] == governance["base"]
+                and delivery["target_ref"] == governance["base_ref"]):
             return
         raise refuse("governance_changed", "governance_changed",
                      "the target moved after the recorded delivery; obtain a direct user decision "

@@ -100,18 +100,41 @@ def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port) -
             unknown = True
             continue
         admission = matches[0]
+        dispatch = admission["native_binding"]["dispatchId"]
+        resource = None
         try:
             from .operations import _assignment_evidence
-            observed = _assignment_evidence(native_port.show_worker(admission["native_binding"]["dispatchId"]),
-                                            admission)
-            settled = observed["settled"] is True
+            shown = native_port.show_worker(dispatch)
+            settled = _assignment_evidence(shown, admission)["settled"] is True
+            resource = shown["result"].get("terminalResource")
         except (PodError, AttributeError, KeyError, TypeError):
             settled = False
-        facts.append({"handle": handle, "admission": admission["admission_id"],
-                      "state": "retained_reclaimable" if settled else "active_or_unknown"})
-        if not settled:
+        # Settlement of the old Dispatch says nothing about who holds the terminal now: reuse moves it to
+        # another Dispatch, and a user takeover or an external terminal is never reclaimable.
+        resource = resource if isinstance(resource, dict) else {}
+        ownership = {"state": resource.get("ownershipState"), "release": resource.get("releaseState"),
+                     "owner": resource.get("ownerDispatchId")}
+        owned = (resource.get("terminalHandle") == handle and ownership["owner"] == dispatch
+                 and ownership["state"] == "owned" and ownership["release"] != "released")
+        facts.append({"handle": handle, "admission": admission["admission_id"], "ownership": ownership,
+                      "state": ("retained_reclaimable" if settled and owned
+                                else "active_or_unknown" if not settled else "not_owned")})
+        if not (settled and owned):
             unknown = True
     return facts, unknown or worktree.get("isMainWorktree") is True
+
+
+def _target_branches(target_ref: object) -> set[str]:
+    """Local branch refs that are, or share the name of, the bound target; all are protected."""
+    if not isinstance(target_ref, str) or not target_ref:
+        return set()
+    if target_ref.startswith("refs/heads/"):
+        return {target_ref}
+    name = target_ref.removeprefix("refs/remotes/")
+    refs = {"refs/heads/" + name}
+    if "/" in name:
+        refs.add("refs/heads/" + name.split("/", 1)[1])
+    return refs
 
 
 def _archive_verified(project: Path, value: dict) -> bool:
@@ -204,6 +227,10 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         archive_by_ref[(row["ref"], row["tip"])] = _archive_verified(project, row)
     worktrees = _worktrees(project)
     by_path = {row.get("worktree"): row for row in worktrees if isinstance(row.get("worktree"), str)}
+    checkouts: dict[str, list[str]] = {}
+    for row in worktrees:
+        if isinstance(row.get("branch"), str) and isinstance(row.get("worktree"), str):
+            checkouts.setdefault(row["branch"], []).append(row["worktree"])
     main_path = next((row.get("worktree") for row in worktrees if row.get("worktree")), None)
     paths = set()
     expected_branches: dict[str, set[str]] = {}
@@ -221,6 +248,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     governance = checkpoint.get("governance") or {}
     target_ref = governance.get("base_ref")
     target = resolve_commit(project, target_ref) if isinstance(target_ref, str) else None
+    target_branches = _target_branches(target_ref)
     delivered = checkpoint.get("delivery") or {}
     moved = bool(delivered and target != delivered.get("result"))
     default = _git(project, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
@@ -243,21 +271,27 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         branch_ref = row.get("branch") if row else None
         branch = branch_ref.removeprefix("refs/heads/") if isinstance(branch_ref, str) else None
         tip = resolve_commit(project, branch_ref) if isinstance(branch_ref, str) else None
+        shared = sorted(other for other in checkouts.get(branch_ref, []) if other != path_text)
         reasons, classification = [], "integrated"
         if not path.is_absolute() or path.is_symlink() or row is None or not path.is_dir():
             classification, reasons = "protected", ["worktree binding is unavailable or foreign"]
-        elif path_text == main_path or branch in ("main", default_branch):
-            classification, reasons = "protected", ["main checkout or protected branch"]
+        elif path_text == main_path or branch in ("main", default_branch) or branch_ref in target_branches:
+            classification, reasons = "protected", ["main checkout, or the default or target branch"]
         elif expected_branches.get(path_text) and expected_branches[path_text] != {branch}:
             classification, reasons = "protected", ["worktree branch changed from its objective binding"]
+        elif shared:
+            classification, reasons = "protected", ["the branch is also checked out in another worktree"]
         elif moved or target is None or tip is None:
             classification, reasons = "protected", ["target or branch identity is unavailable"]
         else:
             terminals, unknown_terminal = _terminal_facts(path, state["admissions"],
                                                             orca_reader=orca_reader, native_port=port)
             dirty, status_unknown = _dirt(path)
-            if unknown_terminal or status_unknown or stash_unknown:
-                classification, reasons = "protected", ["native terminal, status or stash read is uncertain"]
+            if unknown_terminal:
+                classification, reasons = "protected", ["a terminal here is active, user-owned, external, "
+                                                        "held by another Dispatch or of unknown ownership"]
+            elif status_unknown or stash_unknown:
+                classification, reasons = "protected", ["worktree status or stash read is uncertain"]
             elif dirty or stash_present:
                 classification, reasons = "unique", (["worktree has data: " + ", ".join(dirty[:8])] if dirty else [])
                 if stash_present:
@@ -272,7 +306,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                      or classification == "unique" and archive_verified and not dirty and not stash_present)
         resources.append(_resource("worktree", path_text,
                                    {"path": path_text, "branch": branch_ref, "tip": tip,
-                                    "terminals": terminals}, classification, reasons,
+                                    "terminals": terminals, "shared_with": shared}, classification, reasons,
                                    delete_argv=["orca", "worktree", "rm", "--worktree", "path:" + path_text,
                                                 "--json"] if deletable else None,
                                    archive_argv=archive_argv, archive_verified=archive_verified))
@@ -287,11 +321,14 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         branch = ref.removeprefix("refs/heads/")
         tip = resolve_commit(project, ref)
         associated = [row for row in resources if row["kind"] == "worktree" and row["identity"]["branch"] == ref]
+        checked_out = sorted(checkouts.get(ref, []))
         reasons, classification = [], "integrated"
-        if branch in ("main", default_branch) or ref == target_ref:
+        if branch in ("main", default_branch) or ref == target_ref or ref in target_branches:
             classification, reasons = "protected", ["main, default or target branch"]
         elif not associated:
             classification, reasons = "protected", ["creation by this objective is unproven"]
+        elif any(other not in paths for other in checked_out):
+            classification, reasons = "protected", ["the branch is checked out in a worktree outside this objective"]
         elif any(row["class"] == "protected" for row in associated):
             classification, reasons = "protected", ["associated worktree is protected"]
         elif tip is None or target is None or moved:
@@ -304,7 +341,8 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         removed_with_worktree = bool(associated and any(row["delete_argv"] for row in associated))
         deletable = (classification == "integrated" or classification == "unique" and verified
                      and not associated and not stash_present)
-        resources.append(_resource("local_branch", ref, {"ref": ref, "tip": tip}, classification,
+        resources.append(_resource("local_branch", ref, {"ref": ref, "tip": tip, "checked_out": checked_out},
+                                   classification,
                                    reasons + (["Orca also removes the merged local branch"]
                                               if removed_with_worktree else []),
                                    delete_argv=(["git", "update-ref", "-d", ref, tip]
@@ -321,11 +359,11 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         remote = branch.get("remote")
         if not isinstance(remote, str) or not _BRANCH.fullmatch(remote):
             continue
+        # Only branches this objective's Governor published are its remote resources; a prepared branch
+        # name alone proves nothing about who created the remote branch.
         for key in unit.get("published", {}):
             if isinstance(key, str) and key.startswith(remote + "/"):
                 remote_names.add((remote, key[len(remote) + 1:]))
-        if isinstance(branch.get("branch"), str):
-            remote_names.add((remote, branch["branch"]))
     for remote, branch in sorted(remote_names):
         ref = "refs/heads/" + branch
         output = _git(project, ["ls-remote", remote, ref]) if _BRANCH.fullmatch(branch) else None

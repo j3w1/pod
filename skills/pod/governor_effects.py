@@ -255,7 +255,9 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
                     project, objective, owner=owner, port=remote, now=moment,
                     native_projection=native_projection,
                     action={"kind": "cancel_validation", "unit": unit["name"], "candidate": binding["id"],
-                            "target": stale, "reason": "superseded by a newer candidate generation"})
+                            "target": stale, "reason": "superseded by a newer candidate generation",
+                            # The same publish consent for this candidate covers cancelling what it supersedes.
+                            **({"authorization": action["authorization"]} if "authorization" in action else {})})
                 result["cancellations"].append({**canceled, "target": stale})
             except PodError as exc:
                 # The cancel's own row is settled by its execute; the primary action proceeds.

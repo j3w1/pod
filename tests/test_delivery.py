@@ -46,11 +46,15 @@ class DeliveryAuthorizationTests(unittest.TestCase):
                 _, reasons = self.check("push", consent)
                 self.assertEqual(reasons[0]["code"], "authorization_missing")
 
-    def test_local_only_has_no_remote_authority_and_ci_is_unchanged(self):
-        for kind in ("push", "pr_update", "merge", "release", "deploy"):
+    def test_local_only_holds_every_remote_kind(self):
+        for kind in ("push", "pr_update", "workflow_dispatch", "validation_rerun", "remote_diagnostic",
+                     "cancel_validation", "merge", "release", "deploy"):
             with self.subTest(kind=kind):
                 self.assertIn("authorization_missing", [row["code"] for row in self.check(kind)[1]])
-        self.assertEqual(self.check("workflow_dispatch")[1], [])
+        # The remote delivery decision's publish consent covers CI, reruns, diagnostics and cancellation.
+        for kind in ("workflow_dispatch", "validation_rerun", "remote_diagnostic", "cancel_validation"):
+            with self.subTest(consented=kind):
+                self.assertEqual(self.check(kind, authorization(scope=("publish",)))[1], [])
 
     def test_authorization_and_evidence_timestamps_share_utc_normalization(self):
         normalized = validate_authorization(
@@ -101,9 +105,10 @@ class VerifiedDeliveryTests(KernelCase):
                 "preflight": {}, "published": {}, "tasks": [], "candidate": binding,
                 "branch": {"remote": "origin", "base": "target", "branch": "delivery"}}
         row = {"record_id": "merge-1", "logical_key": "merge-1", "attempt": 1,
-               "action": {"kind": "merge", "candidate": "candidate-1", "target": "target",
+               "action": {"kind": "merge", "candidate": "candidate-1", "target": "origin/target",
                           "unit": "delivery", "authorization": authorization(
                               candidate=candidate, tree=tree, scope=("merge",))},
+               "target_binding": {"remote": "origin", "base": "target", "ref": "refs/remotes/origin/target"},
                "candidate_id": "candidate-1", "commit": candidate, "decision": "ALLOW", "outcome": "PASS",
                "receipt": {"provider": {"merge_commit": result, "method": method}},
                "warnings": [], "reasons": [], "classifications": []}
@@ -149,19 +154,27 @@ class VerifiedDeliveryTests(KernelCase):
         self.prepare_result()
         journal_path = _record_path(self.project, "objective")
         from pod.governor import _read_journal
-        journal = _read_journal(journal_path)
-        journal["units"]["delivery"]["branch"]["base"] = "other"
+        admitted = _read_journal(journal_path)
         git(self.project, "update-ref", "refs/remotes/origin/other",
             git(self.project, "rev-parse", "refs/remotes/origin/target"))
-        _write_journal(journal_path, journal)
+        other = {"remote": "origin", "base": "other", "ref": "refs/remotes/origin/other"}
         before = read(self.project, "objective")
-        with self.assertRaises(PodError) as caught:
-            self.write(self.stored(), delivery={"record": "merge-1"})
-        self.assertEqual(caught.exception.detail["detail"], "target_identity")
-        self.assertEqual(read(self.project, "objective"), before)
-        journal["units"]["delivery"]["branch"]["base"] = "target"
-        _write_journal(journal_path, journal)
-        self.write(self.stored(), delivery={"record": "merge-1"})
+        # Another bound target with an equal SHA, an action that names another target than it admitted,
+        # and a row without an admitted target all refuse; a later unit branch edit is irrelevant.
+        for target, binding in (("origin/other", other), ("origin/other", admitted["actions"][0]["target_binding"]),
+                                ("origin/target", None)):
+            journal = _read_journal(journal_path)
+            journal["actions"][0]["action"]["target"] = target
+            journal["actions"][0]["target_binding"] = binding
+            _write_journal(journal_path, journal)
+            with self.subTest(target=target, binding=binding), self.assertRaises(PodError) as caught:
+                self.write(self.stored(), delivery={"record": "merge-1"})
+            self.assertEqual(caught.exception.detail["detail"], "target_identity")
+            self.assertEqual(read(self.project, "objective"), before)
+        admitted["units"]["delivery"]["branch"]["base"] = "other"
+        _write_journal(journal_path, admitted)
+        self.assertEqual(self.write(self.stored(), delivery={"record": "merge-1"})["checkpoint"]["delivery"]
+                         ["target_ref"], "refs/remotes/origin/target")
         with self.assertRaises(PodError) as second:
             self.write(self.stored(), delivery={"record": "another-record"})
         self.assertEqual(second.exception.code, "delivery_recorded")
@@ -263,17 +276,97 @@ class VerifiedDeliveryTests(KernelCase):
             self.write(self.stored(), delivery={"record": "merge-1"})
         self.assertEqual(mismatch.exception.detail["detail"], "tree_mismatch")
 
-    def test_moved_target_can_store_verified_provider_result_but_stays_stale(self):
-        self.prepare_result()
+    def move_target(self) -> str:
         (self.project / "README.md").write_text("later target change\n")
         git(self.project, "add", "README.md")
         git(self.project, "commit", "-qm", "later target")
-        git(self.project, "update-ref", "refs/remotes/origin/target", git(self.project, "rev-parse", "HEAD"))
-        delivered = self.write(self.stored(), delivery={"record": "merge-1"})["checkpoint"]
-        self.assertIn("delivery", delivered)
+        moved = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/target", moved)
+        return moved
+
+    def test_moved_target_refuses_recording_a_stale_delivery(self):
+        self.prepare_result()
+        self.move_target()
+        before = read(self.project, "objective")
         with self.assertRaises(PodError) as stale:
-            require_governance_current(self.project, delivered)
+            self.write(self.stored(), delivery={"record": "merge-1"})
         self.assertEqual(stale.exception.code, "governance_changed")
+        self.assertEqual(read(self.project, "objective"), before)
+
+    def test_replaying_the_delivery_never_skips_currency_or_closes(self):
+        self.prepare_result()
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        self.move_target()
+        before = read(self.project, "objective")
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        for obligations, fields in ((self.stored(), {}), (rows, {"close": True})):
+            with self.subTest(close=bool(fields)), self.assertRaises(PodError) as caught:
+                self.write(obligations, delivery={"record": "merge-1"}, **fields)
+            self.assertEqual(caught.exception.code, "governance_changed")
+            self.assertEqual(read(self.project, "objective"), before)
+
+    def test_delivery_and_refresh_are_separate_writes(self):
+        self.prepare_result()
+        with self.assertRaises(PodError) as caught:
+            self.write(self.stored(), delivery={"record": "merge-1"}, governance_refresh=True,
+                       revision_authority={"provenance": "user_direct", "instruction": "Adopt the target"},
+                       governance={"base_ref": "refs/remotes/origin/target",
+                                   "base": git(self.project, "rev-parse", "refs/remotes/origin/target")})
+        self.assertEqual(caught.exception.detail["detail"], "delivery_with_refresh")
+
+    def test_a_later_snapshot_decision_ends_the_old_delivery_exception(self):
+        _, _, result = self.prepare_result()
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        moved = self.move_target()
+        self.write(self.stored(), governance_refresh=True,
+                   revision_authority={"provenance": "user_direct", "instruction": f"Adopt target at {moved}"},
+                   governance={"base_ref": "refs/remotes/origin/target", "base": moved})
+        git(self.project, "update-ref", "refs/remotes/origin/target", result)
+        with self.assertRaises(PodError) as caught:
+            require_governance_current(self.project, read(self.project, "objective")["checkpoint"])
+        self.assertEqual(caught.exception.code, "governance_changed")
+        with self.assertRaises(PodError):
+            self.write(self.stored())
+
+
+class AdmittedMergeTargetTests(KernelCase):
+    def test_merge_decision_binds_the_prepared_target_that_delivery_checks(self):
+        from pod.governor import decide, observe_candidate, prepare_candidate, record_outcome
+        from tests.kernel_support import action
+        self.intake()
+        git(self.project, "remote", "add", "origin", str(self.project))
+        git(self.project, "checkout", "-qb", "candidate")
+        (self.project / "README.md").write_text("candidate\n")
+        git(self.project, "add", "README.md")
+        git(self.project, "commit", "-qm", "candidate")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        self.write(self.stored())
+        observed = observe_candidate(self.project, base_ref="refs/remotes/origin/target")
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=observed,
+                          branch={"remote": "origin", "base": "target", "branch": "candidate"})
+        consent = authorization(candidate=observed["commit"], tree=observed["tree"], scope=("merge",))
+
+        def merge(target):
+            return decide(self.project, "objective", owner="owner",
+                          action=action(kind="merge", candidate=observed["commit"], target=target,
+                                        unit="delivery", effects=[], authorization=consent),
+                          native_projection={"outstanding": []})
+
+        held = merge("other-target")
+        self.assertEqual(held["decision"], "DEFER")
+        self.assertIn("merge_target_mismatch", [row["code"] for row in held["reasons"]])
+        row = merge("origin/target")
+        self.assertEqual(row["decision"], "ALLOW")
+        git(self.project, "checkout", "-q", "target")
+        git(self.project, "merge", "--no-ff", "-qm", "merge", "candidate")
+        result = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/target", result)
+        record_outcome(self.project, "objective", owner="owner", record_id=row["record_id"], outcome="PASS",
+                       provider={"merge_commit": result, "method": "merge"})
+        delivered = self.write(self.stored(), delivery={"record": row["record_id"]})["checkpoint"]["delivery"]
+        self.assertEqual((delivered["target_ref"], delivered["result"]), ("refs/remotes/origin/target", result))
 
 
 class ReviewOverlapTests(KernelCase):
@@ -298,6 +391,13 @@ class ReviewOverlapTests(KernelCase):
                          ["integration_unsettled"])
         self.assertEqual(self.verdict(purpose="validation", role="implement", candidate=self.base),
                          ["integration_unsettled"])
+
+    def test_a_review_admitted_on_a_moving_ref_never_counts_as_this_candidate(self):
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.base)
+        for alias in ("HEAD", "target", self.base[:12]):
+            with self.subTest(alias=alias):
+                self.assertEqual(self.verdict(purpose="validation", role="review", candidate=alias),
+                                 ["integration_unsettled"])
 
 
 class LocalOnlyReportTests(KernelCase):

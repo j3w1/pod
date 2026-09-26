@@ -52,11 +52,14 @@ class RepeatedPullRequestCycle(unittest.TestCase):
                                          observation=observation(commit=str(index) * 40, tree=chr(ord("a") + index) * 40),
                                          branch=BRANCH, now=NOW)["candidate"]
 
+            def consent(candidate):
+                # The owner's remote delivery decision for this exact candidate covers its CI and probes.
+                return authorization(candidate=candidate["commit"], tree=candidate["tree"], scope=("publish",))
+
             def push(candidate):
                 return execute(project, "objective", owner="owner", port=port, now=NOW,
                                action=action(kind="pr_update", unit="release-boundary", candidate=candidate["id"],
-                                             authorization=authorization(candidate=candidate["commit"],
-                                                                         tree=candidate["tree"], scope=("publish",))))
+                                             authorization=consent(candidate)))
 
             def ci_row(candidate):
                 rows = [row for row in status(project, "objective")["units"]["release-boundary"]["active_validation"]
@@ -88,7 +91,8 @@ class RepeatedPullRequestCycle(unittest.TestCase):
             run = ci_row(candidate)
             self.assertEqual(run["provider"]["run_id"], "100")
             attached = execute(project, "objective", owner="owner", port=port, now=NOW,
-                               action=dispatch(unit="release-boundary", candidate=candidate["id"]))
+                               action=dispatch(unit="release-boundary", candidate=candidate["id"],
+                                               authorization=consent(candidate)))
             self.assertEqual((attached["decision"], attached["reuse"]["kind"], attached["record_id"]),
                              ("REUSE", "attach", run["record_id"]))
 
@@ -98,19 +102,23 @@ class RepeatedPullRequestCycle(unittest.TestCase):
             self.assertEqual(reconcile(project, "objective", owner="owner", record_id=run["record_id"],
                                        port=port, now=NOW)["status"], "FAILED")
             held = decide(project, "objective", owner="owner", now=NOW,
-                          action=dispatch(unit="release-boundary", candidate=candidate["id"]))
+                          action=dispatch(unit="release-boundary", candidate=candidate["id"],
+                                          authorization=consent(candidate)))
             self.assertEqual([reason["code"] for reason in held["reasons"]], ["failure_unclassified"])
             classify_failure(project, "objective", owner="owner", record_id=run["record_id"], now=NOW,
                              classification={"class": "remote_only",
                                              "reason": "the workflow actor cannot read the ruleset field locally"})
             held = decide(project, "objective", owner="owner", now=NOW,
-                          action=dispatch(unit="release-boundary", candidate=candidate["id"]))
+                          action=dispatch(unit="release-boundary", candidate=candidate["id"],
+                                          authorization=consent(candidate)))
             self.assertEqual([reason["code"] for reason in held["reasons"]], ["remote_only_needs_diagnostic"])
             probe = execute(project, "objective", owner="owner", port=port, now=NOW,
-                            action=diagnostic(unit="release-boundary", candidate=candidate["id"]))
+                            action=diagnostic(unit="release-boundary", candidate=candidate["id"],
+                                              authorization=consent(candidate)))
             self.assertEqual((probe["decision"], probe["receipt"]["provider"]["run_id"]), ("ALLOW", "101"))
             self.assertEqual(execute(project, "objective", owner="owner", port=port, now=NOW,
-                                     action=diagnostic(unit="release-boundary", candidate=candidate["id"]))["decision"],
+                                     action=diagnostic(unit="release-boundary", candidate=candidate["id"],
+                                                       authorization=consent(candidate)))["decision"],
                              "REUSE")
 
             # The answer produces one more correction, which is a code defect the second
@@ -130,7 +138,8 @@ class RepeatedPullRequestCycle(unittest.TestCase):
             final = ci_row(candidate)
             self.assertEqual(final["provider"]["run_id"], "102")
             self.assertEqual(execute(project, "objective", owner="owner", port=port, now=NOW,
-                                     action=dispatch(unit="release-boundary", candidate=candidate["id"]))["decision"],
+                                     action=dispatch(unit="release-boundary", candidate=candidate["id"],
+                                                     authorization=consent(candidate)))["decision"],
                              "REUSE")
 
             projection = status(project, "objective")

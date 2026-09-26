@@ -26,7 +26,8 @@ class CleanupPlanTests(KernelCase):
     def orca_read(self, argv):
         self.orca_reads.append(list(argv))
         if argv[:2] == ["worktree", "show"]:
-            return {"result": {"worktree": {"path": str(self.child), "isMainWorktree": False}}}
+            path = argv[argv.index("--worktree") + 1].removeprefix("path:")
+            return {"result": {"worktree": {"path": path, "isMainWorktree": False}}}
         if argv[:2] == ["terminal", "list"]:
             return {"result": {"terminals": list(self.terminals), "truncated": False}}
         raise AssertionError(argv)
@@ -157,6 +158,81 @@ class CleanupPlanTests(KernelCase):
                     if row["id"] == "worktree:" + str(self.project))
         self.assertEqual(main["class"], "protected")
         self.assertIsNone(main["delete_argv"])
+
+    def test_a_worktree_on_the_bound_target_branch_is_protected(self):
+        git(self.project, "branch", "maintained")
+        maintained = self.root / "maintained-worktree"
+        git(self.project, "worktree", "add", "-q", str(maintained), "maintained")
+        context = repository_context(maintained)
+        self.write([self.criterion()], objective="maint-objective",
+                   governance={"base_ref": "refs/heads/maintained"},
+                   revision_authority={"provenance": "user_direct", "instruction": "Deliver onto maintained"},
+                   worktree={"repository": context["repository"], "repo_key": context["repo_key"],
+                             "path": context["worktree"], "branch": context["branch"]})
+        result = plan(self.project, "maint-objective", orca_reader=self.orca_read, native_port=self.port)
+        for kind in ("worktree", "local_branch"):
+            with self.subTest(kind=kind):
+                row = self.resource(result, kind)
+                self.assertEqual(row["class"], "protected")
+                self.assertIsNone(row["delete_argv"])
+
+    def test_a_branch_shared_with_another_worktree_is_protected_and_changes_expect(self):
+        first = self.observed()
+        git(self.project, "worktree", "add", "-q", "--force", str(self.root / "foreign-worktree"), "objective")
+        with self.assertRaises(PodError) as changed:
+            self.observed(expect=first["expect"])
+        self.assertEqual(changed.exception.code, "cleanup_changed")
+        again = self.observed()
+        worktree, branch = self.resource(again, "worktree"), self.resource(again, "local_branch")
+        self.assertEqual((worktree["class"], worktree["delete_argv"]), ("protected", None))
+        self.assertEqual(worktree["identity"]["shared_with"], [str(self.root / "foreign-worktree")])
+        self.assertEqual((branch["class"], branch["delete_argv"]), ("protected", None))
+
+    def test_a_prepared_but_unpublished_remote_branch_is_not_offered(self):
+        bare = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+        git(self.project, "remote", "add", "origin", str(bare))
+        git(self.project, "push", "-q", "origin", "refs/heads/objective:refs/heads/objective")
+        journal = _empty_journal()
+        journal["units"]["delivery"] = {"name": "delivery", "generation": 1, "history": [],
+                                         "preflight": {}, "published": {}, "tasks": [], "candidate": None,
+                                         "branch": {"remote": "origin", "base": "target", "branch": "objective"}}
+        _write_journal(_record_path(self.project, "objective"), journal)
+        self.assertEqual([row for row in self.observed()["resources"] if row["kind"] == "remote_branch"], [])
+
+    def test_terminal_ownership_not_old_settlement_decides_reclaimability(self):
+        from pod.cleanup import _terminal_facts
+        binding = {"runId": "run", "taskId": "task", "dispatchId": "dispatch-1", "workerId": "worker-1",
+                   "worktreeId": "wt", "terminalHandle": "term-1"}
+        admission = {"admission_id": "adm-1", "runtime": "runtime", "native_binding": binding}
+        self.terminals = [{"handle": "term-1", "worktreePath": str(self.child)}]
+
+        class Shown:
+            resource = None
+
+            def show_worker(self, dispatch):
+                return {"runtime": "runtime", "result": {
+                    "dispatch": {"id": dispatch, "runId": "run", "taskId": "task", "status": "completed"},
+                    "projection": {"id": "worker-1", "dispatchId": dispatch, "runId": "run", "taskId": "task",
+                                   "outcome": "succeeded", "stage": {"dispatch": "completed"}},
+                    "worker": {"dispatchId": dispatch, "worktreeId": "wt", "agentTerminalHandle": "term-1"},
+                    "terminalResource": self.resource}}
+
+        port = Shown()
+        owned = {"terminalHandle": "term-1", "ownerDispatchId": "dispatch-1", "ownershipState": "owned",
+                 "releaseState": "not_requested"}
+        cases = ((owned, "retained_reclaimable", False),
+                 ({**owned, "ownerDispatchId": "foreign-dispatch"}, "not_owned", True),
+                 ({**owned, "ownershipState": "user_owned", "releaseState": "retained"}, "not_owned", True),
+                 ({**owned, "ownershipState": "external"}, "not_owned", True),
+                 ({**owned, "releaseState": "released"}, "not_owned", True),
+                 (None, "not_owned", True))
+        for resource, state, protected in cases:
+            port.resource = resource
+            with self.subTest(resource=resource):
+                facts, unknown = _terminal_facts(self.child, {"adm-1": admission}, orca_reader=self.orca_read,
+                                                 native_port=port)
+                self.assertEqual((facts[0]["state"], unknown), (state, protected))
 
 
 if __name__ == "__main__":

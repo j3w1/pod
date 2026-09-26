@@ -65,6 +65,17 @@ class BookkeepingTests(KernelCase):
         self.assertEqual(evidence["environment"], first["verification"]["environment"])
         self.assertIn("definition", evidence)
 
+    def test_restating_identical_short_evidence_is_idempotent(self):
+        first = self.intake()["checkpoint"]
+        short = {"check": "unit", "command": "python -m unittest", "result": "passed", "reference": "unit-log"}
+        written = self.patch_map(first["seq"] + 1, {"O1": {"state": "satisfied", "evidence": [short]}})
+        recorded = written["checkpoint"]["obligations"][0]["evidence"][0]
+        again = self.patch_map(written["checkpoint"]["seq"] + 1, {"O1": {"evidence": [short]}})
+        self.assertEqual(again["checkpoint"]["obligations"][0]["evidence"][0], recorded)
+        with self.assertRaises(PodError) as changed:
+            self.patch_map(again["checkpoint"]["seq"] + 1, {"O1": {"evidence": [{**short, "result": "failed"}]}})
+        self.assertEqual(changed.exception.detail["detail"], "receipt_conflict")
+
     def test_served_settled_review_can_use_its_attempt_automatically(self):
         self.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
                      "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src correct?",

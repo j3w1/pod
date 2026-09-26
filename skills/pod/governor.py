@@ -60,6 +60,7 @@ _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
 _GIT_ID = gitio.OBJECT_ID
 NEXT_ACTIONS = {
+    "merge_target_mismatch": "name the prepared unit target (<remote>/<base>) as the merge target",
     "authorization_missing": "obtain the owner's delivery decision (merge remotely / keep local / defer) for this exact candidate",
     "unit_unknown": "prepare the delivery unit's candidate with the governor-prepare helper",
     "unit_unbound": "prepare the delivery unit's candidate and branch with the governor-prepare helper",
@@ -375,11 +376,12 @@ def _active(native_projection: dict | None, tasks: list[str] | None = None, *,
         task = row.get("task")
         if tasks is not None and task is not None and task not in tasks:
             continue
-        if (project is not None and ignore_review_commit is not None and row.get("role") == "review"
-                and isinstance(row.get("candidate"), str)):
-            from .governance import _resolve_commit
-            if _resolve_commit(project, row["candidate"]) == ignore_review_commit:
-                continue
+        # Only a review admitted on this exact commit id overlaps validation. A ref name is not resolved
+        # here: it may have moved since admission, and an older review must not count for a newer candidate.
+        if (ignore_review_commit is not None and row.get("role") == "review"
+                and isinstance(row.get("candidate"), str) and gitio.OBJECT_ID.fullmatch(row["candidate"])
+                and row["candidate"] == ignore_review_commit):
+            continue
         active.append(str(index) + ":" + str(task or "unbound"))
     return active
 
@@ -491,7 +493,10 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
     scopes = set()
     if kind in AUTHORIZED_KINDS:
         scopes.add(kind)
-    if kind in PUBLICATION_KINDS:
+    else:
+        # Every other governed kind is a remote effect for this candidate (push, PR, CI dispatch or
+        # rerun, remote diagnostic, cancellation). Without the owner's publish consent none runs, which
+        # is what makes a local-only delivery hold every remote kind.
         scopes.add("publish")
     if deploys:
         scopes.add("deploy")
@@ -512,6 +517,34 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
         else:
             action["authorization"] = authorized
 
+
+
+def merge_target(unit: dict | None) -> dict | None:
+    """The canonical branch a merge of this unit lands on, from its prepared remote and base."""
+    branch = unit.get("branch") if isinstance(unit, dict) else None
+    if not isinstance(branch, dict) or not all(isinstance(branch.get(key), str) for key in ("remote", "base")):
+        return None
+    return {"remote": branch["remote"], "base": branch["base"],
+            "ref": f"refs/remotes/{branch['remote']}/{branch['base']}"}
+
+
+def merge_target_names(target: dict) -> tuple[str, str, str]:
+    """The names a merge action may give its target: the prepared remote's base in any exact spelling."""
+    return (f"{target['remote']}/{target['base']}", target["ref"], target["base"])
+
+
+def _check_merge_target(action: dict, unit: dict | None, reasons: list[dict]) -> None:
+    """A merge names the unit's own target, so its consent and any delivery record bind one branch."""
+    if action["kind"] != "merge":
+        return
+    target = merge_target(unit)
+    if target is None:
+        return
+    accepted = merge_target_names(target)
+    if action["target"] not in accepted:
+        _reason(reasons, "correctness", "merge_target_mismatch",
+                f"merge target {action['target']} is not the prepared unit target {accepted[0]}; "
+                f"name {accepted[0]} as the merge target")
 
 
 def _check_binding(action: dict, unit: dict | None, binding: dict | None, checkpoint: dict,
@@ -731,6 +764,7 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
     candidate_ids = {action["candidate"]} | ({binding["id"], binding["commit"]} if names_current else set())
 
     _check_authority(action, binding, deploys, releases, reasons)
+    _check_merge_target(action, unit, reasons)
 
     superseded, current, starting = _check_binding(action, unit, binding, checkpoint, effects,
                                                     validates, purpose, kind, journal, candidate_id,
@@ -870,6 +904,9 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
                    "receipt": {"started_at": moment, "finished_at": None, "observed_elapsed_s": None,
                                "provider": None, "evidence": list(proposal["evidence"]), "detail": None},
                    "classification": None, "classifications": [], "derived_from": None}
+            if proposal["kind"] == "merge" and merge_target(verdict["unit"]) is not None:
+                # The admitted target, not the unit's later state, is what a delivery record must match.
+                row["target_binding"] = merge_target(verdict["unit"])
             journal["actions"].append(row)
         elif decision == "REUSE":
             # Reuse is a decision about an existing row, not a new action; it is counted and

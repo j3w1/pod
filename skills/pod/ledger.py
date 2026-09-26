@@ -689,11 +689,18 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             if prior_map is None:
                 raise PodError("delivery_unverified", "A delivery needs a bound obligation map",
                                {"detail": "map_missing", "next_action": "checkpoint the objective map first"})
+            if refresh:
+                raise PodError("delivery_unverified", "Record delivery and refresh governance in separate writes",
+                               {"detail": "delivery_with_refresh",
+                                "next_action": "record the delivery first, or refresh governance without it"})
             record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
             verified_delivery = verify_delivery(project, objective, prior_map, record_id,
                                                 seq=prior_map["seq"] + 1)
-        if prior_map is not None and not refresh and verified_delivery is None:
-            require_governance_current(project, prior_map)
+        if prior_map is not None and not refresh:
+            # A delivery never skips currency: a first record or a replay is current only when the target
+            # is still exactly the bound base or that verified result, so nothing past it is trusted.
+            current_map = prior_map if verified_delivery is None else {**prior_map, "delivery": verified_delivery}
+            require_governance_current(project, current_map)
         if prior_map is None:
             declared = proposed.get("governance")
             base_ref = declared.get("base_ref") if isinstance(declared, dict) else None

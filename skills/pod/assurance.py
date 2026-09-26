@@ -113,6 +113,11 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
                     "binding": deepcopy(admission.get("binding")),
                     "definition": (admission.get("binding") or {}).get("definitions", {}).get(ob["id"])}
         else:
+            earlier = receipts.get(raw.get("reference")) if isinstance(raw, dict) else None
+            if (earlier is not None and "schema" not in raw and "timestamp" not in raw
+                    and isinstance(earlier["evidence"].get("timestamp"), str)):
+                # A restated short receipt keeps the time it was first observed, so replay is idempotent.
+                raw = {**raw, "timestamp": earlier["evidence"]["timestamp"]}
             base = _evidence_record(ob, raw, ctx)
         key = base[identity]
         previous = receipts.get(key)

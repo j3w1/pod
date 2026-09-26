@@ -190,7 +190,7 @@ Optimize time to a verified result, not utilization or worker count. Re-evaluate
 - <a id="a163"></a>**A163** — Trivial direct work completes without a map and the kernel stays inert. The first delegation without a map is refused `unbound_assignment`.
 - <a id="a173"></a>**A173** — `internal map` returns restatable rows and objective evidence; an `update` patch with the next seq validates as a full map, while stale seq refuses with current seq and a re-read action.
 - <a id="a174"></a>**A174** — A short non-assurance receipt expands with current bindings and timestamp; a settled served assurance can record its attempt automatically. A changed state drops the prior state record, and specific refusals name valid restatements or missing evidence.
-- <a id="a176"></a>**A176** — For a frozen candidate, local gates and read-only review proceed concurrently, Governor validation admits alongside that same-candidate review, and merge/release waits until both results are valid.
+- <a id="a176"></a>**A176** — For a frozen candidate, local gates and read-only review proceed concurrently, Governor validation admits alongside a review admitted on that exact commit id (never a ref that resolves to it later), and merge/release waits until both results are valid.
 - <a id="a177"></a>**A177** — A free reservation with no ready distinct time-saving assignment leaves the coordinator waiting; a later transition triggers reassessment. A ready independent assignment can run even when the plan is lean, subject to ownership and authority.
 
 

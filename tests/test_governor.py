@@ -80,7 +80,9 @@ class GovernorCase(unittest.TestCase):
                       action=self.with_publish_authorization(request), now=NOW, **extra)
 
     def with_publish_authorization(self, request):
-        if request["kind"] not in ("push", "pr_update") or "authorization" in request:
+        # Every governed remote kind except merge, release and deploy needs the owner's publish consent;
+        # these fixtures model a remote delivery decision already taken for the prepared candidate.
+        if request["kind"] in ("merge", "release", "deploy") or "authorization" in request:
             return request
         from pod.governor import _read_journal, _record_path
         unit = _read_journal(_record_path(self.project, "objective"))["units"].get(request["unit"])
@@ -819,7 +821,7 @@ class ExecutorTests(GovernorCase):
         pushed = self.execute(action(candidate=binding["id"]), port)
         running = self.execute(dispatch(candidate=binding["id"], target=RELEASE), port)
         deploying = self.decide(dispatch(candidate=binding["id"], target="deploy.yml", effects=["deploy:preview"],
-                                         authorization=authorization(scope=("deploy",))))
+                                         authorization=authorization(scope=("publish", "deploy"))))
         self.assertEqual(deploying["decision"], "ALLOW")
         second = prepare_candidate(self.project, "objective", owner="owner", unit="release",
                                    observation=observation(commit=COMMIT2, tree=TREE2), now=NOW)
