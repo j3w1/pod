@@ -75,6 +75,8 @@ def clip(value: object, columns: int, *, ellipsis: bool = False, ascii_only: boo
     if display_width(source) <= columns:
         return source
     mark = ("..." if ascii_only else "…") if ellipsis else ""
+    if display_width(mark) >= columns:
+        mark = ""
     allowance = max(0, columns - display_width(mark))
     out = ""
     for character in source:

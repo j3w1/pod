@@ -21,7 +21,7 @@ def git(root: Path, *args: str, input_bytes: bytes | None = None) -> str:
     return result.stdout.decode().strip()
 
 
-def commands(interpreter: str, empty_tree: str) -> dict[str, list[str]]:
+def commands(interpreter: str, empty_tree: str, root: Path) -> dict[str, list[str]]:
     return {
         "unit": [interpreter, "-m", "unittest", "discover", "-s", "tests", "-v"],
         "incidents": [interpreter, "-m", "unittest", "discover", "-s", "tests/incidents",
@@ -36,7 +36,8 @@ def commands(interpreter: str, empty_tree: str) -> dict[str, list[str]]:
         "catalog": [interpreter, "-m", "pod.catalog", "--check"],
         "source": [interpreter, "tools/source_audit.py", "."],
         "traces": [interpreter, "tools/trace_check.py",
-                   *map(str, sorted(Path("tests/fixtures/traces").glob("*.json")))],
+                   *(str(path.relative_to(root))
+                     for path in sorted((root / "tests/fixtures/traces").glob("*.json")))],
     }
 
 
@@ -59,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     empty_tree = git(root, "hash-object", "-t", "tree", "--stdin", input_bytes=b"")
-    selected = commands(sys.executable, empty_tree)
+    selected = commands(sys.executable, empty_tree, root)
     if args.gate:
         selected = {name: command for name, command in selected.items()
                     if name in args.gate}

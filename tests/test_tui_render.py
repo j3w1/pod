@@ -65,12 +65,15 @@ class TuiRenderTests(unittest.TestCase):
         """Strict frames prove the layout for every width and height, including the split threshold."""
         views = [self.state, replace(self.state, expanded=True), replace(self.state, help_open=True),
                  replace(self.state, query='zzz'), with_notice(self.state, 'Not saved — disk full; file unchanged')]
+        ascii_caps = capabilities({'LANG': 'C', 'TERM': 'xterm-256color'}, has_colors=True)
         for cols in range(40, 201, 3):
             for rows in (12, 20, 24, 30, 36, 45):
                 for view in views:
-                    with self.subTest(cols=cols, rows=rows, view=view.expanded or view.help_open or view.query):
-                        picture = self.picture(view, (cols, rows))
-                        self.assertEqual(len(picture.lines), rows)
+                    for caps in (self.caps, ascii_caps):
+                        with self.subTest(cols=cols, rows=rows, ascii=caps.ascii_only,
+                                          view=view.expanded or view.help_open or view.query):
+                            picture = self.picture(view, (cols, rows), caps)
+                            self.assertEqual(len(picture.lines), rows)
         for cols in (119, 120, 121, SPLIT_COLUMNS - 1, SPLIT_COLUMNS):
             self.picture(size=(cols, 36))
 
@@ -142,11 +145,12 @@ class TuiRenderTests(unittest.TestCase):
             for light in (True, False):
                 pairs.clear()
                 tui._styles(Capabilities(ascii_only=False, color=True, light_background=light))
-                faint = {tui.curses.COLOR_YELLOW, tui.curses.COLOR_GREEN, tui.curses.COLOR_CYAN,
-                         tui.curses.COLOR_WHITE} if light else {tui.curses.COLOR_BLACK}
                 with self.subTest(light=light):
-                    self.assertTrue(pairs)
-                    self.assertFalse(faint & set(pairs.values()))
+                    if light:
+                        # The terminal defines these hues; on light themes only the body colour is safe.
+                        self.assertEqual(set(pairs.values()), {tui.curses.COLOR_BLACK, tui.curses.COLOR_RED})
+                    else:
+                        self.assertNotIn(tui.curses.COLOR_BLACK, set(pairs.values()))
 
     def test_all_six_rows_and_layouts(self):
         for size in ((160, 45), (140, 40), (120, 36), (100, 30), (80, 24), (60, 20), (40, 12)):

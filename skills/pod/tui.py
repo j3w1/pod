@@ -133,15 +133,15 @@ def _styles(caps: Capabilities) -> dict[str, int]:
                 focus_bg = 254 if caps.light_background else 236
             else:
                 base = curses.COLOR_BLACK if caps.light_background else curses.COLOR_WHITE
-                accent = curses.COLOR_BLUE if caps.light_background else curses.COLOR_CYAN
                 fg = {role: base for role in roles}
-                for role in ("heading", "label", "key"):
-                    fg[role] = accent
-                # Yellow, green and cyan are unreadable on a light background (about 1.2-2.6:1); magenta and
-                # blue keep essential metrics, caveats and badges above 4:1 there.
-                for role in ("metric", "advisory", "badge_preferred"):
-                    fg[role] = curses.COLOR_MAGENTA if caps.light_background else curses.COLOR_YELLOW
-                fg["badge_available"] = curses.COLOR_BLUE if caps.light_background else curses.COLOR_GREEN
+                # These hues are the terminal's own; many light palettes make every one of them faint, so a
+                # light background keeps the dark body colour and bold emphasis.
+                if not caps.light_background:
+                    for role in ("heading", "label", "key"):
+                        fg[role] = curses.COLOR_CYAN
+                    for role in ("metric", "advisory", "badge_preferred"):
+                        fg[role] = curses.COLOR_YELLOW
+                    fg["badge_available"] = curses.COLOR_GREEN
                 fg["error"] = curses.COLOR_RED
                 focus_bg = curses.COLOR_WHITE if caps.light_background else curses.COLOR_BLUE
             for index, role in enumerate(roles, 1):
