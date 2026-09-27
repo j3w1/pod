@@ -16,9 +16,9 @@ Workers report scope changes, checks/results, failures, evidence, uncertainty an
 
 ### R40 — Run cheap discriminating checks early, focused
 
-Type: B · Scenarios: [A28](models.md#a28), [A66](#a66), [A155](#a155)
+Type: B · Scenarios: [A28](models.md#a28), [A66](#a66), [A155](#a155), [A185](#a185)
 
-Run cheap discriminating checks early, focused checks during development and required complete gates at milestones. Honor project review rules; otherwise independently review substantial or high-risk changes. Request review through assurance obligations (R87). Review receives the exact candidate and reproducible evidence without being primed to approve.
+Run cheap discriminating checks early, focused checks during development and required complete gates at milestones. At normal intake, bind a trusted final independent audit as a source-cited `project_policy` assurance obligation, not a model constraint or optional coordinator assurance. Preserve it through checkpoints, admission, reports and applicable delivery. Unavailable review stays incomplete; only scoped direct-user waiver or genuinely gone newly trusted policy withdraws it. A waiver is distinct from passing review. Otherwise independently review substantial or high-risk changes. Request review through assurance obligations (R87). Review receives the exact candidate and reproducible evidence without being primed to approve.
 
 ### R41 — Bind verification to commit/tree where applicable
 
@@ -71,6 +71,8 @@ The `independently reviewed` label requires at least one non-withdrawn assurance
 - <a id="a157"></a>**A157** — With an unbound assurance obligation, none at all, or only withdrawn assurances, the report stands, the label is withheld, and `assurance_unbound` names the gap. An unsettled review report cannot be consumed, and a failed report cannot be changed to success on its Dispatch; a fresh settled review attempt may qualify. A valid REUSE binding satisfies the requirement.
 - <a id="a158"></a>**A158** — **Quiescence.** When only a non-Owner test identity remains outstanding, as `blocked_external` with the user as party, the interim report says incomplete and names the need and the unblock condition. The objective stays open. After the user supplies the identity, continuation admits the dependent obligation without a reopen.
 
+
+- <a id="a185"></a>**A185** — Normal brief/intake cites a trusted final audit as project_policy; production checkpoint/report refuse omission, relabeling, unauthorized downgrade or withdrawal. Required review blocks acceptance/closure despite caller review_required=false, and production Governor release-purpose admission holds missing/invalid required audit proof without blocking publication/validation or making optional assurance mandatory. A valid fresh review qualifies; a scoped user waiver is recorded separately and never qualifies as passing review. A147 candidate/history, unavailable/moved/genuinely removed source protections remain.
 
 ## Verification
 

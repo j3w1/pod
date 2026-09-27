@@ -15,7 +15,7 @@ import subprocess
 import threading
 
 from .catalog import load as load_catalog
-from .config import _read_bytes, load as load_preferences, set_mode, set_model
+from .config import _read_bytes, load as load_preferences, set_mode, set_model, set_pin
 from .errors import PodError
 from .orca import MAX_OUTPUT, _envelope, executable
 from .term import Capabilities, capabilities, display_width
@@ -187,6 +187,8 @@ def _apply_effect(state: State, effect, project: Path) -> State:
     try:
         if effect.kind == "set_model":
             outcome = set_model(path, effect.model_id, effect.value, displayed=state.preferences)
+        elif effect.kind == "set_pin":
+            outcome = set_pin(path, effect.value, displayed=state.preferences)
         elif effect.kind == "set_mode":
             outcome = set_mode(path, effect.value, displayed=state.preferences)
         else:

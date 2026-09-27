@@ -72,6 +72,7 @@ def _config(project: Path, *, edit: bool) -> dict:
     document = load_catalog()
     result.update({"schema": "pod-cli/v4", "path": snapshot["path"],
                    "revision": snapshot["revision"], "mode": snapshot["mode"],
+                   "pinned_model": snapshot["pinned_model"],
                    "saved": snapshot["saved"], "effective": snapshot["effective"],
                    "eligible": snapshot["eligible"], "not_set": snapshot["not_set"],
                    "not_set_meaning": "not set (not eligible)",
@@ -146,7 +147,7 @@ def _doctor(project: Path) -> dict:
                          "ownership": launcher_ownership},
             "placements": inspect_placements(project), "skills_cli": skills_cli_entry(),
             "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
-                                                           "max_active", "errors", "policy_revision")},
+                                                           "max_active", "errors", "policy_revision", "pinned_model")},
             "catalog": {"models": list(by_id()), "ranks_of_six": ranks(),
                         "benchmark_age_days": age()},
             "orca": {"status": snapshot.get("status"), "capabilities": snapshot.get("capabilities", {}),
@@ -207,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Pod {version()}: {len(result['eligible'])} eligible models, "
                   f"{result['mode']} selection, maximum {result['max_active']} workers")
             print(f"Preferences: {result['path']}")
+            print(f"Pinned worker: {result.get('pinned_model') or 'none'}")
             if result["not_set"]:
                 print("Not set (not eligible): " + ", ".join(result["not_set"]))
     elif result["status"] == "blocked":

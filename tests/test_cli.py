@@ -86,6 +86,32 @@ class CliTests(unittest.TestCase):
         self.assertEqual(report['installation'],'not installed by the one-shot installer')
         native.assert_not_called()
 
+    def test_config_status_and_doctor_expose_valid_and_invalid_pins_passively(self):
+        from pod.config import DEFAULT
+        from copy import deepcopy
+        import yaml
+        path = self.root/'config'/'pod'/'config.yaml'
+        path.parent.mkdir(parents=True)
+        for pin, disabled in [('gpt-6-sol', False), ('gpt-6-sol', True), ('unknown', False), ([], False)]:
+            with self.subTest(pin=pin, disabled=disabled):
+                document = {**deepcopy(DEFAULT), 'pinned_model': pin}
+                if disabled:
+                    document['models']['gpt-6-sol'] = 'disabled'
+                path.write_text(yaml.safe_dump(document))
+                original = path.read_bytes()
+                with patch('pod.cli.contract', return_value={'status': 'observed', 'capabilities': {}}), \
+                     patch('pod.cli.current_run', return_value={'run': None}), \
+                     patch('pod.orca.read_command') as native:
+                    config = execute(parser().parse_args(['config', '--json']), self.project)
+                    status = execute(parser().parse_args(['status', '--json']), self.project)
+                    doctor = execute(parser().parse_args(['doctor', '--json']), self.project)
+                expected = '<invalid list pin>' if isinstance(pin, list) else pin
+                for report in (config, status['preferences'], doctor['preferences']):
+                    self.assertEqual(report['pinned_model'], expected)
+                    self.assertEqual(bool(report['errors']), disabled or pin != 'gpt-6-sol')
+                native.assert_not_called()
+                self.assertEqual(path.read_bytes(), original)
+
     def test_disposable_doctor_paths_never_resolve_into_host_pod_data(self):
         from pod.installer import receipt_path
         receipt=receipt_path().resolve(strict=False)

@@ -144,7 +144,7 @@ Type: B,H · Scenarios: [A161](#a161)
 | Route decision | Agent/model, requested effort/context, short reason, mode, preference and Governor revisions, constraint refs, Pod version, then observed effective values or `unknown`. |
 | Worker packet | Objective/criteria, scope, source references, candidate, route, preference revision, reporting contract and authorized actions. |
 | Admission | Intent, exact request and Run/Task/Dispatch/worker references, route decision, requested/effective values and recovery state. |
-| Failure | Attempt-local `rate_limited`, `unavailable`, `auth_failed` or `safety_refusal`, source, time, optional native retry-after and later clear provenance. |
+| Failure | Attempt-local `rate_limited`, `unavailable`, `auth_failed` or `safety_refusal`, source, time, optional native retry-after, local reconsideration point and later clear provenance. |
 | Evidence/checkpoint | Candidate/source/policy/dependency/environment bindings, checks, remaining gates, native references, next safe action and Pod version. |
 | Obligation checkpoint | `pod-checkpoint/v3`: sequence, map revision, fixed governance source paths/base commits/byte revisions, obligations, proposals, coordinator slot, quiescence or closure. |
 | Obligation packet | `pod-packet/v3`: `serves[]`, role, path/surface boundary, investigation decision and stopping condition. |
@@ -177,7 +177,7 @@ A direct user constraint may narrow agents/models, exclude models, select a
 role model or lower maximum workers. Only direct user intent may allow a named
 Disabled model or descendant delegation, and the exception lapses when the
 model's saved state or selection mode changes. Constraints never edit global
-YAML. A failure holds its route until retry-after or a meaningful change; a
+YAML. A temporary unavailable failure holds its route until meaningful native retry-after or the 60-second local reconsideration point in R19; expiry launches nothing. Actual auth/capacity/safety restrictions remain; a
 replacement waits for settlement or proven no-start. Safety refusal bars a
 same-Task alternative. There is no scheduler or blind retry.
 

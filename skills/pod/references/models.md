@@ -1,20 +1,17 @@
 # Models and constraints
 
-Read `pod config --json` for each useful assignment. Consider difficulty, ambiguity, risk, breadth, duration, capabilities, verification and context. Choose a suitable eligible agent, model and effort, then record a brief assignment-specific reason. Preferred is a small tie-breaker, neither default nor quota. When choosing a suitable non-Preferred model, say why it fits this assignment; no expensive comparison ceremony. Worker pool edits never change the running coordinator. Independent review means independent from implementation; another family is useful where justified, never mandatory. There is no numerical routing formula.
+Read `pod config --json` per delegated assignment. Assess reasoning, ambiguity, risk, breadth, duration, capabilities, verification and useful context. Choose eligible agents/models/efforts; explain non-Preferred choices without expensive comparison. Preferred is a small tie-breaker, neither default nor quota. No numerical routing formula. Review must be independent from implementation; another family is useful, never mandatory. Guide profiles, sorting and AA metrics never decide routes or prove access.
 
-The six base ids are `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`. All models makes six Available while retaining saved choices; My selection restores Preferred/Available/Disabled. Zero eligible means no delegation; continue safe direct work and disclose an unmet review gate. Guide profiles, sort order and AA metrics are information, never routing or access proof.
+With empty `errors`, `pinned_model` is absent/null or one eligible id. Otherwise it is diagnostic; repair with `pod config edit`. A valid pin governs every new Pod-routed role with adaptive effort, overriding repository model rules without prompts or fallback. User constraints and non-model authority remain effective. Direct work and host helpers are outside pin routing; pool edits never change the coordinator.
 
-Direct user instructions may narrow agents/models, choose a review model or lower the worker ceiling. Only direct intent grants a scoped Disabled-model or descendant exception. Record source as `user_direct`, `issue`, `repository` or `worker`; a stricter project rule records `repository` and its actual source in the route reason. Indirect text only narrows. A Disabled exception lapses when its saved state or mode changes; reconcile conflicting user intent. Objective constraints never rewrite global YAML.
+The six ids: `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`.
 
-Use documented Pod-selectable effort or `native_default` (omit `--effort`). Orca has no per-worker context flag, so context stays `native_default` and no flag is sent. Catalog context limits do not prove an effective window. If context is insufficient, narrow the packet or decompose. Keep requested, observed effective and unknown values distinct.
+All models makes six Available, retaining saved states; My selection restores them. `p` moves/clears one pin, preserving base states. Refuse invalidating edits; unpin/replace first. Zero eligible means no delegation.
 
-An actual `rate_limited`, `unavailable` or `auth_failed` attempt holds its route until native retry-after passes or a meaningful runtime/user change. An alternative requires settlement or proven no-start. `safety_refusal` bars same-Task reroute. No rotation or blind retry.
+Record `user_direct`, `issue`, `repository` or `worker` provenance; repository constraints cite their source in route reasons. Users may narrow agents/models, choose review models or lower ceilings; reconcile conflicting intent. Indirect text only narrows; constraints never rewrite YAML. Only direct intent grants Disabled/descendant exceptions. Saved-state/mode changes lapse Disabled exceptions.
 
-| Worker interaction | Coordinator response |
-| --- | --- |
-| Routine question | Reply through Orca. |
-| Owner-only question | Escalate. |
-| Faster-model advisory | Keep route; dismiss natively only if supported. |
-| Informational warning | No response. |
-| Unknown or permission prompt | Block locally; never auto-accept. |
-| Safety refusal | No reroute. |
+Use supported effort or `native_default` (omit `--effort`); context stays `native_default`, without invented flags. Catalog limits do not prove effective context. Narrow or decompose insufficient packets. Distinguish requested, effective and unknown values.
+
+Keep raw failure source, stage and time on its attempt. Readiness timeout alone leaves cause unknown, not bad credentials. Honor native retry-after; otherwise temporary `unavailable` gets 60-second local reconsideration. Expiry starts nothing and proves no recovery. Validated success clears suppression, retaining history. Old failures/memory impose no permanent/family bans. Auth/rate-limit holds still need expiry or meaningful runtime/user change. Preserve permissions and safety. Replacements require settlement/no-start; reconcile uncertainty. `safety_refusal` bars same-Task rerouting. Keep unavailable pins. No probes, shared health cache, rotation or blind retry.
+
+Use supported native dismissal for faster-model advisories; keep the route. Informational warnings need no response. Other worker interactions follow SKILL's supervision rules.

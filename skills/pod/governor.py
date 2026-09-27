@@ -77,6 +77,7 @@ NEXT_ACTIONS = {
     "local_preflight_missing": "run the configured local preflight and record each result for this candidate",
     "blocking_findings": "fix the failing local check, then prepare a new candidate",
     "verification_gaps": "close the checkpoint's verification gaps",
+    "assurance_unbound": "complete the required project-policy audit for this candidate or record a scoped authorized waiver",
     "failure_unclassified": "classify the previous failure with the governor-classify helper",
     "unchanged_rerun": "fix the defect locally and prepare a new candidate; nothing new would be learned from the same one",
     "remote_only_needs_diagnostic": "request a bounded remote diagnostic naming the question and its stopping condition",
@@ -538,6 +539,22 @@ def merge_target_name(unit: dict | None) -> str | None:
     return f"{target['remote']}/{target['base']}" if target else None
 
 
+def applicable_authorization(unit: dict, authorization: object, *, candidate: str | None,
+                             tree: str | None, scope: str) -> bool:
+    """Both delivery status and authority waits require the same current target truth."""
+    target = merge_target_name(unit) if scope == "merge" else None
+    if scope == "merge":
+        bound = unit.get("candidate") or {}
+        if (target is None or not bound.get("commit") or not bound.get("tree")
+                or candidate != bound["commit"] or tree != bound["tree"]):
+            return False
+    try:
+        return validate_authorization(authorization, candidate=candidate, tree=tree,
+                                      kind=scope, target=target) is not None
+    except PodError:
+        return False
+
+
 def pushed_branch(row: dict, unit: dict | None) -> dict | None:
     """The branch a publication row pushed: its own snapshot, or for a row admitted before snapshots, the unit's
     branch only while that still names the row's own target."""
@@ -883,6 +900,20 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         journal = _read_journal(record_path)
         verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
                             native_projection=native_projection, project=project)
+        if verdict["purpose"] == "release":
+            required_audits = {ob["id"] for ob in (map_of(state) or {}).get("obligations", [])
+                              if ob["kind"] == "assurance" and ob["provenance"] == "project_policy"
+                              and ob["state"] != "withdrawn" and not ob.get("source", {}).get("gone")}
+            if required_audits:
+                from .ledger import kernel_view
+                qualification = kernel_view(project, objective, state=state,
+                                            candidate=verdict["commit"] or proposal["candidate"])["label"]
+                gaps = [gap for gap in qualification["assurance_unbound"]
+                        if gap["obligation"] in required_audits]
+                if gaps:
+                    _reason(verdict["reasons"], "correctness", "assurance_unbound",
+                            "required project-policy audit lacks current candidate proof: "
+                            + ", ".join(gap["obligation"] + ": " + gap["gap"] for gap in gaps))
         exception_record = _exception_grant(governor_policy, supplied, action=proposal, objective=objective,
                                             candidate_ids=verdict["candidate_ids"], now=now)
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
@@ -1489,12 +1520,9 @@ def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
             for row in rows:
                 if row["action"]["kind"] not in kinds or row.get("commit") != binding["commit"]:
                     continue
-                try:
-                    granted = validate_authorization(
-                        row["action"].get("authorization"), candidate=binding["commit"], tree=binding["tree"],
-                        kind=scope, target=merge_target_name(unit) if scope == "merge" else None) is not None
-                except PodError:
-                    granted = False
+                granted = applicable_authorization(
+                    unit, row["action"].get("authorization"), candidate=binding["commit"],
+                    tree=binding["tree"], scope=scope)
                 if granted:
                     break
         authorization[scope] = "RECORDED" if granted else "MISSING"

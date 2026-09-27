@@ -14,7 +14,8 @@ from tests.kernel_support import KernelCase
 class StatusProjectionTests(unittest.TestCase):
     def test_unselected_run_has_the_existing_json_shape(self):
         preferences = {"path": "/fixture/config.yaml", "revision": "r", "mode": "all",
-                       "eligible": [], "not_set": [], "max_active": 2, "errors": []}
+                       "eligible": [], "not_set": [], "max_active": 2, "errors": [],
+                       "pinned_model": None}
         with patch("pod.status.load_config", return_value=preferences), \
              patch("pod.status.running_identity", return_value={"version": "0.6.4", "bundle_digest": "d"}), \
              patch("pod.cli.current_run", return_value={"run": None}):
