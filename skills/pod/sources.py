@@ -229,6 +229,8 @@ def _read(response, url: str, policy: Policy, deadline: float, cancel) -> Page:
             if size > policy.max_bytes:
                 raise SourceError("malformed", "Response exceeds the size limit")
             chunks.append(chunk)
+        if response.length:
+            raise SourceError("malformed", "Response is truncated")
     except http.client.IncompleteRead as exc:
         raise SourceError("malformed", "Response is truncated") from exc
     except (OSError, http.client.HTTPException) as exc:
@@ -410,7 +412,8 @@ def parse_aa(text: str) -> dict:
     """The leaderboard's static table, Anthropic and OpenAI rows only, exact row names kept."""
     tables = _feed(_Tables(), text).tables
     for table in tables:
-        header = next((index for index, row in enumerate(table[:4]) if row and _key(row[0]) == "model"), None)
+        header = next((index for index, row in enumerate(table[:4])
+                       if {"model", "creator"} <= {_key(cell) for cell in row}), None)
         if header is not None:
             break
     else:
