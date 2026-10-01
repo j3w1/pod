@@ -100,7 +100,10 @@ def _lock(root: Path, *, shared: bool = False) -> Iterator[None]:
             raise PodError("unsafe_cache", "Observation cache lock cannot be opened") from exc
     else:
         _make_root(root)
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        except OSError as exc:
+            raise PodError("unsafe_cache", "Observation cache lock cannot be opened") from exc
     try:
         deadline = time.monotonic() + 2.0
         while True:
@@ -334,7 +337,9 @@ def _cached(moment: datetime, *, pair: bool) -> tuple[dict, dict | None]:
     if snapshot is not None:
         return _view(snapshot, "cache", moment, diagnostics), older
     snapshot = _try(BUNDLED_PATH, MAX_BUNDLED, diagnostics)
-    return _view(snapshot, "bundled" if snapshot else "unknown", moment, diagnostics), older
+    # The cache's previous snapshot is no pair for the bundled fallback; comparing them would show
+    # unrelated differences as changes.
+    return _view(snapshot, "bundled" if snapshot else "unknown", moment, diagnostics), None
 
 
 def load(now: datetime | None = None) -> dict:
@@ -564,7 +569,10 @@ def refresh(check: bool = False, now: datetime | None = None, cancel=None, fetch
         base_digest = _digest(root / "current.json")
         base = _try(root / "current.json", MAX_SNAPSHOT, diagnostics)
         record = _status_record(root)
-        _write_record(root, _attempt_record(record, started, "running", check, None, {}))
+        try:
+            _write_record(root, _attempt_record(record, started, "running", check, None, {}))
+        except OSError as exc:
+            raise PodError("unsafe_cache", "Observation refresh record cannot be written") from exc
     try:
         reference = base or bundled()
         deadline = time.monotonic() + (policy or sources.DEFAULT).timeout_s

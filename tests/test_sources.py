@@ -523,6 +523,44 @@ class ArtificialAnalysisParserTests(unittest.TestCase):
                     parse(big, deadline=time.monotonic() + .2)
                 self.assertLess(time.monotonic() - started, 1.5)
 
+    def test_methodology_version_uses_ascii_digits_only(self):
+        # Delta review D10: non-ASCII digits never form a methodology label.
+        result = sources.parse_aa(aa_page([aa_row()], tail="<p>Updated to Intelligence Index v٤.٣</p>"))
+        self.assertIsNone(result["methodology"])
+
+    def test_a_deadline_raised_after_connect_closes_that_socket(self):
+        # Delta review D8: check() raising right after connect must not leave the socket to GC.
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        guard = sources._Guard(time.monotonic() + 30, None)
+        self.addCleanup(guard.close)
+        created = []
+        real_socket = socket.socket
+
+        class Recording(real_socket):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created.append(self)
+
+        calls = {"n": 0}
+
+        def check():
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise SourceError("unavailable", "Source read exceeded the time limit")
+            return 5.0
+
+        with patch.object(sources.socket, "socket", Recording), patch.object(guard, "check", check), \
+                patch.object(guard, "_resolve", lambda host, port: [(socket.AF_INET, socket.SOCK_STREAM, 0, "",
+                                                                     listener.getsockname())]):
+            with self.assertRaises(SourceError):
+                guard.connect(listener.getsockname())
+        # created[0] is the connecting socket; the guard's registered duplicate closes with the guard.
+        self.assertGreaterEqual(len(created), 1)
+        self.assertEqual(created[0].fileno(), -1)
+
     def test_methodology_must_be_unambiguous(self):
         tail = "<script>v4.3 Intelligence Index v4.3 and Intelligence Index v5.0</script>"
         result = sources.parse_aa(aa_page([aa_row()], tail=tail))

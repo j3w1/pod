@@ -221,6 +221,11 @@ class _Guard:
                 error = exc
                 if self.reason is not None:
                     raise
+            except BaseException:
+                # A deadline or cancel raised by check() must not leave this socket to the
+                # garbage collector.
+                sock.close()
+                raise
         raise error or OSError("Destination has no address")
 
     def close(self) -> None:
@@ -572,7 +577,7 @@ AA_COLUMNS = {"model": "model", "contextwindow": "context", "creator": "creator"
               "artificialanalysisintelligenceindex": "intelligence", "costpertaskusd": "usd_per_task",
               "mediantokens/s": "output_tps", "latencyfirstchunk(s)": "first_response_s",
               "totalresponse(s)": "total_response_s"}
-_AA_METHOD = re.compile(r"Intelligence Index v(\d{1,2}(?:\.\d{1,2})?)\b")
+_AA_METHOD = re.compile(r"Intelligence Index v([0-9]{1,2}(?:\.[0-9]{1,2})?)\b")
 
 
 def parse_aa(text: str, deadline: float | None = None) -> dict:

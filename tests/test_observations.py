@@ -248,6 +248,50 @@ class RefreshTransactionTests(ObservationCase):
         self.assertEqual((snapshot["generation"], sol["metrics"]["usd_per_task"]), ("2", 0.55))
         self.assertEqual(observations.previous()["generation"], "1")
 
+    def test_load_pair_never_pairs_the_bundled_fallback_with_cache_previous(self):
+        # Delta review D5: a corrupt current.json falls back to the bundled snapshot; the cache's
+        # previous generation is no pair for it.
+        self.refresh()
+        self.refresh(now=T0 + timedelta(days=1))
+        self.assertIsNotNone(observations.load_pair(T0 + timedelta(days=2))["previous"])
+        (self.root / "current.json").write_text("{not json")
+        pair = observations.load_pair(T0 + timedelta(days=2))
+        self.assertEqual(pair["current"]["origin"], "bundled")
+        self.assertIsNone(pair["previous"])
+
+    def test_special_lock_or_record_refuses_refresh_without_a_traceback(self):
+        # Delta review D6: a directory, link or unreadable .lock or refresh.json is an honest
+        # unsafe_cache refusal before any network read.
+        self.refresh()
+        def directory(path):
+            path.mkdir()
+        def dangling(path):
+            path.symlink_to(self.base / "missing-target")
+        def unreadable(path):
+            path.write_text("")
+            path.chmod(0)
+        cases = [(".lock", directory), (".lock", dangling), ("refresh.json", directory)]
+        if os.geteuid() != 0:
+            cases.append((".lock", unreadable))
+        for name, make in cases:
+            with self.subTest(file=name, kind=make.__name__):
+                path = self.root / name
+                saved = path.read_bytes() if path.is_file() else None
+                path.unlink(missing_ok=True)
+                make(path)
+                fetch = FakeFetch(pages())
+                with self.assertRaises(PodError) as caught:
+                    observations.refresh(now=T0 + timedelta(days=1), fetch=fetch)
+                self.assertEqual(caught.exception.code, "unsafe_cache")
+                self.assertEqual(fetch.calls, [])
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.chmod(0o600) if not path.is_symlink() else None
+                    path.unlink()
+                if saved is not None:
+                    path.write_bytes(saved)
+
     def test_load_pair_reads_current_and_previous_coherently(self):
         self.assertEqual(observations.load_pair(T0)["previous"], None)
         self.refresh()
