@@ -116,6 +116,18 @@ class CatalogTests(unittest.TestCase):
                 with self.assertRaises(PodError):
                     validate(changed)
 
+    def test_a_checked_date_one_day_ahead_of_the_local_date_is_accepted(self):
+        # A registry checked in UTC on release day must not disable routing on hosts behind UTC.
+        from datetime import date, timedelta
+        document = load()
+        ahead = deepcopy(document)
+        ahead['models'][0]['sources'][0]['checked'] = (date.today() + timedelta(days=1)).isoformat()
+        validate(ahead)
+        future = deepcopy(document)
+        future['models'][0]['sources'][0]['checked'] = (date.today() + timedelta(days=2)).isoformat()
+        with self.assertRaises(PodError):
+            validate(future)
+
     def test_adding_a_model_is_a_registry_edit_and_check_reports_it(self):
         document = deepcopy(load())
         extra = deepcopy(document['models'][5])

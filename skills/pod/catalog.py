@@ -7,7 +7,7 @@ data never extends this file; adding an ordinary model is a registry edit.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import re
@@ -60,7 +60,9 @@ def _date(value: object, name: str) -> date:
         day = date.fromisoformat(value)
     except ValueError as exc:
         raise PodError("invalid_catalog", f"{name} is not a real date") from exc
-    if day > date.today():
+    # Checked dates are written in UTC; a host whose local date is still a day behind must not
+    # reject a same-day registry and lose every route.
+    if day > date.today() + timedelta(days=1):
         raise PodError("invalid_catalog", f"{name} cannot be in the future")
     return day
 
