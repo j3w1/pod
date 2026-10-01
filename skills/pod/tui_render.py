@@ -216,7 +216,7 @@ def table_columns(state: ts.State, width: int) -> tuple[Column, ...]:
         if sort in metric and metric[sort] not in fixed:
             fixed.append(metric[sort])
     else:
-        fixed = [metric["intelligence"]]
+        fixed = [metric["intelligence"]] + ([metric["usd_per_task"]] if width >= 57 and sort != "usd_per_task" else [])
         if sort in metric and sort != "intelligence":
             fixed.append(metric[sort])
         elif sort == "state":
@@ -803,7 +803,7 @@ def _setup(state: ts.State, width: int, height: int, caps: Capabilities) -> list
         model = next(row for row in preview["choices"] if row.get("id") == "pin")["model"]
         text = ("choose an effort or clear" if setup.pin < 0 else
                 pins[setup.pin] if setup.pin < len(pins) else "clear the pin")
-        lines.append(_field(f"Pin {model}", text, current == "pin", caps, width))
+        lines.append(_field("Earlier pin", f"{model}: {text}", current == "pin", caps, width))
     lines.append(_field("Preferred", preferred[setup.preferred - 1] if setup.preferred else "none",
                         current == "preferred", caps, width))
     lines += _wrapped(f"Proposed: {route_states.count('enabled')} routes enabled, {route_states.count('disabled')} "
@@ -950,7 +950,12 @@ def frame(state: ts.State, cols: int, rows: int, caps: Capabilities, now: dateti
         return Frame((Line(_fit("Terminal too small", width, caps), "error"),
                       Line(_fit("Resize or press q to quit", width, caps))), cols, rows)
     title, overflow = _title(state, width, caps)
-    body_rows = rows - 3
+    # Selections that do not fit the title get their own line when there is height for it.
+    selections = None
+    if overflow and rows >= 20:
+        selections, _dropped = _pack([(segment, False) for segment in overflow], width, caps, glyph(caps, "dot"))
+        overflow = []
+    body_rows = rows - 3 - (1 if selections else 0)
     table_scroll, table_page = state.table_scroll, state.table_page
     inspector_scroll, inspector_page, help_scroll = state.inspector_scroll, state.inspector_page, state.help_scroll
     if state.mode == "help":
@@ -968,7 +973,8 @@ def frame(state: ts.State, cols: int, rows: int, caps: Capabilities, now: dateti
                                                           caps, state.inspector_scroll)
         body = table + [_tab_bar(state, width, caps)] + content
     body = body[:body_rows] + [Line("") for _ in range(body_rows - len(body))]
-    lines = [title, *body, _status(state, width, caps, now, overflow), _footer(state, width, caps)]
+    lines = [title, *body, *([selections] if selections else []), _status(state, width, caps, now, overflow),
+             _footer(state, width, caps)]
     too_wide = [line.text for line in lines if display_width(line.text) > width]
     if too_wide and strict:
         raise ValueError(f"frame line exceeds {width} columns: {too_wide[0]!r}")
