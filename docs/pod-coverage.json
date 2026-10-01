@@ -1286,7 +1286,12 @@
         "tests.test_tui_pty.TuiPtyTests.test_resize_keeps_focus_and_compact_inspector",
         "tests.test_tui_pty.TuiPtyTests.test_ascii_monochrome_help_and_native_unknown",
         "tests.test_tui_pty.TuiPtyTests.test_too_small_terminal_recovers",
-        "tests.test_workspace_pty.WorkspacePtyTests.test_compact_inspector_at_40_by_12_is_reachable"
+        "tests.test_workspace_pty.WorkspacePtyTests.test_compact_inspector_at_40_by_12_is_reachable",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_cost_or_time_column_always_keeps_a_disclaimer_at_40_by_12",
+        "tests.test_workspace_state.AuditRenderTests.test_cost_or_time_column_never_appears_without_a_disclaimer",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_narrow_labels_keep_the_effort_under_every_sort",
+        "tests.test_workspace_state.AuditRenderTests.test_narrow_labels_shorten_the_model_never_the_effort",
+        "tests.test_workspace_state.AuditRenderTests.test_scroll_hints_name_the_keys_that_scroll"
       ],
       "status": "NOT_RUN"
     },
@@ -1305,7 +1310,9 @@
         "tests.test_tui_pty.TuiPtyTests.test_ctrl_c_and_sigterm_exit_without_writing",
         "tests.test_sparse_toggle_pty.SparseTogglePtyTests.test_sparse_map_edits_one_exact_route_and_survives_restart",
         "tests.test_workspace_state.WorkspaceSessionTests.test_missing_file_gets_a_read_only_notice_after_one_held_tick",
-        "tests.test_workspace_pty.WorkspacePtyTests.test_missing_preferences_file_gets_a_read_only_notice"
+        "tests.test_workspace_pty.WorkspacePtyTests.test_missing_preferences_file_gets_a_read_only_notice",
+        "tests.test_workspace_state.AuditSessionTests.test_a_save_in_the_same_tick_still_announces_an_outside_edit",
+        "tests.test_workspace_state.AuditSessionTests.test_refresh_in_the_same_tick_still_announces_an_outside_edit_and_setup_note"
       ],
       "status": "NOT_RUN"
     },
@@ -2174,7 +2181,8 @@
         "tests.test_observations.RefreshTransactionTests.test_unexpected_error_at_promotion_never_leaves_running",
         "tests.test_observations.RefreshTransactionTests.test_unexpected_fetch_or_parser_errors_settle_the_attempt",
         "tests.test_observations.SnapshotValidationTests.test_hostile_cache_files_fall_back_without_raising_or_blocking",
-        "tests.test_observations.RefreshTransactionTests.test_hostile_content_length_through_the_real_reader_settles_failed"
+        "tests.test_observations.RefreshTransactionTests.test_hostile_content_length_through_the_real_reader_settles_failed",
+        "tests.test_workspace_state.AuditSessionTests.test_current_and_previous_are_read_as_one_pair_stamped_before_the_read"
       ],
       "status": "NOT_RUN"
     },
@@ -2219,7 +2227,8 @@
         "tests.test_sources.ArtificialAnalysisParserTests.test_missing_values_stay_unknown_and_estimates_are_labelled",
         "tests.test_sources.ProviderParserTests.test_openai_cards_report_exact_ids_and_context",
         "tests.test_routes.RouteProjectionTests.test_metrics_stay_paired_with_their_row_and_unknown_is_never_zero",
-        "tests.test_cli.CliTests.test_bare_non_tty_summary_uses_validity_exit_code"
+        "tests.test_cli.CliTests.test_bare_non_tty_summary_uses_validity_exit_code",
+        "tests.test_workspace_state.AuditRenderTests.test_profile_marks_follow_values_in_tables_details_compare_and_changes"
       ],
       "status": "NOT_RUN"
     },
@@ -2278,7 +2287,9 @@
         "tests.test_tui_render.FrameTests.test_sort_metric_stays_visible_in_every_preset",
         "tests.test_workspace_pty.WorkspacePtyTests.test_palette_runs_sorting_grouping_and_help_from_the_keyboard",
         "tests.test_workspace_pty.WorkspacePtyTests.test_new_and_unsupported_observations_are_reachable_not_routable",
-        "tests.test_tui_pty.TuiPtyTests.test_keyboard_moves_table_and_inspector_independently"
+        "tests.test_tui_pty.TuiPtyTests.test_keyboard_moves_table_and_inspector_independently",
+        "tests.test_workspace_state.AuditRenderTests.test_focus_always_rests_on_a_shown_row_and_edits_only_that_row",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_focus_stays_on_a_shown_row_and_edits_only_that_row"
       ],
       "status": "NOT_RUN"
     },
@@ -2295,7 +2306,13 @@
         "tests.test_tui_render.FrameTests.test_disclaimer_units_and_scope_are_visible",
         "tests.test_tui_render.FrameTests.test_status_line_reports_counts_selections_age_refresh_native_and_path",
         "tests.test_tui_pty.TuiPtyTests.test_keyboard_moves_table_and_inspector_independently",
-        "tests.test_tui_render.FrameTests.test_wide_profile_column_shows_exact_aa_qualifier_text"
+        "tests.test_tui_render.FrameTests.test_wide_profile_column_shows_exact_aa_qualifier_text",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_mixed_source_ages_are_never_hidden_behind_one_time",
+        "tests.test_workspace_state.AuditRenderTests.test_mixed_source_ages_show_beside_the_data_age",
+        "tests.test_workspace_state.AuditSessionTests.test_open_session_repaints_so_age_and_stale_keep_moving",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_open_window_ages_and_turns_stale_without_a_reload",
+        "tests.test_workspace_state.AuditRenderTests.test_profile_marks_follow_values_in_tables_details_compare_and_changes",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_profile_marks_sit_beside_the_numbers_in_both_glyph_sets"
       ],
       "status": "NOT_RUN"
     },
@@ -2313,7 +2330,13 @@
         "tests.test_workspace_state.EditTests.test_read_only_and_setup_required_files_refuse_edits",
         "tests.test_tui_render.FrameTests.test_footer_describes_keys_and_fits",
         "tests.test_workspace_pty.WorkspacePtyTests.test_bulk_preview_saves_once_and_protects_the_pin",
-        "tests.test_tui_render.FrameTests.test_invalid_file_keeps_its_pin_visible_as_read_only_diagnostic"
+        "tests.test_tui_render.FrameTests.test_invalid_file_keeps_its_pin_visible_as_read_only_diagnostic",
+        "tests.test_workspace_state.AuditSessionTests.test_bulk_clear_pin_consent_is_bound_to_the_shown_pin",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_bulk_clear_pin_consent_never_moves_to_another_pin",
+        "tests.test_workspace_state.AuditSessionTests.test_bulk_enter_after_an_outside_edit_saves_nothing_and_previews_again",
+        "tests.test_workspace_state.AuditSessionTests.test_bulk_refused_by_the_file_reopens_with_a_fresh_preview",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_bulk_saves_nothing_unreviewed_after_an_outside_not_set",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_bulk_scroll_hint_names_the_key_that_scrolls"
       ],
       "status": "NOT_RUN"
     },
@@ -2327,7 +2350,11 @@
         "tests.test_workspace_state.ComparisonTests.test_delta_rules_for_missing_zero_and_methodology",
         "tests.test_workspace_state.ComparisonTests.test_frontier_marks_shown_comparable_rows_only",
         "tests.test_workspace_state.ComparisonTests.test_changed_data_and_methodology_change",
-        "tests.test_workspace_pty.WorkspacePtyTests.test_compare_tab_and_frontier_create_no_recommendation"
+        "tests.test_workspace_pty.WorkspacePtyTests.test_compare_tab_and_frontier_create_no_recommendation",
+        "tests.test_workspace_state.AuditRenderTests.test_changed_data_reports_a_profile_change_not_a_model_change",
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_compare_names_a_profile_difference_instead_of_a_delta",
+        "tests.test_workspace_state.AuditRenderTests.test_compare_names_profile_differences_and_gives_no_delta_across_them",
+        "tests.test_workspace_state.AuditRenderTests.test_frontier_is_found_within_each_profile_and_methodology"
       ],
       "status": "NOT_RUN"
     },
