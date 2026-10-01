@@ -1435,8 +1435,8 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
                      expected_runtime: str | None = None) -> dict:
     """``expected_runtime`` is the runtime at which the update's native evidence was read.
 
-    Such an update never applies after a rebind to another runtime inside its own
-    authority join; the join refuses as it would without continuity.
+    Such an update applies only when its own authority join ends on that runtime, so a
+    rebind to another runtime, inside the join or by another call before it, refuses.
     """
     path = _path(project, objective)
     with _lock(path):
@@ -1445,9 +1445,11 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
             raise PodError("unknown_admission", "No owned admission identity")
         if open_required:
             _require_open(state)
-        require_authority(project, objective, owner=owner, state=state,
-                          run_id=state["admissions"][admission_id]["run_id"],
-                          expected_runtime=expected_runtime)
+        authority = require_authority(project, objective, owner=owner, state=state,
+                                      run_id=state["admissions"][admission_id]["run_id"],
+                                      expected_runtime=expected_runtime)
+        if expected_runtime is not None and authority["runtime"] != expected_runtime:
+            raise PodError("native_authority_unverified", "Update evidence was read at another runtime")
         row = state["admissions"][admission_id]
         admitted = ("admitted_seq" in row, row.get("admitted_seq"))
         update(row)
@@ -1502,8 +1504,11 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         if state["owner"] != owner or row is None:
             raise PodError("unknown_admission", "No owned admission identity")
         # The report path read its fresh identity at the observation's runtime (A2).
+        observed_runtime = (observation.get("native_binding") or {}).get("runtime")
         authority = require_authority(project, objective, owner=owner, state=state, run_id=row["run_id"],
-                                      expected_runtime=(observation.get("native_binding") or {}).get("runtime"))
+                                      expected_runtime=observed_runtime)
+        if observed_runtime is not None and authority["runtime"] != observed_runtime:
+            raise PodError("native_authority_unverified", "Report identity was read at another runtime")
         map_state = map_of(state)
         if map_state is None:
             raise refuse("unbound_assignment", "no_map", "a report joins an obligation map")

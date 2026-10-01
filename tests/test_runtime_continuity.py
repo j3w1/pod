@@ -503,6 +503,74 @@ class ContinuityBoundaryTests(ContinuityCase):
                          ("unresolved", "native_attempt_absent"))
         self.assertNotIn("start_worker", self.port.calls)
 
+    def assert_bind_refuses_after_another_calls_rebind(self, other_call):
+        first, = self.started()
+        update_admission(self.project, "objective", owner="owner", admission_id=first["admission_id"],
+                         update=lambda row: row.update(state="reserved", native_binding=None,
+                                                       request_uuid=None))
+        original = ContinuityPort.show_worker
+        reads = []
+
+        def show(port, dispatch):
+            shown = original(port, dispatch)
+            reads.append(dispatch)
+            if len(reads) == 2:  # the bind's own read, before the bind takes the objective lock
+                self.change_runtime()
+                port.workers.clear()  # the runtime change destroyed the Dispatch
+                other_call()  # another helper call's locked join rebinds first
+            return shown
+
+        def recover():
+            return recover_admission(self.project, "objective", owner="owner",
+                                     admission_id=first["admission_id"], worktree="current", port=self.port)
+        with patch.object(ContinuityPort, "show_worker", show):
+            self.refused("native_authority_unverified", recover)
+        row = read(self.project, "objective")["admissions"][first["admission_id"]]
+        self.assertEqual((row["state"], row["native_binding"], row["runtime"]), ("reserved", None, "runtime-2"))
+        self.assertEqual([entry["verified"]["absent"] for entry in self.history()], [[first["admission_id"]]])
+        recovered = recover()
+        self.assertEqual((recovered["status"], recovered["admission"]["error"]["code"]),
+                         ("unresolved", "native_attempt_absent"))
+        self.assertNotIn("start_worker", self.port.calls)
+
+    def test_bind_read_before_another_calls_locked_rebind_refuses_and_stays_reserved(self):
+        self.assert_bind_refuses_after_another_calls_rebind(
+            lambda: ledger.continuity_locked(self.project, "objective", owner="owner", port=self.port))
+
+    def test_bind_read_before_another_calls_checkpoint_rebind_refuses_and_stays_reserved(self):
+        self.assert_bind_refuses_after_another_calls_rebind(self.checkpoint_op)
+
+    def test_report_read_before_another_calls_rebind_refuses_without_consuming(self):
+        first, = self.started()
+        self.settle(first)
+        rows = self.stored()
+        row = next(item for item in rows if item.get("executor") == first["admission_id"])
+        row.pop("executor")
+        row.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        frozen = self.frozen_packets[first["admission_id"]]
+        request = {"project": str(self.project), "objective": "objective",
+                   "admission_id": first["admission_id"], "packet": frozen, "map": {"obligations": rows},
+                   "report": {"schema": "pod-report/v1", "assignment": frozen["packet_id"],
+                              "attempt": first["native_binding"]["dispatchId"], "candidate": self.candidate,
+                              "outcome": "succeeded", "scope": ["src"], "files": [], "checks": ["unit"],
+                              "failures": [], "evidence": [], "uncertainty": [], "questions": []}}
+        original = ContinuityPort.show_worker
+        raced = []
+
+        def show(port, dispatch):
+            shown = original(port, dispatch)
+            if not raced:  # the report path's fresh identity read, at the recorded runtime
+                raced.append(dispatch)
+                self.change_runtime()  # the Dispatch survives: continuity is proven
+                ledger.continuity_locked(self.project, "objective", owner="owner", port=self.port)
+            return shown
+        with patch.object(ContinuityPort, "show_worker", show):
+            self.refused("native_authority_unverified", internal_run, "report", request)
+        self.assertIsNone(read(self.project, "objective")["admissions"][first["admission_id"]].get("report"))
+        self.assertEqual([entry["to_runtime"] for entry in self.history()], ["runtime-2"])
+        # The report read again at the current runtime is consumed.
+        self.assertTrue(internal_run("report", request)["settled"])
+
     def test_governor_reconcile_writes_its_rebind_under_the_objective_lock(self):
         self.started()
         writes = []

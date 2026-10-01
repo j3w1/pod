@@ -133,8 +133,10 @@ ambiguous case; exact-scope Owner decisions reclassified at write time; every
 compared identity disproven with the path's existing code; no start, replay,
 Run creation, adoption or owner change; the eight-entry history bound; a bind
 whose worker read preceded a Dispatch-destroying runtime change refusing as in
-0.6.6; and a Governor reconcile rebind written while the objective lock is held
-(R29, R98, A195–A199). Sanitized R15 and R17 incidents keep only counts and
+0.6.6, also after another call's rebind, and a report read before another
+call's rebind refusing without consuming; and a Governor reconcile rebind
+written while the objective lock is held (R29, R98, A195–A199). Sanitized R15
+and R17 incidents keep only counts and
 which identities changed. A4 runs every `pod internal` operation through the
 helper entry with a sentinel value (R99, A200–A201). A5 uses disposable Git
 repositories and injected issue ports (R62–R64, A202–A204). Live native A1 and

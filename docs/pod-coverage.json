@@ -1925,6 +1925,9 @@
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_starts_replays_creates_adopts_and_reassigns_nothing",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_past_the_history_bound_refuses_without_a_write",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_a_runtime_change_that_destroyed_its_dispatch_refuses_and_stays_reserved",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_another_calls_locked_rebind_refuses_and_stays_reserved",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_another_calls_checkpoint_rebind_refuses_and_stays_reserved",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_report_read_before_another_calls_rebind_refuses_without_consuming",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_governor_reconcile_writes_its_rebind_under_the_objective_lock",
         "tests.test_runtime_continuity.AmbiguousContinuityTests.test_reserved_dispatch_found_needs_the_owner_then_separate_recovery_binds_it"
       ],
