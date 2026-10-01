@@ -1285,6 +1285,32 @@ class DeltaAuditRenderTests(unittest.TestCase):
         self.assertIn("Data cache 1h old; mixed ages (oldest 3d)", self.status(mixed, 60))
         self.assertIn("Data cache 1h old; mixed (oldest 3d)", self.status(mixed, 40))
 
+    def test_selections_never_hide_the_age_in_overlays_and_placeholders_never_displace_it(self):
+        # Third delta review: under 20 rows only exact Pin/Preferred keys may share the status line
+        # with the age; a "none" placeholder or the enabled count never displaces it, and overlays
+        # (no table controls line) keep the age and STALE first.
+        key = "claude/claude-opus-5-5/max"
+        choices = {"none": prefs(), "pin": prefs(pinned=key), "preferred": prefs(preferred=key),
+                   "both": prefs(pinned=key, preferred=key)}
+        for name, chosen in choices.items():
+            base = state(chosen)
+            for now, stale in ((T0, False), (T0 + timedelta(days=8), True)):
+                for rows in (12, 19):
+                    for cols in range(40, 161, 3):
+                        for notice in ("", "Saved: Disabled claude/claude-opus-5-5/max"):
+                            for mode in ("table", "help", "palette"):
+                                current = ts.with_notice(base, notice) if notice else base
+                                if mode != "table":
+                                    current = replace(current, mode=mode)
+                                frame = text(current, cols, rows, now=now)
+                                status = frame.splitlines()[-2]
+                                with self.subTest(selection=name, stale=stale, rows=rows, cols=cols,
+                                                  notice=bool(notice), mode=mode):
+                                    if stale:
+                                        self.assertIn("STALE", frame)
+                                    if mode != "table" or name == "none":
+                                        self.assertIn("Data cache ", status)
+
     def test_changed_data_gives_no_context_delta_across_a_profile_change(self):
         plain = state(snapshot=fixture_snapshot(edit=lambda rows: [
             {**row, "qualifiers": [q for q in row["qualifiers"] if q != "with fallback"]} for row in rows]))

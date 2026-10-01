@@ -1000,14 +1000,17 @@ def _title(state: ts.State, width: int, caps: Capabilities) -> tuple[Line, list]
     return line, [segments[index][0] for index in dropped]
 
 
-def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extra: list) -> Line:
+def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extra: list, *,
+            age_first: bool = False) -> Line:
     seen = state.projection.get("observations") or {}
     segments = []
     if state.notice and state.notice != state.error:
         segments.append(([(state.notice, "advisory")], True))
     if state.error:
         segments.append(([(state.error, "error")], True))
-    segments += [(segment, False) for segment in extra]
+    later = [(segment, False) for segment in extra] if age_first else []
+    if not age_first:
+        segments += [(segment, False) for segment in extra]
     refresh = refresh_label(state) if state.refresh_state != "idle" else None
     at = len(segments)
     if seen.get("status") == "observed":
@@ -1021,7 +1024,7 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
         role = "error" if ages["stale"] else "body"
     else:
         variants, role = ["Data unknown"], "advisory"
-    tail = []
+    tail = list(later)
     if refresh:
         tail.append(([refresh], True))
     tail.append(([("Native access unknown", "body")], False))
@@ -1114,6 +1117,11 @@ def frame(state: ts.State, cols: int, rows: int, caps: Capabilities, now: dateti
         return Frame((Line(_fit("Terminal too small", width, caps), "error"),
                       Line(_fit("Resize or press q to quit", width, caps))), cols, rows)
     title, overflow = _title(state, width, caps)
+    # Only exact Pin and Preferred keys carry over from the title; a "none" placeholder or the enabled
+    # count never displaces the data age.
+    overflow = [segment for segment in overflow
+                if len(segment) == 2 and segment[0][0] in ("Pin ", "Preferred ")
+                and not segment[1][0].startswith("none")]
     # Selections that do not fit the title get their own line when there is height for it.
     selections = None
     if overflow and rows >= 20:
@@ -1138,8 +1146,11 @@ def frame(state: ts.State, cols: int, rows: int, caps: Capabilities, now: dateti
                                                           caps, state.inspector_scroll, hint)
         body = table + [_tab_bar(state, width, caps)] + content
     body = body[:body_rows] + [Line("") for _ in range(body_rows - len(body))]
-    lines = [title, *body, *([selections] if selections else []), _status(state, width, caps, now, overflow),
-             _footer(state, width, caps)]
+    # Overlays draw no table controls line, so their status line keeps the age (and STALE) ahead of
+    # overflowed selections.
+    table_view = state.mode not in ("help", "palette", "bulk", "setup")
+    lines = [title, *body, *([selections] if selections else []),
+             _status(state, width, caps, now, overflow, age_first=not table_view), _footer(state, width, caps)]
     too_wide = [line.text for line in lines if display_width(line.text) > width]
     if too_wide and strict:
         raise ValueError(f"frame line exceeds {width} columns: {too_wide[0]!r}")
