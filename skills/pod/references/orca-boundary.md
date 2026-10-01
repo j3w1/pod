@@ -35,12 +35,11 @@ checkpoint core. It does not re-check preferences or make a new model choice.
 
 Terminal reuse requires a settled prior attempt with a known
 terminal, copies its effective route and rechecks eligibility. Native
-`worker-start --terminal` carries no model or effort flag. New model+effort and
-model-with-omitted-effort starts use only Orca's documented launch preferences,
+`worker-start --terminal` carries no model or effort flag. Other starts use only Orca's documented launch preferences,
 which only delegation requires.
 
 Requested/effective model and effort differ. Missing values stay `unknown`; an exact bound attempt with a mismatch is marked
-`route_mismatch` and blocks acceptance. Orca currently has no per-worker
+`route_mismatch` and blocks acceptance. Orca has no per-worker
 context selector; omit the context flag and record `native_default`. Do not
 write provider settings, automate provider prompts or wrap direct APIs.
 

@@ -10,8 +10,8 @@ All models makes six Available, retaining saved states; My selection restores th
 
 Record `user_direct`, `issue`, `repository` or `worker` provenance; repository constraints cite their source in route reasons. Users may narrow agents/models, choose review models or lower ceilings; reconcile conflicting intent. Indirect text only narrows; constraints never rewrite YAML. Only direct intent grants Disabled/descendant exceptions. Saved-state/mode changes lapse Disabled exceptions.
 
-Use supported effort or `native_default` (omit `--effort`); context stays `native_default`, without invented flags. Catalog limits do not prove effective context. Narrow or decompose insufficient packets. Distinguish requested, effective and unknown values.
+Use supported effort or `native_default` (omit `--effort`). Catalog limits do not prove effective context. Narrow or decompose insufficient packets.
 
 Keep raw failure source, stage and time on its attempt. Readiness timeout alone leaves cause unknown, not bad credentials. Honor native retry-after; otherwise temporary `unavailable` gets 60-second local reconsideration. Expiry starts nothing and proves no recovery. Validated success clears suppression, retaining history. Old failures/memory impose no permanent/family bans. Auth/rate-limit holds still need expiry or meaningful runtime/user change. Preserve permissions and safety. Replacements require settlement/no-start; reconcile uncertainty. `safety_refusal` bars same-Task rerouting. Keep unavailable pins. No probes, shared health cache, rotation or blind retry.
 
-Use supported native dismissal for faster-model advisories; keep the route. Informational warnings need no response. Other worker interactions follow SKILL's supervision rules.
+Use supported native dismissal for faster-model advisories; keep the route. Informational warnings need no response.
