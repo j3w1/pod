@@ -56,7 +56,7 @@ A small task can finish with zero workers. Missing Orca delegation support block
 
 The table starts sorted by Artificial Analysis (AA) index, with unknown values last. `s` and `S` change the sort, `g` groups routes by model, `/` searches, `f` and `o` filter by provider and discovery, `:` or Ctrl+P opens the command palette, and `?` lists every key. A full-width inspector at the bottom has Details, Benchmarks, Routing and Sources tabs. `c` marks up to four routes to compare, and `e` marks the AA frontier of the shown rows; both are display only. AA benchmark cost is not your subscription charge, quota or Pod invoice, and benchmark response time is not worker task duration.
 
-Space enables or disables the focused route, `P` makes it your Preferred route and `p` pins it; pressing again clears them. `b` previews a bulk change, such as all efforts of one model, and saves it once. Edits save immediately to your personal file; browsing, sorting, filtering and comparing never do.
+Space enables or disables the focused route, and the palette can return it to not set. `P` makes it your Preferred route and `p` pins it; pressing again clears them. `b` previews a bulk change, such as all efforts of one model, and saves it once. Edits save immediately to your personal file; browsing, sorting, filtering and comparing never do.
 
 The personal YAML at `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` is the single route preference authority. `pod config --json` shows its path, status, enabled routes, Preferred and Pin; `pod config edit` opens it in your editor. A route the file does not list is not set, which means not eligible.
 

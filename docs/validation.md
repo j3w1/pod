@@ -106,9 +106,9 @@ Pure workspace state and frame tests (`tests.test_workspace_state`,
 `tests.test_tui_render`) cover sorting, grouping, filters, compare, the
 frontier, changed data, bulk scopes, the setup screen and automatic refresh with
 controlled time, without a terminal. The latency
-measurement (`python tests/pty_harness.py`) records p50/p95/max for focus, save,
-external-change repaint and refreshed-data repaint, plus startup to the first
-frame and `pod.tui` import time, with kernel, CPU, Python, ncurses, TERM, locale
+measurement (`python -m tests.pty_harness measure`) records p50/p95/max for focus,
+save, external-change repaint and refreshed-data repaint (`data_refresh`), plus
+`startup_to_first_frame` and `import_pod_tui`, with kernel, CPU, Python, ncurses, TERM, locale
 and terminal size. Focus and save p95 must be under 500 ms, and an external
 change or refreshed data must repaint within one second; startup and import
 times are recorded for the footprint review, not gated. Visual review examines `tests/tui_snapshot.py` SVG/PNG output at 160×45,

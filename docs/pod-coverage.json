@@ -1039,7 +1039,8 @@
         "tests.test_workspace_state.SetupTests.test_setup_collects_pin_and_preferred_then_confirms",
         "tests.test_workspace_state.WorkspaceSessionTests.test_setup_apply_saves_only_after_confirmation",
         "tests.test_workspace_pty.WorkspacePtyTests.test_state_pin_and_preferred_save_at_once_and_survive_restart",
-        "tests.test_workspace_pty.WorkspacePtyTests.test_setup_screen_saves_only_after_explicit_confirmation"
+        "tests.test_workspace_pty.WorkspacePtyTests.test_setup_screen_saves_only_after_explicit_confirmation",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_setup_can_be_left_for_read_only_browsing"
       ],
       "status": "NOT_RUN"
     },
@@ -1799,7 +1800,8 @@
         "tests.test_workspace_state.WorkspaceSessionTests.test_saves_report_success_conflict_and_failure_honestly",
         "tests.test_workspace_pty.WorkspacePtyTests.test_hidden_pin_and_focus_survive_filters_search_and_errors",
         "tests.test_workspace_pty.WorkspacePtyTests.test_state_pin_and_preferred_save_at_once_and_survive_restart",
-        "tests.test_tui_pty.TuiPtyTests.test_save_failure_keeps_bytes_and_stays_reachable"
+        "tests.test_tui_pty.TuiPtyTests.test_save_failure_keeps_bytes_and_stays_reachable",
+        "tests.test_tui_pty.TuiPtyTests.test_two_windows_conflict_and_recover"
       ],
       "status": "NOT_RUN"
     },
@@ -2245,7 +2247,8 @@
         "tests.test_workspace_state.TableTests.test_focus_and_hidden_selections_survive_filter_sort_and_refresh",
         "tests.test_tui_render.FrameTests.test_sort_metric_stays_visible_in_every_preset",
         "tests.test_workspace_pty.WorkspacePtyTests.test_palette_runs_sorting_grouping_and_help_from_the_keyboard",
-        "tests.test_workspace_pty.WorkspacePtyTests.test_new_and_unsupported_observations_are_reachable_not_routable"
+        "tests.test_workspace_pty.WorkspacePtyTests.test_new_and_unsupported_observations_are_reachable_not_routable",
+        "tests.test_tui_pty.TuiPtyTests.test_keyboard_moves_table_and_inspector_independently"
       ],
       "status": "NOT_RUN"
     },
@@ -2278,7 +2281,8 @@
         "tests.test_workspace_state.EditTests.test_bulk_disable_of_pin_requires_clearing_it_in_the_same_save",
         "tests.test_workspace_state.EditTests.test_read_only_and_setup_required_files_refuse_edits",
         "tests.test_tui_render.FrameTests.test_footer_describes_keys_and_fits",
-        "tests.test_workspace_pty.WorkspacePtyTests.test_bulk_preview_saves_once_and_protects_the_pin"
+        "tests.test_workspace_pty.WorkspacePtyTests.test_bulk_preview_saves_once_and_protects_the_pin",
+        "tests.test_tui_render.FrameTests.test_invalid_file_keeps_its_pin_visible_as_read_only_diagnostic"
       ],
       "status": "NOT_RUN"
     },
