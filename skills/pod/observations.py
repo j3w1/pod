@@ -74,8 +74,7 @@ def cache_root(project: Path | None = None) -> Path:
     else:
         root = native_home("XDG_CACHE_HOME", default=Path.home() / ".cache",
                            project=project).resolve(strict=False) / "pod" / "models"
-    bundle = BUNDLED_PATH.parent.resolve()
-    if root.resolve(strict=False).is_relative_to(bundle):
+    if root.resolve(strict=False).is_relative_to(Path(__file__).resolve().parent):
         raise PodError("unsafe_cache", "Observation cache cannot live inside the installed bundle")
     return root
 

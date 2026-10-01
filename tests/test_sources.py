@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from email.utils import format_datetime
 from datetime import datetime, timedelta, timezone
 import gzip
