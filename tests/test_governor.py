@@ -17,7 +17,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from pod.config import DEFAULT, effective
+from pod.config import defaults, effective
 from pod.errors import PodError
 from pod.governor import (classify_failure, decide, discover_triggers, enforcement, execute,
                           observe_candidate, prepare_candidate, reconcile, record_correction,
@@ -58,7 +58,8 @@ class GovernorCase(unittest.TestCase):
             personal = self.root / "config" / "pod" / "config.yaml"
             personal.parent.mkdir(parents=True, exist_ok=True)
             fragment = yaml.safe_load(personal_yaml)
-            document = deepcopy(DEFAULT)
+            fragment.pop("schema", None)
+            document = defaults()
             document.update(fragment)
             personal.write_text(yaml.safe_dump(document, sort_keys=False))
 
@@ -122,12 +123,12 @@ class CandidateTests(GovernorCase):
         self.assertEqual(ready["decision"], "ALLOW")
 
     def test_model_edit_preserves_candidate_but_preflight_edit_opens_generation(self):
-        from pod.config import load as load_config, set_model, write_defaults
+        from pod.config import load as load_config, set_preferred, write_defaults
         personal = self.root / "config" / "pod" / "config.yaml"
         write_defaults(personal)
         self.configure()
         first = self.prepared(obs=observation(policy=effective(self.project)["revision"]))["candidate"]
-        set_model(personal, "gpt-6-sol", "preferred", displayed=load_config(self.project))
+        set_preferred(personal, "codex/gpt-6.1-sol/medium", displayed=load_config(self.project))
         same = prepare_candidate(self.project, "objective", owner="owner", unit="release",
                                  observation=observation(policy=effective(self.project)["revision"]),
                                  now=NOW)["candidate"]

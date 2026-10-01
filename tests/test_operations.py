@@ -10,7 +10,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from pod.config import load as load_config, set_model, write_defaults
+from pod.config import load as load_config, set_route, write_defaults
 from pod.errors import PodError
 from pod.internal import run as internal_run
 from pod.ledger import (admission_identity, checkpoint, constraints_update, objective_root, read,
@@ -22,6 +22,9 @@ from tests.common import (fake_authority, fixture, kernel_binding, kernel_map, m
                           restated_map, stored_map)
 
 from tests.kernel_support import REQUEST, OTHER, ROUTE, FakePort
+
+SOL = 'codex/gpt-6.1-sol/medium'
+LUNA = 'codex/gpt-6-luna/medium'
 
 
 class AdmissionTests(unittest.TestCase):
@@ -100,52 +103,56 @@ class AdmissionTests(unittest.TestCase):
         result=self.start()
         self.assertEqual(result['status'],'bound')
         row=result['admission']
-        self.assertEqual(row['route_decision']['model'],'gpt-6-sol')
-        self.assertEqual(row['route_decision']['effective']['model'],'gpt-6-sol')
+        self.assertEqual(row['route_decision']['model'],'gpt-6.1-sol')
+        self.assertEqual(row['route_decision']['effective']['model'],'gpt-6.1-sol')
         self.assertEqual(row['route_decision']['requested_context'],'native_default')
         self.assertFalse(row['route_decision']['route_mismatch'])
         self.assertEqual(len(self.port.starts),1)
         self.assertEqual(self.start()['status'],'bound')
         self.assertEqual(len(self.port.starts),1)
 
-    def test_missing_benchmark_row_cannot_block_admission(self):
-        from pod.catalog import load as load_catalog
-        document=deepcopy(load_catalog())
-        del document['benchmarks']['models']['gpt-6-luna']
-        with patch('pod.catalog.load',return_value=document):
-            result=self.start()
+    def test_observation_refresh_eviction_or_absence_cannot_change_admission(self):
+        from tests.common import without_module
+        frozen=self.frozen()
+        cache=Path(os.environ['XDG_CACHE_HOME'])/'pod'/'models'
+        # A refresh or eviction between selection and final admission is not an authority change.
+        self.port.before_native=lambda:(cache.mkdir(parents=True,exist_ok=True),
+                                        (cache/'current.json').write_text('{"evicted": true}'))
+        with without_module('pod.observations'), \
+             patch('socket.socket.connect',side_effect=AssertionError('admission must not use the network')):
+            result=self.start(frozen=frozen)
         self.assertEqual(result['status'],'bound')
-        self.assertEqual(result['admission']['route_decision']['model'],'gpt-6-sol')
+        self.assertEqual(result['admission']['route_decision']['model'],'gpt-6.1-sol')
         self.assertEqual(len(self.port.starts),1)
 
     def test_before_boundary_edit_refuses_with_no_admission_and_after_row_keeps_start(self):
         frozen=self.frozen()
-        set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
+        set_route(self.personal,SOL,'disabled',displayed=load_config(self.project))
         with self.assertRaises(PodError) as caught:
             self.start(frozen=frozen)
         self.assertEqual(caught.exception.code,'preference_changed')
         self.assertFalse(read(self.project,'objective')['admissions'])
-        set_model(self.personal,'gpt-6-sol','available',displayed=load_config(self.project))
+        set_route(self.personal,SOL,'enabled',displayed=load_config(self.project))
         frozen=self.frozen()
-        self.port.before_native=lambda:set_model(self.personal,'gpt-6-sol','disabled',
+        self.port.before_native=lambda:set_route(self.personal,SOL,'disabled',
                                                   displayed=load_config(self.project))
         with self.assertRaises(PodError): self.start(frozen=frozen)
         self.assertFalse(read(self.project,'objective')['admissions'])
-        set_model(self.personal,'gpt-6-sol','available',displayed=load_config(self.project))
+        set_route(self.personal,SOL,'enabled',displayed=load_config(self.project))
         result=self.start(frozen=self.frozen())
-        set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
+        set_route(self.personal,SOL,'disabled',displayed=load_config(self.project))
         self.assertEqual(read(self.project,'objective')['admissions'][result['admission']['admission_id']]['state'],'bound')
 
     def test_boundary_distinguishes_stale_revision_from_current_ineligibility(self):
-        set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
+        set_route(self.personal,SOL,'disabled',displayed=load_config(self.project))
         disabled_packet=self.frozen(task='disabled-now')
         with self.assertRaises(PodError) as disabled:
             self.start(task='disabled-now',frozen=disabled_packet)
-        self.assertEqual(disabled.exception.code,'model_ineligible')
+        self.assertEqual(disabled.exception.code,'route_ineligible')
         self.assertFalse(read(self.project,'objective')['admissions'])
-        set_model(self.personal,'gpt-6-sol','available',displayed=load_config(self.project))
+        set_route(self.personal,SOL,'enabled',displayed=load_config(self.project))
         permitted_packet=self.frozen(task='other-edit')
-        set_model(self.personal,'gpt-6-luna','disabled',displayed=load_config(self.project))
+        set_route(self.personal,LUNA,'disabled',displayed=load_config(self.project))
         with self.assertRaises(PodError) as stale:
             self.start(task='other-edit',frozen=permitted_packet)
         self.assertEqual(stale.exception.code,'preference_revision_stale')
@@ -155,6 +162,12 @@ class AdmissionTests(unittest.TestCase):
             self.start(task='bad-effort',frozen=unsupported)
         self.assertEqual(effort.exception.code,'effort_unsupported')
         self.assertFalse(read(self.project,'objective')['admissions'])
+        adaptive=self.frozen(route={**ROUTE,'effort':'native_default'},task='bad-effort')
+        with self.assertRaises(PodError) as required:
+            self.start(task='bad-effort',frozen=adaptive)
+        self.assertEqual(required.exception.code,'effort_required')
+        self.assertFalse(read(self.project,'objective')['admissions'])
+        self.assertEqual(self.port.starts,[])
 
     def test_missing_and_partial_preferences_disable_new_workers(self):
         self.personal.unlink()
@@ -162,6 +175,12 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(self.port.starts,[])
         self.personal.write_text('schema: pod/v1\nselection: all\nmodels: {gpt-6-sol: available}\n')
         with self.assertRaises(PodError): self.start(frozen=self.frozen())
+        self.assertEqual(self.port.starts,[])
+        # A kept 0.6.x file blocks new delegation until its route setup is saved.
+        self.personal.write_text('schema: pod/v1\nselection: all\nmodels: {gpt-6-sol: available}\n'
+                                 'workers: {max_active: 2}\n')
+        with self.assertRaises(PodError) as setup: self.start(frozen=self.frozen())
+        self.assertEqual(setup.exception.code,'setup_required')
         self.assertEqual(self.port.starts,[])
 
     def test_logical_ceiling_and_exact_settlement(self):
@@ -179,7 +198,7 @@ class AdmissionTests(unittest.TestCase):
         document=yaml.safe_load(self.personal.read_text())
         document['workers']['max_active']=1
         self.personal.write_text(yaml.safe_dump(document,sort_keys=False))
-        sonnet={**ROUTE,'agent':'claude','model':'claude-sonnet-5'}
+        sonnet={**ROUTE,'agent':'claude','model':'claude-sonnet-5-5'}
         first=self.start(frozen=self.frozen(route=sonnet))['admission']
         with self.assertRaises(PodError) as full:
             self.start('replacement-task',frozen=self.frozen(route=sonnet,task='replacement-task'))
@@ -283,7 +302,7 @@ class AdmissionTests(unittest.TestCase):
         def unresolved(row): row.update(state='unresolved',native_binding=None)
         update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],update=unresolved)
         self.port.state='pending'
-        set_model(self.personal,'gpt-6-sol','disabled',displayed=load_config(self.project))
+        set_route(self.personal,SOL,'disabled',displayed=load_config(self.project))
         from pod import __version__
         with patch('pod.__version__','different'):
             result=recover_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
@@ -513,7 +532,7 @@ class AdmissionTests(unittest.TestCase):
         binding={'runId':'run','taskId':'task','dispatchId':'dispatch','workerId':'worker',
                  'worktreeId':'worktree','terminalHandle':'terminal'}
         prior={'state':'bound','native_binding':binding,
-               'route_decision':{'effective':{'agent':'codex','model':'gpt-6-sol',
+               'route_decision':{'effective':{'agent':'codex','model':'gpt-6.1-sol',
                                               'effort':'native_default'}}}
         admission={'request':{**ROUTE,'effort':'native_default'},'reuse_of':'prior'}
         shown={'result':{'worker':{'agentTerminalHandle':'terminal','worktreeId':'worktree',
@@ -565,15 +584,15 @@ class AdmissionTests(unittest.TestCase):
         from tests.common import envelope
         shown=envelope('reused-terminal-worker-show')
         shown['result']['worker']['startOptions']['launch']={
-            'effective':{},'requested':{'agent':'codex','model':'gpt-6-sol'},'extra':'ignored'}
+            'effective':{},'requested':{'agent':'codex','model':'gpt-6.1-sol'},'extra':'ignored'}
         receipt={'launch':{'effective':{'agent':None,'model':None,'effort':None,'extra':'ignored'},
-                           'requested':{'agent':'codex','model':'gpt-6-sol','effort':None,
+                           'requested':{'agent':'codex','model':'gpt-6.1-sol','effort':None,
                                         'extra':'different'}}}
         effective,mismatch=_effective_evidence(receipt,shown,{'request':dict(ROUTE)})
         self.assertEqual([effective[key] for key in ('agent','model','effort')],['unknown']*3)
         self.assertFalse(mismatch)
         shown['result']['worker']['startOptions']['launch']['effective']['model']='gpt-6-luna'
-        receipt['launch']['effective']['model']='gpt-6-sol'
+        receipt['launch']['effective']['model']='gpt-6.1-sol'
         self.assertTrue(_effective_evidence(receipt,shown,{'request':dict(ROUTE)})[1])
         shown['result']['worker']['startOptions']['launch']['effective'].clear()
         receipt['launch']['effective']['model']='gpt-6-luna'
@@ -1134,7 +1153,7 @@ class AdmissionTests(unittest.TestCase):
         # an alternate start while the exact native assignment remains live.
         update_admission(self.project,'objective',owner='owner',admission_id=first['admission_id'],
                          update=lambda row:row['failures'].append({
-                             'kind':'unavailable','model':'gpt-6-sol','task':'task',
+                             'kind':'unavailable','model':'gpt-6.1-sol','task':'task',
                              'retry_after':None,'cleared_at':None}))
         alternate={**ROUTE,'model':'gpt-6-luna','reason':'available alternative'}
         with self.assertRaises(PodError) as blocked:
@@ -1315,11 +1334,11 @@ class AdmissionTests(unittest.TestCase):
         self.discard(first,reason='the failed attempt has no result to integrate')
         alternative={**ROUTE,'model':'gpt-6-luna','reason':'failed original route'}
         frozen=self.frozen(route=alternative,task='task2')
-        set_model(self.personal,'gpt-6-luna','disabled',displayed=load_config(self.project))
+        set_route(self.personal,LUNA,'disabled',displayed=load_config(self.project))
         with self.assertRaises(PodError) as caught: self.start('task2',frozen=frozen)
         self.assertEqual(caught.exception.code,'preference_changed')
         with self.assertRaises(PodError) as caught: self.start('task2',frozen=self.frozen(route=alternative,task='task2'))
-        self.assertEqual(caught.exception.code,'model_ineligible')
+        self.assertEqual(caught.exception.code,'route_ineligible')
         self.assertEqual(len(self.port.starts),1)
 
     def test_issue_change_holds_pending_replay_but_completed_read_is_observational(self):
@@ -1421,34 +1440,72 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(other['status'],'bound')
 
     def test_pin_final_boundary_and_pending_replay_keep_their_distinct_routes(self):
-        from pod.config import set_pin
+        from pod.config import set_pin, set_preferred
         frozen = self.frozen()
-        set_pin(self.personal, 'gpt-6-luna', displayed=load_config(self.project))
+        set_pin(self.personal, 'codex/gpt-6-luna/medium', displayed=load_config(self.project))
         with self.assertRaises(PodError) as caught: self.start(frozen=frozen)
         self.assertEqual(caught.exception.code, 'preference_changed')
         self.assertFalse(read(self.project, 'objective')['admissions'])
-        set_pin(self.personal, 'gpt-6-sol', displayed=load_config(self.project))
+        set_preferred(self.personal, 'claude/claude-opus-5-5/high', displayed=load_config(self.project))
+        set_pin(self.personal, SOL, displayed=load_config(self.project))
         first = self.recovery_case()
         decision = first['route_decision']
-        self.assertEqual(decision['pinned_model'], 'gpt-6-sol')
-        self.assertIn('personal pin selected the model', decision['reason'])
+        self.assertEqual((decision['pinned_model'], decision['pinned_route'], decision['route']),
+                         ('gpt-6.1-sol', SOL, SOL))
+        self.assertEqual((decision['preferred_route'], decision['preference_schema']),
+                         ('claude/claude-opus-5-5/high', 'pod/v2'))
+        self.assertIn('personal pin selected the route', decision['reason'])
         self.assertNotIn('overrides repository', decision['reason'])
-        set_pin(self.personal, 'gpt-6-luna', displayed=load_config(self.project))
+        set_pin(self.personal, 'codex/gpt-6-luna/medium', displayed=load_config(self.project))
         self.port.state = 'pending'
         replay = self.recover(first)
         self.assertEqual(replay['status'], 'bound')
-        self.assertEqual(self.port.starts[-1]['route']['model'], 'gpt-6-sol')
+        self.assertEqual(self.port.starts[-1]['route']['model'], 'gpt-6.1-sol')
+        self.assertEqual(self.port.starts[-1]['route']['effort'], 'medium')
         self.assertEqual(self.port.starts[-1]['retry_request'], REQUEST)
         self.assertEqual(replay['admission']['route_decision'], decision)
         with self.assertRaises(PodError) as mismatch:
             self.start(task='new-task')
         self.assertEqual(mismatch.exception.code, 'pin_mismatch')
 
+    def test_pin_requires_the_exact_effort_for_every_role_and_correction(self):
+        from pod.config import set_pin
+        set_pin(self.personal, 'codex/gpt-6.1-sol/high', displayed=load_config(self.project))
+        for index, effort in enumerate(('medium', 'xhigh', 'native_default')):
+            with self.subTest(effort=effort), self.assertRaises(PodError) as caught:
+                self.start(task=f'task-{index}', frozen=self.frozen(route={**ROUTE, 'effort': effort},
+                                                                   task=f'task-{index}'))
+            self.assertEqual(caught.exception.code, 'effort_required' if effort == 'native_default' else 'pin_mismatch')
+        self.assertEqual(self.port.starts, [])
+        result = self.start(task='task-3', frozen=self.frozen(route={**ROUTE, 'effort': 'high'}, task='task-3'))
+        self.assertEqual(result['admission']['route_decision']['route'], 'codex/gpt-6.1-sol/high')
+        self.assertEqual(self.port.starts[-1]['route']['effort'], 'high')
+        # A pinned effort the native readback contradicts is a mismatch, never success.
+        self.port.effective = {'agent': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'medium'}
+        mismatched = self.start(task='task-4', frozen=self.frozen(route={**ROUTE, 'effort': 'high'}, task='task-4'))
+        self.assertTrue(mismatched['admission']['route_decision']['route_mismatch'])
+        self.assertEqual(mismatched['admission']['error'], {'code': 'route_mismatch'})
+
+    def test_terminal_reuse_must_match_the_pinned_route_exactly(self):
+        from pod.config import set_pin
+        first = self.start()['admission']
+        self.port.workers[first['native_binding']['dispatchId']]['outcome'] = 'succeeded'
+        self.discard(first)
+        set_pin(self.personal, 'codex/gpt-6.1-sol/high', displayed=load_config(self.project))
+        with self.assertRaises(PodError) as pinned:
+            self.start('task2', frozen=self.frozen(task='task2'), reuse_of=first['admission_id'])
+        self.assertEqual(pinned.exception.code, 'pin_mismatch')
+        with self.assertRaises(PodError) as changed:
+            self.start('task2', frozen=self.frozen(route={**ROUTE, 'effort': 'high'}, task='task2'),
+                       reuse_of=first['admission_id'])
+        self.assertEqual(changed.exception.code, 'reuse_route_changed')
+        self.assertEqual(len(self.port.starts), 1)
+
     def test_temporary_failure_reconsideration_then_success_retains_history(self):
         from datetime import timedelta
         from pod.config import set_pin
         from pod.selection import failure_active
-        set_pin(self.personal, 'gpt-6-sol', displayed=load_config(self.project))
+        set_pin(self.personal, SOL, displayed=load_config(self.project))
         preferences = self.personal.read_bytes()
         first = self.start()['admission']
         self.port.workers[first['native_binding']['dispatchId']]['outcome'] = 'failed'

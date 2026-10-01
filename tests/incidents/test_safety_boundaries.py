@@ -22,7 +22,7 @@ class SafetyBoundaryIncidents(unittest.TestCase):
         with fixture() as root:
             path=root/'pod'/'config.yaml'; write_defaults(path)
             snapshot=load(personal=path)
-            choice={'agent':'codex','model':'gpt-6-sol','effort':'medium',
+            choice={'agent':'codex','model':'gpt-6.1-sol','effort':'medium',
                     'context':'max','reason':'bounded worker'}
             self.assertEqual(validate_choice(snapshot,[],[],choice)['code'],'context_unsupported')
             choice['context']='native_default'

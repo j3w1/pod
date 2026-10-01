@@ -52,6 +52,7 @@ def fixture():
                  "XDG_CONFIG_HOME": str(base / "config-home"),
                  "XDG_DATA_HOME": str(base / "data-home"),
                  "XDG_STATE_HOME": str(base / "state-home"),
+                 "XDG_CACHE_HOME": str(base / "cache-home"),
                  "CODEX_HOME": str(base / "codex-home"),
                  "CLAUDE_CONFIG_DIR": str(base / "claude-home"),
                  "PATH": disposable_path(base / "home")}
@@ -61,6 +62,7 @@ def fixture():
         with patch.dict(os.environ, homes, clear=False):
             os.environ.pop("POD_CONFIG_HOME", None)
             os.environ.pop("POD_STATE_HOME", None)
+            os.environ.pop("POD_CACHE_HOME", None)
             yield path
 
 
@@ -177,3 +179,50 @@ def proof(obligation: str, candidate: str = "c1", *, status: str = "PASS", polic
     from pod.util import digest
     row["reference"] = reference or "log-" + digest(row)[:16]
     return row
+
+
+# The genuine 0.6.7 release, merged by #34; its personal parser predates pod/v2.
+POD_067 = "ebec0f5257fc1673859caec09e85e42a4d4d64a1"
+
+
+def earlier_validate(commit: str, document: object, *, project: bool = False) -> dict:
+    """Validate a document with the exact config parser of an earlier commit, read from Git objects.
+
+    The earlier package runs in a subprocess under its own package name, so it never mixes with
+    the current modules.
+    """
+    import subprocess
+    import sys
+    import tarfile
+    from io import BytesIO
+    root = Path(__file__).resolve().parents[1]
+    archive = subprocess.run(["git", "-C", str(root), "archive", "--format=tar", commit, "skills/pod"],
+                             capture_output=True, check=True).stdout
+    with tempfile.TemporaryDirectory() as directory:
+        with tarfile.open(fileobj=BytesIO(archive)) as bundle:
+            bundle.extractall(directory, filter="data")
+        (Path(directory) / "skills" / "pod").rename(Path(directory) / "earlier_pod")
+        program = ("import json,sys\nfrom earlier_pod.config import validate\nfrom earlier_pod.errors import PodError\n"
+                   "try:\n validate(json.loads(sys.argv[1]), project=sys.argv[2] == 'project')\n"
+                   " print(json.dumps({'accepted': True}))\n"
+                   "except PodError as exc:\n print(json.dumps({'accepted': False, 'code': exc.code, 'message': str(exc)}))\n")
+        result = subprocess.run([sys.executable, "-c", program, json.dumps(document),
+                                 "project" if project else "personal"],
+                                env={**os.environ, "PYTHONPATH": directory}, cwd=directory,
+                                capture_output=True, text=True, check=True, timeout=60)
+    return json.loads(result.stdout)
+
+
+@contextmanager
+def without_module(name: str):
+    """Make one already-imported Pod submodule unavailable to fresh imports."""
+    import sys
+    import pod
+    attribute = name.rsplit(".", 1)[-1]
+    saved = pod.__dict__.pop(attribute, None)
+    try:
+        with patch.dict(sys.modules, {name: None}):
+            yield
+    finally:
+        if saved is not None:
+            setattr(pod, attribute, saved)
