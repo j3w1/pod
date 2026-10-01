@@ -14,7 +14,7 @@ from pod.cli import execute, main, parser
 from pod.config import load, write_defaults
 from pod.errors import PodError
 from pod.placement import inspect
-from tests.common import HOST_HOME, HOST_POD_DATA, disposable_path, fixture, modified_bundle
+from tests.common import HOST_HOME, HOST_POD_DATA, disposable_path, fixture, modified_bundle, without_module
 
 
 class CliTests(unittest.TestCase):
@@ -31,28 +31,47 @@ class CliTests(unittest.TestCase):
 
     def test_minimal_public_surface_and_version(self):
         help_text=parser().format_help()
-        for family in ('config','doctor','status','update'): self.assertIn(family,help_text)
+        for family in ('config','doctor','status','update','models'): self.assertIn(family,help_text)
         for obsolete in ('setup','approve','revoke'): self.assertNotIn(obsolete,help_text)
         with redirect_stdout(StringIO()), self.assertRaises(SystemExit) as versioned:
             parser().parse_args(['--version'])
         self.assertEqual(versioned.exception.code,0)
-        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
-            parser().parse_args(['config','approve'])
+        # `pod update` stays software-only; model data refreshes only through `pod models refresh`.
+        for argv in (['config','approve'],['update','models'],['models','update'],['models','refresh','--all']):
+            with self.subTest(argv=argv), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                parser().parse_args(argv)
+        self.assertEqual(parser().parse_args(['models','refresh','--check','--json']).check,True)
 
     def test_config_summary_and_invalid_file_exit_honestly(self):
         args=parser().parse_args(['config','--json'])
         missing=execute(args,self.project)
-        self.assertEqual(missing['status'],'invalid')
+        self.assertEqual((missing['status'],missing['preference_status']),('invalid','missing'))
         self.assertEqual(missing['eligible'],[])
         path=self.root/'config'/'pod'/'config.yaml'; write_defaults(path)
         valid=execute(args,self.project)
-        self.assertEqual(valid['status'],'valid')
-        self.assertEqual(len(valid['eligible']),6)
-        self.assertEqual(len(valid['catalog']),6)
-        self.assertTrue(all(row['suggested_use'] and set(row['ladder']) ==
-                            {'quick', 'normal', 'hard', 'escalation'} for row in valid['catalog']))
+        self.assertEqual((valid['status'],valid['schema'],valid['preference_schema']),('valid','pod-cli/v4','pod/v2'))
+        self.assertEqual(valid['path'],str(path.resolve()))
+        self.assertEqual(len(valid['eligible']),30)
+        self.assertEqual(len(valid['routes']),30)
+        self.assertEqual(set(valid['routes'][0]),{'key','agent','model','effort','state','preferred','pinned'})
+        self.assertEqual([row['id'] for row in valid['models']],
+                         ['claude-opus-5-5','claude-fable-5-1','claude-sonnet-5-5','gpt-6-astra','gpt-6.1-sol','gpt-6-luna'])
+        self.assertTrue(all(row['guide']['efforts'] and row['guide']['use'] for row in valid['models']))
+        self.assertEqual(valid['summary']['enabled'],30)
+        self.assertEqual(valid['observations'],{'status':'not_read','command':'pod models --json'})
+        for removed in ('catalog','mode','saved','not_set','pinned_model','ranks_of_six'):
+            self.assertNotIn(removed,valid)
         path.write_text('schema: pod/v1\nselection: all\nmodels: {gpt-6-sol: available}\n')
         self.assertEqual(execute(args,self.project)['eligible'],[])
+        path.write_text('schema: pod/v1\nselection: all\nmodels: {gpt-6-sol: available}\nworkers: {max_active: 3}\n')
+        setup=execute(args,self.project)
+        self.assertEqual((setup['status'],setup['eligible'],setup['setup']['from_schema']),
+                         ('setup_required',[],'pod/v1'))
+        output=StringIO()
+        with patch('pathlib.Path.cwd',return_value=self.project), redirect_stdout(output):
+            self.assertEqual(main(['config']),1)
+        self.assertIn('need route setup',output.getvalue())
+        self.assertIn('confirm the route setup',output.getvalue())
 
     def test_bare_non_tty_summary_uses_validity_exit_code(self):
         output=StringIO()
@@ -60,10 +79,15 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main([]),1)
         self.assertIn('need attention',output.getvalue())
         write_defaults(self.root/'config'/'pod'/'config.yaml')
-        output=StringIO()
-        with patch('pathlib.Path.cwd',return_value=self.project), redirect_stdout(output):
-            self.assertEqual(main([]),0)
-        self.assertIn('6 eligible models',output.getvalue())
+        for argv in ([],['models']):
+            output=StringIO()
+            with self.subTest(argv=argv), patch('pathlib.Path.cwd',return_value=self.project), redirect_stdout(output):
+                self.assertEqual(main(argv),0)
+            text=output.getvalue()
+            self.assertIn('30 supported, 30 enabled',text)
+            self.assertIn('codex/gpt-6.1-sol/xhigh',text)
+            self.assertIn('bundled snapshot',text)
+            self.assertIn('AA metrics are informational',text)
 
     def test_config_edit_creates_defaults_and_preserves_invalid_manual_change(self):
         path=self.root/'config'/'pod'/'config.yaml'
@@ -87,16 +111,16 @@ class CliTests(unittest.TestCase):
         native.assert_not_called()
 
     def test_config_status_and_doctor_expose_valid_and_invalid_pins_passively(self):
-        from pod.config import DEFAULT
-        from copy import deepcopy
+        from pod.config import defaults
         import yaml
         path = self.root/'config'/'pod'/'config.yaml'
         path.parent.mkdir(parents=True)
-        for pin, disabled in [('gpt-6-sol', False), ('gpt-6-sol', True), ('unknown', False), ([], False)]:
+        sol = 'codex/gpt-6.1-sol/high'
+        for pin, disabled in [(sol, False), (sol, True), ('unknown', False), ([], False)]:
             with self.subTest(pin=pin, disabled=disabled):
-                document = {**deepcopy(DEFAULT), 'pinned_model': pin}
+                document = {**defaults(), 'pinned': pin, 'preferred': 'claude/claude-opus-5-5/high'}
                 if disabled:
-                    document['models']['gpt-6-sol'] = 'disabled'
+                    document['routes'][sol] = 'disabled'
                 path.write_text(yaml.safe_dump(document))
                 original = path.read_bytes()
                 with patch('pod.cli.contract', return_value={'status': 'observed', 'capabilities': {}}), \
@@ -105,12 +129,110 @@ class CliTests(unittest.TestCase):
                     config = execute(parser().parse_args(['config', '--json']), self.project)
                     status = execute(parser().parse_args(['status', '--json']), self.project)
                     doctor = execute(parser().parse_args(['doctor', '--json']), self.project)
+                valid = pin == sol and not disabled
                 expected = '<invalid list pin>' if isinstance(pin, list) else pin
                 for report in (config, status['preferences'], doctor['preferences']):
-                    self.assertEqual(report['pinned_model'], expected)
-                    self.assertEqual(bool(report['errors']), disabled or pin != 'gpt-6-sol')
+                    self.assertEqual(report['pinned'], pin if valid else None)
+                    self.assertEqual(bool(report['errors']), not valid)
+                    self.assertEqual(report['eligible'] == [], not valid)
+                for report in (config, doctor['preferences']):
+                    self.assertEqual(report['pin_diagnostic'], None if valid else expected)
+                    self.assertEqual(report['preferred'], 'claude/claude-opus-5-5/high' if valid else None)
+                self.assertEqual(status['routes']['pinned'], pin if valid else None)
+                # An invalid file has no trusted saved map, so the view shows no enabled route.
+                self.assertEqual(doctor['routes']['enabled'], 30 if valid else 0)
                 native.assert_not_called()
                 self.assertEqual(path.read_bytes(), original)
+
+    def test_route_setup_is_named_by_config_status_and_doctor(self):
+        path = self.root/'config'/'pod'/'config.yaml'
+        path.parent.mkdir(parents=True)
+        path.write_text('schema: pod/v1\nselection: custom\nmodels: {gpt-6-sol: preferred}\n'
+                        'workers: {max_active: 2}\npinned_model: gpt-6-sol\n')
+        original = path.read_bytes()
+        with patch('pod.cli.contract', return_value={'status': 'unavailable'}), \
+             patch('pod.cli.worker_rows', return_value={'workers': [], 'scope': None, 'complete': True}):
+            config = execute(parser().parse_args(['config', '--json']), self.project)
+            status = execute(parser().parse_args(['status', '--run', 'run', '--json']), self.project)
+            doctor = execute(parser().parse_args(['doctor', '--json']), self.project)
+        self.assertEqual(config['status'], 'setup_required')
+        self.assertEqual(config['pin_diagnostic'], 'gpt-6-sol')
+        self.assertEqual(status['preferences']['status'], 'setup_required')
+        self.assertEqual(status['blocker'], 'route_setup_required')
+        self.assertIn('confirm the route setup', status['next_safe_action'])
+        self.assertEqual(doctor['preferences']['setup']['from_schema'], 'pod/v1')
+        output = StringIO()
+        with patch('pathlib.Path.cwd', return_value=self.project), redirect_stdout(output), \
+             patch('pod.cli.contract', return_value={'status': 'unavailable'}):
+            self.assertEqual(main(['doctor']), 0)
+        self.assertIn('Preferences: setup required', output.getvalue())
+        self.assertIn('confirm the route setup', output.getvalue())
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_models_commands_delegate_to_observations_and_report_honestly(self):
+        write_defaults(self.root/'config'/'pod'/'config.yaml')
+        projection = execute(parser().parse_args(['models', '--json']), self.project)['projection']
+        self.assertEqual(projection['schema'], 'pod-routes/v1')
+        self.assertEqual(projection['observations']['origin'], 'bundled')
+        self.assertEqual(projection['native'], {'access': 'unknown'})
+        self.assertTrue(all(row['native'] == {'access': 'unknown'} for row in projection['routes']))
+        for name in ('rank', 'score', 'recommended'):
+            self.assertNotIn(name, json.dumps(projection))
+        output = StringIO()
+        with patch('pathlib.Path.cwd', return_value=self.project), redirect_stdout(output):
+            self.assertEqual(main(['models', '--json']), 0)
+        self.assertEqual(json.loads(output.getvalue())['schema'], 'pod-routes/v1')
+        outcome = {'outcome': 'checked', 'check': True, 'promoted': False, 'generation': None,
+                   'base_generation': '1', 'diff': None, 'diagnostics': [],
+                   'sources': {'artificial_analysis': {'status': 'ok', 'rows': 53, 'mapped': 37,
+                                                       'diagnostics': ['\x1b[31mred']}}}
+        for result, code in ((outcome, 0), ({**outcome, 'outcome': 'promoted', 'check': False}, 0),
+                             ({**outcome, 'outcome': 'refused'}, 1), ({**outcome, 'outcome': 'failed'}, 1)):
+            output = StringIO()
+            with self.subTest(outcome=result['outcome']), patch('pod.observations.refresh', return_value=result) as refresh, \
+                 patch('pathlib.Path.cwd', return_value=self.project), redirect_stdout(output):
+                self.assertEqual(main(['models', 'refresh', '--check']), code)
+            refresh.assert_called_once_with(check=True)
+            self.assertIn(f"refresh: {result['outcome']}", output.getvalue())
+            self.assertNotIn('\x1b', output.getvalue())
+        output = StringIO()
+        with patch('pod.observations.refresh', side_effect=PodError('observations_busy', 'busy')), \
+             patch('pathlib.Path.cwd', return_value=self.project), redirect_stdout(output):
+            self.assertEqual(main(['models', 'refresh', '--json']), 1)
+        self.assertEqual(json.loads(output.getvalue()),
+                         {'schema': 'pod-cli/v4', 'status': 'blocked',
+                          'error': {'code': 'observations_busy', 'message': 'busy'}})
+        from pod.config import load as load_config, set_refresh
+        set_refresh(Path(load_config(self.project)['path']), 'manual', displayed=load_config(self.project))
+        with patch('pod.observations.status', wraps=__import__('pod.observations', fromlist=['status']).status) as status:
+            report = execute(parser().parse_args(['models', 'status', '--json']), self.project)
+        status.assert_called_once_with(setting='manual')
+        self.assertEqual(report['observations']['auto_refresh']['setting'], 'manual')
+        self.assertFalse(report['observations']['auto_refresh']['due'])
+        with without_module('pod.observations'):
+            for argv in (['models', '--json'], ['models', 'status', '--json'], ['models', 'refresh', '--json']):
+                output = StringIO()
+                with self.subTest(argv=argv), patch('pathlib.Path.cwd', return_value=self.project), \
+                     redirect_stdout(output):
+                    self.assertEqual(main(argv), 1)
+                self.assertEqual(json.loads(output.getvalue())['error']['code'], 'observations_unavailable')
+
+    def test_config_status_doctor_and_route_views_make_no_network_call(self):
+        import socket
+        import urllib.request
+        write_defaults(self.root/'config'/'pod'/'config.yaml')
+        guard = AssertionError('network access')
+        with patch.object(socket.socket, 'connect', side_effect=guard), \
+             patch.object(socket, 'create_connection', side_effect=guard), \
+             patch.object(urllib.request, 'urlopen', side_effect=guard), \
+             patch('pod.observations.refresh', side_effect=guard), \
+             patch('pod.cli.contract', return_value={'status': 'unavailable'}), \
+             patch('pod.cli.current_run', return_value={'run': None}), \
+             patch('pathlib.Path.cwd', return_value=self.project):
+            for argv in (['config', '--json'], ['status', '--json'], ['doctor', '--json'], ['models', '--json'],
+                         ['models', 'status', '--json'], [], ['config'], ['doctor'], ['models']):
+                with self.subTest(argv=argv), redirect_stdout(StringIO()):
+                    self.assertIn(main(argv), (0, 1))
 
     def test_disposable_doctor_paths_never_resolve_into_host_pod_data(self):
         from pod.installer import receipt_path
@@ -177,22 +299,26 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(['doctor']),0)
         self.assertIn('Orca: unavailable',output.getvalue())
 
-    def test_sparse_custom_map_is_reported_explicitly_in_reads(self):
+    def test_sparse_route_map_is_reported_explicitly_in_reads(self):
         path=self.root/'config'/'pod'/'config.yaml';path.parent.mkdir(parents=True)
-        path.write_text('schema: pod/v1\nselection: custom\n'
-                        'models: {gpt-6-sol: available}\nworkers: {max_active: 2}\n')
+        path.write_text('schema: pod/v2\nroutes: {codex/gpt-6.1-sol/high: enabled, codex/gpt-6-luna/low: disabled}\n'
+                        'workers: {max_active: 2}\n')
         config=execute(parser().parse_args(['config','--json']),self.project)
-        self.assertEqual(config['eligible'],['gpt-6-sol'])
-        self.assertIn('claude-opus-5-5',config['not_set'])
+        self.assertEqual(config['eligible'],['codex/gpt-6.1-sol/high'])
+        states={row['key']:row['state'] for row in config['routes']}
+        self.assertEqual(states['claude/claude-opus-5-5/high'],'not_set')
+        self.assertEqual(states['codex/gpt-6-luna/low'],'disabled')
         self.assertEqual(config['not_set_meaning'],'not set (not eligible)')
+        self.assertEqual(config['summary']['not_set'],28)
         with patch('pod.cli.contract',return_value={'status':'unavailable'}):
             doctor=execute(parser().parse_args(['doctor','--json']),self.project)
-        self.assertIn('claude-opus-5-5',doctor['preferences']['not_set'])
+        self.assertEqual((doctor['routes']['enabled'],doctor['routes']['not_set']),(1,28))
         with patch('pod.cli.worker_rows',return_value={'workers':[],'scope':{'source':'flag','run':'run'},
                                                       'complete':True}), \
              patch('pod.cli.context_root_for_run',return_value=None):
             status=execute(parser().parse_args(['status','--run','run','--json']),self.project)
-        self.assertIn('claude-opus-5-5',status['preferences']['not_set'])
+        self.assertEqual(status['preferences']['eligible'],['codex/gpt-6.1-sol/high'])
+        self.assertEqual(status['routes']['not_set'],28)
 
     def test_placement_reports_canonical_and_missing_claude_link_precisely(self):
         canonical=self.root/'.agents'/'skills'/'pod'; canonical.mkdir(parents=True)

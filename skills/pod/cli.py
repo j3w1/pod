@@ -13,7 +13,7 @@ import sys
 
 from .bundle import (RELOAD_ACTION, bundle_root, checkpoint_identity, identity_drift_message,
                      identity_label, identity_matches, running_identity, version)
-from .catalog import age, by_id, guide_projection, load as load_catalog, ranks, reference_rows
+from .catalog import SCHEMA as CATALOG_SCHEMA, format_latency, format_usd, load as load_catalog
 from .config import load as load_config, personal_path, read_yaml, write_defaults
 from .errors import PodError
 from .ledger import context_root_for_run, state_inventory
@@ -37,7 +37,22 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--run")
     status.add_argument("--json", action="store_true")
     sub.add_parser("update", help="update the installed bundle")
+    models = sub.add_parser("models", help="model routes and cached public observations")
+    models.add_argument("--json", action="store_true")
+    models_sub = models.add_subparsers(dest="models_command")
+    refresh = models_sub.add_parser("refresh", help="fetch and promote public model observations")
+    refresh.add_argument("--check", action="store_true", help="validate and compare without saving")
+    refresh.add_argument("--json", action="store_true")
+    models_status = models_sub.add_parser("status", help="offline source, cache and mapping diagnostics")
+    models_status.add_argument("--json", action="store_true")
     return root
+
+
+# Config, doctor and status describe preferences without reading or fetching observations.
+NOT_READ = {"status": "not_read", "sources": {}}
+PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
+                   "max_active", "refresh", "errors", "setup", "pin_diagnostic",
+                   "preferred_diagnostic", "policy_revision")
 
 
 def _edit(path: Path) -> dict:
@@ -58,36 +73,52 @@ def _edit(path: Path) -> dict:
     try:
         read_yaml(path)
     except PodError as exc:
-        return {"status": "invalid", "reason": exc.code, "path": str(path),
+        return {"status": "setup_required" if exc.code == "setup_required" else "invalid",
+                "reason": exc.code, "path": str(path),
                 "message": "Edited file was kept; correct it before delegation"}
     return {"status": "valid", "path": str(path)}
 
 
 def _config(project: Path, *, edit: bool) -> dict:
+    from .routes import project as project_routes
     if edit:
         result = _edit(personal_path(project))
     else:
         result = {"status": "valid"}
     snapshot = load_config(project)
-    document = load_catalog()
-    result.update({"schema": "pod-cli/v4", "path": snapshot["path"],
-                   "revision": snapshot["revision"], "mode": snapshot["mode"],
-                   "pinned_model": snapshot["pinned_model"],
-                   "saved": snapshot["saved"], "effective": snapshot["effective"],
-                   "eligible": snapshot["eligible"], "not_set": snapshot["not_set"],
+    projection = project_routes(project, preferences=snapshot, observations=NOT_READ)
+    result.update({key: snapshot[key] for key in PREFERENCE_KEYS if key not in ("schema", "status")})
+    result.update({"schema": "pod-cli/v4", "preference_schema": snapshot["schema"],
+                   "preference_status": snapshot["status"],
+                   "routes": [{key: row[key] for key in ("key", "agent", "model", "effort", "state",
+                                                         "preferred", "pinned")}
+                              for row in projection["routes"]],
                    "not_set_meaning": "not set (not eligible)",
-                   "max_active": snapshot["max_active"],
-                   "policy_revision": snapshot["policy_revision"], "errors": snapshot["errors"],
-                   "catalog": guide_projection(document)})
+                   "models": [{"id": model["id"], "name": model["name"], "agent": model["agent"],
+                               "provider": model["provider"], "efforts": list(model["efforts"]),
+                               "guide": dict(model["guide"]), "guidance": model["guidance"],
+                               "documented_context_tokens": model["documented_context_tokens"]}
+                              for model in load_catalog()["models"]],
+                   "summary": projection["summary"],
+                   "observations": {"status": "not_read", "command": "pod models --json"}})
     if snapshot["errors"]:
-        result["status"] = "invalid"
+        result["status"] = "setup_required" if snapshot["setup"] else "invalid"
     return result
 
 
 def _doctor(project: Path) -> dict:
     from . import installer
+    from .routes import project as project_routes
     running = running_identity()
     preferences = load_config(project)
+    try:
+        document = load_catalog()
+        catalog_state = {"status": "valid", "schema": CATALOG_SCHEMA,
+                         "models": [row["id"] for row in document["models"]],
+                         "not_routable": [row["id"] for row in document["not_routable"]]}
+    except PodError as exc:
+        catalog_state = {"status": "invalid", "error": {"code": exc.code, "message": str(exc)}}
+    observation_state = _observation_status(preferences)
     snapshot = contract()
     try:
         state = state_inventory(project)
@@ -146,10 +177,9 @@ def _doctor(project: Path) -> dict:
             "launcher": {"path": str(launcher), "exists": launcher.is_file(), "shadowed": shadowed,
                          "ownership": launcher_ownership},
             "placements": inspect_placements(project), "skills_cli": skills_cli_entry(),
-            "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
-                                                           "max_active", "errors", "policy_revision", "pinned_model")},
-            "catalog": {"models": list(by_id()), "ranks_of_six": ranks(),
-                        "benchmark_age_days": age()},
+            "preferences": {key: preferences[key] for key in PREFERENCE_KEYS},
+            "routes": project_routes(project, preferences=preferences, observations=NOT_READ)["summary"],
+            "catalog": catalog_state, "observations": observation_state,
             "orca": {"status": snapshot.get("status"), "capabilities": snapshot.get("capabilities", {}),
                      "runtime_state": snapshot.get("runtime_state"),
                      "reason": snapshot.get("reason")},
@@ -159,9 +189,46 @@ def _doctor(project: Path) -> dict:
 from .status import project_for_state, status as _status, render as render_status
 
 
+def _observations():
+    """The observations module, imported only by the commands that read it."""
+    try:
+        from . import observations
+    except ImportError as exc:
+        raise PodError("observations_unavailable", "The observations module is unavailable in this bundle") from exc
+    return observations
+
+
+def _observation_status(preferences: dict) -> dict:
+    """Offline cache and source diagnostics for doctor; never a refresh."""
+    try:
+        report = _observations().status(setting=preferences["refresh"])
+    except PodError as exc:
+        return {"status": "unavailable", "reason": exc.code}
+    return {"status": "observed", **{key: report.get(key) for key in (
+        "cache", "origin", "generation", "created_at", "age_s", "stale", "auto_refresh")},
+            "sources": {source: {key: row.get(key) for key in ("status", "rows", "mapped", "stale",
+                                                                "retrieved_at")}
+                        for source, row in (report.get("sources") or {}).items()},
+            "diagnostics": list(report.get("diagnostics") or [])[:16]}
+
+
+def _models(project: Path, action: str | None, *, check: bool = False) -> dict:
+    observations = _observations()
+    if action == "refresh":
+        result = observations.refresh(check=check)
+        return {"schema": "pod-cli/v4", "status": result["outcome"], "refresh": result}
+    if action == "status":
+        report = observations.status(setting=load_config(project)["refresh"])
+        return {"schema": "pod-cli/v4", "status": "observed", "observations": report}
+    from .routes import project as project_routes
+    return {"schema": "pod-cli/v4", "status": "observed", "projection": project_routes(project)}
+
+
 def execute(args: argparse.Namespace, project: Path) -> dict:
-    if args.command in (None, "config"):
+    if args.command == "config":
         return _config(project, edit=getattr(args, "config_action", None) == "edit")
+    if args.command in (None, "models"):
+        return _models(project, getattr(args, "models_command", None), check=getattr(args, "check", False))
     if args.command == "doctor":
         return _doctor(project)
     if args.command == "status":
@@ -172,12 +239,78 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
     raise PodError("unknown_command", "Unsupported public command")
 
 
+def _metric(row: dict, name: str, render) -> str:
+    value = row["metrics"][name]["value"]
+    return "—" if value is None else render(value)
+
+
+def _print_models(projection: dict) -> None:
+    preferences, summary = projection["preferences"], projection["summary"]
+    print(f"Pod {version()} routes: {summary['routes']} supported, {summary['enabled']} enabled, "
+          f"{summary['disabled']} disabled, {summary['not_set']} not set (not eligible)")
+    print(f"Preferences: {preferences['path']} ({preferences['status'].replace('_', ' ')})")
+    if preferences["status"] != "valid":
+        print(f"Pod preferences need {'route setup' if preferences['setup'] else 'attention'}; "
+              "no route is eligible for new delegation")
+        for error in preferences["errors"]:
+            print(f"  {error['code']}: {error['message']}")
+    print(f"Preferred route: {preferences['preferred'] or 'none'}; pinned route: {preferences['pinned'] or 'none'}")
+    seen = projection["observations"]
+    if seen["status"] == "observed":
+        print(f"Observations: {seen['origin']} snapshot, generation {seen['generation']}, "
+              f"created {seen['created_at']}{' (stale)' if seen.get('stale') else ''}")
+    else:
+        print(f"Observations: {seen['status']}")
+    print(f"{'ROUTE':34} {'STATE':9} {'MARK':5} {'INDEX':>5} {'USD/TASK':>9} {'FIRST':>8}")
+    for row in projection["routes"]:
+        mark = ("pin " if row["pinned"] else "") + ("pref" if row["preferred"] else "")
+        print(f"{row['key']:34} {row['state'].replace('_', ' '):9} {mark.strip():5} "
+              f"{_metric(row, 'intelligence', str):>5} {_metric(row, 'usd_per_task', format_usd):>9} "
+              f"{_metric(row, 'first_response_s', format_latency):>8}")
+    if projection["unmapped"]:
+        print(f"New or unsupported observations: {len(projection['unmapped'])} (not routable; pod models --json lists them)")
+    print("AA metrics are informational; Pod chooses each exact route by suitability.")
+
+
+def _print_refresh(result: dict) -> None:
+    print(f"Model observations refresh: {result['outcome']}"
+          + (" (check only; nothing saved)" if result["check"] else ""))
+    for source, row in sorted(result["sources"].items()):
+        print(f"  {source}: {row['status']}; {row.get('mapped', 0)}/{row.get('rows', 0)} rows mapped")
+        for message in row.get("diagnostics", [])[:4]:
+            print(f"    {clean(message)}")
+
+
+def _print_observation_status(report: dict) -> None:
+    print(f"Model observations: {report['origin']} snapshot"
+          + (f", generation {report['generation']}" if report.get("generation") else "")
+          + (" (stale)" if report.get("stale") else ""))
+    print(f"Cache: {report.get('cache') or 'unavailable'}")
+    for source, row in sorted(report["sources"].items()):
+        print(f"  {source}: {row['status']}; {row.get('mapped', 0)}/{row.get('rows', 0)} rows mapped"
+              + (" (stale)" if row.get("stale") else ""))
+    auto = report.get("auto_refresh") or {}
+    print(f"Automatic refresh: {auto.get('setting')}; due: {'yes' if auto.get('due') else 'no'}"
+          + (f" ({clean(str(auto['reason']))})" if auto.get("reason") else ""))
+    for message in report.get("diagnostics", [])[:8]:
+        print(f"  {clean(message)}")
+
+
+def _exit_code(args: argparse.Namespace, result: dict) -> int:
+    if "projection" in result:
+        # The route view succeeds as a read; its exit code still reports preference validity.
+        return 0 if result["projection"]["preferences"]["status"] == "valid" else 1
+    return 0 if result["status"] in ("valid", "observed", "promoted", "checked") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "update":
         from .installer import main as installer_main
         return installer_main(["--update"])
-    if args.command is None and sys.stdin.isatty() and sys.stdout.isatty():
+    workspace = (args.command is None or args.command == "models" and args.models_command is None
+                 and not args.json)
+    if workspace and sys.stdin.isatty() and sys.stdout.isatty():
         from .tui import run as run_tui
         try:
             return run_tui(Path.cwd())
@@ -190,29 +323,35 @@ def main(argv: list[str] | None = None) -> int:
         result = {"schema": "pod-cli/v4", "status": "blocked",
                   "error": {"code": exc.code, "message": str(exc)}}
     if getattr(args, "json", False):
-        print(json.dumps(result, sort_keys=True, ensure_ascii=False))
-    elif args.command is None:
-        from .tui_render import summary
-        if result["status"] == "blocked":
-            print(f"pod: {result['error']['code']}: {result['error']['message']}")
-        else:
-            print(summary(result))
-    elif args.command in (None, "config"):
-        if result["status"] == "invalid":
-            print(f"Pod preferences need attention: {result['path']}")
-            for error in result.get("errors", []):
-                print(f"  {error['code']}: {error['message']}")
-        elif result["status"] == "blocked":
-            print(f"pod: {result['error']['code']}: {result['error']['message']}")
-        else:
-            print(f"Pod {version()}: {len(result['eligible'])} eligible models, "
-                  f"{result['mode']} selection, maximum {result['max_active']} workers")
-            print(f"Preferences: {result['path']}")
-            print(f"Pinned worker: {result.get('pinned_model') or 'none'}")
-            if result["not_set"]:
-                print("Not set (not eligible): " + ", ".join(result["not_set"]))
+        print(json.dumps(result.get("projection", result) if args.command == "models"
+                         and getattr(args, "models_command", None) is None and result["status"] != "blocked"
+                         else result, sort_keys=True, ensure_ascii=False))
     elif result["status"] == "blocked":
         print(f"pod: {result['error']['code']}: {result['error']['message']}")
+    elif args.command in (None, "models"):
+        action = getattr(args, "models_command", None)
+        if action == "refresh":
+            _print_refresh(result["refresh"])
+        elif action == "status":
+            _print_observation_status(result["observations"])
+        else:
+            _print_models(result["projection"])
+    elif args.command == "config":
+        if result["status"] != "valid":
+            print(f"Pod preferences need {'route setup' if result['status'] == 'setup_required' else 'attention'}: "
+                  f"{result['path']}")
+            for error in result.get("errors", []):
+                print(f"  {error['code']}: {error['message']}")
+            if result.get("setup"):
+                print(f"Next: {result['setup']['action']}")
+        else:
+            print(f"Pod {version()}: {len(result['eligible'])} enabled routes, "
+                  f"maximum {result['max_active']} workers, refresh {result['refresh']}")
+            print(f"Preferences: {result['path']}")
+            print(f"Preferred route: {result['preferred'] or 'none'}")
+            print(f"Pinned route: {result['pinned'] or 'none'}")
+            if result["summary"]["not_set"]:
+                print(f"Not set (not eligible): {result['summary']['not_set']} routes")
     elif args.command == "doctor":
         print(f"Pod {version()}: {result['installation']}")
         checks = result["installation_checks"]
@@ -232,9 +371,15 @@ def main(argv: list[str] | None = None) -> int:
             print("Launcher: another pod command is earlier on PATH")
         for duplicate in checks.get("duplicates", []):
             print(f"Duplicate skill: {duplicate}")
-        print(f"Preferences: {'valid' if not result['preferences']['errors'] else 'invalid'}")
-        if result["preferences"]["not_set"]:
-            print("Not set (not eligible): " + ", ".join(result["preferences"]["not_set"]))
+        preferences = result["preferences"]
+        print(f"Preferences: {preferences['status'].replace('_', ' ')} ({preferences['path']})")
+        if preferences["setup"]:
+            print(f"Next: {preferences['setup']['action']}")
+        print(f"Routes: {result['routes']['enabled']} enabled of {result['routes']['routes']}; "
+              f"preferred {preferences['preferred'] or 'none'}; pinned {preferences['pinned'] or 'none'}")
+        seen = result["observations"]
+        print(f"Model observations: {seen.get('origin') or seen['status']}"
+              + (" (stale)" if seen.get("stale") else ""))
         print(f"Orca: {result['orca']['status']}")
         for row in result["state"].get("superseded", []):
             print(f"Superseded objective {row['objective'] or row['record']}: "
@@ -243,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
         render_status(result)
     else:
         print(f"pod: {result['status']}")
-    return 0 if result["status"] in ("valid", "observed") else 1
+    return _exit_code(args, result)
 
 
 if __name__ == "__main__":
