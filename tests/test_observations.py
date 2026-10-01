@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -282,6 +283,64 @@ class RefreshTransactionTests(ObservationCase):
         self.assertEqual(result["generation"], "2")
         self.assertEqual(observations.previous()["generation"], "1")
 
+    def test_one_deadline_from_the_policy_covers_fetch_and_parsing(self):
+        self.assertFalse(hasattr(observations, "TOTAL_TIMEOUT_S"), "the policy is the bound's only home")
+        heavy = ("<table><tr><th>Model</th><th>Creator</th></tr><tr><td>" + "<i>x</i>" * 1_000_000
+                 + "</td></tr></table>")
+        started = time.monotonic()
+        result, _ = self.refresh(pages(**{AA_URL: heavy}),
+                                 policy=sources.Policy(timeout_s=.5))
+        self.assertLess(time.monotonic() - started, 2.5)
+        self.assertEqual((result["outcome"], result["sources"][sources.AA]["status"]), ("failed", "malformed"))
+        self.assertIn("time limit", result["sources"][sources.AA]["diagnostics"][0])
+        seen = []
+
+        def fetch(url, *, deadline, cancel):
+            seen.append(deadline - time.monotonic())
+            return sources.Page(url, pages()[url])
+
+        observations.refresh(now=T0, fetch=fetch, policy=sources.Policy(timeout_s=3.0))
+        self.assertEqual(len(seen), 3)
+        self.assertTrue(all(0 < remaining <= 3.0 for remaining in seen), seen)
+
+    def test_unexpected_fetch_or_parser_errors_settle_the_attempt(self):
+        result, _ = self.refresh(pages(**{AA_URL: ValueError("invalid literal for int(): '\u00b2'" * 20)}))
+        self.assertEqual((result["outcome"], result["sources"][sources.AA]["status"]), ("failed", "unavailable"))
+        message = result["sources"][sources.AA]["diagnostics"][0]
+        self.assertIn("unexpected ValueError", message)
+        self.assertLessEqual(len(message), sources.MAX_DIAGNOSTIC)
+        self.assertEqual(self.record()["attempt"]["outcome"], "failed")
+        broken = dict(sources.PARSERS, **{sources.ANTHROPIC: lambda text, deadline=None: 1 / 0})
+        with patch.object(sources, "PARSERS", broken):
+            result, _ = self.refresh(now=T0 + timedelta(hours=7))
+        self.assertEqual((result["outcome"], result["sources"][sources.ANTHROPIC]["status"]),
+                         ("promoted", "malformed"))
+        self.assertEqual(self.record()["attempt"]["outcome"], "promoted")
+
+    def test_hostile_content_length_through_the_real_reader_settles_failed(self):
+        server = Server()
+        self.addCleanup(server.close)
+        server.routes["/aa"] = (200, {"Content-Length": "\u00b2"}, b"<p>x</p>")
+        local = partial(sources.fetch, policy=server.policy())
+        result = observations.refresh(now=T0, fetch=lambda url, *, deadline, cancel: local(
+            server.url("/aa"), deadline=deadline, cancel=cancel))
+        self.assertEqual((result["outcome"], result["sources"][sources.AA]["status"]), ("failed", "malformed"))
+        self.assertEqual(self.record()["attempt"]["outcome"], "failed")
+
+    def test_unexpected_error_at_promotion_never_leaves_running(self):
+        original = observations.atomic_json
+
+        def broken(path, value, **kwargs):
+            if path.name == "current.json":
+                raise IsADirectoryError(21, "Is a directory")
+            return original(path, value, **kwargs)
+
+        with patch.object(observations, "atomic_json", broken), self.assertRaises(PodError) as caught:
+            self.refresh()
+        self.assertEqual(caught.exception.code, "refresh_failed")
+        self.assertEqual(self.record()["attempt"]["outcome"], "failed")
+        self.assertIsNotNone(self.record()["attempt"]["finished_at"])
+
     def test_severe_coverage_loss_is_refused(self):
         self.refresh()
         before = self.current_bytes()
@@ -426,6 +485,26 @@ class AutomaticRefreshTests(ObservationCase):
         (self.root / "refresh.json").write_text(json.dumps(record))
         self.assertFalse(observations.auto_refresh_due("automatic", T0 + timedelta(days=3, minutes=5)))
 
+    def test_cancelled_or_abandoned_attempts_restrain_only_briefly(self):
+        self.refresh()
+        later = T0 + timedelta(days=2)
+        event = threading.Event()
+        event.set()
+        self.assertEqual(self.refresh(now=later, cancel=event)[0]["outcome"], "cancelled")
+        self.assertFalse(observations.auto_refresh_due("automatic", later + timedelta(minutes=9)))
+        self.assertTrue(observations.auto_refresh_due("automatic", later + timedelta(minutes=10)))
+
+        def interrupt(url):
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.refresh(fetch=FakeFetch(pages(), hook=interrupt), now=later)
+        self.assertEqual(self.record()["attempt"]["outcome"], "running")
+        self.assertFalse(observations.auto_refresh_due("automatic", later + timedelta(minutes=9)))
+        self.assertTrue(observations.auto_refresh_due("automatic", later + timedelta(minutes=10)))
+        self.refresh(pages(**{AA_URL: sources.SourceError("unavailable", "Network error")}), now=later)
+        self.assertFalse(observations.auto_refresh_due("automatic", later + timedelta(hours=5)))
+
     def test_status_and_auto_checks_are_offline_and_read_only(self):
         self.refresh()
         before = {path.name: path.read_bytes() for path in self.root.iterdir()}
@@ -502,6 +581,52 @@ class SnapshotValidationTests(ObservationCase):
         target.write_text("{}")
         (self.root / "previous.json").symlink_to(target)
         self.assertIsNone(observations.previous())
+
+
+    def bounded(self, call):
+        """Run a reader in a thread so a blocking regression fails instead of hanging the suite."""
+        box = {}
+        thread = threading.Thread(target=lambda: box.update(value=call()), daemon=True)
+        thread.start()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), "reader blocked on a cache file")
+        self.assertIn("value", box, "reader raised")
+        return box["value"]
+
+    def test_hostile_cache_files_fall_back_without_raising_or_blocking(self):
+        self.snapshot()
+        good = {name: (self.root / name).read_bytes() for name in ("current.json", "refresh.json")}
+        def sparse(path):
+            path.touch()
+            os.truncate(path, 512 * 1024 * 1024)
+
+        makers = {"nested": lambda path: path.write_text("[" * 200_000), "fifo": os.mkfifo,
+                  "directory": lambda path: path.mkdir(), "sparse": sparse}
+        for kind, make in makers.items():
+            for name in ("current.json", "previous.json", "refresh.json"):
+                with self.subTest(kind=kind, file=name):
+                    path = self.root / name
+                    if path.is_dir():
+                        path.rmdir()
+                    else:
+                        path.unlink(missing_ok=True)
+                    make(path)
+                    view = self.bounded(lambda: observations.load(T0))
+                    pair = self.bounded(lambda: observations.load_pair(T0))
+                    report = self.bounded(lambda: observations.status(T0, "automatic"))
+                    self.bounded(lambda: observations.auto_refresh_due("automatic", T0))
+                    if name == "current.json":
+                        self.assertEqual(view["origin"], "bundled")
+                        self.assertTrue(any(item.startswith("current.json ignored") for item in view["diagnostics"]))
+                    if name == "previous.json":
+                        self.assertIsNone(pair["previous"])
+                    if name == "refresh.json":
+                        self.assertIsNone(report["last_attempt"])
+                    path.rmdir() if path.is_dir() else path.unlink()
+                    if name in good:
+                        path.write_bytes(good[name])
+        result = self.bounded(lambda: observations.refresh(now=T0 + timedelta(days=1), fetch=FakeFetch(pages())))
+        self.assertEqual(result["outcome"], "promoted")
 
 
 class CacheLocationTests(unittest.TestCase):

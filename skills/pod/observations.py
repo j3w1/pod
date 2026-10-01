@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import errno
 import fcntl
 from functools import partial
 import hashlib
@@ -17,6 +18,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import time
 from typing import Iterator
 
@@ -32,9 +34,8 @@ MAX_BUNDLED = 64 * 1024
 MAX_STATUS = 64 * 1024
 FRESH_S = 24 * 3600          # automatic refresh is due from this age
 STALE_S = 7 * 24 * 3600      # display stale from this age
-FAILED_RESTRAINT_S = 6 * 3600  # no automatic retry this soon after an unsuccessful attempt
-RUNNING_RESTRAINT_S = 600    # an attempt still marked running blocks automatic starts this long
-TOTAL_TIMEOUT_S = 20.0
+FAILED_RESTRAINT_S = 6 * 3600  # no automatic retry this soon after a failed or refused attempt
+BRIEF_RESTRAINT_S = 600      # after a cancelled attempt, or one still (or left) marked running
 COLLAPSE_FLOOR = 8           # below this many rows a drop is too small to call a collapse
 MAX_DIFF_NAMES = 20
 MAX_DIAGNOSTICS = 10
@@ -91,7 +92,7 @@ def _lock(root: Path, *, shared: bool = False) -> Iterator[None]:
     path = root / ".lock"
     if shared:
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
             yield
             return
@@ -228,23 +229,53 @@ def validate(document: object) -> dict:
     return document
 
 
-def _read(path: Path, limit: int) -> dict | None:
-    """A validated snapshot, or None when absent; PodError when present but unusable."""
+def _bytes(path: Path, limit: int) -> bytes | None:
+    """A regular file's bytes, or None when absent; PodError when redirected, special or too big.
+
+    The file is opened without following a link or waiting on a FIFO, and its type and size
+    are checked before anything is read.
+    """
     try:
-        if path.is_symlink():
-            raise PodError("unsafe_cache", f"{path.name} is redirected")
-        raw = path.read_bytes()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise PodError("invalid_observations", f"{path.name} cannot be read") from exc
-    if len(raw) > limit:
-        raise _invalid(f"{path.name} exceeds its size limit")
+        if exc.errno == errno.ELOOP:
+            raise PodError("unsafe_cache", f"{path.name} is redirected") from exc
+        raise _invalid(f"{path.name} cannot be read") from exc
     try:
-        document = json.loads(raw, object_pairs_hook=_reject_duplicates)
-    except (UnicodeError, ValueError) as exc:
-        raise _invalid(f"{path.name} is not valid JSON") from exc
-    return validate(document)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise _invalid(f"{path.name} is not a regular file")
+        if info.st_size > limit:
+            raise _invalid(f"{path.name} exceeds its size limit")
+        chunks, size = [], 0
+        while size <= limit:
+            chunk = os.read(fd, min(64 * 1024, limit + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    except OSError as exc:
+        raise _invalid(f"{path.name} cannot be read") from exc
+    finally:
+        os.close(fd)
+    if size > limit:
+        raise _invalid(f"{path.name} exceeds its size limit")
+    return b"".join(chunks)
+
+
+def _json(raw: bytes, name: str) -> object:
+    try:
+        return json.loads(raw, object_pairs_hook=_reject_duplicates)
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise _invalid(f"{name} is not valid JSON") from exc
+
+
+def _read(path: Path, limit: int) -> dict | None:
+    """A validated snapshot, or None when absent; PodError when present but unusable."""
+    raw = _bytes(path, limit)
+    return None if raw is None else validate(_json(raw, path.name))
 
 
 def _try(path: Path, limit: int, diagnostics: list[str]) -> dict | None:
@@ -329,11 +360,11 @@ def previous() -> dict | None:
 
 def _status_record(root: Path) -> dict | None:
     """The bounded refresh record; unreadable or invalid records count as absent."""
-    path = root / "refresh.json"
     try:
-        if path.is_symlink() or path.stat().st_size > MAX_STATUS:
+        raw = _bytes(root / "refresh.json", MAX_STATUS)
+        if raw is None:
             return None
-        record = json.loads(path.read_bytes(), object_pairs_hook=_reject_duplicates)
+        record = _json(raw, "refresh.json")
         _exact(record, {"schema", "attempt", "sources"}, "refresh record")
         attempt = _exact(record["attempt"], {"started_at", "finished_at", "outcome", "check"}, "attempt")
         _utc(attempt["started_at"], "started_at")
@@ -384,9 +415,12 @@ def _auto(setting: object, moment: datetime) -> tuple[bool, str]:
     if record is not None:
         attempt = record["attempt"]
         since = (moment - _moment(attempt["started_at"])).total_seconds()
-        if attempt["outcome"] == "running" and since < RUNNING_RESTRAINT_S:
+        if attempt["outcome"] == "running" and since < BRIEF_RESTRAINT_S:
             return False, "a refresh is already running"
-        if attempt["outcome"] in ("running", "failed", "refused", "cancelled") and since < FAILED_RESTRAINT_S:
+        # A cancel, quit or kill is not a source failure: it restrains automatic starts briefly.
+        restraint = {"cancelled": BRIEF_RESTRAINT_S, "failed": FAILED_RESTRAINT_S,
+                     "refused": FAILED_RESTRAINT_S}.get(attempt["outcome"], 0)
+        if since < restraint:
             return False, f"last attempt at {attempt['started_at']} was {attempt['outcome']}"
     if current is None:
         return True, "no local observations"
@@ -457,9 +491,10 @@ def status(now: datetime | None = None, setting: object = None) -> dict:
 
 def _digest(path: Path) -> str | None:
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except FileNotFoundError:
-        return None
+        raw = _bytes(path, MAX_SNAPSHOT)
+    except PodError as exc:
+        return f"unusable: {exc}"
+    return None if raw is None else hashlib.sha256(raw).hexdigest()
 
 
 def _empty_block(source: sources.Source, status: str) -> dict:
@@ -515,7 +550,10 @@ def refresh(check: bool = False, now: datetime | None = None, cancel=None, fetch
     ``check`` and cancelled runs never promote. The cache lock is held only for short file
     reads and the final compare-and-swap, never across network work. ``fetch(url, *,
     deadline, cancel) -> sources.Page`` may be injected; it defaults to the bounded HTTPS
-    reader. No preference, registry or bundle file is written and no worker is started.
+    reader. One wall-clock deadline of ``policy.timeout_s`` (``sources.DEFAULT``'s when no policy
+    is given) covers every source's fetch and parse together. An unexpected error settles the
+    attempt as failed instead of leaving it running. No preference, registry or bundle file is
+    written and no worker is started.
     """
     moment = _now(now)
     started = _stamp(moment)
@@ -527,92 +565,109 @@ def refresh(check: bool = False, now: datetime | None = None, cancel=None, fetch
         base = _try(root / "current.json", MAX_SNAPSHOT, diagnostics)
         record = _status_record(root)
         _write_record(root, _attempt_record(record, started, "running", check, None, {}))
-    reference = base or bundled()
-    deadline = time.monotonic() + TOTAL_TIMEOUT_S
-    blocks, attempts = {}, {}
-    cancelled = required_failed = collapsed = False
-    for source in sources.SOURCES:
-        prior = (reference or {}).get("sources", {}).get(source.id)
-        prior = prior if prior and prior["url"] == source.url else None
-        until = _retry_until(record, source.id, moment)
-        retry_s = None
-        if cancelled or sources.cancelled(cancel):
-            cancelled = True
-            status_, message = "not_attempted", "Refresh was cancelled"
-        elif until is not None:
-            status_, message = "not_attempted", f"Source asked to retry after {_stamp(until)}"
-        elif required_failed:
-            status_, message = "not_attempted", "Skipped because a required source failed"
-        else:
-            try:
-                page = fetcher(source.url, deadline=deadline, cancel=cancel)
-                parsed = sources.PARSERS[source.id](page.text)
-                block = {"url": source.url, "attribution": source.attribution,
-                         "required": source.required, "status": "ok",
-                         "retrieved_at": _stamp(_now(now)), "published_at": parsed["published_at"],
-                         "methodology": parsed["methodology"], "rows": parsed["rows"],
-                         "diagnostics": [sources.diagnostic(item) for item in parsed["diagnostics"]][:MAX_DIAGNOSTICS]}
-                _block(block)
-                old, new = _coverage(source.id, prior), _coverage(source.id, block)
-                if _collapsed(old, new):
-                    collapsed = collapsed or source.required
-                    raise sources.ParseError(
-                        f"Coverage collapsed from {old['rows']} rows ({old['mapped']} mapped) "
-                        f"to {new['rows']} ({new['mapped']} mapped)")
-                blocks[source.id] = block
-                attempts[source.id] = {"status": "ok", "attempted_at": started,
-                                       "retry_after_until": None, "diagnostics": block["diagnostics"]}
-                continue
-            except sources.SourceError as exc:
-                status_, message, retry_s = exc.status, f"{source.id}: {exc}", exc.retry_after_s
-                cancelled = cancelled or (exc.status == "not_attempted" and sources.cancelled(cancel))
-            except (sources.ParseError, PodError) as exc:
-                status_, message = "malformed", f"{source.id}: {exc}"
-        blocks[source.id] = _kept(source, prior, status_, message)
-        if until is not None:
-            retry_at = _stamp(until)
-        elif retry_s is not None:
-            retry_at = _stamp(datetime.fromtimestamp(moment.timestamp() + retry_s, timezone.utc))
-        else:
-            retry_at = None
-        attempts[source.id] = {"status": status_, "attempted_at": None if status_ == "not_attempted" else started,
-                               "retry_after_until": retry_at, "diagnostics": blocks[source.id]["diagnostics"]}
-        if source.required and status_ != "ok":
-            required_failed = True
-            diagnostics.append(sources.diagnostic(message))
-
-    candidate = None
-    if cancelled:
-        outcome = "cancelled"
-    elif required_failed:
-        outcome = "refused" if collapsed else "failed"
-    else:
-        candidate = validate({"schema": SCHEMA, "generation": "0", "created_at": started, "sources": blocks})
-        outcome = "checked" if check else "promoted"
-    generation = None
-    with _lock(root):
-        if outcome == "promoted":
-            if sources.cancelled(cancel):
-                outcome = "cancelled"
-            elif _digest(root / "current.json") != base_digest:
-                outcome = "superseded"
-                diagnostics.append("A concurrent refresh promoted newer observations first")
+    try:
+        reference = base or bundled()
+        deadline = time.monotonic() + (policy or sources.DEFAULT).timeout_s
+        blocks, attempts = {}, {}
+        cancelled = required_failed = collapsed = False
+        for source in sources.SOURCES:
+            prior = (reference or {}).get("sources", {}).get(source.id)
+            prior = prior if prior and prior["url"] == source.url else None
+            until = _retry_until(record, source.id, moment)
+            retry_s = None
+            if cancelled or sources.cancelled(cancel):
+                cancelled = True
+                status_, message = "not_attempted", "Refresh was cancelled"
+            elif until is not None:
+                status_, message = "not_attempted", f"Source asked to retry after {_stamp(until)}"
+            elif required_failed:
+                status_, message = "not_attempted", "Skipped because a required source failed"
             else:
-                older = _try(root / "previous.json", MAX_SNAPSHOT, [])
-                counter = max([int(doc["generation"]) for doc in (base, older) if doc] + [0]) + 1
-                generation = candidate["generation"] = str(counter)
-                candidate["created_at"] = _stamp(_now(now))
-                if base is not None:
-                    atomic_json(root / "previous.json", base, limit=MAX_SNAPSHOT)
-                atomic_json(root / "current.json", candidate, limit=MAX_SNAPSHOT)
-        _write_record(root, _attempt_record(_status_record(root), started, outcome, check,
-                                            _stamp(_now(now)), attempts))
-    return {"outcome": outcome, "check": check, "promoted": outcome == "promoted",
-            "generation": generation, "base_generation": base["generation"] if base else None,
-            "sources": {source_id: {"status": block["status"], **_coverage(source_id, block),
-                                    "retrieved_at": block["retrieved_at"],
-                                    "retry_after_until": attempts[source_id]["retry_after_until"],
-                                    "diagnostics": block["diagnostics"]}
-                        for source_id, block in blocks.items()},
-            "diff": _diff(reference, candidate) if candidate else None,
-            "diagnostics": diagnostics[:MAX_DIAGNOSTICS]}
+                page = None
+                try:
+                    page = fetcher(source.url, deadline=deadline, cancel=cancel)
+                    parsed = sources.PARSERS[source.id](page.text, deadline)
+                    block = {"url": source.url, "attribution": source.attribution,
+                             "required": source.required, "status": "ok",
+                             "retrieved_at": _stamp(_now(now)), "published_at": parsed["published_at"],
+                             "methodology": parsed["methodology"], "rows": parsed["rows"],
+                             "diagnostics": [sources.diagnostic(item) for item in parsed["diagnostics"]][:MAX_DIAGNOSTICS]}
+                    _block(block)
+                    old, new = _coverage(source.id, prior), _coverage(source.id, block)
+                    if _collapsed(old, new):
+                        collapsed = collapsed or source.required
+                        raise sources.ParseError(
+                            f"Coverage collapsed from {old['rows']} rows ({old['mapped']} mapped) "
+                            f"to {new['rows']} ({new['mapped']} mapped)")
+                    blocks[source.id] = block
+                    attempts[source.id] = {"status": "ok", "attempted_at": started,
+                                           "retry_after_until": None, "diagnostics": block["diagnostics"]}
+                    continue
+                except sources.SourceError as exc:
+                    status_, message, retry_s = exc.status, f"{source.id}: {exc}", exc.retry_after_s
+                    cancelled = cancelled or (exc.status == "not_attempted" and sources.cancelled(cancel))
+                except (sources.ParseError, PodError) as exc:
+                    status_, message = "malformed", f"{source.id}: {exc}"
+                except Exception as exc:  # A fetch or parser defect fails this source, never the record.
+                    status_ = "unavailable" if page is None else "malformed"
+                    message = f"{source.id}: unexpected {type(exc).__name__}: {exc}"
+            blocks[source.id] = _kept(source, prior, status_, message)
+            if until is not None:
+                retry_at = _stamp(until)
+            elif retry_s is not None:
+                retry_at = _stamp(datetime.fromtimestamp(moment.timestamp() + retry_s, timezone.utc))
+            else:
+                retry_at = None
+            attempts[source.id] = {"status": status_, "attempted_at": None if status_ == "not_attempted" else started,
+                                   "retry_after_until": retry_at, "diagnostics": blocks[source.id]["diagnostics"]}
+            if source.required and status_ != "ok":
+                required_failed = True
+                diagnostics.append(sources.diagnostic(message))
+
+        candidate = None
+        if cancelled:
+            outcome = "cancelled"
+        elif required_failed:
+            outcome = "refused" if collapsed else "failed"
+        else:
+            candidate = validate({"schema": SCHEMA, "generation": "0", "created_at": started, "sources": blocks})
+            outcome = "checked" if check else "promoted"
+        generation = None
+        with _lock(root):
+            if outcome == "promoted":
+                if sources.cancelled(cancel):
+                    outcome = "cancelled"
+                elif _digest(root / "current.json") != base_digest:
+                    outcome = "superseded"
+                    diagnostics.append("A concurrent refresh promoted newer observations first")
+                else:
+                    older = _try(root / "previous.json", MAX_SNAPSHOT, [])
+                    counter = max([int(doc["generation"]) for doc in (base, older) if doc] + [0]) + 1
+                    generation = candidate["generation"] = str(counter)
+                    candidate["created_at"] = _stamp(_now(now))
+                    if base is not None:
+                        atomic_json(root / "previous.json", base, limit=MAX_SNAPSHOT)
+                    atomic_json(root / "current.json", candidate, limit=MAX_SNAPSHOT)
+            _write_record(root, _attempt_record(_status_record(root), started, outcome, check,
+                                                _stamp(_now(now)), attempts))
+        return {"outcome": outcome, "check": check, "promoted": outcome == "promoted",
+                "generation": generation, "base_generation": base["generation"] if base else None,
+                "sources": {source_id: {"status": block["status"], **_coverage(source_id, block),
+                                        "retrieved_at": block["retrieved_at"],
+                                        "retry_after_until": attempts[source_id]["retry_after_until"],
+                                        "diagnostics": block["diagnostics"]}
+                            for source_id, block in blocks.items()},
+                "diff": _diff(reference, candidate) if candidate else None,
+                "diagnostics": diagnostics[:MAX_DIAGNOSTICS]}
+    except Exception as exc:
+        # Never leave the record at "running": settle it as failed, then report a PodError.
+        try:
+            with _lock(root):
+                _write_record(root, _attempt_record(_status_record(root), started, "failed", check,
+                                                    _stamp(_now(now)), {}))
+        except (PodError, OSError):
+            pass
+        if isinstance(exc, PodError):
+            raise
+        raise PodError("refresh_failed", sources.diagnostic(
+            f"Refresh failed unexpectedly: {type(exc).__name__}: {exc}")) from exc

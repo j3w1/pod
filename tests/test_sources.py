@@ -7,9 +7,11 @@ from datetime import datetime, timedelta, timezone
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import socket
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import urllib.parse
 import zlib
 
@@ -87,6 +89,47 @@ class Server:
     def close(self):
         self.httpd.shutdown()
         self.httpd.server_close()
+
+
+class RawServer:
+    """One raw TCP connection whose bytes the test writes at its own pace."""
+
+    def __init__(self, behaviour):
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(1)
+        self.host = f"127.0.0.1:{self.listener.getsockname()[1]}"
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, args=(behaviour,), daemon=True)
+        self.thread.start()
+
+    def _run(self, behaviour):
+        try:
+            conn, _ = self.listener.accept()
+        except OSError:
+            return
+        with conn:
+            try:
+                conn.recv(65536)
+                behaviour(conn, self.stop)
+            except OSError:
+                pass
+
+    def drip(self, conn, head: bytes, unit: bytes = b"a", every: float = .05, limit: float = 8.0):
+        conn.sendall(head)
+        end = time.monotonic() + limit
+        while not self.stop.is_set() and time.monotonic() < end:
+            conn.sendall(unit)
+            time.sleep(every)
+
+    def close(self):
+        self.stop.set()
+        self.listener.close()
+        self.thread.join(10)
+
+
+def watcher_threads() -> list[str]:
+    return [thread.name for thread in threading.enumerate() if thread.name == "pod-source-deadline"]
 
 
 class FetchTests(unittest.TestCase):
@@ -188,6 +231,91 @@ class FetchTests(unittest.TestCase):
         self.assertIn("time limit", str(self.refused("/slow", "unavailable", timeout_s=.3)))
         self.assertIn("time limit", str(self.refused("/trickle", "unavailable", timeout_s=.5)))
         self.assertLess(time.monotonic() - started, 2.5)
+
+    def dripped(self, head: bytes, *, timeout_s=.5, cancel=None) -> tuple[SourceError, float]:
+        server = RawServer(lambda conn, stop: server.drip(conn, head))
+        self.addCleanup(server.close)
+        policy = Policy(scheme="http", hosts=frozenset({server.host}), timeout_s=timeout_s)
+        started = time.monotonic()
+        with self.assertRaises(SourceError) as caught:
+            sources.fetch(f"http://{server.host}/", policy=policy, cancel=cancel)
+        return caught.exception, time.monotonic() - started
+
+    def test_deadline_is_total_through_dripped_headers(self):
+        error, elapsed = self.dripped(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nX-Slow: ")
+        self.assertEqual((error.status, str(error)), ("unavailable", "Source read exceeded the time limit"))
+        self.assertLess(elapsed, 1.5)
+        self.assertEqual(watcher_threads(), [])
+
+    def test_deadline_is_total_through_dripped_chunk_sizes(self):
+        error, elapsed = self.dripped(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                                      b"Transfer-Encoding: chunked\r\n\r\n2;ext=")
+        self.assertEqual((error.status, str(error)), ("unavailable", "Source read exceeded the time limit"))
+        self.assertLess(elapsed, 1.5)
+        self.assertEqual(watcher_threads(), [])
+
+    def test_deadline_is_total_through_a_dripped_tls_handshake(self):
+        server = RawServer(lambda conn, stop: server.drip(conn, b"\x16\x03\x03\x40\x00\x02"))
+        self.addCleanup(server.close)
+        started = time.monotonic()
+        with self.assertRaises(SourceError) as caught:
+            sources.fetch(f"https://{server.host}/", policy=Policy(hosts=frozenset({server.host}), timeout_s=.5))
+        self.assertEqual((caught.exception.status, str(caught.exception)),
+                         ("unavailable", "Source read exceeded the time limit"))
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(watcher_threads(), [])
+
+    def test_cancel_ends_a_dripping_read_promptly(self):
+        cancel = threading.Event()
+        threading.Timer(.2, cancel.set).start()
+        error, elapsed = self.dripped(b"HTTP/1.1 200 OK\r\nX-Slow: ", timeout_s=5.0, cancel=cancel)
+        self.assertEqual(error.status, "not_attempted")
+        self.assertLess(elapsed, 1.5)
+
+    def test_deadline_covers_slow_name_resolution(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def slow(*args, **kwargs):
+            release.wait(10)
+            raise socket.gaierror(socket.EAI_NONAME, "simulated resolver gave up")
+
+        started = time.monotonic()
+        with patch("socket.getaddrinfo", slow), self.assertRaises(SourceError) as caught:
+            sources.fetch("http://pod-test.invalid/", policy=Policy(
+                scheme="http", hosts=frozenset({"pod-test.invalid"}), timeout_s=.5))
+        self.assertEqual((caught.exception.status, str(caught.exception)),
+                         ("unavailable", "Source read exceeded the time limit"))
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(watcher_threads(), [])
+
+    def test_hostile_content_length_is_malformed(self):
+        for value in ("\u00b2", "1_0", "+12", "-1", "1 2", "0x10", "1" * 30):
+            self.server.routes[f"/length{len(self.server.routes)}"] = (200, {"Content-Length": value}, b"<p>x</p>")
+
+        def twice(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/html")
+            handler.send_header("Content-Length", "8")
+            handler.send_header("Content-Length", "9")
+            handler.end_headers()
+            handler.wfile.write(b"<p>x</p>")
+            handler.close_connection = True
+
+        self.server.routes["/twice"] = twice
+        for path in [*self.server.routes]:
+            with self.subTest(path=path):
+                error = self.refused(path, "malformed")
+                self.assertIn("Content-Length", str(error))
+
+    def test_compressed_trailing_data_or_second_member_is_malformed(self):
+        body = gzip.compress(b"<p>first</p>")
+        self.server.routes["/members"] = (200, {"Content-Encoding": "gzip"}, body + gzip.compress(b"<p>2</p>"))
+        self.server.routes["/junk"] = (200, {"Content-Encoding": "gzip"}, body + b"junk")
+        self.server.routes["/deflate"] = (200, {"Content-Encoding": "deflate"}, zlib.compress(b"<p>x</p>") + b"x")
+        for path in ("/members", "/junk", "/deflate"):
+            with self.subTest(path=path):
+                self.assertIn("trailing data", str(self.refused(path, "malformed")))
 
     def test_redirects_stay_within_the_allowlist_and_the_hop_limit(self):
         self.server.routes["/final"] = (200, {}, b"<p>final</p>")
@@ -379,6 +507,22 @@ class ArtificialAnalysisParserTests(unittest.TestCase):
         with self.assertRaisesRegex(ParseError, "nested"):
             sources.parse_aa(nested)
 
+    def test_cell_text_is_linear_and_parsing_obeys_the_deadline(self):
+        cell = "<i>x</i>" * 200_000
+        page = aa_page([aa_row(name="GPT-6.1 Sol (xhigh)" + cell)])
+        started = time.monotonic()
+        with self.assertRaisesRegex(ParseError, "not a model name"):
+            sources.parse_aa(page)
+        self.assertLess(time.monotonic() - started, 5.0)
+        big = "<table><tr><th>Model</th><th>Creator</th></tr><tr><td>" + "<i>x</i>" * 1_000_000 + "</td></tr></table>"
+        for parse, reason in ((sources.parse_aa, "time limit"), (sources.parse_anthropic, "time limit"),
+                              (sources.parse_openai, "too much text")):
+            with self.subTest(parser=parse.__name__):
+                started = time.monotonic()
+                with self.assertRaisesRegex(ParseError, reason):
+                    parse(big, deadline=time.monotonic() + .2)
+                self.assertLess(time.monotonic() - started, 1.5)
+
     def test_methodology_must_be_unambiguous(self):
         tail = "<script>v4.3 Intelligence Index v4.3 and Intelligence Index v5.0</script>"
         result = sources.parse_aa(aa_page([aa_row()], tail=tail))
@@ -414,6 +558,20 @@ class ProviderParserTests(unittest.TestCase):
             ("gpt-6-astra", 1_050_000), ("gpt-6.1-sol", 1_050_000), ("gpt-6-luna", 1_050_000)])
         self.assertTrue(all(row["metrics"]["usd_per_task"] is None for row in rows))
 
+    def test_duplicate_provider_context_rows_are_malformed(self):
+        page = ("<table><tr><td>Claude API ID</td><td>claude-opus-5-5</td></tr>"
+                "<tr><td>Context window</td><td>1M tokens</td></tr>"
+                "<tr><td>Context window</td><td>200K tokens</td></tr></table>")
+        with self.assertRaisesRegex(ParseError, "duplicate"):
+            sources.parse_anthropic(page)
+        ids = page.replace("Context window</td><td>200K", "Claude API ID</td><td>claude-x")
+        with self.assertRaisesRegex(ParseError, "duplicate"):
+            sources.parse_anthropic(ids)
+        card = ("<div>Model ID</div><div>gpt-6-luna</div><div>Context window</div><div>1M</div>"
+                "<div>Context window</div><div>200K</div>")
+        with self.assertRaisesRegex(ParseError, "duplicate context"):
+            sources.parse_openai(card)
+
     def test_openai_challenge_or_changed_page_is_malformed(self):
         with self.assertRaisesRegex(ParseError, "Model ID"):
             sources.parse_openai(fixture("challenge-403.html"))
@@ -434,6 +592,16 @@ class ValueTests(unittest.TestCase):
         self.assertEqual(sources.tokens_count("872k"), 872_000)
         self.assertIsNone(sources.tokens_count("--"))
 
+    def test_only_ascii_digits_are_numbers(self):
+        for value in ("\uff15\uff11", "\u0665\u0661", "5\u0661", "\U0001d7d3"):
+            with self.subTest(value=value), self.assertRaises(ParseError):
+                sources.number(value, high=100)
+        for value in ("\uff11M", "1\u0660k"):
+            with self.subTest(value=value), self.assertRaises(ParseError):
+                sources.tokens_count(value)
+        with self.assertRaisesRegex(ParseError, "finite decimal"):
+            sources.parse_aa(aa_page([aa_row(score="\uff15\uff11")]))
+
     def test_clean_removes_terminal_sequences_and_controls(self):
         self.assertEqual(sources.clean("a\x1b[2J\x1b]8;;https://x\x07b​\tc\nd"), "ab c d")
         self.assertEqual(len(sources.clean("x" * 5000)), sources.MAX_CELL_TEXT)
@@ -446,6 +614,10 @@ class ValueTests(unittest.TestCase):
         self.assertEqual(sources.retry_after(format_datetime(now - timedelta(hours=1), usegmt=True), now), 0)
         self.assertIsNone(sources.retry_after(None, now))
         self.assertIsNone(sources.retry_after("-1", now))
+        for value in ("99999999999", "1" * 40, "0" * 12 + "5" * 4000):
+            with self.subTest(digits=len(value)):
+                self.assertEqual(sources.retry_after(value, now), sources.MAX_RETRY_AFTER_S)
+        self.assertIsNone(sources.retry_after("\uff13\uff10", now))
 
 
 if __name__ == "__main__":

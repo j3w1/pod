@@ -14,6 +14,8 @@ from html.parser import HTMLParser
 import http.client
 import math
 import re
+import socket
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -47,7 +49,11 @@ BY_ID = {source.id: source for source in SOURCES}
 
 @dataclass(frozen=True)
 class Policy:
-    """Network bounds. Production uses DEFAULT; tests substitute a local HTTP policy."""
+    """Network bounds. Production uses DEFAULT; tests substitute a local HTTP policy.
+
+    ``timeout_s`` is the one total wall-clock budget of a refresh: name resolution, connects,
+    TLS, headers, body and parsing of every source all count against it.
+    """
     scheme: str = "https"
     hosts: frozenset = frozenset(urllib.parse.urlsplit(source.url).netloc for source in SOURCES)
     max_redirects: int = 3
@@ -111,8 +117,8 @@ def retry_after(value: str | None, now: datetime | None = None) -> int | None:
     if value is None:
         return None
     value = value.strip()
-    if re.fullmatch(r"\d{1,10}", value):
-        return min(int(value), MAX_RETRY_AFTER_S)
+    if re.fullmatch(r"[0-9]+", value):
+        return MAX_RETRY_AFTER_S if len(value) > 10 else min(int(value), MAX_RETRY_AFTER_S)
     try:
         when = parsedate_to_datetime(value)
     except (TypeError, ValueError, IndexError):
@@ -126,6 +132,132 @@ def retry_after(value: str | None, now: datetime | None = None) -> int | None:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+class _Guard:
+    """One fetch's wall-clock bound and cancel watch.
+
+    Socket timeouts bound only a single wait, so a server that drips header or chunk bytes
+    could otherwise hold a read open indefinitely. A watcher thread shuts every socket this
+    fetch opened down at the deadline or on cancel, which ends any blocked read at once.
+    Name resolution runs in a helper thread because a resolver call cannot be interrupted;
+    if it outlives the deadline it ends on the system resolver's own timeout, holding no
+    socket. ``close()`` stops the watcher and releases its socket handles.
+    """
+
+    def __init__(self, deadline: float, cancel):
+        self.deadline, self.cancel, self.reason = deadline, cancel, None
+        self._sockets, self._lock, self._done = [], threading.Lock(), threading.Event()
+        self._watcher = threading.Thread(target=self._watch, daemon=True, name="pod-source-deadline")
+        self._watcher.start()
+
+    def _watch(self) -> None:
+        while not self._done.wait(min(.05, max(0.0, self.deadline - time.monotonic()))):
+            if time.monotonic() >= self.deadline:
+                self._abort("timeout")
+                return
+            if self.cancel is not None and cancelled(self.cancel):
+                self._abort("cancelled")
+                return
+
+    def _abort(self, reason: str) -> None:
+        with self._lock:
+            self.reason = self.reason or reason
+            for sock in self._sockets:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def check(self) -> float:
+        """Remaining seconds; raises the refusal once the fetch must end."""
+        if self.reason is None and self.cancel is not None and cancelled(self.cancel):
+            self.reason = "cancelled"
+        remaining = self.deadline - time.monotonic()
+        if self.reason is None and remaining <= 0:
+            self.reason = "timeout"
+        if self.reason is not None:
+            raise self.refusal()
+        return remaining
+
+    def refusal(self) -> SourceError:
+        if self.reason == "cancelled":
+            return SourceError("not_attempted", "Refresh was cancelled")
+        return SourceError("unavailable", "Source read exceeded the time limit")
+
+    def _resolve(self, host: str, port: int) -> list:
+        box = {}
+
+        def run():
+            try:
+                box["infos"] = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+            except OSError as exc:
+                box["error"] = exc
+
+        resolver = threading.Thread(target=run, daemon=True, name="pod-source-resolve")
+        resolver.start()
+        while resolver.is_alive():
+            resolver.join(min(.05, self.check()))
+        if "error" in box:
+            raise box["error"]
+        return box["infos"]
+
+    def connect(self, address, timeout=None, source_address=None) -> socket.socket:
+        """``socket.create_connection`` within the deadline, registering each socket."""
+        host, port = address
+        error = None
+        for family, kind, proto, _, target in self._resolve(host, port):
+            sock = socket.socket(family, kind, proto)
+            try:
+                with self._lock:
+                    # A duplicate handle survives the TLS wrapper taking over the original.
+                    self._sockets.append(sock.dup())
+                sock.settimeout(self.check())
+                sock.connect(target)
+                sock.settimeout(self.check())
+                return sock
+            except OSError as exc:
+                sock.close()
+                error = exc
+                if self.reason is not None:
+                    raise
+        raise error or OSError("Destination has no address")
+
+    def close(self) -> None:
+        self._done.set()
+        self._watcher.join()
+        with self._lock:
+            for sock in self._sockets:
+                sock.close()
+            self._sockets.clear()
+
+
+def _connection(base, guard: _Guard):
+    class Connection(base):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._create_connection = guard.connect
+
+    return Connection
+
+
+class _HTTP(urllib.request.HTTPHandler):
+    def __init__(self, guard: _Guard):
+        super().__init__()
+        self.guard = guard
+
+    def http_open(self, req):
+        return self.do_open(_connection(http.client.HTTPConnection, self.guard), req)
+
+
+class _HTTPS(urllib.request.HTTPSHandler):
+    def __init__(self, guard: _Guard):
+        super().__init__()
+        self.guard = guard
+
+    def https_open(self, req):
+        return self.do_open(_connection(http.client.HTTPSConnection, self.guard), req,
+                            context=self._context)
 
 
 def _allowed(url: str, policy: Policy) -> urllib.parse.SplitResult:
@@ -161,21 +293,31 @@ def _decode(raw: bytes, encoding: str, limit: int) -> bytes:
         raise SourceError("malformed", "Decompressed response exceeds the size limit")
     if not inflater.eof:
         raise SourceError("malformed", "Compressed response is truncated")
+    if inflater.unused_data:
+        raise SourceError("malformed", "Compressed response has trailing data")
     return data
 
 
 def fetch(url: str, *, policy: Policy = DEFAULT, deadline: float | None = None,
           cancel=None, opener=None) -> Page:
-    """One bounded GET of a fixed source URL; raises SourceError on any refusal."""
+    """One bounded GET of a fixed source URL; raises SourceError on any refusal.
+
+    ``deadline`` (``time.monotonic()`` seconds) is a total bound: no read of this fetch
+    continues past it, whatever pace the server sends at.
+    """
     deadline = time.monotonic() + policy.timeout_s if deadline is None else deadline
-    opener = opener or urllib.request.build_opener(_NoRedirect)
+    guard = _Guard(deadline, cancel)
+    try:
+        return _fetch(url, policy, guard, opener or urllib.request.build_opener(
+            _NoRedirect, _HTTP(guard), _HTTPS(guard)))
+    finally:
+        guard.close()
+
+
+def _fetch(url: str, policy: Policy, guard: _Guard, opener) -> Page:
     for _ in range(policy.max_redirects + 1):
         _allowed(url, policy)
-        if cancelled(cancel):
-            raise SourceError("not_attempted", "Refresh was cancelled")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise SourceError("unavailable", "Source read exceeded the time limit")
+        remaining = guard.check()
         request = urllib.request.Request(url, headers={
             "User-Agent": USER_AGENT, "Accept": "text/html", "Accept-Encoding": "gzip, deflate"})
         try:
@@ -183,6 +325,7 @@ def fetch(url: str, *, policy: Policy = DEFAULT, deadline: float | None = None,
         except urllib.error.HTTPError as exc:
             status, headers = exc.code, exc.headers
             exc.close()
+            guard.check()
             if status in _REDIRECTS:
                 location = headers.get("Location")
                 if not location:
@@ -195,16 +338,22 @@ def fetch(url: str, *, policy: Policy = DEFAULT, deadline: float | None = None,
                 raise SourceError("access_denied", f"HTTP {status}" + (" bot challenge" if challenge else " access denied"), wait)
             raise SourceError("unavailable", f"HTTP {status}", wait)
         except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
+            if guard.reason is not None:
+                raise guard.refusal() from exc
             reason = getattr(exc, "reason", exc)
             if isinstance(reason, TimeoutError) or isinstance(exc, TimeoutError):
                 raise SourceError("unavailable", "Source read exceeded the time limit") from exc
             raise SourceError("unavailable", "Network error: " + type(reason).__name__) from exc
         with response:
-            return _read(response, url, policy, deadline, cancel)
+            return _read(response, url, policy, guard)
     raise SourceError("unavailable", "Too many redirects")
 
 
-def _read(response, url: str, policy: Policy, deadline: float, cancel) -> Page:
+_DIGITS = re.compile(r"[0-9]{1,20}")
+
+
+def _read(response, url: str, policy: Policy, guard: _Guard) -> Page:
+    guard.check()  # headers cut short by the deadline or a cancel are not a server answer
     if response.status != 200:
         raise SourceError("unavailable", f"HTTP {response.status}")
     content_type = (response.headers.get("Content-Type") or "").lower()
@@ -212,16 +361,15 @@ def _read(response, url: str, policy: Policy, deadline: float, cancel) -> Page:
     charset = re.search(r"charset=\"?([a-z0-9_-]+)", params)
     if media.strip() != "text/html" or (charset and charset.group(1) not in ("utf-8", "utf8")):
         raise SourceError("malformed", "Response is not UTF-8 HTML")
-    declared = response.headers.get("Content-Length")
-    if declared is not None and declared.isdigit() and int(declared) > policy.max_bytes:
+    declared = response.headers.get_all("Content-Length") or []
+    if len(declared) > 1 or any(not _DIGITS.fullmatch(value.strip()) for value in declared):
+        raise SourceError("malformed", "Response has an invalid Content-Length")
+    if declared and int(declared[0]) > policy.max_bytes:
         raise SourceError("malformed", "Response exceeds the size limit")
     chunks, size = [], 0
     try:
         while True:
-            if cancelled(cancel):
-                raise SourceError("not_attempted", "Refresh was cancelled")
-            if time.monotonic() > deadline:
-                raise SourceError("unavailable", "Source read exceeded the time limit")
+            guard.check()
             chunk = response.read1(64 * 1024)
             if not chunk:
                 break
@@ -229,11 +377,16 @@ def _read(response, url: str, policy: Policy, deadline: float, cancel) -> Page:
             if size > policy.max_bytes:
                 raise SourceError("malformed", "Response exceeds the size limit")
             chunks.append(chunk)
+        guard.check()
         if response.length:
             raise SourceError("malformed", "Response is truncated")
     except http.client.IncompleteRead as exc:
+        if guard.reason is not None:
+            raise guard.refusal() from exc
         raise SourceError("malformed", "Response is truncated") from exc
-    except (OSError, http.client.HTTPException) as exc:
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        if guard.reason is not None:
+            raise guard.refusal() from exc
         if isinstance(exc, TimeoutError):
             raise SourceError("unavailable", "Source read exceeded the time limit") from exc
         raise SourceError("unavailable", "Network error: " + type(exc).__name__) from exc
@@ -261,6 +414,7 @@ class _Tables(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.tables, self._open, self._row, self._cell, self._skip = [], [], None, None, 0
+        self._cell_size = 0
 
     def handle_starttag(self, tag, attrs):
         if tag in _SKIP:
@@ -272,9 +426,9 @@ class _Tables(HTMLParser):
         elif self._open and tag == "tr":
             self._row = []
         elif self._open and self._row is not None and tag in ("td", "th"):
-            self._cell = []
+            self._cell, self._cell_size = [], 0
         elif tag == "br" and self._cell is not None:
-            self._cell.append(" ")
+            self._add(" ")
 
     def handle_endtag(self, tag):
         if tag in _SKIP:
@@ -295,9 +449,15 @@ class _Tables(HTMLParser):
             self.tables.append(self._open.pop())
             self._row = self._cell = None
 
-    def handle_data(self, data):
-        if self._cell is not None and not self._skip and sum(map(len, self._cell)) < MAX_CELL_TEXT * 4:
+    def _add(self, data: str) -> None:
+        # Text beyond the bound is dropped; a running count keeps this linear in the page size.
+        if self._cell_size < MAX_CELL_TEXT * 4:
             self._cell.append(data)
+            self._cell_size += len(data)
+
+    def handle_data(self, data):
+        if self._cell is not None and not self._skip:
+            self._add(data)
 
 
 class _Tokens(HTMLParser):
@@ -325,9 +485,16 @@ class _Tokens(HTMLParser):
             self.tokens.append(text)
 
 
-def _feed(parser: HTMLParser, text: str):
+FEED_CHUNK = 256 * 1024
+
+
+def _feed(parser: HTMLParser, text: str, deadline: float | None = None):
+    """Parse in bounded slices so the refresh deadline also bounds parsing."""
     try:
-        parser.feed(text)
+        for start in range(0, len(text), FEED_CHUNK):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise ParseError("Page parsing exceeded the time limit")
+            parser.feed(text[start:start + FEED_CHUNK])
         parser.close()
     except ParseError:
         raise
@@ -340,7 +507,7 @@ def _key(text: str) -> str:
     return re.sub(r"\s+", "", text).lower()
 
 
-_NUMBER = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d{1,9})(?:\.\d{1,6})?")
+_NUMBER = re.compile(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,9})(?:\.[0-9]{1,6})?")
 _MISSING = ("", "--", "—", "–", "-", "n/a")
 
 
@@ -370,7 +537,7 @@ def tokens_count(text: str) -> int | None:
     body = text.strip()
     if body.lower() in _MISSING:
         return None
-    match = re.fullmatch(r"(\d{1,4}(?:\.\d{1,3})?)\s?([kKmM])(?: tokens)?", body)
+    match = re.fullmatch(r"([0-9]{1,4}(?:\.[0-9]{1,3})?)\s?([kKmM])(?: tokens)?", body)
     if not match:
         raise ParseError("Context window has an unsupported unit")
     value = round(float(match.group(1)) * (1000 if match.group(2) in "kK" else 1_000_000))
@@ -408,9 +575,9 @@ AA_COLUMNS = {"model": "model", "contextwindow": "context", "creator": "creator"
 _AA_METHOD = re.compile(r"Intelligence Index v(\d{1,2}(?:\.\d{1,2})?)\b")
 
 
-def parse_aa(text: str) -> dict:
+def parse_aa(text: str, deadline: float | None = None) -> dict:
     """The leaderboard's static table, Anthropic and OpenAI rows only, exact row names kept."""
-    tables = _feed(_Tables(), text).tables
+    tables = _feed(_Tables(), text, deadline).tables
     for table in tables:
         header = next((index for index, row in enumerate(table[:4])
                        if {"model", "creator"} <= {_key(cell) for cell in row}), None)
@@ -466,11 +633,14 @@ def parse_aa(text: str) -> dict:
 # ---------------------------------------------------------------- Anthropic models overview
 
 
-def parse_anthropic(text: str) -> dict:
+def parse_anthropic(text: str, deadline: float | None = None) -> dict:
     """The models overview comparison table: one column per model, keyed by its API id."""
-    for table in _feed(_Tables(), text).tables:
+    for table in _feed(_Tables(), text, deadline).tables:
+        keys = [_key(row[0]) for row in table if row]
         labels = {_key(row[0]): row for row in table if row}
         if "claudeapiid" in labels and "contextwindow" in labels:
+            if keys.count("claudeapiid") > 1 or keys.count("contextwindow") > 1:
+                raise ParseError("Model comparison has a duplicate API id or context row")
             break
     else:
         raise ParseError("Model comparison table with API ids is missing")
@@ -488,9 +658,9 @@ def parse_anthropic(text: str) -> dict:
 # ---------------------------------------------------------------- OpenAI models page
 
 
-def parse_openai(text: str) -> dict:
+def parse_openai(text: str, deadline: float | None = None) -> dict:
     """Model cards: each "Model ID" label and the card's "Context window" value."""
-    tokens = _feed(_Tokens(), text).tokens
+    tokens = _feed(_Tokens(), text, deadline).tokens
     starts = [index for index, token in enumerate(tokens) if token == "Model ID"]
     if not starts:
         raise ParseError("Model cards with a Model ID label are missing")
@@ -502,6 +672,8 @@ def parse_openai(text: str) -> dict:
         if not _MODEL_ID.fullmatch(model_id) or not model_id.startswith("gpt-"):
             raise ParseError("Model card has an invalid model id")
         context = None
+        if card.count("Context window") > 1:
+            raise ParseError("Model card has a duplicate context window")
         if "Context window" in card:
             label = card.index("Context window")
             context = tokens_count(card[label + 1] if label + 1 < len(card) else "")
