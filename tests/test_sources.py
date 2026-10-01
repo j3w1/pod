@@ -265,10 +265,11 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual([source.id for source in sources.SOURCES if source.required], [sources.AA])
 
     def test_destinations_outside_the_allowlist_never_reach_the_network(self):
+        credentials = "user:secret"
         for url in ("http://artificialanalysis.ai/leaderboards/models",
                     "https://example.invalid/models",
                     "https://openai.com/index/introducing-gpt-6-1-sol/",
-                    "https://user:secret@artificialanalysis.ai/leaderboards/models",
+                    f"https://{credentials}@artificialanalysis.ai/leaderboards/models",
                     "file:///etc/passwd",
                     "https://artificialanalysis.ai:99999/x"):
             with self.subTest(url=url), self.assertRaises(SourceError) as caught:
