@@ -1,5 +1,5 @@
 from copy import deepcopy
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 from datetime import datetime, timezone
 from io import StringIO
 import base64
@@ -112,18 +112,28 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(len(self.port.starts),1)
 
     def test_observation_refresh_eviction_or_absence_cannot_change_admission(self):
+        import shutil
+        from pod.observations import BUNDLED_PATH, cache_root
         from tests.common import without_module
-        frozen=self.frozen()
-        cache=Path(os.environ['XDG_CACHE_HOME'])/'pod'/'models'
-        # A refresh or eviction between selection and final admission is not an authority change.
-        self.port.before_native=lambda:(cache.mkdir(parents=True,exist_ok=True),
-                                        (cache/'current.json').write_text('{"evicted": true}'))
-        with without_module('pod.observations'), \
-             patch('socket.socket.connect',side_effect=AssertionError('admission must not use the network')):
-            result=self.start(frozen=frozen)
-        self.assertEqual(result['status'],'bound')
-        self.assertEqual(result['admission']['route_decision']['model'],'gpt-6.1-sol')
-        self.assertEqual(len(self.port.starts),1)
+        cache=cache_root()
+        def promote():
+            # A refresh promotes a new snapshot between selection and the final admission.
+            cache.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(BUNDLED_PATH,cache/'current.json')
+        def evict():
+            shutil.rmtree(cache)
+        guard=patch('socket.socket.connect',side_effect=AssertionError('admission must not use the network'))
+        for index,(change,absent) in enumerate(((promote,False),(evict,False),(lambda:None,True))):
+            task=f'task-{index}'
+            frozen=self.frozen(task=task)
+            self.port.before_native=change
+            with guard, (without_module('pod.observations') if absent else nullcontext()):
+                result=self.start(task,frozen=frozen)
+            self.assertEqual(result['status'],'bound')
+            self.assertEqual(result['admission']['route_decision']['route'],SOL)
+            self.port.workers[result['admission']['native_binding']['dispatchId']]['outcome']='succeeded'
+            self.discard(result['admission'])
+        self.assertEqual(len(self.port.starts),3)
 
     def test_before_boundary_edit_refuses_with_no_admission_and_after_row_keeps_start(self):
         frozen=self.frozen()

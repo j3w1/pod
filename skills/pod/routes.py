@@ -20,7 +20,7 @@ METRICS = ("intelligence", "usd_per_task", "output_tps", "first_response_s",
 CREATORS = ("Anthropic", "OpenAI")
 STALE_AFTER = timedelta(days=7)
 NATIVE = {"access": "unknown"}
-PREFERENCE_FIELDS = ("path", "schema", "status", "revision", "preferred", "pinned",
+PREFERENCE_FIELDS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
                      "max_active", "refresh", "errors", "setup", "pin_diagnostic",
                      "preferred_diagnostic")
 

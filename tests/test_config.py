@@ -229,6 +229,34 @@ class PreferencesTests(unittest.TestCase):
         with patch('pod.config.route_keys', return_value=(*route_keys(), later)):
             self.assertNotIn(later, load(personal=self.path)['eligible'])
 
+    def test_concurrent_edits_keep_each_targeted_change(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        write_defaults(self.path)
+        shown = load(personal=self.path)
+        keys = [key for key in route_keys() if '/gpt-6-luna/' in key]
+        barrier = threading.Barrier(len(keys))
+
+        def disable(key):
+            barrier.wait()
+            for _ in range(20):
+                try:
+                    return set_route(self.path, key, 'disabled', displayed=shown)['changed']
+                except PodError as exc:
+                    if exc.code != 'config_busy':
+                        raise
+            raise AssertionError('lock never became available')
+        with ThreadPoolExecutor(len(keys)) as pool:
+            changed = list(pool.map(disable, keys))
+        self.assertEqual(changed, [[key] for key in keys])
+        final = load(personal=self.path)
+        self.assertTrue(all(final['routes'][key] == 'disabled' for key in keys))
+        self.assertEqual(len(final['eligible']), 25)
+        # The same targeted route from a stale display is refused, not overwritten.
+        with self.assertRaises(PodError) as caught:
+            set_route(self.path, keys[0], 'enabled', displayed=shown)
+        self.assertEqual(caught.exception.code, 'config_changed_elsewhere')
+
     def test_refresh_setting_and_worker_ceiling_edits(self):
         write_defaults(self.path)
         set_refresh(self.path, 'manual', displayed=load(personal=self.path))
