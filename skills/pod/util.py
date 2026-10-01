@@ -11,8 +11,9 @@ from pathlib import Path
 import sys
 import tempfile
 from typing import Any
+import unicodedata
 
-from .errors import PodError
+from .errors import FieldRefusal, PodError
 
 MAX_RECORD = 128 * 1024
 _ZONED_TIMESTAMP = re.compile(
@@ -149,12 +150,37 @@ def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD) -> None:
             os.unlink(name)
 
 
+# Field names echoed by an input refusal come from the caller's keys, so they are bounded.
+MAX_NAMED_FIELDS = 8
+MAX_FIELD_NAME = 64
+
+
+def _field_names(names: set) -> tuple[list[str], int]:
+    """Sorted, control-stripped and truncated names; never a value."""
+    cleaned = sorted({"".join(character for character in str(name)
+                              if unicodedata.category(character) not in ("Cc", "Cf", "Cs"))[:MAX_FIELD_NAME]
+                      for name in names})
+    return cleaned[:MAX_NAMED_FIELDS], max(0, len(cleaned) - MAX_NAMED_FIELDS)
+
+
 def exact(value: Any, fields: set[str], required: set[str] | None = None, *,
           name: str = "record", error=None) -> dict:
     if not isinstance(value, dict) or set(value) - fields or (required or set()) - set(value):
         if error is not None:
             raise error(name)
-        raise PodError("invalid_" + name, f"{name} has missing or unsupported fields")
+        if not isinstance(value, dict):
+            raise FieldRefusal("invalid_" + name, f"{name} must be a JSON object",
+                               {"record": name, "expected": "object"})
+        missing, missing_omitted = _field_names((required or set()) - set(value))
+        unsupported, unsupported_omitted = _field_names(set(value) - fields)
+        parts = [f"{label} {', '.join(names)}" + (f" (+{omitted} more)" if omitted else "")
+                 for label, names, omitted in (("missing", missing, missing_omitted),
+                                               ("unsupported", unsupported, unsupported_omitted))
+                 if names]
+        raise FieldRefusal("invalid_" + name,
+                           f"{name} has missing or unsupported fields: {'; '.join(parts)}",
+                           {"record": name, "missing": missing, "unsupported": unsupported,
+                            "omitted": missing_omitted + unsupported_omitted})
     return value
 
 

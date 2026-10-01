@@ -5,3 +5,7 @@ class PodError(Exception):
         super().__init__(message)
         self.code = code
         self.detail = detail
+
+
+class FieldRefusal(PodError):
+    """An exact-fields refusal; its detail names the record and fields, never values."""
