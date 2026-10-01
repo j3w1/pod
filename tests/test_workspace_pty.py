@@ -1,5 +1,6 @@
 """Workspace actions through the real launcher: palette, edits, bulk, setup, compare and refresh."""
 
+from datetime import datetime, timedelta, timezone
 import json
 import time
 
@@ -160,6 +161,51 @@ class WorkspacePtyTests(PtyCase):
         self.assertEqual((self.config.parent / "config.yaml.pod-v1").read_text(), V1)
         session.wait_for("Saved: route setup")
 
+    def test_setup_conflict_rereads_the_file_so_confirming_again_saves(self):
+        self.config.write_text(V1)
+        session = self.open(cols=100, rows=30, wait="ROUTE SETUP")
+        session.send(RIGHT + RIGHT + "\r")
+        session.wait_for("Save this route setup now?")
+        changed = V1.replace("max_active: 3", "max_active: 4")
+        self.config.write_text(changed)
+        session.send("y")
+        session.wait_for("changed elsewhere")
+        self.assertEqual(self.config.read_text(), changed)
+        session.send("\r")
+        session.wait_for("Save this route setup now?")
+        session.send("y")
+        session.wait_for(lambda _s: self.saved()["status"] == "valid")
+        self.assertEqual((self.saved()["max_active"], self.saved()["pinned"]), (4, "claude/claude-opus-5-5/medium"))
+        session.wait_for("Saved: route setup")
+
+    def test_missing_preferences_file_gets_a_read_only_notice(self):
+        session = self.open()
+        self.config.unlink()
+        session.wait_for("Preferences missing - read-only", timeout=3)
+        session.wait_for("READ-ONLY")
+        session.send(" ")
+        session.settle()
+        self.assertFalse(self.config.exists())
+
+    def test_stale_data_is_marked_at_40_by_12_with_pin_and_preferred(self):
+        from pod.observations import bundled
+        pin, preferred = "codex/gpt-6.1-sol/high", "claude/claude-opus-5-5/medium"
+        fixture_config(self.config, pinned=pin, preferred=preferred)
+        snapshot = bundled()
+        old = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        snapshot["created_at"] = old
+        for block in snapshot["sources"].values():
+            block["retrieved_at"] = old
+        self.cache.mkdir(parents=True)
+        (self.cache / "current.json").write_text(json.dumps(snapshot))
+        session = self.open(cols=40, rows=12)
+        text = session.text()
+        self.assertIn("Data STALE", text)
+        self.assertIn("Pin " + pin, text)
+        self.assertIn("Preferred " + preferred, text)
+        session.resize(160, 45)
+        session.wait_for("10d old STALE")
+
     def test_setup_can_be_left_for_read_only_browsing(self):
         self.config.write_text(V1)
         session = self.open(wait="ROUTE SETUP")
@@ -206,13 +252,20 @@ class RefreshPtyTests(PtyCase):
         record = json.loads((self.cache / "refresh.json").read_text())
         self.assertIn(record["attempt"]["outcome"], ("cancelled", "running"))
 
+    def test_coverage_collapse_is_named_refused_with_its_diagnostic(self):
+        session = self.open(cols=160, rows=45, fetch="collapse")
+        session.send("R")
+        session.wait_for("Refresh refused: artificial_analysis: Coverage collapsed", timeout=4)
+        self.assertNotIn("Refresh failed", session.text())
+        self.assertFalse((self.cache / "current.json").exists())
+
     def test_denial_is_reported_and_restrains_reopening(self):
         fixture_config(self.config, refresh="automatic")
         session = self.open(fetch="deny")
         session.wait_for("Refresh failed", timeout=4)
         session.send("\t" + RIGHT * 3)
         session.wait_for("LAST REFRESH IN THIS WINDOW")
-        session.wait_for("failed: artificial_analysis: HTTP 403 bot challenge")
+        session.wait_for("Refresh failed: access_denied: artificial_analysis: HTTP 403 bot challenge")
         session.send("\x1b")
         session.send(DOWN)
         session.settle()

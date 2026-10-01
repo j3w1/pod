@@ -53,8 +53,14 @@ def fetch(url, *, policy=None, deadline=None, cancel=None, opener=None):
             time.sleep(.05)
     if mode == "deny":
         raise sources.SourceError("access_denied", "HTTP 403 bot challenge")
+    if mode == "collapse" and url == sources.SOURCES[0].url:
+        return sources.Page(url, COLLAPSED)
     source = next(source for source in sources.SOURCES if source.url == url)
     return sources.Page(url, (Path({fixtures!r}) / PAGES[source.id]).read_text(encoding="utf-8"))
+COLLAPSED = ("<table><tr><th>Model</th><th>Context Window</th><th>Creator</th>"
+             "<th>Artificial Analysis Intelligence Index</th><th>Cost per TaskUSD</th><th>MedianTokens/s</th>"
+             "<th>LatencyFirst Chunk (s)</th><th>TotalResponse (s)</th></tr><tr><td>GPT-6.1 Sol (xhigh)</td>"
+             "<td>1M</td><td>OpenAI</td><td>51</td><td>$0.39</td><td>63</td><td>107.76</td><td>115.66</td></tr></table>")
 sources.fetch = fetch
 from pod.cli import main
 raise SystemExit(main(sys.argv[1:]))
