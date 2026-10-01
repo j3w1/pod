@@ -156,5 +156,5 @@ explicit notes and the choices the user still has to make, then saves it after c
 Saving takes the lock, compares the expected revision of the kept bytes, copies the original
 exclusively and durably to `config.yaml.pod-v1`, and then atomically replaces the file. An equal
 earlier copy is reused; a different one stops the setup. Interruption before the copy or before
-the swap leaves the kept file intact. Older Pod releases refuse `pod/v2` because of its fields and
+the swap leaves the kept file intact. Earlier Pod versions refuse `pod/v2` because of its fields and
 schema.
