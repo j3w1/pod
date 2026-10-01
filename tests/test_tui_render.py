@@ -145,6 +145,25 @@ class FrameTests(unittest.TestCase):
                     self.assertIn("Preferred " + preferred, text)
         self.assertNotIn("STALE", picture(current, (40, 12)).plain)
 
+    def test_wide_profile_column_shows_exact_aa_qualifier_text(self):
+        both = state(snapshot=fixture_snapshot(edit=lambda rows: [
+            {**row, "qualifiers": row["qualifiers"] + (["estimated index"] if row["name"] == "Claude Opus 5.5 (max with fallback)"
+                                                       else [])} for row in rows]))
+        for cols in (140, 160, 200):
+            with self.subTest(cols=cols):
+                lines = picture(both, (cols, 45)).plain.splitlines()
+                header = lines[2]
+                start = header.index("AA profile")
+                opus_max = next(line for line in lines[3:] if "Claude Opus 5.5" in line and " max " in line)
+                self.assertEqual(opus_max[start:start + 30], "with fallback, estimated index")
+                opus_high = next(line for line in lines[3:] if "Claude Opus 5.5" in line and " high " in line)
+                self.assertEqual(opus_high[start:start + 30].rstrip(), "with fallback")
+                astra = next(line for line in lines[3:] if "GPT-6 Astra" in line and " max " in line)
+                self.assertEqual(astra[start:start + 30].strip(), "")
+                for line in lines[3:23]:
+                    cell = line[start:start + 30]
+                    self.assertNotRegex(cell, r"(?<!with )fallback", "the AA wording is never cut to 'fallback'")
+
     def test_marks_are_distinct_from_focus_and_ascii_safe(self):
         key = "codex/gpt-6.1-sol/high"
         current = replace(state(prefs(pinned=key, preferred=key, routes={key: "enabled"})), focus=key)

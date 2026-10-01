@@ -157,8 +157,8 @@ def _index_text(row: dict, caps: Capabilities) -> str:
 
 
 def _profile(row: dict) -> str:
-    marks = _qualifiers(row)
-    return ", ".join("fallback" if mark == "with fallback" else "estimated" for mark in marks)
+    """AA's exact qualifier wording; "with fallback" describes AA's harness, never Pod fallback."""
+    return ", ".join(_qualifiers(row))
 
 
 def _when(value: object) -> datetime | None:
@@ -206,10 +206,14 @@ def table_columns(state: ts.State, width: int) -> tuple[Column, ...]:
     kind = preset(width + 1)
     if kind == "wide":
         fixed = [Column("effort", "Effort", 6), Column("state", "State", 8), Column("provider", "Provider", 9),
-                 *(metric[name] for name in ts.METRICS), Column("profile", "AA profile", 19)]
+                 *(metric[name] for name in ts.METRICS),
+                 # Wide enough for "with fallback, estimated index"; the qualifier text is never cut.
+                 Column("profile", "AA profile", len("with fallback, estimated index"))]
         used = marks + 1 + sum(column.width + 1 for column in fixed)
         name = Column("name", "Model", 22)
-        return (name, *fixed, Column("key", "Route key", max(8, width - used - name.width - 1)))
+        room = width - used - name.width - 1
+        # The route key is also in Details, so it appears here only when it has useful room.
+        return (name, *fixed) + ((Column("key", "Route key", room),) if room >= 12 else ())
     elif kind == "normal":
         fixed = [Column("effort", "Effort", 6), Column("state", "State", 8), metric["intelligence"],
                  metric["usd_per_task"], metric["first_response_s"]]
