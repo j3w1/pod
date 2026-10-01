@@ -684,8 +684,8 @@ def setup_preview(raw: bytes) -> dict:
     preferred_models = [model_id for model_id in V1_IDS if saved.get(model_id) == "preferred"]
     if preferred_models:
         notes.append({"code": "preferred_not_inferred",
-                      "message": "Earlier Preferred models (" + ", ".join(preferred_models) + ") are now "
-                                 "Available; choose one exact Preferred route if you want one"})
+                      "message": "Earlier Preferred models (" + ", ".join(preferred_models) + ") now have "
+                                 "every effort enabled; choose one exact Preferred route if you want one"})
     pin = older.get("pinned_model")
     if pin is not None:
         model = supported.get(pin)
