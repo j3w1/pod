@@ -1161,7 +1161,8 @@
       ],
       "offline_test": [
         "tests.test_workspace_state.WorkspaceSessionTests.test_saves_report_success_conflict_and_failure_honestly",
-        "tests.test_tui_pty.TuiPtyTests.test_two_windows_conflict_and_recover"
+        "tests.test_tui_pty.TuiPtyTests.test_two_windows_conflict_and_recover",
+        "tests.test_config.PreferencesTests.test_edit_reports_an_outside_edit_merged_under_the_lock"
       ],
       "status": "NOT_RUN"
     },
@@ -1312,7 +1313,9 @@
         "tests.test_workspace_state.WorkspaceSessionTests.test_missing_file_gets_a_read_only_notice_after_one_held_tick",
         "tests.test_workspace_pty.WorkspacePtyTests.test_missing_preferences_file_gets_a_read_only_notice",
         "tests.test_workspace_state.AuditSessionTests.test_a_save_in_the_same_tick_still_announces_an_outside_edit",
-        "tests.test_workspace_state.AuditSessionTests.test_refresh_in_the_same_tick_still_announces_an_outside_edit_and_setup_note"
+        "tests.test_workspace_state.AuditSessionTests.test_refresh_in_the_same_tick_still_announces_an_outside_edit_and_setup_note",
+        "tests.test_workspace_pty.DeltaAuditPtyTests.test_an_outside_edit_merged_under_the_preference_lock_is_announced",
+        "tests.test_workspace_state.DeltaAuditSessionTests.test_an_outside_edit_merged_while_waiting_for_the_lock_is_announced"
       ],
       "status": "NOT_RUN"
     },
@@ -2316,7 +2319,9 @@
         "tests.test_workspace_state.AuditSessionTests.test_open_session_repaints_so_age_and_stale_keep_moving",
         "tests.test_workspace_pty.AuditCorrectionPtyTests.test_open_window_ages_and_turns_stale_without_a_reload",
         "tests.test_workspace_state.AuditRenderTests.test_profile_marks_follow_values_in_tables_details_compare_and_changes",
-        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_profile_marks_sit_beside_the_numbers_in_both_glyph_sets"
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_profile_marks_sit_beside_the_numbers_in_both_glyph_sets",
+        "tests.test_workspace_pty.DeltaAuditPtyTests.test_data_age_outlasts_the_mixed_ages_note_and_a_notice",
+        "tests.test_workspace_state.DeltaAuditRenderTests.test_data_age_and_stale_survive_mixed_ages_and_notices_at_every_width"
       ],
       "status": "NOT_RUN"
     },
@@ -2340,7 +2345,16 @@
         "tests.test_workspace_state.AuditSessionTests.test_bulk_enter_after_an_outside_edit_saves_nothing_and_previews_again",
         "tests.test_workspace_state.AuditSessionTests.test_bulk_refused_by_the_file_reopens_with_a_fresh_preview",
         "tests.test_workspace_pty.AuditCorrectionPtyTests.test_bulk_saves_nothing_unreviewed_after_an_outside_not_set",
-        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_bulk_scroll_hint_names_the_key_that_scrolls"
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_bulk_scroll_hint_names_the_key_that_scrolls",
+        "tests.test_workspace_pty.DeltaAuditPtyTests.test_bulk_range_edit_never_moves_clear_pin_consent_to_a_moved_pin",
+        "tests.test_workspace_pty.DeltaAuditPtyTests.test_bulk_range_narrowed_then_widened_drops_hidden_consent",
+        "tests.test_workspace_state.DeltaAuditSessionTests.test_range_edit_keeps_clear_pin_consent_only_for_the_captured_pin",
+        "tests.test_workspace_state.DeltaAuditSessionTests.test_range_edit_keeps_clear_preferred_consent_only_for_the_captured_route",
+        "tests.test_workspace_state.DeltaAuditSessionTests.test_range_narrowed_then_widened_never_applies_hidden_consent_to_a_moved_pin",
+        "tests.test_workspace_state.DeltaAuditSessionTests.test_palette_disable_never_retargets_a_focus_moved_while_the_palette_was_open",
+        "tests.test_workspace_state.DeltaAuditSessionTests.test_palette_pin_refuses_a_pin_moved_while_the_palette_was_open",
+        "tests.test_workspace_state.DeltaAuditSessionTests.test_palette_refresh_setting_refuses_a_setting_changed_while_the_palette_was_open",
+        "tests.test_workspace_pty.DeltaAuditPtyTests.test_palette_toggle_refuses_a_route_changed_while_the_palette_was_open"
       ],
       "status": "NOT_RUN"
     },
@@ -2358,7 +2372,8 @@
         "tests.test_workspace_state.AuditRenderTests.test_changed_data_reports_a_profile_change_not_a_model_change",
         "tests.test_workspace_pty.AuditCorrectionPtyTests.test_compare_names_a_profile_difference_instead_of_a_delta",
         "tests.test_workspace_state.AuditRenderTests.test_compare_names_profile_differences_and_gives_no_delta_across_them",
-        "tests.test_workspace_state.AuditRenderTests.test_frontier_is_found_within_each_profile_and_methodology"
+        "tests.test_workspace_state.AuditRenderTests.test_frontier_is_found_within_each_profile_and_methodology",
+        "tests.test_workspace_state.DeltaAuditRenderTests.test_changed_data_gives_no_context_delta_across_a_profile_change"
       ],
       "status": "NOT_RUN"
     },
