@@ -1,54 +1,35 @@
-"""Sparse saved-map fleet-toggle proof through the real terminal launcher."""
+"""A sparse pod/v2 route map stays sparse through a real-terminal edit and a restart."""
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-import tempfile
-import unittest
-
-from pod.catalog import IDS
 from pod.config import load
-from tests.pty_harness import PtySession, dependencies_available
+from tests.pty_harness import PtyCase
+
+SPARSE = ("schema: pod/v2 # keep this comment\n"
+          "routes:\n"
+          "  codex/gpt-6-luna/low: enabled # only explicit choice\n"
+          "workers:\n"
+          "  max_active: 2\n"
+          "refresh: manual\n")
 
 
-class SparseTogglePtyTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        if not dependencies_available():
-            if os.environ.get("POD_REQUIRE_PTY") == "1":
-                raise AssertionError("POD_REQUIRE_PTY=1 needs pinned pyte and wcwidth")
-            raise unittest.SkipTest("pyte and wcwidth are optional local test dependencies")
-
-    def test_sparse_custom_all_custom_survives_restart(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            home, work = root / "home", root / "work"
-            home.mkdir(); work.mkdir()
-            config = home / "config/pod/config.yaml"
-            config.parent.mkdir(parents=True)
-            original = ("schema: pod/v1\nselection: custom # retain choice\n"
-                        "models:\n  gpt-6-sol: preferred # explicit\n"
-                        "workers: {max_active: 2}\n")
-            config.write_text(original)
-            with PtySession(home=home, cwd=work) as first:
-                first.wait_for("Details", timeout=4)
-                self.assertIn("1 eligible", first.text())
-                first.send("r")
-                # The footer names the r action, so wait for the saved mode itself, not for its label.
-                first.wait_for(lambda _s: load(personal=config)["mode"] == "all")
-                first.wait_for("Pod · All models")
-                all_mode = load(personal=config)
-                self.assertEqual(all_mode["mode"], "all")
-                self.assertEqual(set(all_mode["eligible"]), set(IDS))
-                self.assertEqual(all_mode["saved"]["gpt-6-sol"], "preferred")
-                self.assertEqual(len(all_mode["not_set"]), 5)
-            with PtySession(home=home, cwd=work) as second:
-                second.wait_for("Pod · All models", timeout=4)
-                second.send("r")
-                second.wait_for(lambda _s: load(personal=config)["mode"] == "custom")
-                second.wait_for("Pod · My selection")
-                restored = load(personal=config)
-                self.assertEqual(restored["mode"], "custom")
-                self.assertEqual(restored["eligible"], ["gpt-6-sol"])
-                self.assertEqual(config.read_text(), original)
+class SparseTogglePtyTests(PtyCase):
+    def test_sparse_map_edits_one_exact_route_and_survives_restart(self):
+        self.config.write_text(SPARSE)
+        first = self.open(cols=100, rows=30)
+        self.assertIn("1/30 enabled", first.text())
+        self.assertIn("not set", first.text())
+        first.send("/gpt-6-luna/medium\r ")
+        first.wait_for(lambda _s: load(personal=self.config)["routes"].get("codex/gpt-6-luna/medium") == "enabled")
+        first.wait_for("2/30 enabled")
+        saved = load(personal=self.config)
+        self.assertEqual(saved["routes"], {"codex/gpt-6-luna/low": "enabled", "codex/gpt-6-luna/medium": "enabled"})
+        text = self.config.read_text()
+        self.assertIn("# keep this comment", text)
+        self.assertIn("# only explicit choice", text)
+        first.close()
+        second = self.open(cols=100, rows=30)
+        self.assertIn("2/30 enabled", second.text())
+        second.send("/gpt-6-luna/medium\r ")
+        second.wait_for(lambda _s: load(personal=self.config)["routes"].get("codex/gpt-6-luna/medium") == "disabled")
+        self.assertEqual(len(load(personal=self.config)["routes"]), 2, "no other route is written")

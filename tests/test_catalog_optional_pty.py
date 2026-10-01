@@ -1,56 +1,37 @@
-"""A copied bundle remains browsable when an AA reference row is unavailable."""
+"""A copied bundle stays browsable when an AA observation row is missing."""
 
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
-import unittest
 
-from tests.pty_harness import (ROOT, PtySession, dependencies_available,
-                               environment, fixture_config)
+from tests.pty_harness import ROOT, PtyCase, environment
 
 
-class OptionalCatalogPtyTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        if not dependencies_available():
-            if os.environ.get("POD_REQUIRE_PTY") == "1":
-                raise AssertionError("POD_REQUIRE_PTY=1 needs pinned pyte and wcwidth")
-            raise unittest.SkipTest("pyte and wcwidth are optional local test dependencies")
-
-    def test_missing_reference_row_still_renders_and_config_reads(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);home=root/'home';work=root/'work'
-            home.mkdir();work.mkdir()
-            fixture_config(home/'config/pod/config.yaml')
-            copied=root/'copy/pod'
-            shutil.copytree(ROOT/'skills/pod',copied,
-                            ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
-            catalog_path=copied/'catalog.json'
-            document=json.loads(catalog_path.read_text())
-            del document['benchmarks']['models']['gpt-6-luna']
-            catalog_path.write_text(json.dumps(document))
-            launcher=copied/'scripts/pod.py'
-            with PtySession(home=home,cwd=work,launcher=launcher) as screen:
-                screen.wait_for('Details',timeout=4)
-                screen.send('/Luna\n')
-                screen.wait_for(lambda session: 'Details  GPT-6 Luna' in session.text()
-                                and 'unknown' in session.text(),timeout=2)
-                screen.settle()
-                self.assertIn('unknown',screen.text())
-                self.assertIn('BENCHMARK SOURCE',screen.text())
-                screen.send('\n')
-                screen.wait_for('Details  GPT-6 Luna [expanded]')
-            result=subprocess.run([sys.executable,'-I',str(launcher),'config','--json'],
-                                  cwd=work,env=environment(home),capture_output=True,text=True,timeout=10)
-            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-            self.assertEqual(len(json.loads(result.stdout)['eligible']),6)
-            doctor=subprocess.run([sys.executable,'-I',str(launcher),'doctor','--json'],
-                                  cwd=work,env=environment(home),capture_output=True,text=True,timeout=10)
-            self.assertEqual(doctor.returncode,0,doctor.stdout+doctor.stderr)
-            self.assertEqual(set(json.loads(doctor.stdout)['catalog']['ranks_of_six'].values()),{None})
+class OptionalObservationPtyTests(PtyCase):
+    def test_missing_observation_row_renders_unknown_and_reads_still_work(self):
+        copied = self.root / "copy" / "pod"
+        shutil.copytree(ROOT / "skills" / "pod", copied, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        path = copied / "observations.json"
+        document = json.loads(path.read_text())
+        rows = document["sources"]["artificial_analysis"]["rows"]
+        document["sources"]["artificial_analysis"]["rows"] = [row for row in rows if row["name"] != "GPT-6 Luna (high)"]
+        self.assertLess(len(document["sources"]["artificial_analysis"]["rows"]), len(rows))
+        path.write_text(json.dumps(document, indent=2, sort_keys=True))
+        launcher = copied / "scripts" / "pod.py"
+        from tests.pty_harness import PtySession
+        with PtySession(home=self.home, cwd=self.work, launcher=launcher, cols=100, rows=30) as screen:
+            screen.wait_for("[Det", timeout=6)
+            screen.send("/gpt-6-luna/high\r")
+            screen.wait_for(lambda s: any(line.startswith("▸") and "GPT-6 Luna" in line and " high " in line
+                                          and "—" in line for line in s.lines()))
+            self.assertIn("1 rows", screen.text())
+            screen.send("]")
+            screen.wait_for("no AA row maps to this route; metrics unknown")
+        for argv in (["config", "--json"], ["models", "--json"], ["doctor", "--json"]):
+            result = subprocess.run([sys.executable, "-I", str(launcher), *argv], cwd=self.work,
+                                    env=environment(self.home), capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, argv + [result.stdout + result.stderr])
+            json.loads(result.stdout)

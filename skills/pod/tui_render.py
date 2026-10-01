@@ -574,7 +574,12 @@ def routing(state: ts.State, item: ts.Item | None, width: int, caps: Capabilitie
 
 def sources(state: ts.State, item: ts.Item | None, width: int, caps: Capabilities, now: datetime) -> list[Line]:
     seen = state.projection.get("observations") or {}
-    lines = [_heading("OBSERVATION SNAPSHOT", width, caps)]
+    lines = []
+    if state.refresh_state != "idle":
+        lines.append(_heading("LAST REFRESH IN THIS WINDOW", width, caps))
+        lines += _wrapped(state.refresh_state + (": " + state.refresh_detail if state.refresh_detail else ""),
+                          width, caps, "error" if state.refresh_state == "failed" else "body")
+    lines.append(_heading("OBSERVATION SNAPSHOT", width, caps))
     if seen.get("status") == "observed":
         lines += _wrapped(f"{seen.get('origin')} snapshot, generation {seen.get('generation')}, created "
                           f"{seen.get('created_at')}" + (" (stale)" if seen.get("stale") else ""), width, caps,
@@ -868,8 +873,6 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
     refresh = {"running": ("Refreshing data...", "advisory"), "failed": ("Refresh failed: " + state.refresh_detail, "error"),
                "updated": ("Data updated", "advisory"), "unchanged": ("Refresh: " + state.refresh_detail, "advisory"),
                "cancelled": ("Refresh cancelled", "advisory")}.get(state.refresh_state)
-    if refresh:
-        segments.append(([refresh], True))
     if seen.get("status") == "observed":
         age = "unknown age" if seen.get("age_s") is None else age_text(
             datetime.fromtimestamp(now.timestamp() - seen["age_s"], timezone.utc).isoformat(), now)
@@ -877,6 +880,8 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
                            "error" if seen.get("stale") else "body")], False))
     else:
         segments.append(([("Data unknown", "advisory")], False))
+    if refresh:
+        segments.append(([refresh], True))
     segments.append(([("Native access unknown", "body")], False))
     if state.saved_at:
         segments.append(([("Saved " + state.saved_at.astimezone().strftime("%H:%M:%S"), "body")], False))

@@ -200,8 +200,8 @@ def _matches(state: State, row: dict, *, observation: bool) -> bool:
         return False
     if state.query:
         haystack = " ".join(str(row.get(name) or "") for name in ("name", "model", "key", "effort", "row",
-                                                                   "creator", "provider"))
-        if state.query.casefold() not in haystack.casefold():
+                                                                   "creator", "provider")).casefold()
+        if not all(word in haystack for word in state.query.casefold().split()):
             return False
     return True
 
