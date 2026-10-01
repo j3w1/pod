@@ -193,6 +193,15 @@ class FrameTests(unittest.TestCase):
                     else:
                         self.assertNotIn(tui.curses.COLOR_BLACK, set(pairs.values()))
 
+    def test_invalid_file_keeps_its_pin_visible_as_read_only_diagnostic(self):
+        broken = state(dict(prefs(), status="invalid", pin_diagnostic="gpt-6-sol",
+                            errors=[{"code": "invalid_pin", "message": "pinned 'gpt-6-sol' is not a supported route"}]))
+        text = " ".join(picture(broken, (160, 45)).plain.split())
+        for phrase in ("PREFERENCES UNAVAILABLE - READ-ONLY", "Run pod config edit", "Pin in file: gpt-6-sol",
+                       "READ-ONLY"):
+            self.assertIn(phrase, text)
+        self.assertEqual(press(broken, " ", "p", "P", "b")[1], [])
+
     def test_unknown_metrics_render_as_dashes(self):
         current = state(snapshot=fixture_snapshot(edit=lambda rows: []))
         self.assertEqual({ts.value(row, "intelligence") for row in ts.routes(current)}, {None})
