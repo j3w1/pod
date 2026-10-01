@@ -53,10 +53,10 @@ New Anthropic and OpenAI observations appear automatically but stay new, unmappe
 - <a id="a122"></a>**A122** — The registry validates exact identities, verified efforts, provider sources and check dates, attributed guidance and unambiguous explicit source aliases, and holds no benchmark measurements; adding an ordinary model is a registry edit.
 - <a id="a125"></a>**A125** — Workspace sorting, filtering, comparison, frontier marks and AA metrics cannot influence the selected route or start a worker.
 - <a id="a178"></a>**A178** — Config JSON supplies every supported route's state and the guide profiles; the joined projection pairs each route's AA metrics with their source row, qualifiers and dates, and the workspace renders them without a model call or dispatch.
-- <a id="a211"></a>**A211** — A refresh promotes a valid update atomically with previous rotation; `--check`, cancellation, interruption, a concurrent or out-of-order refresh, malformed or truncated required input and severe coverage loss promote nothing, keep current and previous coherent, and leave preferences and the bundle unchanged.
-- <a id="a212"></a>**A212** — Fetches stay on the HTTPS allowlist and within time, size, redirect and decompression limits; invalid numbers, duplicates, hostile text and control sequences are refused or cleaned, access denial and challenges are reported, and Retry-After is honored.
+- <a id="a211"></a>**A211** — A refresh promotes a valid update atomically with previous rotation; `--check`, cancellation, interruption, a concurrent or out-of-order refresh, malformed or truncated required input and severe coverage loss promote nothing, keep current and previous coherent for readers, settle an unexpected error as failed rather than running, fall back from a corrupt or special cache file, and leave preferences and the bundle unchanged.
+- <a id="a212"></a>**A212** — Fetches stay on the HTTPS allowlist and within one total time bound covering connection, headers, body and parsing, and within size, redirect and decompression limits; invalid numbers, duplicates, hostile text and control sequences are refused or cleaned, access denial and challenges are reported, and Retry-After is honored.
 - <a id="a213"></a>**A213** — Exact profile association, aliases, units, source and methodology labels, unknown fields and the fallback and estimated-index qualifiers survive parsing and projection; token prices never appear as cost per task.
-- <a id="a214"></a>**A214** — Automatic refresh starts only for an absent cache or data at least 24 hours old with `refresh: automatic`, respects Retry-After and the restraint after an unsuccessful or running attempt, shows data at least seven days old as stale, and is cancellable; config, status, doctor and admission make no network call.
+- <a id="a214"></a>**A214** — Automatic refresh starts only for an absent cache or data at least 24 hours old with `refresh: automatic`, respects Retry-After, a six-hour restraint after a failed or refused attempt and a ten-minute restraint after a cancelled or abandoned one, shows data at least seven days old as stale, and is cancellable; config, status, doctor and admission make no network call.
 - <a id="a215"></a>**A215** — New, unsupported and missing rows, provider disagreement and unknown native access remain honest observations, and a refresh or software update leaves the enabled pool, Preferred, Pin and Disabled routes unchanged.
 
 ## Registry
@@ -68,7 +68,7 @@ source URLs with checked dates on the provider's own hosts, a guide profile and 
 aliases. The not-routable list carries `claude-sonnet-5`, `gpt-6-sol` and the Daybreak models
 with a note and their own aliases. Validation checks exact fields, id and source-id shape, agent
 and provider pairing, efforts as an ordered subset of `low, medium, high, xhigh, max`, provider
-hosts, no future check dates, unique ids, aliases that are unambiguous across entries and never
+hosts, no check date more than one day ahead of the local date (a UTC release-day date stays valid on hosts behind UTC), unique ids, aliases that are unambiguous across entries and never
 equal a registry id, and a 128 KB size bound.
 
 Aliases map a source's exact row name to an effort of that base, to `none` for an informational
@@ -96,16 +96,23 @@ Public observations come from a fixed set of public HTTPS pages: the Artificial 
 leaderboard (`artificial_analysis`, required), Anthropic's models overview (`anthropic_models`,
 optional) and OpenAI's developer models page (`openai_models`, optional). The hosts form a fixed
 allowlist. A fetch uses stdlib `urllib` with no cookies, credentials, API clients, keys, accounts,
-browser or script execution, follows at most three redirects inside the allowlist, stops at
-about 20 seconds for the whole refresh, caps bodies and gzip/deflate decompression at 8 MiB and
-accepts only UTF-8 HTML. 401, 403, 407 and 451 are `access_denied` (a challenge is noted), 429,
-5xx and network failures are `unavailable`, and parse or shape problems are `malformed`.
-Retry-After is honoured, capped at seven days. Fetched URLs, commands and instructions are data,
-never execution authority.
+browser or script execution, follows at most three redirects inside the allowlist, caps bodies
+and gzip/deflate decompression at 8 MiB and accepts only UTF-8 HTML. One total wall-clock bound of
+about 20 seconds (a single authored value) covers the whole refresh: name resolution, connects,
+TLS, status line, headers, chunk-size lines, bodies and parsing of every source. At the bound a
+read is closed and the source is `unavailable` ("Source read exceeded the time limit"), or
+`malformed` when parsing ran out of time; a cancel ends an in-flight read promptly as
+`not_attempted`. A stuck system resolver call cannot be interrupted, so its thread may outlive
+the bound without holding a socket or Pod state. 401, 403, 407 and 451 are `access_denied` (a
+challenge is noted), 429, 5xx and network failures are `unavailable`, and parse or shape problems
+are `malformed`, including an invalid or repeated Content-Length, compressed trailing data or a
+second gzip member. Retry-After is honoured, capped at seven days, also when its value is
+oversized. Fetched URLs, commands and instructions are data, never execution authority.
 
 Isolated `html.parser` parsers bound tables, nesting, rows, cells and text, strip control and
 escape sequences, find AA columns by header name, and validate finite numbers in range with their
-exact units, duplicates and required columns. Rows keep the exact source name and are limited to
+exact units (ASCII digits only), duplicates (including a repeated provider id or context row) and
+required columns. Text accounting is linear and parsing runs inside the refresh bound. Rows keep the exact source name and are limited to
 Anthropic and OpenAI creators; they are matched to routes at read time through the registry, so a
 registry update takes effect without re-fetching. Missing metrics are `null` and shown as unknown,
 never zero. AA's "with fallback" describes AA's harness and never enables Pod fallback; an
@@ -119,18 +126,26 @@ The AA methodology label comes from the page's single "Intelligence Index vX.Y" 
 current bytes, so an older or concurrent request cannot overwrite newer data (`superseded`); the
 old current becomes `previous.json`. Nothing is promoted when the required source fails, is
 malformed or truncated, or loses more than half of its rows or mapped rows from a reference of at
-least eight, or when the run is `--check`, cancelled or superseded. A failed optional source keeps
-its earlier rows with their own retrieval time, and every source shows its own age; mixed ages are
-never hidden behind one timestamp.
+least eight, or when the run is `--check`, cancelled or superseded. An unexpected error fails
+that source with a bounded diagnostic, or settles the attempt as `failed` with the code
+`refresh_failed`; an attempt record is never left `running` by an error. A failed optional source
+keeps its earlier rows with their own retrieval time, and every source shows its own age; mixed
+ages are never hidden behind one timestamp. Readers obtain `current.json` and `previous.json`
+together under one shared lock (`observations.load_pair`), so they always see a coherent pair. A
+writer crash between the two renames leaves both files holding the replaced snapshot: a valid
+pair that loses the older previous generation.
 
 Only `current.json`, `previous.json` and `refresh.json` (last attempt, Retry-After and per-source
 diagnostics; source-fetch metadata, not model-health policy) live in
 `${XDG_CACHE_HOME:-~/.cache}/pod/models/`, or `$POD_CACHE_HOME/models/` for disposable validation,
-never inside the bundle, a worktree or the preference YAML. A corrupt cache falls back with a
-diagnostic. With `refresh: automatic`, opening the workspace starts one asynchronous refresh when
-no local cache exists or the data is at least 24 hours old, unless the required source's
-Retry-After is active or an unsuccessful or still-running attempt started within the last six
-hours. Data at least seven days old is shown as stale.
+never inside the bundle, a worktree or the preference YAML. A corrupt, redirected, special (FIFO,
+device, directory), oversized or too deeply nested cache file is ignored with a diagnostic, never
+read in full or waited on; readers fall back from the local cache to the bundled snapshot. With
+`refresh: automatic`, opening the workspace starts one asynchronous refresh when no local cache
+exists or the data is at least 24 hours old, unless the required source's Retry-After is active,
+a failed or refused attempt started within the last six hours, or a cancelled attempt (or one left
+`running` by a quit or kill) started within the last ten minutes. Data at least seven days old is
+shown as stale.
 There is no daemon, timer or watcher; quitting cancels an automatic refresh.
 
 The bundled `skills/pod/observations.json` is a small fallback snapshot taken from one real

@@ -1098,7 +1098,8 @@
       "offline_test": [
         "tests.test_catalog.CatalogTests.test_duplicate_keys_and_corrupt_metadata_are_rejected",
         "tests.test_catalog.CatalogTests.test_match_is_exact_and_keeps_qualifiers_informational",
-        "tests.test_catalog.CatalogTests.test_adding_a_model_is_a_registry_edit_and_check_reports_it"
+        "tests.test_catalog.CatalogTests.test_adding_a_model_is_a_registry_edit_and_check_reports_it",
+        "tests.test_catalog.CatalogTests.test_a_checked_date_one_day_ahead_of_the_local_date_is_accepted"
       ],
       "status": "NOT_RUN"
     },
@@ -1792,7 +1793,8 @@
         "tests.test_operations.AdmissionTests.test_terminal_reuse_must_match_the_pinned_route_exactly",
         "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_implementation_role_uses_pin",
         "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_investigation_role_uses_pin",
-        "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_review_role_uses_pin"
+        "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_review_role_uses_pin",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_pin_limits"
       ],
       "status": "NOT_RUN"
     },
@@ -2137,7 +2139,8 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries"
+        "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_pin_limits"
       ],
       "status": "NOT_RUN"
     },
@@ -2166,7 +2169,12 @@
         "tests.test_observations.RefreshTransactionTests.test_cancel_before_and_during_refresh_never_promotes",
         "tests.test_observations.RefreshTransactionTests.test_out_of_order_refresh_cannot_overwrite_newer_data",
         "tests.test_observations.RefreshTransactionTests.test_severe_coverage_loss_is_refused",
-        "tests.test_observations.RefreshTransactionTests.test_refresh_never_touches_preferences_bundle_or_workers"
+        "tests.test_observations.RefreshTransactionTests.test_refresh_never_touches_preferences_bundle_or_workers",
+        "tests.test_observations.RefreshTransactionTests.test_load_pair_reads_current_and_previous_coherently",
+        "tests.test_observations.RefreshTransactionTests.test_unexpected_error_at_promotion_never_leaves_running",
+        "tests.test_observations.RefreshTransactionTests.test_unexpected_fetch_or_parser_errors_settle_the_attempt",
+        "tests.test_observations.SnapshotValidationTests.test_hostile_cache_files_fall_back_without_raising_or_blocking",
+        "tests.test_observations.RefreshTransactionTests.test_hostile_content_length_through_the_real_reader_settles_failed"
       ],
       "status": "NOT_RUN"
     },
@@ -2185,7 +2193,19 @@
         "tests.test_sources.FetchTests.test_retry_after_is_honoured_and_bounded",
         "tests.test_sources.PolicyTests.test_destinations_outside_the_allowlist_never_reach_the_network",
         "tests.test_sources.ArtificialAnalysisParserTests.test_invalid_numbers_and_units_are_malformed",
-        "tests.test_sources.ArtificialAnalysisParserTests.test_hostile_text_is_inert_bounded_data"
+        "tests.test_sources.ArtificialAnalysisParserTests.test_hostile_text_is_inert_bounded_data",
+        "tests.test_sources.FetchTests.test_deadline_is_total_through_dripped_headers",
+        "tests.test_sources.FetchTests.test_deadline_is_total_through_dripped_chunk_sizes",
+        "tests.test_sources.FetchTests.test_deadline_is_total_through_a_dripped_tls_handshake",
+        "tests.test_sources.FetchTests.test_deadline_covers_slow_name_resolution",
+        "tests.test_sources.FetchTests.test_cancel_ends_a_dripping_read_promptly",
+        "tests.test_observations.RefreshTransactionTests.test_one_deadline_from_the_policy_covers_fetch_and_parsing",
+        "tests.test_sources.ArtificialAnalysisParserTests.test_cell_text_is_linear_and_parsing_obeys_the_deadline",
+        "tests.test_sources.FetchTests.test_hostile_content_length_is_malformed",
+        "tests.test_sources.ValueTests.test_retry_after_header_forms",
+        "tests.test_sources.FetchTests.test_compressed_trailing_data_or_second_member_is_malformed",
+        "tests.test_sources.ProviderParserTests.test_duplicate_provider_context_rows_are_malformed",
+        "tests.test_sources.ValueTests.test_only_ascii_digits_are_numbers"
       ],
       "status": "NOT_RUN"
     },
@@ -2198,7 +2218,8 @@
         "tests.test_sources.ArtificialAnalysisParserTests.test_fixture_rows_keep_exact_names_profiles_and_units",
         "tests.test_sources.ArtificialAnalysisParserTests.test_missing_values_stay_unknown_and_estimates_are_labelled",
         "tests.test_sources.ProviderParserTests.test_openai_cards_report_exact_ids_and_context",
-        "tests.test_routes.RouteProjectionTests.test_metrics_stay_paired_with_their_row_and_unknown_is_never_zero"
+        "tests.test_routes.RouteProjectionTests.test_metrics_stay_paired_with_their_row_and_unknown_is_never_zero",
+        "tests.test_cli.CliTests.test_bare_non_tty_summary_uses_validity_exit_code"
       ],
       "status": "NOT_RUN"
     },
@@ -2212,7 +2233,8 @@
         "tests.test_observations.AutomaticRefreshTests.test_fresh_stale_and_seven_day_display",
         "tests.test_observations.AutomaticRefreshTests.test_reopen_restraint_after_failed_and_running_attempts",
         "tests.test_observations.AutomaticRefreshTests.test_status_and_auto_checks_are_offline_and_read_only",
-        "tests.test_cli.CliTests.test_config_status_doctor_and_route_views_make_no_network_call"
+        "tests.test_cli.CliTests.test_config_status_doctor_and_route_views_make_no_network_call",
+        "tests.test_observations.AutomaticRefreshTests.test_cancelled_or_abandoned_attempts_restrain_only_briefly"
       ],
       "status": "NOT_RUN"
     },
