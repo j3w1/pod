@@ -122,7 +122,8 @@ Public 0.6.4 consent fixtures under `tests/fixtures/pod-0.6.4/` were emitted by 
 
 Pod 0.6.7 focused regressions cover A1–A5. A1 status tests compare a verified
 read with the exact 0.6.6 `status.py` read from Git object
-`f4101feb8e517382cb4cc626a1afc702c6429f37` on the same fixture, and show
+`f4101feb8e517382cb4cc626a1afc702c6429f37` on the same fixture, including a
+checkpoint whose real authority join recorded the consumer generation, and show
 unverified rows, the failed read's code, both runtimes and Orca-labelled
 attention for a changed runtime without a write (R97, A192–A194). A2 tests drive
 the real authority join through a fake Orca port that reports the current-Run
@@ -130,7 +131,9 @@ binding: proven rebinds for a checkpoint, Governor mutation, report read, new
 admission and reserved-admission recovery; byte-identical refusals for each
 ambiguous case; exact-scope Owner decisions reclassified at write time; every
 compared identity disproven with the path's existing code; no start, replay,
-Run creation, adoption or owner change; and the eight-entry history bound
+Run creation, adoption or owner change; the eight-entry history bound; a bind
+whose worker read preceded a Dispatch-destroying runtime change refusing as in
+0.6.6; and a Governor reconcile rebind written while the objective lock is held
 (R29, R98, A195–A199). Sanitized R15 and R17 incidents keep only counts and
 which identities changed. A4 runs every `pod internal` operation through the
 helper entry with a sentinel value (R99, A200–A201). A5 uses disposable Git

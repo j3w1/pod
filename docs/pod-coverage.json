@@ -1872,7 +1872,8 @@
       ],
       "offline_test": [
         "tests.test_status_unverified.UnverifiedStatusTests.test_verified_read_matches_066_output_and_kernel_outstanding_is_unchanged",
-        "tests.incidents.test_runtime_change_incidents.R15StatusIncident.test_finished_rows_after_a_runtime_change_are_unverified_not_active"
+        "tests.incidents.test_runtime_change_incidents.R15StatusIncident.test_finished_rows_after_a_runtime_change_are_unverified_not_active",
+        "tests.test_status_unverified.RecordedGenerationStatusTests.test_verified_read_with_a_recorded_generation_matches_066_without_a_continuity_field"
       ],
       "status": "NOT_RUN"
     },
@@ -1923,6 +1924,8 @@
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_status_never_rebinds",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_starts_replays_creates_adopts_and_reassigns_nothing",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_past_the_history_bound_refuses_without_a_write",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_a_runtime_change_that_destroyed_its_dispatch_refuses_and_stays_reserved",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_governor_reconcile_writes_its_rebind_under_the_objective_lock",
         "tests.test_runtime_continuity.AmbiguousContinuityTests.test_reserved_dispatch_found_needs_the_owner_then_separate_recovery_binds_it"
       ],
       "status": "NOT_RUN"
