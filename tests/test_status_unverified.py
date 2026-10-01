@@ -16,6 +16,7 @@ from pod.errors import PodError
 from pod.ledger import _outstanding_ids, kernel_view, objective_root, read
 from pod.operations import OrcaPort
 from tests.kernel_support import KernelCase
+from tests import test_runtime_continuity as continuity
 
 BASELINE = "f4101feb8e517382cb4cc626a1afc702c6429f37"  # Pod 0.6.6
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -137,6 +138,31 @@ class UnverifiedStatusTests(UnverifiedStatusCase):
         self.assertEqual(view["settlement"], "unverified")
         self.assertEqual(sorted(view["ctx"]["outstanding"]), sorted(_outstanding_ids(state, None)))
         self.assertEqual(len(view["ctx"]["outstanding"]), 3)
+
+
+class RecordedGenerationStatusTests(continuity.ContinuityCase):
+    """A production-shaped checkpoint: the real authority join records the consumer generation."""
+
+    def test_verified_read_with_a_recorded_generation_matches_066_without_a_continuity_field(self):
+        self.started()
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["continuity"],
+                         {"binding": {"run": "run", "coordinator": "owner", "generation": 1}, "history": []})
+
+        def observe(module):
+            output = StringIO()
+            result = module.status(self.project, None, objective="objective",
+                                   current_run_fn=lambda: {"run": {"id": "run"}, "runtime": "runtime"},
+                                   worker_rows_fn=lambda _run: {"runtime": "runtime", "workers": [],
+                                                                "scope": None, "complete": True})
+            with redirect_stdout(output):
+                module.render(result)
+            return json.loads(json.dumps(result)), output.getvalue()
+        observed, observed_render = observe(current_status)
+        expected, expected_render = observe(baseline_status())
+        self.assertEqual(observed["native_settlement"], "observed")
+        self.assertNotIn("runtime_continuity", observed)
+        self.assertEqual(observed, expected)
+        self.assertEqual(observed_render, expected_render)
 
 
 if __name__ == "__main__":

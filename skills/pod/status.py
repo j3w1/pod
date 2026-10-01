@@ -296,10 +296,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         except PodError as exc:
             result["obligations"] = {"error": exc.code}
     continuity = checkpoint.get("continuity") if isinstance(checkpoint, dict) else None
-    if isinstance(continuity, dict):
-        # Recorded continuity and every runtime rebind, read-only; status never rebinds (A2).
-        result["runtime_continuity"] = {"recorded": continuity.get("binding"),
-                                        "history": list(continuity.get("history", []))}
+    if isinstance(continuity, dict) and continuity.get("history"):
+        # The objective's runtime rebind history only, read-only; status never rebinds (A2).
+        result["runtime_continuity"] = {"history": list(continuity["history"])}
     if state is not None and checkpoint is not None:
         failure = settlement_failure(state, view, workers)
         if failure is not None:
