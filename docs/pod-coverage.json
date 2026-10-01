@@ -2182,7 +2182,9 @@
         "tests.test_observations.RefreshTransactionTests.test_unexpected_fetch_or_parser_errors_settle_the_attempt",
         "tests.test_observations.SnapshotValidationTests.test_hostile_cache_files_fall_back_without_raising_or_blocking",
         "tests.test_observations.RefreshTransactionTests.test_hostile_content_length_through_the_real_reader_settles_failed",
-        "tests.test_workspace_state.AuditSessionTests.test_current_and_previous_are_read_as_one_pair_stamped_before_the_read"
+        "tests.test_workspace_state.AuditSessionTests.test_current_and_previous_are_read_as_one_pair_stamped_before_the_read",
+        "tests.test_observations.RefreshTransactionTests.test_load_pair_never_pairs_the_bundled_fallback_with_cache_previous",
+        "tests.test_observations.RefreshTransactionTests.test_special_lock_or_record_refuses_refresh_without_a_traceback"
       ],
       "status": "NOT_RUN"
     },
@@ -2213,7 +2215,8 @@
         "tests.test_sources.ValueTests.test_retry_after_header_forms",
         "tests.test_sources.FetchTests.test_compressed_trailing_data_or_second_member_is_malformed",
         "tests.test_sources.ProviderParserTests.test_duplicate_provider_context_rows_are_malformed",
-        "tests.test_sources.ValueTests.test_only_ascii_digits_are_numbers"
+        "tests.test_sources.ValueTests.test_only_ascii_digits_are_numbers",
+        "tests.test_sources.ArtificialAnalysisParserTests.test_a_deadline_raised_after_connect_closes_that_socket"
       ],
       "status": "NOT_RUN"
     },
@@ -2228,7 +2231,8 @@
         "tests.test_sources.ProviderParserTests.test_openai_cards_report_exact_ids_and_context",
         "tests.test_routes.RouteProjectionTests.test_metrics_stay_paired_with_their_row_and_unknown_is_never_zero",
         "tests.test_cli.CliTests.test_bare_non_tty_summary_uses_validity_exit_code",
-        "tests.test_workspace_state.AuditRenderTests.test_profile_marks_follow_values_in_tables_details_compare_and_changes"
+        "tests.test_workspace_state.AuditRenderTests.test_profile_marks_follow_values_in_tables_details_compare_and_changes",
+        "tests.test_sources.ArtificialAnalysisParserTests.test_methodology_version_uses_ascii_digits_only"
       ],
       "status": "NOT_RUN"
     },

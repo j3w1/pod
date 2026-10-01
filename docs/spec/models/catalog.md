@@ -131,7 +131,8 @@ that source with a bounded diagnostic, or settles the attempt as `failed` with t
 `refresh_failed`; an attempt record is never left `running` by an error. A failed optional source
 keeps its earlier rows with their own retrieval time, and every source shows its own age; mixed
 ages are never hidden behind one timestamp. Readers obtain `current.json` and `previous.json`
-together under one shared lock (`observations.load_pair`), so they always see a coherent pair. A
+together under one shared lock (`observations.load_pair`), so they always see a coherent pair; when
+the current view falls back to the bundled snapshot there is no previous snapshot to compare. A
 writer crash between the two renames leaves both files holding the replaced snapshot: a valid
 pair that loses the older previous generation.
 
@@ -139,8 +140,10 @@ Only `current.json`, `previous.json` and `refresh.json` (last attempt, Retry-Aft
 diagnostics; source-fetch metadata, not model-health policy) live in
 `${XDG_CACHE_HOME:-~/.cache}/pod/models/`, or `$POD_CACHE_HOME/models/` for disposable validation,
 never inside the bundle, a worktree or the preference YAML. A corrupt, redirected, special (FIFO,
-device, directory), oversized or too deeply nested cache file is ignored with a diagnostic, never
-read in full or waited on; readers fall back from the local cache to the bundled snapshot. With
+device, directory), oversized or too deeply nested cache file is ignored by readers with a
+diagnostic, never read in full or waited on; readers fall back from the local cache to the bundled
+snapshot. A `.lock` or `refresh.json` that cannot be opened or written as a regular file makes
+`pod models refresh` refuse with `unsafe_cache` before any network read. With
 `refresh: automatic`, opening the workspace starts one asynchronous refresh when no local cache
 exists or the data is at least 24 hours old, unless the required source's Retry-After is active,
 a failed or refused attempt started within the last six hours, or a cancelled attempt (or one left
