@@ -244,6 +244,15 @@ def _metric(row: dict, name: str, render) -> str:
     return "—" if value is None else render(value)
 
 
+def _profile(row: dict) -> str:
+    """The AA profile qualifiers the shown metrics were measured under ("—" without an AA row)."""
+    for name in ("intelligence", "usd_per_task", "first_response_s"):
+        metric = row["metrics"][name]
+        if metric.get("row"):
+            return ", ".join(metric.get("qualifiers") or []) or "standard"
+    return "—"
+
+
 def _print_models(projection: dict) -> None:
     preferences, summary = projection["preferences"], projection["summary"]
     print(f"Pod {version()} routes: {summary['routes']} supported, {summary['enabled']} enabled, "
@@ -259,17 +268,25 @@ def _print_models(projection: dict) -> None:
     if seen["status"] == "observed":
         print(f"Observations: {seen['origin']} snapshot, generation {seen['generation']}, "
               f"created {seen['created_at']}{' (stale)' if seen.get('stale') else ''}")
+        # Each source keeps its own retrieval time, so a kept older block is never hidden behind one date.
+        for source, block in sorted((seen.get("sources") or {}).items()):
+            print(f"  {source}: {block.get('status')}, retrieved {block.get('retrieved_at') or 'unknown'}"
+                  f"{', published ' + block['published_at'] if block.get('published_at') else ''}"
+                  f"{' (stale)' if block.get('stale') else ''}")
     else:
         print(f"Observations: {seen['status']}")
-    print(f"{'ROUTE':34} {'STATE':9} {'MARK':5} {'INDEX':>5} {'USD/TASK':>9} {'FIRST':>8}")
+    print(f"{'ROUTE':34} {'STATE':9} {'MARK':5} {'INDEX':>5} {'USD/TASK':>9} {'FIRST':>8}  AA PROFILE")
     for row in projection["routes"]:
         mark = ("pin " if row["pinned"] else "") + ("pref" if row["preferred"] else "")
         print(f"{row['key']:34} {row['state'].replace('_', ' '):9} {mark.strip():5} "
               f"{_metric(row, 'intelligence', str):>5} {_metric(row, 'usd_per_task', format_usd):>9} "
-              f"{_metric(row, 'first_response_s', format_latency):>8}")
+              f"{_metric(row, 'first_response_s', format_latency):>8}  {_profile(row)}")
     if projection["unmapped"]:
         print(f"New or unsupported observations: {len(projection['unmapped'])} (not routable; pod models --json lists them)")
-    print("AA metrics are informational; Pod chooses each exact route by suitability.")
+    print("AA benchmark cost is not the user's subscription charge, quota consumption or Pod invoice; "
+          "first/total benchmark response is not worker task duration.")
+    print("AA metrics are informational; Pod chooses each exact route by suitability. "
+          "\"with fallback\" is AA's harness profile and never enables Pod fallback.")
 
 
 def _print_refresh(result: dict) -> None:

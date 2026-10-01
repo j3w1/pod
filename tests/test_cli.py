@@ -88,6 +88,15 @@ class CliTests(unittest.TestCase):
             self.assertIn('codex/gpt-6.1-sol/xhigh',text)
             self.assertIn('bundled snapshot',text)
             self.assertIn('AA metrics are informational',text)
+            # Metrics stay paired with their AA profile, each source shows its own retrieval time,
+            # and the full benchmark-cost disclaimer is present (audit M1/M2).
+            opus=next(line for line in text.splitlines() if line.startswith('claude/claude-opus-5-5/high '))
+            luna=next(line for line in text.splitlines() if line.startswith('codex/gpt-6-luna/high '))
+            self.assertTrue(opus.rstrip().endswith('with fallback'),opus)
+            self.assertTrue(luna.rstrip().endswith('standard'),luna)
+            for source in ('artificial_analysis','anthropic_models','openai_models'):
+                self.assertRegex(text,rf'  {source}: ok, retrieved \d{{4}}-')
+            self.assertIn("not the user's subscription charge, quota consumption or Pod invoice",text)
 
     def test_config_edit_creates_defaults_and_preserves_invalid_manual_change(self):
         path=self.root/'config'/'pod'/'config.yaml'
