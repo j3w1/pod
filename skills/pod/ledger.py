@@ -460,8 +460,10 @@ def _ambiguous(objective: str, verdict: dict) -> PodError:
         "ambiguity can rebind (internal runtime-continuity)",
         {"objective": objective, "recorded_runtime": verdict["recorded_runtime"],
          "current_runtime": verdict["current_runtime"], "ambiguity": verdict["ambiguity"],
-         "next_action": "ask the Owner for an exact-scope runtime continuity decision, or settle "
-                        "this objective's workers through Orca"})
+         "next_action": "ask the Owner; only on their direct decision call internal runtime-continuity "
+                        "with a decision of provenance user_direct, their instruction, and this "
+                        "objective, recorded_runtime, current_runtime and ambiguity unchanged; "
+                        "otherwise settle this objective's workers through Orca"})
 
 
 def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, port,
