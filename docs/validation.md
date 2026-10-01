@@ -18,7 +18,7 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | Focused route, refresh and workspace tests | `PYTHONPATH=skills python -m unittest tests.test_catalog tests.test_config tests.test_pin tests.test_selection tests.test_routes tests.test_route_upgrade tests.test_sources tests.test_observations tests.test_cli tests.test_workspace_state tests.test_tui_render -v` | Registry, preferences, exact pin, admission validation, the joined projection, upgrade setup, bounded public-source reads and refresh, CLI and workspace state with local fixtures, controlled time and local HTTP servers only. |
 | Source hygiene | `python tools/source_audit.py .` | Tracked-source privacy and removed-mechanism guard; no Pod package, tag or release path. |
 | Recorded trace checks | `python tools/trace_check.py tests/fixtures/traces/*.json` | Deterministic record checks and observation-only counts; a trace without maps remains `NOT_EVALUABLE`, not kernel proof. |
-| PTY and subprocess | `POD_REQUIRE_PTY=1 PYTHONPATH=skills python -m unittest tests.test_tui_pty -v`; `PYTHONPATH=skills python -m unittest tests.test_installer -v` | Actual terminal and shell entrypoints, immediate persistence, responsive focus, install interruption and safe recovery. |
+| PTY and subprocess | `POD_REQUIRE_PTY=1 PYTHONPATH=skills python -m unittest tests.test_tui_pty tests.test_workspace_pty tests.test_sparse_toggle_pty tests.test_catalog_optional_pty -v`; `PYTHONPATH=skills python -m unittest tests.test_installer -v` | Actual terminal and shell entrypoints, immediate persistence, responsive focus, install interruption and safe recovery. |
 | Copied bundle | Run installed `pod --version`, `pod config --json` and `pod doctor --json` from an unrelated directory with no checkout or `PYTHONPATH` | One placed bundle works independently. |
 | Disposable installer | `POD_INSTALL_SOURCE=file://… sh install.sh` in a scrubbed temporary home, then `--installed` parity and launcher checks | Real install, dependencies, both skills, receipt, preferences, PATH and update. |
 | SHA-pinned public install | Download `install.sh` from `raw.githubusercontent.com` at the commit SHA and set `POD_INSTALL_SOURCE` to the matching `codeload.github.com` SHA tarball in hosted CI | Public endpoints serve the reviewed commit. |
@@ -106,9 +106,12 @@ Pure workspace state and frame tests (`tests.test_workspace_state`,
 `tests.test_tui_render`) cover sorting, grouping, filters, compare, the
 frontier, changed data, bulk scopes, the setup screen and automatic refresh with
 controlled time, without a terminal. The latency
-measurement records p50/p95/max for focus/save and external refresh with kernel,
-CPU, Python, ncurses, TERM, locale and terminal size; focus/save p95 must be
-under 500 ms and an external change must repaint within one second. Visual review examines `tests/tui_snapshot.py` SVG/PNG output at 160×45,
+measurement (`python tests/pty_harness.py`) records p50/p95/max for focus, save,
+external-change repaint and refreshed-data repaint, plus startup to the first
+frame and `pod.tui` import time, with kernel, CPU, Python, ncurses, TERM, locale
+and terminal size. Focus and save p95 must be under 500 ms, and an external
+change or refreshed data must repaint within one second; startup and import
+times are recorded for the footprint review, not gated. Visual review examines `tests/tui_snapshot.py` SVG/PNG output at 160×45,
 100×30, 80×24, 60×20 and 40×12 in pink, dark and light palettes, plus
 NO_COLOR, ASCII, each inspector tab, compare, the bulk preview, route setup and
 help. `frame(strict=True)` and a 40–200-column sweep at short and tall heights

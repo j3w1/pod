@@ -423,7 +423,8 @@
       "offline_test": [
         "tests.test_config.PreferencesTests.test_sparse_and_empty_route_maps_are_valid_but_omissions_are_ineligible",
         "tests.test_config.PreferencesTests.test_missing_invalid_and_partial_files_never_enable_delegation",
-        "tests.test_selection.SelectionTests.test_setup_required_and_invalid_preferences_block_every_route"
+        "tests.test_selection.SelectionTests.test_setup_required_and_invalid_preferences_block_every_route",
+        "tests.test_tui_pty.LauncherPtyTests.test_missing_preferences_open_read_only"
       ],
       "status": "NOT_RUN"
     },
@@ -1036,7 +1037,9 @@
       "offline_test": [
         "tests.test_workspace_state.EditTests.test_route_state_preferred_and_pin_effects_name_exact_routes",
         "tests.test_workspace_state.SetupTests.test_setup_collects_pin_and_preferred_then_confirms",
-        "tests.test_workspace_state.WorkspaceSessionTests.test_setup_apply_saves_only_after_confirmation"
+        "tests.test_workspace_state.WorkspaceSessionTests.test_setup_apply_saves_only_after_confirmation",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_state_pin_and_preferred_save_at_once_and_survive_restart",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_setup_screen_saves_only_after_explicit_confirmation"
       ],
       "status": "NOT_RUN"
     },
@@ -1120,7 +1123,8 @@
       ],
       "offline_test": [
         "tests.test_workspace_state.EditTests.test_navigation_view_and_compare_keys_never_write",
-        "tests.test_workspace_state.ComparisonTests.test_frontier_marks_shown_comparable_rows_only"
+        "tests.test_workspace_state.ComparisonTests.test_frontier_marks_shown_comparable_rows_only",
+        "tests.test_tui_pty.TuiPtyTests.test_browsing_palette_sort_filter_compare_and_help_never_write"
       ],
       "status": "NOT_RUN"
     },
@@ -1148,7 +1152,8 @@
         "pty_subprocess"
       ],
       "offline_test": [
-        "tests.test_workspace_state.WorkspaceSessionTests.test_saves_report_success_conflict_and_failure_honestly"
+        "tests.test_workspace_state.WorkspaceSessionTests.test_saves_report_success_conflict_and_failure_honestly",
+        "tests.test_tui_pty.TuiPtyTests.test_two_windows_conflict_and_recover"
       ],
       "status": "NOT_RUN"
     },
@@ -1268,7 +1273,12 @@
         "tests.test_tui_render.FrameTests.test_inspector_paging_reaches_every_line_at_any_height",
         "tests.test_tui_render.FrameTests.test_strict_sweep_has_no_overflow_from_40_to_200_columns",
         "tests.test_tui_render.FrameTests.test_sixteen_colour_light_palette_keeps_essential_roles_readable",
-        "tests.test_tui_render.FrameTests.test_interpreter_coerced_c_locale_stays_ascii"
+        "tests.test_tui_render.FrameTests.test_interpreter_coerced_c_locale_stays_ascii",
+        "tests.test_tui_pty.TuiPtyTests.test_five_sizes_keep_the_bottom_dock_and_contrast",
+        "tests.test_tui_pty.TuiPtyTests.test_resize_keeps_focus_and_compact_inspector",
+        "tests.test_tui_pty.TuiPtyTests.test_ascii_monochrome_help_and_native_unknown",
+        "tests.test_tui_pty.TuiPtyTests.test_too_small_terminal_recovers",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_compact_inspector_at_40_by_12_is_reachable"
       ],
       "status": "NOT_RUN"
     },
@@ -1281,7 +1291,11 @@
       "offline_test": [
         "tests.test_workspace_state.EditTests.test_navigation_view_and_compare_keys_never_write",
         "tests.test_workspace_state.WorkspaceSessionTests.test_saves_report_success_conflict_and_failure_honestly",
-        "tests.test_workspace_state.WorkspaceSessionTests.test_external_edit_and_invalid_file_are_noticed"
+        "tests.test_workspace_state.WorkspaceSessionTests.test_external_edit_and_invalid_file_are_noticed",
+        "tests.test_tui_pty.TuiPtyTests.test_browsing_palette_sort_filter_compare_and_help_never_write",
+        "tests.test_tui_pty.TuiPtyTests.test_external_edit_invalid_yaml_and_read_only",
+        "tests.test_tui_pty.TuiPtyTests.test_ctrl_c_and_sigterm_exit_without_writing",
+        "tests.test_sparse_toggle_pty.SparseTogglePtyTests.test_sparse_map_edits_one_exact_route_and_survives_restart"
       ],
       "status": "NOT_RUN"
     },
@@ -1711,7 +1725,8 @@
       "offline_test": [
         "tests.test_cli.CliTests.test_config_summary_and_invalid_file_exit_honestly",
         "tests.test_routes.RouteProjectionTests.test_metrics_stay_paired_with_their_row_and_unknown_is_never_zero",
-        "tests.test_workspace_state.InspectorTests.test_tabs_render_disclaimer_profiles_sources_and_routing"
+        "tests.test_workspace_state.InspectorTests.test_tabs_render_disclaimer_profiles_sources_and_routing",
+        "tests.test_catalog_optional_pty.OptionalObservationPtyTests.test_missing_observation_row_renders_unknown_and_reads_still_work"
       ],
       "status": "NOT_RUN"
     },
@@ -1781,7 +1796,10 @@
         "tests.test_tui_render.FrameTests.test_marks_are_distinct_from_focus_and_ascii_safe",
         "tests.test_workspace_state.TableTests.test_focus_and_hidden_selections_survive_filter_sort_and_refresh",
         "tests.test_workspace_state.EditTests.test_bulk_disable_of_pin_requires_clearing_it_in_the_same_save",
-        "tests.test_workspace_state.WorkspaceSessionTests.test_saves_report_success_conflict_and_failure_honestly"
+        "tests.test_workspace_state.WorkspaceSessionTests.test_saves_report_success_conflict_and_failure_honestly",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_hidden_pin_and_focus_survive_filters_search_and_errors",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_state_pin_and_preferred_save_at_once_and_survive_restart",
+        "tests.test_tui_pty.TuiPtyTests.test_save_failure_keeps_bytes_and_stays_reachable"
       ],
       "status": "NOT_RUN"
     },
@@ -2061,7 +2079,8 @@
         "tests.test_route_upgrade.RouteSetupTests.test_genuine_067_files_stay_readable_as_setup_required",
         "tests.test_installer.InstallerTests.test_valid_and_old_shape_preferences_are_preserved",
         "tests.test_cli.CliTests.test_route_setup_is_named_by_config_status_and_doctor",
-        "tests.test_operations.AdmissionTests.test_missing_and_partial_preferences_disable_new_workers"
+        "tests.test_operations.AdmissionTests.test_missing_and_partial_preferences_disable_new_workers",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_setup_can_be_left_for_read_only_browsing"
       ],
       "status": "NOT_RUN"
     },
@@ -2073,7 +2092,8 @@
       "offline_test": [
         "tests.test_route_upgrade.RouteSetupTests.test_preview_is_pure_deterministic_and_conservative",
         "tests.test_route_upgrade.RouteSetupTests.test_apply_needs_explicit_pin_choice_and_keeps_the_original",
-        "tests.test_route_upgrade.RouteSetupTests.test_an_unsupported_pin_can_only_be_cleared_explicitly"
+        "tests.test_route_upgrade.RouteSetupTests.test_an_unsupported_pin_can_only_be_cleared_explicitly",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_setup_screen_saves_only_after_explicit_confirmation"
       ],
       "status": "NOT_RUN"
     },
@@ -2223,7 +2243,9 @@
         "tests.test_workspace_state.TableTests.test_filters_compose_and_search_matches_display_and_native_identity",
         "tests.test_workspace_state.TableTests.test_new_and_unsupported_observations_are_reachable_but_not_routable",
         "tests.test_workspace_state.TableTests.test_focus_and_hidden_selections_survive_filter_sort_and_refresh",
-        "tests.test_tui_render.FrameTests.test_sort_metric_stays_visible_in_every_preset"
+        "tests.test_tui_render.FrameTests.test_sort_metric_stays_visible_in_every_preset",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_palette_runs_sorting_grouping_and_help_from_the_keyboard",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_new_and_unsupported_observations_are_reachable_not_routable"
       ],
       "status": "NOT_RUN"
     },
@@ -2238,7 +2260,8 @@
         "tests.test_workspace_state.InspectorTests.test_failed_optional_source_shows_attempt_and_earlier_rows",
         "tests.test_workspace_state.InspectorTests.test_tab_and_pane_keys_scroll_the_inspector_independently",
         "tests.test_tui_render.FrameTests.test_disclaimer_units_and_scope_are_visible",
-        "tests.test_tui_render.FrameTests.test_status_line_reports_counts_selections_age_refresh_native_and_path"
+        "tests.test_tui_render.FrameTests.test_status_line_reports_counts_selections_age_refresh_native_and_path",
+        "tests.test_tui_pty.TuiPtyTests.test_keyboard_moves_table_and_inspector_independently"
       ],
       "status": "NOT_RUN"
     },
@@ -2254,7 +2277,8 @@
         "tests.test_workspace_state.EditTests.test_reset_enables_listed_routes_and_keeps_pin_and_preference",
         "tests.test_workspace_state.EditTests.test_bulk_disable_of_pin_requires_clearing_it_in_the_same_save",
         "tests.test_workspace_state.EditTests.test_read_only_and_setup_required_files_refuse_edits",
-        "tests.test_tui_render.FrameTests.test_footer_describes_keys_and_fits"
+        "tests.test_tui_render.FrameTests.test_footer_describes_keys_and_fits",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_bulk_preview_saves_once_and_protects_the_pin"
       ],
       "status": "NOT_RUN"
     },
@@ -2267,7 +2291,8 @@
         "tests.test_workspace_state.ComparisonTests.test_compare_holds_four_routes_and_reports_bounded_deltas",
         "tests.test_workspace_state.ComparisonTests.test_delta_rules_for_missing_zero_and_methodology",
         "tests.test_workspace_state.ComparisonTests.test_frontier_marks_shown_comparable_rows_only",
-        "tests.test_workspace_state.ComparisonTests.test_changed_data_and_methodology_change"
+        "tests.test_workspace_state.ComparisonTests.test_changed_data_and_methodology_change",
+        "tests.test_workspace_pty.WorkspacePtyTests.test_compare_tab_and_frontier_create_no_recommendation"
       ],
       "status": "NOT_RUN"
     },
@@ -2282,7 +2307,11 @@
         "tests.test_workspace_state.WorkspaceSessionTests.test_manual_only_never_touches_the_network",
         "tests.test_workspace_state.WorkspaceSessionTests.test_seven_day_data_is_stale_and_reopen_restraint_holds_after_a_failure",
         "tests.test_workspace_state.WorkspaceSessionTests.test_cancel_on_quit_promotes_nothing_and_keys_stay_responsive",
-        "tests.test_workspace_state.WorkspaceSessionTests.test_refresh_keeps_focus_view_and_compare_marks"
+        "tests.test_workspace_state.WorkspaceSessionTests.test_refresh_keeps_focus_view_and_compare_marks",
+        "tests.test_workspace_pty.RefreshPtyTests.test_automatic_refresh_renders_cache_first_then_updates_once",
+        "tests.test_workspace_pty.RefreshPtyTests.test_manual_only_never_fetches_until_refresh_is_pressed",
+        "tests.test_workspace_pty.RefreshPtyTests.test_quit_cancels_a_running_refresh_without_promoting",
+        "tests.test_workspace_pty.RefreshPtyTests.test_denial_is_reported_and_restrains_reopening"
       ],
       "status": "NOT_RUN"
     }
