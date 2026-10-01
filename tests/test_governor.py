@@ -94,6 +94,20 @@ class GovernorCase(unittest.TestCase):
     def codes(self, result):
         return [reason["code"] for reason in result["reasons"]]
 
+    def read_back(self, record_id, workflow, commit=COMMIT, *, event="workflow_dispatch", conclusion="success"):
+        """Settle a row the way Pod does: its own readback of a run of the given event."""
+        port = FakePort()
+        run = port._start(workflow, commit, event=event)
+        if conclusion is not None:
+            port.complete(run["id"], conclusion)
+        return reconcile(self.project, "objective", owner="owner", record_id=record_id, port=port, now=NOW)
+
+    def derived(self, publication):
+        """The validation row a landed publication journaled for the run it started."""
+        rows = [row for row in status(self.project, "objective")["actions"] if row["derived_from"] == publication]
+        self.assertEqual(len(rows), 1)
+        return rows[0]["record_id"]
+
 
 class CandidateTests(GovernorCase):
     def test_project_cannot_remove_personal_preflight_from_governor_decision(self):
@@ -194,9 +208,8 @@ class CandidateTests(GovernorCase):
         self.preflight(first["id"])
         record_outcome(self.project, "objective", owner="owner", record_id=self.decide(action())["record_id"],
                        outcome="PASS")
-        record_outcome(self.project, "objective", owner="owner",
-                       record_id=self.decide(dispatch(candidate=first["id"], target=RELEASE))["record_id"],
-                       outcome="PASS")
+        # Evidence is a workflow_dispatch run Pod read back itself (A3); a manual PASS is not proof.
+        self.read_back(self.decide(dispatch(candidate=first["id"], target=RELEASE))["record_id"], RELEASE)
         self.assertEqual(self.decide(dispatch(candidate=first["id"], target=RELEASE))["decision"], "REUSE")
         for changed in (observation(workflows={".github/workflows/ci.yml": "3" * 64}),
                         observation(base="4" * 40), observation(policy="r2"),
@@ -338,8 +351,8 @@ class DecisionTests(GovernorCase):
         self.assertEqual((attached["decision"], attached["reuse"]["kind"], attached["record_id"]),
                          ("REUSE", "attach", first["record_id"]))
         self.assertFalse(attached["recorded"])
-        record_outcome(self.project, "objective", owner="owner", record_id=first["record_id"], outcome="PASS",
-                       provider={"run_id": "100"}, now=NOW + timedelta(minutes=9))
+        # A3: the PASS is evidence once Pod's own readback established a workflow_dispatch run.
+        self.assertEqual(self.read_back(first["record_id"], RELEASE)["status"], "PASS")
         evidence = self.decide(dispatch(candidate=binding["id"], target=RELEASE))
         self.assertEqual((evidence["decision"], evidence["reuse"]["kind"]), ("REUSE", "evidence"))
         repeat = self.decide(action(candidate=binding["id"]))
@@ -349,7 +362,8 @@ class DecisionTests(GovernorCase):
         self.assertEqual(projection["counters"]["evidence_reused"], 2)
         self.assertEqual(projection["units"]["release"]["published"][TARGET], COMMIT)
         row = [row for row in projection["actions"] if row["record_id"] == first["record_id"]][0]
-        self.assertEqual((row["outcome"], row["provider"], row["commit"]), ("PASS", {"run_id": "100"}, COMMIT))
+        self.assertEqual((row["outcome"], row["provider"]["run_id"], row["provider"]["event"], row["commit"]),
+                         ("PASS", "100", "workflow_dispatch", COMMIT))
         # A reuse is not a row: nothing in the journal says a second run happened.
         self.assertEqual([r["kind"] for r in projection["actions"]], ["push", "workflow_dispatch", "workflow_dispatch"])
         self.assertEqual(projection["actions"][1]["derived_from"], pushed["record_id"])
@@ -364,19 +378,20 @@ class DecisionTests(GovernorCase):
         derived = status(self.project, "objective")["units"]["release"]["active_validation"]
         self.assertEqual([(row["kind"], row["target"], row["provider"]) for row in derived],
                          [("workflow_dispatch", "ci.yml", None)])
-        attached = self.decide(dispatch(candidate=binding["id"]))
-        self.assertEqual((attached["decision"], attached["reuse"]["kind"], attached["record_id"]),
-                         ("REUSE", "attach", derived[0]["record_id"]))
         port = FakePort()
         port.heads[TARGET] = COMMIT
         run = port._start("ci.yml", COMMIT, event="push")
         found = reconcile(self.project, "objective", owner="owner", record_id=derived[0]["record_id"], port=port,
                           now=NOW)
-        self.assertEqual((found["status"], found["receipt"]["provider"]["run_id"]), ("pending", run["id"]))
+        self.assertEqual((found["status"], found["receipt"]["provider"]["run_id"],
+                          found["receipt"]["provider"]["event"]), ("pending", run["id"], "push"))
         port.complete(run["id"], "success")
         self.assertEqual(reconcile(self.project, "objective", owner="owner", record_id=derived[0]["record_id"],
                                    port=port, now=NOW)["status"], "PASS")
-        self.assertEqual(self.decide(dispatch(candidate=binding["id"]))["reuse"]["kind"], "evidence")
+        # A3: the push's run is journaled under the dispatch key, but it is not proof for a dispatch.
+        explicit = self.decide(dispatch(candidate=binding["id"]))
+        self.assertEqual((explicit["decision"], explicit["reuse"]), ("ALLOW", None))
+        self.assertIn("proof_not_exact", [warning["code"] for warning in explicit["warnings"]])
         self.assertEqual(status(self.project, "objective")["phase"], "candidate")
 
     def test_a_dispatch_needs_the_candidate_on_the_branch_first(self):
@@ -386,7 +401,8 @@ class DecisionTests(GovernorCase):
         self.assertEqual(self.codes(early), ["candidate_unpublished"])
         pushed = self.decide(action(candidate=binding["id"]))
         record_outcome(self.project, "objective", owner="owner", record_id=pushed["record_id"], outcome="PASS")
-        self.assertEqual(self.decide(dispatch(candidate=binding["id"]))["decision"], "REUSE")
+        # A3: the push's own ci.yml run is not proof for an explicit dispatch, so both are admitted.
+        self.assertEqual(self.decide(dispatch(candidate=binding["id"]))["decision"], "ALLOW")
         self.assertEqual(self.decide(dispatch(candidate=binding["id"], target=RELEASE))["decision"], "ALLOW")
 
     def test_authorization_binds_the_candidate_commit_and_tree(self):
@@ -470,9 +486,9 @@ class FailureTests(GovernorCase):
         self.preflight(binding["id"])
         pushed = self.decide(action(candidate=binding["id"]))
         record_outcome(self.project, "objective", owner="owner", record_id=pushed["record_id"], outcome="PASS")
-        # The push started ci.yml; the derived row is the run, and a dispatch attaches to it.
-        run = self.decide(dispatch(candidate=binding["id"]))
-        self.assertEqual((run["decision"], run["reuse"]["kind"]), ("REUSE", "attach"))
+        # The push started ci.yml and its derived row is that run. Its failure gates a dispatch on the
+        # same key even though the run is not proof for one (A3).
+        run = {"record_id": self.derived(pushed["record_id"])}
         record_outcome(self.project, "objective", owner="owner", record_id=run["record_id"], outcome="FAILED",
                        provider={"run_id": "100"})
         return binding, run
@@ -554,10 +570,9 @@ class FailureTests(GovernorCase):
         second = prepare_candidate(self.project, "objective", owner="owner", unit="release",
                                    observation=observation(commit=COMMIT2, tree=TREE2), now=NOW)["candidate"]
         self.preflight(second["id"])
-        record_outcome(self.project, "objective", owner="owner",
-                       record_id=self.decide(action(candidate=second["id"]))["record_id"], outcome="PASS")
-        run2 = self.decide(dispatch(candidate=second["id"]))
-        self.assertEqual((run2["decision"], run2["reuse"]["kind"]), ("REUSE", "attach"))
+        pushed2 = self.decide(action(candidate=second["id"]))
+        record_outcome(self.project, "objective", owner="owner", record_id=pushed2["record_id"], outcome="PASS")
+        run2 = {"record_id": self.derived(pushed2["record_id"])}
         record_outcome(self.project, "objective", owner="owner", record_id=run2["record_id"], outcome="FAILED")
         self.classify(run2["record_id"], "code_defect", correction=correction("second"))
         third = prepare_candidate(self.project, "objective", owner="owner", unit="release",
@@ -576,7 +591,8 @@ class FailureTests(GovernorCase):
                           correction=correction("third"), diagnosis={"diagnosis_evidence": "probe.log"})
         record_outcome(self.project, "objective", owner="owner",
                        record_id=self.decide(action(candidate=third["id"]))["record_id"], outcome="PASS")
-        self.assertEqual(self.decide(dispatch(candidate=third["id"]))["decision"], "REUSE")
+        # Validation resumes; the push's own run is not proof for an explicit dispatch (A3).
+        self.assertEqual(self.decide(dispatch(candidate=third["id"]))["decision"], "ALLOW")
         with self.assertRaises(PodError) as conflict:
             record_outcome(self.project, "objective", owner="owner", record_id=run2["record_id"], outcome="PASS")
         self.assertEqual(conflict.exception.code, "outcome_conflict")
@@ -596,10 +612,9 @@ class FailureTests(GovernorCase):
                 (self.project / "probe.log").write_text("evidence")
                 record_correction(self.project, "objective", owner="owner", unit="release",
                                   correction=correction("third"), diagnosis={"diagnosis_evidence": "probe.log"})
-            record_outcome(self.project, "objective", owner="owner",
-                           record_id=self.decide(action(candidate=candidate["id"]))["record_id"], outcome="PASS")
-            run = self.decide(dispatch(candidate=candidate["id"]))
-            self.assertEqual(run["decision"], "REUSE")
+            pushed = self.decide(action(candidate=candidate["id"]))
+            record_outcome(self.project, "objective", owner="owner", record_id=pushed["record_id"], outcome="PASS")
+            run = {"record_id": self.derived(pushed["record_id"])}
             if index == 0:
                 record_outcome(self.project, "objective", owner="owner", record_id=run["record_id"], outcome="FAILED")
                 self.classify(run["record_id"], "code_defect", correction=correction("second"))
@@ -941,6 +956,7 @@ class RecoveryTests(GovernorCase):
         pushed = self.decide(action(candidate=binding["id"]))
         record_outcome(self.project, "objective", owner="owner", record_id=pushed["record_id"], outcome="PASS")
         run = self.decide(dispatch(candidate=binding["id"]))
+        derived = self.derived(pushed["record_id"])
         script = ("import json,sys; from pathlib import Path; from pod.governor import status; "
                   "print(json.dumps(status(Path(sys.argv[1]), 'objective')))")
         resumed = json.loads(subprocess.run([sys.executable, "-c", script, str(self.project)],
@@ -949,8 +965,9 @@ class RecoveryTests(GovernorCase):
         unit = resumed["units"]["release"]
         self.assertEqual((unit["generation"], unit["candidate"]["commit"], unit["preflight"]),
                          (1, COMMIT, {"unit": "PASS", "workflow-lint": "PASS"}))
-        self.assertEqual([row["record_id"] for row in unit["active_validation"]], [run["record_id"]])
-        self.assertEqual((run["decision"], unit["last_decision"]["decision"]), ("REUSE", "REUSE"))
+        # A3: the push's run is not proof for the dispatch, so both runs are active after a restart.
+        self.assertEqual([row["record_id"] for row in unit["active_validation"]], [derived, run["record_id"]])
+        self.assertEqual((run["decision"], unit["last_decision"]["decision"]), ("ALLOW", "ALLOW"))
         self.assertEqual(resumed["enforcement"]["level"], "advisory")
 
     def test_a_journal_in_another_schema_is_refused_and_left_unchanged(self):

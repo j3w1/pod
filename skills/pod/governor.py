@@ -84,7 +84,7 @@ NEXT_ACTIONS = {
     "transient_budget_exhausted": "the retry budget for this candidate is spent; inspect the failure or prepare a new candidate",
     "external_blocker": "report the external blocker; re-classify it once the dependency is restored",
     "repeat_diagnostic": "this probe already ran unchanged; change the check or record the answer",
-    "publication_unsettled": "record or reconcile the pending publication; its triggered run is the validation",
+    "publication_unsettled": "record or reconcile the pending publication before requesting this validation",
     "exception_grant_required": "bind the exception to a current personal efficiency_exception grant",
 }
 
@@ -139,7 +139,9 @@ def _validate_row(row: object) -> None:
             or not isinstance(row.get("receipt"), dict)
             or not isinstance(row.get("warnings"), list)
             or not isinstance(row.get("reasons"), list)
-            or not isinstance(row.get("classifications"), list)):
+            or not isinstance(row.get("classifications"), list)
+            or not isinstance(row.get("run_event"), (str, type(None)))
+            or not isinstance(row.get("rejected_run"), (dict, type(None)))):
         raise _malformed("action row")
 
 
@@ -326,6 +328,26 @@ def _logical_key(action: dict, candidate_id: str | None) -> str:
                    "candidate": candidate_id or action["candidate"], "target": action["target"],
                    "effects": action.get("effects"),
                    "check": diagnostic.get("check") if isinstance(diagnostic, dict) else None})
+
+
+def _proves(row: dict, action: dict) -> bool:
+    """Whether a same-key row is proof for this request: for a dispatch, only an exact run.
+
+    The stored key leaves out the triggering event and the dispatch inputs; they count here,
+    each of them known. A publication's run never proves a dispatch: its event is not
+    workflow_dispatch and its inputs are unknowable. A requested dispatch attaches while
+    pending unless its readback found another event, and counts after PASS only when Pod's own
+    readback established a workflow_dispatch run. A row settled without that readback, such as
+    a manual outcome or a 0.6.6 row, is not proof.
+    """
+    if action["kind"] != "workflow_dispatch":
+        return True
+    if (row["action"]["kind"] != "workflow_dispatch" or row.get("derived_from") is not None
+            or row["action"].get("inputs") != action["inputs"] or row.get("rejected_run") is not None):
+        return False
+    if row["outcome"] == "pending":
+        return row.get("run_event") in (None, "workflow_dispatch")
+    return row.get("run_event") == "workflow_dispatch"
 
 
 def _validate_exception(value: object) -> dict | None:
@@ -621,39 +643,45 @@ def _check_binding(action: dict, unit: dict | None, binding: dict | None, checkp
     return superseded, current, starting
 
 
-def _check_equivalent(action: dict, latest: dict | None, starting: list[dict],
+def _check_equivalent(action: dict, latest: dict | None, proof: dict | None, starting: list[dict],
                       candidate_id: str | None, kind: str, purpose: str, superseded: bool,
                       binding: dict | None, reasons: list[dict], warnings: list[dict]) -> dict | None:
     reuse = None
     # 3. An equivalent action already running, or valid evidence already recorded.
     if latest is None and kind in VALIDATION_KINDS and candidate_id is not None:
-        # A push or pull-request update that triggers this workflow journals a derived
-        # validation row when it lands; the same key finds it. A publication still pending
-        # is the run about to start, so a dispatch now would only double it.
+        # A push or pull-request update that triggers this workflow is still in flight with
+        # this candidate; the validation waits for it to land rather than race it.
         if starting:
             _reason(reasons, "efficiency", "publication_unsettled",
-                    f"{starting[-1]['action']['kind']} {starting[-1]['record_id'][:12]} will start this workflow "
-                    "once it lands; settle it first")
+                    f"{starting[-1]['action']['kind']} {starting[-1]['record_id'][:12]} carrying this candidate "
+                    "has not settled; settle it first")
     if latest is not None and not superseded:
-        if latest["outcome"] == "pending":
-            reuse = {"record_id": latest["record_id"], "kind": "attach",
-                     "detail": "an identical action is already running"}
-        elif latest["outcome"] == "PASS":
-            if kind == "remote_diagnostic":
-                reuse = {"record_id": latest["record_id"], "kind": "evidence",
-                         "detail": "this diagnostic already answered against the same candidate and target"}
-            elif purpose == "validation" and kind not in PUBLICATION_KINDS:
-                reuse = {"record_id": latest["record_id"], "kind": "evidence",
-                         "detail": "a passing result already binds this candidate and context"}
-            else:
-                reuse = {"record_id": latest["record_id"], "kind": "already_done",
-                         "detail": "this action already completed for the same candidate and target"}
-            if binding is None:
-                _warn(warnings, "context_unbound",
-                      "the reused evidence binds a commit only; workflow, base and environment were not frozen")
-        elif latest["outcome"] == "UNKNOWN":
+        # The key decides failure and unresolved-effect gating; only an exact run is reused.
+        if latest["outcome"] == "UNKNOWN":
             _reason(reasons, "correctness", "effect_unresolved",
                     f"attempt {latest['attempt']} of this action has no known outcome")
+        elif latest["outcome"] in ("pending", "PASS"):
+            if proof is not None and proof["outcome"] == "pending":
+                reuse = {"record_id": proof["record_id"], "kind": "attach",
+                         "detail": "an identical action is already running"}
+            elif proof is not None and proof["outcome"] == "PASS":
+                if kind == "remote_diagnostic":
+                    reuse = {"record_id": proof["record_id"], "kind": "evidence",
+                             "detail": "this diagnostic already answered against the same candidate and target"}
+                elif purpose == "validation" and kind not in PUBLICATION_KINDS:
+                    reuse = {"record_id": proof["record_id"], "kind": "evidence",
+                             "detail": "a passing run of the same event and inputs already binds this candidate "
+                                       "and context"}
+                else:
+                    reuse = {"record_id": proof["record_id"], "kind": "already_done",
+                             "detail": "this action already completed for the same candidate and target"}
+            else:
+                _warn(warnings, "proof_not_exact",
+                      "a run of this workflow from another event, with other inputs or an unknown event "
+                      "is not proof for this request")
+            if reuse is not None and reuse["kind"] != "attach" and binding is None:
+                _warn(warnings, "context_unbound",
+                      "the reused evidence binds a commit only; workflow, base and environment were not frozen")
 
     return reuse
 
@@ -806,6 +834,8 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
     logical_key = _logical_key(action, candidate_id)
     same = [row for row in journal["actions"] if row["logical_key"] == logical_key and row["decision"] == "ALLOW"]
     latest = same[-1] if same else None
+    exact_runs = [row for row in same if _proves(row, action)]
+    proof = exact_runs[-1] if exact_runs else None
     reuse = None
 
     def verdict(phase: str, stale_pending: list[str]) -> dict:
@@ -821,7 +851,7 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         # Nothing after the binding step is about this request; it names the wrong candidate.
         return verdict(_phase(state, journal["actions"], unit, current, native_projection), [])
 
-    reuse = _check_equivalent(action, latest, starting, candidate_id, kind, purpose,
+    reuse = _check_equivalent(action, latest, proof, starting, candidate_id, kind, purpose,
                               superseded, binding, reasons, warnings)
 
     stale_pending, phase = _check_unresolved(action, journal, logical_key, candidate_id, state,
@@ -1059,9 +1089,10 @@ def _settle(journal: dict, row: dict, *, outcome: str, provider: dict | None, ev
 def _derive_validation(journal: dict, row: dict, moment: str) -> None:
     """Journal the validation a landed publication started, one row per triggered workflow.
 
-    The run exists whether or not anyone dispatched it, so it must be visible to the same
-    logical key a later dispatch would use; otherwise the dispatch doubles it. The executor
-    supplies the run identities it read back; a manual outcome leaves them for readback.
+    The run exists whether or not anyone dispatched it. It shares the logical key a dispatch
+    would use, so failure gating and de-duplication see it, but it records its run's read-back
+    event and is never proof for a dispatch. The executor supplies the run identities it read
+    back; a manual outcome leaves them for readback.
     """
     if row.get("candidate_id") is None:
         return
@@ -1086,7 +1117,7 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
             "commit": row.get("commit"), "decision": "ALLOW", "phase": row.get("phase"), "at": moment,
             "outcome": "pending", "inputs": row.get("inputs"), "exception": None,
             "warnings": ["derived_from_publication"], "reasons": [], "purpose": "validation",
-            "cancel_safe": True, "effects": [effect],
+            "cancel_safe": True, "effects": [effect], "run_event": run.get("event") if run else None,
             "receipt": {"started_at": row["receipt"]["started_at"], "finished_at": None,
                         "observed_elapsed_s": None, "provider": _provider_run(run) if run else None,
                         "evidence": [], "detail": None if run else "started by the publication; run not read back yet"},
