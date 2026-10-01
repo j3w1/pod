@@ -1,0 +1,11 @@
+schema: pod/v1
+selection: custom
+models:
+  claude-opus-5-5: available
+  claude-fable-5-1: available
+  claude-sonnet-5: available
+  gpt-6-astra: available
+  gpt-6-sol: available
+  gpt-6-luna: available
+workers:
+  max_active: 2

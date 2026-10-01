@@ -1,0 +1,12 @@
+schema: pod/v1
+selection: custom
+models:
+  claude-opus-5-5: preferred
+  claude-fable-5-1: available
+  claude-sonnet-5: available
+  gpt-6-astra: available
+  gpt-6-sol: available
+  gpt-6-luna: disabled
+workers:
+  max_active: 3 # personal ceiling
+pinned_model: claude-opus-5-5

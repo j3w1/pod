@@ -1,0 +1,11 @@
+schema: pod/v1
+selection: all
+models:
+  gpt-6-sol: preferred
+  claude-sonnet-5: disabled
+  gpt-6-astra: available
+workers:
+  max_active: 2
+waste_governor:
+  preflight: [personal-check]
+pinned_model: gpt-6-sol
