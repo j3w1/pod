@@ -168,6 +168,15 @@ class RouteProjectionTests(unittest.TestCase):
         self.assertGreaterEqual(sum(row['metrics']['intelligence']['value'] is not None
                                     for row in self.projected(bundled)['routes']), 25)
 
+    def test_an_already_read_view_converts_through_the_same_observed_function(self):
+        # The workspace reads current and previous under one lock and passes that view here, so the
+        # observation shape has one implementation.
+        from pod import observations
+        view = observations.load(now=NOW)
+        self.assertEqual(observed(view=view), observed(now=NOW))
+        self.assertEqual(observed(view={'origin': 'unknown', 'snapshot': None, 'diagnostics': ['x']})['status'],
+                         'unknown')
+
     def test_invalid_or_setup_required_preferences_show_no_enabled_route(self):
         self.path.write_text('schema: pod/v1\nselection: all\nmodels: {}\nworkers: {max_active: 2}\n')
         projection = self.projected()

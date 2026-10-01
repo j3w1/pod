@@ -35,16 +35,21 @@ def _when(value: object) -> datetime | None:
     return moment if moment.tzinfo is not None else None
 
 
-def observed(now: datetime | None = None) -> dict:
-    """Cached observations through `observations.load()`, or unknown when unavailable."""
-    try:
-        from . import observations
-    except ImportError:
-        return {"status": "unavailable", "reason": "observations module is unavailable", "sources": {}}
-    try:
-        view = observations.load(now=now)
-    except PodError as exc:
-        return {"status": "unavailable", "reason": exc.code, "sources": {}}
+def observed(now: datetime | None = None, *, view: dict | None = None) -> dict:
+    """Cached observations through `observations.load()`, or unknown when unavailable.
+
+    A caller that already read a `load()`-shaped view (the workspace reads it with the previous
+    snapshot under one lock) passes it as `view`, so the conversion has one home.
+    """
+    if view is None:
+        try:
+            from . import observations
+        except ImportError:
+            return {"status": "unavailable", "reason": "observations module is unavailable", "sources": {}}
+        try:
+            view = observations.load(now=now)
+        except PodError as exc:
+            return {"status": "unavailable", "reason": exc.code, "sources": {}}
     snapshot = view.get("snapshot") if isinstance(view, dict) else None
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("sources"), dict):
         return {"status": "unknown", "origin": view.get("origin") if isinstance(view, dict) else None,

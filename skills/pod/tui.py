@@ -21,7 +21,7 @@ from typing import Callable
 from . import config, observations
 from . import tui_state as ts
 from .errors import PodError
-from .routes import METRICS, project as project_routes
+from .routes import METRICS, observed as observed_routes, project as project_routes
 from .term import Capabilities, capabilities, display_width
 from .tui_render import Frame, frame
 
@@ -61,17 +61,6 @@ def _cache_stamp() -> tuple | None:
     except (OSError, PodError):
         return None
     return (metadata.st_mtime_ns, metadata.st_size, metadata.st_ino)
-
-
-def _seen(view: dict) -> dict:
-    """The projection's observation input from one `observations.load()` result."""
-    snapshot = view.get("snapshot")
-    diagnostics = list(view.get("diagnostics") or [])
-    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("sources"), dict):
-        return {"status": "unknown", "origin": view.get("origin"), "diagnostics": diagnostics, "sources": {}}
-    return {"status": "observed", "origin": view.get("origin"), "generation": snapshot.get("generation"),
-            "created_at": snapshot.get("created_at"), "stale": view.get("stale"), "age_s": view.get("age_s"),
-            "diagnostics": diagnostics, "sources": snapshot["sources"]}
 
 
 class Workspace:
@@ -120,7 +109,7 @@ class Workspace:
         prefs = self._preferences()
         try:
             pair = observations.load_pair(now=self.clock())
-            seen, older = _seen(pair["current"]), pair["previous"]
+            seen, older = observed_routes(view=pair["current"]), pair["previous"]
         except PodError as exc:
             seen, older = {"status": "unavailable", "reason": exc.code, "sources": {}}, None
         return prefs, self._projection(prefs, seen), self._previous(prefs, older), watched
