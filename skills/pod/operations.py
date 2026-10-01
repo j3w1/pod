@@ -208,9 +208,13 @@ class OrcaPort:
         authoritative = bool(expected_runs and handle and handle == owner and stable
                              and current.get("id") in expected_runs
                              and current.get("coordinator_handle") == owner)
-        return {"runtime": runtime, "owner": owner if authoritative else None,
-                "authoritative": authoritative, "scope": "objective_assignments",
-                "complete": True, "assignments": evidence, "physical_capacity": "unavailable"}
+        observed = {"runtime": runtime, "owner": owner if authoritative else None,
+                    "authoritative": authoritative, "scope": "objective_assignments",
+                    "complete": True, "assignments": evidence, "physical_capacity": "unavailable"}
+        if expected_runs:
+            # The stable current-Run binding and caller identity runtime continuity compares (A2).
+            observed.update(binding=current if stable else None, caller=handle or None)
+        return observed
 
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
                      worktree: str = "current", retry_request: str | None = None,
@@ -819,6 +823,17 @@ def _recover_pending(project: Path, objective: str, owner: str, admission_id: st
     return {"status": row["state"], "admission": row, "action": "joined_pending_request"}
 
 
+def _continuity_for_recovery(project: Path, objective: str, owner: str, admission: dict,
+                             authority: dict, native_port: NativePort) -> dict:
+    """Classify a runtime change before recovery's own runtime check; the rebind recovers nothing."""
+    if authority.get("runtime") == admission["runtime"]:
+        return admission
+    from .ledger import continuity_locked
+    if continuity_locked(project, objective, owner=owner, port=native_port, current=authority) is None:
+        return admission
+    return read(project, objective)["admissions"][admission["admission_id"]]
+
+
 def recover_admission(project: Path, objective: str, *, owner: str, admission_id: str,
                       worktree: str, port: NativePort | None = None, issue_port=None) -> dict:
     """Recover the same admission; pending replay never rechecks model preferences."""
@@ -838,6 +853,7 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
         if _known_request_conflict(admission):
             return {"status": admission["state"], "admission": admission, "action": "hold"}
         authority = native_port.read_native(owner, authority_runs=(admission["run_id"],))
+        admission = _continuity_for_recovery(project, objective, owner, admission, authority, native_port)
         if (authority.get("authoritative") is not True or authority.get("owner") != owner
                 or authority.get("runtime") != admission["runtime"]):
             raise PodError("native_authority_unverified", "No-UUID readback lost Run ownership")
@@ -851,6 +867,8 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
                     request_uuid=request_uuid, code=exc.code, detail="Invalid stored UUID")
         return {"status": row["state"], "admission": row, "action": "hold"}
     authority = native_port.read_native(owner, authority_runs=(admission["run_id"],))
+    admission = _continuity_for_recovery(project, objective, owner, admission, authority, native_port)
+    state = read(project, objective)
     if (authority.get("authoritative") is not True or authority.get("owner") != owner
             or authority.get("runtime") != admission["runtime"]):
         raise PodError("native_authority_unverified", "Recovery caller/runtime authority is unproven")
@@ -959,7 +977,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                         packet_id=validated["packet_id"], worktree=worktree,
                         frozen_packet=validated, expected_runtime=capability["runtime"],
                         placement_binding=placement_binding, reuse_of=reuse_of,
-                        accompanying=accompanying)
+                        accompanying=accompanying, continuity_port=native_port)
     if admission["existing"]:
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
                                       worktree=worktree, port=native_port, issue_port=issue_port)

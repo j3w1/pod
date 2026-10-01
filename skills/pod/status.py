@@ -295,6 +295,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 result["next_safe_action"] = checkpoint["quiescence"]["interim_report"]
         except PodError as exc:
             result["obligations"] = {"error": exc.code}
+    continuity = checkpoint.get("continuity") if isinstance(checkpoint, dict) else None
+    if isinstance(continuity, dict):
+        # Recorded continuity and every runtime rebind, read-only; status never rebinds (A2).
+        result["runtime_continuity"] = {"recorded": continuity.get("binding"),
+                                        "history": list(continuity.get("history", []))}
     if state is not None and checkpoint is not None:
         failure = settlement_failure(state, view, workers)
         if failure is not None:
@@ -352,6 +357,9 @@ def render(result: dict) -> None:
             for item in assignments.get("unverified", []):
                 print(f"  Unverified {item['role']} (dispatch {item['dispatch'] or 'pending'}): "
                       + _orca_attention_label(item["orca_attention"]))
+        for entry in (result.get("runtime_continuity") or {}).get("history", []):
+            print(f"Runtime rebind: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
+                  f"{clean(entry['at'])} ({entry['provenance']})")
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})")
         for line in result.get("progress", []):
