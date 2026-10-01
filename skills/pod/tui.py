@@ -258,7 +258,8 @@ class Workspace:
         except (PodError, OSError) as exc:
             self._failed(exc, effect)
             return
-        note = self.reload(own=outcome.get("revision"), outside=outside)
+        # An outside edit merged under the preference lock is already in the returned revision.
+        note = self.reload(own=outcome.get("revision"), outside=outside or bool(outcome.get("merged_outside")))
         message = (effect.label + (f"; {outcome['notice']}" if outcome.get("notice") else "")
                    + (f"; {note}" if note else ""))
         self.state = ts.with_notice(self.state, "Saved: " + message, saved_at=self.clock())

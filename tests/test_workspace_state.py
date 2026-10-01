@@ -772,6 +772,7 @@ class WorkspaceSessionTests(unittest.TestCase):
 
 
 OPUS_MAX = "claude/claude-opus-5-5/max"
+OPUS_HIGH = "claude/claude-opus-5-5/high"
 
 
 class AuditSessionTests(unittest.TestCase):
@@ -913,6 +914,192 @@ class AuditSessionTests(unittest.TestCase):
             self.assertEqual(len(calls), 2)
             self.assertIn("Model data changed by another Pod process", workspace.state.notice)
             self.assertEqual(workspace.state.projection["observations"]["origin"], "cache")
+
+
+class DeltaAuditSessionTests(unittest.TestCase):
+    """FIX_TUI3 session regressions: range consent, palette basis and outside edits merged under the lock."""
+
+    setUp, clock, fetch, refresher, open, set_refresh, outside = (
+        WorkspaceSessionTests.setUp, WorkspaceSessionTests.clock, WorkspaceSessionTests.fetch,
+        WorkspaceSessionTests.refresher, WorkspaceSessionTests.open, WorkspaceSessionTests.set_refresh,
+        AuditSessionTests.outside)
+
+    def range_dialog(self, workspace: tui.Workspace) -> None:
+        for key in ("b", "RIGHT", "DOWN", "RIGHT"):   # range scope over every shown route, action disable
+            workspace.handle(key)
+        self.assertEqual((workspace.state.bulk.scope, workspace.state.bulk.action), ("range", "disabled"))
+
+    def field(self, workspace: tui.Workspace, name: str) -> None:
+        for _ in range(8):
+            bulk = workspace.state.bulk
+            fields = ts.bulk_fields(bulk, bulk.conflicts)
+            if fields[min(bulk.field, len(fields) - 1)] == name:
+                return
+            workspace.handle("DOWN")
+        self.fail(f"no bulk field {name}")
+
+    def palette(self, workspace: tui.Workspace, words: str, command: str) -> None:
+        workspace.handle(":")
+        for char in words:
+            workspace.handle("SPACE" if char == " " else char)
+        ids = [row[0] for row in ts.palette_matches(workspace.state)]
+        for _ in range(ids.index(command)):
+            workspace.handle("DOWN")
+        self.assertEqual(ts.palette_matches(workspace.state)[workspace.state.palette_index][0], command)
+
+    def assert_refused(self, workspace: tui.Workspace, before: bytes) -> None:
+        self.assertEqual(self.config.read_bytes(), before, "nothing the user did not see is saved")
+        self.assertIn("changed elsewhere; review again", workspace.state.error)
+
+    def range_consent_follows_only_the_captured_target(self, name: str, consent: str) -> None:
+        self.set_refresh("manual")
+        self.outside(**{name: OPUS_HIGH})
+        workspace = self.open()
+        self.range_dialog(workspace)
+        self.field(workspace, name)
+        workspace.handle("SPACE")
+        self.assertTrue(getattr(workspace.state.bulk, consent))
+        self.field(workspace, "low")
+        workspace.handle("RIGHT")
+        self.assertTrue(getattr(workspace.state.bulk, consent), "a range edit keeps consent for the same target")
+        workspace.handle("LEFT")
+        self.outside(**{name: OPUS_MAX})
+        workspace.poll()
+        workspace.handle("RIGHT")
+        workspace.handle("LEFT")
+        bulk = workspace.state.bulk
+        self.assertEqual(bulk.conflicts.get(name), OPUS_MAX, "the rebuilt preview names the new target")
+        self.assertFalse(getattr(bulk, consent), "consent given for another key never moves to this one")
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertIn("this disables", workspace.state.error)
+        self.field(workspace, name)
+        workspace.handle("SPACE")
+        workspace.handle("ENTER")
+        saved = config.load(personal=self.config)
+        self.assertIsNone(saved[name], "fresh consent for the shown key clears it")
+        self.assertEqual(saved["routes"][OPUS_MAX], "disabled")
+
+    def test_range_edit_keeps_clear_pin_consent_only_for_the_captured_pin(self):
+        self.range_consent_follows_only_the_captured_target("pinned", "clear_pin")
+
+    def test_range_edit_keeps_clear_preferred_consent_only_for_the_captured_route(self):
+        self.range_consent_follows_only_the_captured_target("preferred", "clear_preferred")
+
+    def test_range_narrowed_then_widened_never_applies_hidden_consent_to_a_moved_pin(self):
+        self.set_refresh("manual")
+        self.outside(pinned=OPUS_HIGH)
+        workspace = self.open()
+        self.range_dialog(workspace)
+        self.field(workspace, "pinned")
+        workspace.handle("SPACE")
+        self.field(workspace, "high")
+        for _ in range(3):                             # To effort max -> medium hides the pin conflict
+            workspace.handle("LEFT")
+        self.assertEqual(workspace.state.bulk.conflicts, {})
+        self.assertFalse(workspace.state.bulk.clear_pin, "consent for a target no longer shown is dropped")
+        self.outside(pinned=OPUS_MAX)
+        workspace.poll()
+        for _ in range(3):
+            workspace.handle("RIGHT")
+        self.assertEqual(workspace.state.bulk.conflicts, {"pinned": OPUS_MAX})
+        self.assertFalse(workspace.state.bulk.clear_pin)
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(config.load(personal=self.config)["pinned"], OPUS_MAX)
+
+    def test_palette_toggle_refuses_a_route_changed_while_the_palette_was_open(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        self.assertEqual(ts.focused_route(workspace.state)["key"], OPUS_MAX)
+        self.palette(workspace, "enable or disable", "toggle")
+        self.outside(routes={OPUS_MAX: "disabled"})
+        workspace.poll()
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assert_refused(workspace, before)
+        self.assertEqual(workspace.state.mode, "browse", "the table is shown again to review")
+        self.palette(workspace, "enable or disable", "toggle")
+        workspace.handle("ENTER")
+        self.assertEqual(config.load(personal=self.config)["routes"][OPUS_MAX], "enabled",
+                         "choosing again acts on what is now shown")
+
+    def test_palette_disable_never_retargets_a_focus_moved_while_the_palette_was_open(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        self.palette(workspace, "filter by route state", "state")
+        workspace.handle("ENTER")
+        target = ts.visible_keys(workspace.state)[1]
+        workspace.state = replace(workspace.state, focus=target)
+        self.palette(workspace, "disable the focused", "disable")
+        self.outside(routes={target: "disabled"})
+        workspace.poll()
+        moved = workspace.state.focus
+        self.assertNotEqual(moved, target)
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assert_refused(workspace, before)
+        self.assertEqual(config.load(personal=self.config)["routes"][moved], "enabled")
+
+    def test_palette_pin_refuses_a_pin_moved_while_the_palette_was_open(self):
+        self.set_refresh("manual")
+        self.outside(pinned=OPUS_HIGH)
+        workspace = self.open()
+        workspace.state = replace(workspace.state, focus=OPUS_MAX)
+        self.palette(workspace, "pin the focused", "pin")
+        self.outside(pinned=OPUS_MAX)
+        workspace.poll()
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assert_refused(workspace, before)
+        self.assertEqual(config.load(personal=self.config)["pinned"], OPUS_MAX)
+
+    def test_palette_refresh_setting_refuses_a_setting_changed_while_the_palette_was_open(self):
+        workspace = self.open(automatic=False)
+        self.palette(workspace, "switch automatic", "refresh_setting")
+        self.outside(refresh="manual")
+        workspace.poll()
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assert_refused(workspace, before)
+        self.assertEqual(config.load(personal=self.config)["refresh"], "manual")
+        # An unchanged palette still runs the command it shows.
+        self.palette(workspace, "switch automatic", "refresh_setting")
+        workspace.handle("ENTER")
+        self.assertEqual(config.load(personal=self.config)["refresh"], "automatic")
+
+    def test_an_outside_edit_merged_while_waiting_for_the_lock_is_announced(self):
+        import fcntl
+        import time
+        self.set_refresh("manual")
+        workspace = self.open()
+        held = threading.Event()
+
+        def outside_writer():
+            fd = os.open(self.config.parent / ".config.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                held.set()
+                time.sleep(.15)                           # this window's save now waits for the lock
+                document = yaml.safe_load(self.config.read_text())
+                document["routes"]["codex/gpt-6-luna/low"] = "disabled"
+                self.config.with_suffix(".tmp").write_text(yaml.safe_dump(document, sort_keys=False))
+                os.replace(self.config.with_suffix(".tmp"), self.config)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+        writer = threading.Thread(target=outside_writer)
+        writer.start()
+        self.assertTrue(held.wait(2))
+        workspace.handle(" ")
+        writer.join(2)
+        saved = config.load(personal=self.config)["routes"]
+        self.assertEqual((saved[OPUS_MAX], saved["codex/gpt-6-luna/low"]), ("disabled", "disabled"))
+        self.assertIn("Saved: Disabled " + OPUS_MAX, workspace.state.notice)
+        self.assertIn("Preferences changed outside this window", workspace.state.notice)
 
 
 class AuditRenderTests(unittest.TestCase):
@@ -1066,6 +1253,55 @@ class AuditRenderTests(unittest.TestCase):
         self.assertIn("Tab, then Down or Page Down", text(state(), 80, 24))
         self.assertIn("lines): Down or Page Down", text(replace(state(), pane="inspector"), 80, 24))
         self.assertIn("lines): Down or Page Down", text(replace(state(), mode="help"), 80, 24))
+
+
+class DeltaAuditRenderTests(unittest.TestCase):
+    """FIX_TUI3 pure regressions: the data age outlasts the mixed-ages note; no delta across a profile."""
+
+    NOTICES = ("", "Saved: Disabled claude/claude-opus-5-5/max",
+               "Saved: Disabled claude/claude-opus-5-5/max; Preferences changed outside this window")
+
+    def status(self, current: ts.State, cols: int, now: datetime = T0) -> str:
+        return text(current, cols, 12 if cols < 60 else 24, now=now).splitlines()[-2]
+
+    def test_data_age_and_stale_survive_mixed_ages_and_notices_at_every_width(self):
+        def older(snapshot):
+            snapshot["sources"][sources.OPENAI]["retrieved_at"] = "2026-09-28T11:00:00Z"
+            return snapshot
+        mixed = state(snapshot=older(fixture_snapshot()))
+        cases = ((T0, "Data cache 1h old"), (T0 + timedelta(days=8), "Data cache 8d old STALE"))
+        for now, age in cases:
+            for cols in range(40, 121):
+                for notice in self.NOTICES:
+                    for error in (False, True):
+                        current = ts.with_notice(mixed, notice, error=error) if notice else mixed
+                        line = self.status(current, cols, now)
+                        with self.subTest(now=now, cols=cols, notice=notice, error=error):
+                            self.assertIn(age, line)
+                            if not notice:
+                                self.assertIn("; mixed", line, "mixed ages show whenever there is room")
+                            if notice and cols >= 60:
+                                self.assertIn(notice[:12], line, "the notice is cut, never hidden")
+        self.assertIn("Data cache 1h old; mixed ages (oldest 3d)", self.status(mixed, 60))
+        self.assertIn("Data cache 1h old; mixed (oldest 3d)", self.status(mixed, 40))
+
+    def test_changed_data_gives_no_context_delta_across_a_profile_change(self):
+        plain = state(snapshot=fixture_snapshot(edit=lambda rows: [
+            {**row, "qualifiers": [q for q in row["qualifiers"] if q != "with fallback"]} for row in rows]))
+        context = ts.value(ts.route(plain, OPUS_MAX), "context_tokens")
+        previous = {"generation": "1", "created_at": "2026-09-30T10:00:00Z",
+                    "methodology": {sources.AA: "Artificial Analysis Intelligence Index v4.3"},
+                    "routes": {OPUS_MAX: {"intelligence": 58, "context_tokens": context // 2}},
+                    "profiles": {OPUS_MAX: {"source": sources.AA,
+                                            "methodology": "Artificial Analysis Intelligence Index v4.3",
+                                            "qualifiers": ["with fallback"]}}}
+        moved = inspector(replace(plain, previous=previous, focus=OPUS_MAX), "benchmarks")
+        line = next(row for row in moved.splitlines() if row.startswith("Context window") and "->" in row)
+        self.assertIn("(not comparable: the AA methodology or profile changed)", line)
+        self.assertNotRegex(line, r"[+-]\d+\.\d%")
+        same = inspector(replace(state(), previous=previous, focus=OPUS_MAX), "benchmarks")
+        self.assertIn("(+100.0%)", next(row for row in same.splitlines()
+                                        if row.startswith("Context window") and "->" in row))
 
 
 if __name__ == "__main__":

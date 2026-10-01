@@ -257,6 +257,21 @@ class PreferencesTests(unittest.TestCase):
             set_route(self.path, keys[0], 'enabled', displayed=shown)
         self.assertEqual(caught.exception.code, 'config_changed_elsewhere')
 
+    def test_edit_reports_an_outside_edit_merged_under_the_lock(self):
+        write_defaults(self.path)
+        shown = load(personal=self.path)
+        saved = set_route(self.path, LUNA, 'disabled', displayed=shown)
+        self.assertIs(saved['merged_outside'], False, 'the bytes read match the displayed revision')
+        # Another writer changes an unrelated route; this save merges it and says so.
+        set_route(self.path, OPUS, 'disabled', displayed=load(personal=self.path))
+        merged = set_route(self.path, SOL, 'disabled', displayed=shown)
+        self.assertIs(merged['merged_outside'], True)
+        self.assertEqual(load(personal=self.path)['routes'][OPUS], 'disabled')
+        self.assertIs(set_route(self.path, SOL, 'enabled', displayed=load(personal=self.path))['merged_outside'],
+                      False)
+        self.assertIs(edit(self.path, displayed={'routes': {LUNA: 'disabled'}}, routes={LUNA: 'enabled'})
+                      ['merged_outside'], False, 'no displayed revision means nothing to compare')
+
     def test_refresh_setting_and_worker_ceiling_edits(self):
         write_defaults(self.path)
         set_refresh(self.path, 'manual', displayed=load(personal=self.path))

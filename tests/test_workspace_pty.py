@@ -428,3 +428,104 @@ class AuditCorrectionPtyTests(PtyCase):
         session.wait_for("CHANGES (30)")
         session.wait_for(lambda s: "more (" in s.text() and "lines): Page Down" in s.text())
         self.assertNotIn("Tab, then", session.text())
+
+
+class DeltaAuditPtyTests(PtyCase):
+    """Real-terminal regressions for the FIX_TUI3 delta-review corrections (D1-D4)."""
+
+    saved, outside, write_cache = (AuditCorrectionPtyTests.saved, AuditCorrectionPtyTests.outside,
+                                   AuditCorrectionPtyTests.write_cache)
+    HIGH = "claude/claude-opus-5-5/high"
+
+    def range_consent(self) -> "object":
+        fixture_config(self.config, pinned=self.HIGH)
+        session = self.open(cols=100, rows=30)
+        session.send("b")
+        session.wait_for("BULK EDIT")
+        session.send(RIGHT)
+        session.wait_for("Shown routes in an effort range")
+        session.send(DOWN + RIGHT)
+        session.wait_for(f"({self.HIGH} would be disabled)")
+        session.send(DOWN * 3 + RIGHT)
+        session.wait_for(f"yes ({self.HIGH} would be disabled)")
+        return session
+
+    def assert_moved_pin_kept(self, session) -> None:
+        session.wait_for(f"no ({OPUS_MAX} would be disabled)")
+        before = self.config.read_bytes()
+        session.send("\r")
+        session.wait_for(f"this disables Pin {OPUS_MAX}")
+        self.assertEqual(self.config.read_bytes(), before, "consent for another pin never clears this one")
+        self.assertEqual(self.saved()["pinned"], OPUS_MAX)
+
+    def test_bulk_range_edit_never_moves_clear_pin_consent_to_a_moved_pin(self):
+        session = self.range_consent()
+        self.outside(pinned=OPUS_MAX)
+        session.wait_for("changed since this preview")
+        session.send(UP + UP + RIGHT + LEFT)        # From effort low -> medium -> low rebuilds the preview
+        self.assert_moved_pin_kept(session)
+
+    def test_bulk_range_narrowed_then_widened_drops_hidden_consent(self):
+        session = self.range_consent()
+        session.send(UP + LEFT * 3)                 # To effort max -> medium hides the pin conflict
+        session.wait_for(lambda s: "Clear Pin" not in s.text())
+        self.outside(pinned=OPUS_MAX)
+        session.wait_for("Preferences changed outside this window")
+        session.send(RIGHT * 3)
+        self.assert_moved_pin_kept(session)
+
+    def test_palette_toggle_refuses_a_route_changed_while_the_palette_was_open(self):
+        session = self.open(cols=100, rows=30)
+        session.send(":")
+        session.wait_for("COMMAND PALETTE")
+        session.send("enable or disable")
+        session.wait_for("Enable or disable the focused route")
+        self.outside(routes={OPUS_MAX: "disabled"})
+        session.wait_for("Preferences changed outside this window")
+        before = self.config.read_bytes()
+        session.send("\r")
+        session.wait_for("changed elsewhere; review again")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(self.saved()["routes"][OPUS_MAX], "disabled")
+
+    def test_an_outside_edit_merged_under_the_preference_lock_is_announced(self):
+        import fcntl
+        import os
+        import threading
+        import yaml
+        session = self.open(cols=160, rows=30)
+        held = threading.Event()
+
+        def writer():
+            fd = os.open(self.config.parent / ".config.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                held.set()
+                time.sleep(.25)                         # the window's save now waits for the lock
+                document = yaml.safe_load(self.config.read_text())
+                document["routes"]["codex/gpt-6-luna/low"] = "disabled"
+                self.config.with_suffix(".tmp").write_text(yaml.safe_dump(document, sort_keys=False))
+                os.replace(self.config.with_suffix(".tmp"), self.config)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        self.assertTrue(held.wait(2))
+        session.send(" ")
+        thread.join(2)
+        session.wait_for(f"Saved: Disabled {OPUS_MAX}; Preferences changed outside this window")
+        self.assertEqual(self.saved()["routes"]["codex/gpt-6-luna/low"], "disabled")
+
+    def test_data_age_outlasts_the_mixed_ages_note_and_a_notice(self):
+        self.write_cache(timedelta(hours=1), optional=timedelta(days=3))
+        session = self.open(cols=40, rows=12)
+        session.wait_for("Data cache 1h old; mixed (oldest 3d)")
+        self.write_cache(timedelta(days=8), optional=timedelta(days=10))
+        session.wait_for("Data cache 8d old STALE")
+        for cols in (60, 70, 80):
+            session.resize(cols, 24)
+            session.send(" ")
+            session.wait_for(lambda s: any("Saved: " in line and "Data cache 8d old STALE" in line
+                                           for line in s.lines()))

@@ -112,6 +112,8 @@ class State:
     frontier: bool = False
     palette_query: str = ""
     palette_index: int = 0
+    # The preferences and focus the table showed when the palette opened over it.
+    palette_basis: tuple | None = None
     bulk: Bulk | None = None
     setup: Setup | None = None
     notice: str = ""
@@ -673,17 +675,21 @@ def bulk_stale(state: State) -> bool:
     return (live.changes, live.before, live.conflicts) != (bulk.changes, bulk.before, bulk.conflicts)
 
 
+def _rebuilt(state: State, shown: Bulk, changed: Bulk) -> Bulk:
+    """A fresh preview of `changed`; consent to clear survives only for the target `shown` named."""
+    fresh = bulk_preview(state, changed)
+    return replace(fresh, scroll=0,
+                   clear_pin=changed.clear_pin and fresh.conflicts.get("pinned") == shown.conflicts.get("pinned"),
+                   clear_preferred=(changed.clear_preferred
+                                    and fresh.conflicts.get("preferred") == shown.conflicts.get("preferred")))
+
+
 def reopen_bulk(state: State, bulk: Bulk, message: str) -> State:
     """Show a fresh preview after a refused bulk save; consent to clear survives only for the same target."""
     refused = _refused(state)
     if refused is not None:
         return with_notice(replace(refused, mode="browse", bulk=None), message, error=True)
-    fresh = bulk_preview(state, bulk)
-    fresh = replace(fresh, scroll=0,
-                    clear_pin=bulk.clear_pin and fresh.conflicts.get("pinned") == bulk.conflicts.get("pinned"),
-                    clear_preferred=(bulk.clear_preferred
-                                     and fresh.conflicts.get("preferred") == bulk.conflicts.get("preferred")))
-    return with_notice(replace(state, mode="bulk", bulk=fresh), message, error=True)
+    return with_notice(replace(state, mode="bulk", bulk=_rebuilt(state, bulk, bulk)), message, error=True)
 
 
 CHANGED_ELSEWHERE = "Not saved - changed elsewhere; review again; file unchanged"
@@ -728,8 +734,9 @@ def _bulk_key(state: State, key: str) -> tuple[State, Effect | None]:
             changed = replace(bulk, action="disabled" if bulk.action == "enabled" else "enabled",
                               clear_pin=False, clear_preferred=False, scroll=0)
         else:
-            changed = replace(bulk, **{current: max(0, min(len(EFFORTS) - 1, getattr(bulk, current) + step))},
-                              scroll=0)
+            # A range edit rebuilds the preview from live data, so consent follows only an unchanged target.
+            changed = replace(bulk, **{current: max(0, min(len(EFFORTS) - 1, getattr(bulk, current) + step))})
+            return replace(state, bulk=_rebuilt(state, bulk, changed)), None
         return replace(state, bulk=bulk_preview(state, changed)), None
     if key == "ENTER":
         if bulk_stale(state):
@@ -815,7 +822,7 @@ def _setup_key(state: State, key: str) -> tuple[State, Effect | None]:
 def _palette_key(state: State, key: str) -> tuple[State, Effect | None]:
     matches = palette_matches(state)
     if key == "ESC":
-        return replace(state, mode="browse", palette_query="", palette_index=0), None
+        return replace(state, mode="browse", palette_query="", palette_index=0, palette_basis=None), None
     if key in ("UP", "DOWN"):
         if not matches:
             return state, None
@@ -825,13 +832,30 @@ def _palette_key(state: State, key: str) -> tuple[State, Effect | None]:
         if not matches:
             return state, None
         command = matches[min(state.palette_index, len(matches) - 1)][0]
-        return run_command(replace(state, mode="browse", palette_query="", palette_index=0), command)
+        closed = replace(state, mode="browse", palette_query="", palette_index=0, palette_basis=None)
+        if _palette_moved(state, command):
+            return with_notice(closed, CHANGED_ELSEWHERE, error=True), None
+        return run_command(closed, command)
     if key == "BACKSPACE":
         return replace(state, palette_query=state.palette_query[:-1], palette_index=0), None
     text = " " if key == "SPACE" else key
     if len(text) == 1 and text.isprintable() and len(state.palette_query) < MAX_QUERY:
         return replace(state, palette_query=state.palette_query + text, palette_index=0), None
     return state, None
+
+
+# Palette commands that write preferences or act on the focused row the palette covers.
+WRITE_COMMANDS = ("toggle", "enable", "disable", "unset", "preferred", "pin", "clear_preferred", "clear_pin",
+                  "refresh_setting")
+
+
+def _palette_moved(state: State, command: str) -> bool:
+    """Whether a writing or row command would act on preferences or a focus the user did not see."""
+    if state.palette_basis is None:
+        return False
+    shown, focus = state.palette_basis
+    return (command in ROW_COMMANDS and focus != state.focus
+            or command in WRITE_COMMANDS and shown != preferences(state))
 
 
 def run_command(state: State, command: str) -> tuple[State, Effect | None]:
@@ -991,7 +1015,8 @@ def _reduce(state: State, key: str) -> tuple[State, Effect | None]:
             return replace(state, help_scroll=max(0, state.help_scroll + step)), None
         return state, None
     if key in ("CTRL_P", ":"):
-        return replace(state, mode="palette", palette_query="", palette_index=0), None
+        return replace(state, mode="palette", palette_query="", palette_index=0,
+                       palette_basis=(preferences(state), state.focus)), None
     if key == "ESC":
         if state.pane == "inspector":
             return replace(state, pane="table"), None

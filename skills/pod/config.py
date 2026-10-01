@@ -559,7 +559,9 @@ def edit(path: Path, *, displayed: dict, routes: dict | None = None, preferred: 
     `routes` lists the exact route keys this action changes (`enabled`, `disabled`, or None for
     not set); it is never a wildcard for routes added later. Preferred and Pin move or clear only
     when named here. An edit that would leave the pin or preference on a route that is not enabled
-    is refused unless this same action clears or replaces it.
+    is refused unless this same action clears or replaces it. `merged_outside` reports whether
+    the bytes read under the lock differ from `displayed["revision"]`, so an outside edit merged
+    into this save can be announced; it is False when `displayed` names no revision.
     """
     changes = dict(routes or {})
     if len(changes) > 512:
@@ -622,7 +624,9 @@ def edit(path: Path, *, displayed: dict, routes: dict | None = None, preferred: 
             "routes": dict(updated["routes"]), "preferred": updated.get("preferred"),
             "pinned": updated.get("pinned"), "refresh": updated.get("refresh", "automatic"),
             "max_active": updated["workers"]["max_active"], "changed": sorted(changes),
-            "notice": "" if preserved else "comments not preserved"}
+            "notice": "" if preserved else "comments not preserved",
+            "merged_outside": (displayed.get("revision") is not None
+                               and hashlib.sha256(raw).hexdigest() != displayed["revision"])}
 
 
 def set_route(path: Path, key: str, state: str | None, *, displayed: dict,

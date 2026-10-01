@@ -649,7 +649,7 @@ def benchmarks(state: ts.State, item: ts.Item | None, width: int, caps: Capabili
             earlier = ((state.previous.get("profiles") or {}).get(row["key"]) or {}).get("qualifiers") or ()
             found = ts.changes(state, row["key"])
             for name, before, after in found:
-                comparable = not (moved or shift) or name in ("context_tokens",)
+                comparable = not (moved or shift)
                 marks = (marks_for(earlier, name, caps), marks_for(qualifiers, name, caps))
                 lines += _wrapped(_change_text(name, before, after, caps, comparable, marks), width, caps, "metric")
             if not found:
@@ -957,17 +957,21 @@ def _setup(state: ts.State, width: int, height: int, caps: Capabilities) -> list
 # --------------------------------------------------------------------------- frame parts
 
 def _pack(segments: list[tuple[list[tuple[str, str]], bool]], width: int, caps: Capabilities,
-          separator: str) -> tuple[Line, list[int]]:
-    """Fit segments in order; a segment that does not fit is dropped and reported."""
+          separator: str, reserve: tuple[int, int] = (0, 0)) -> tuple[Line, list[int]]:
+    """Fit segments in order; a segment that does not fit is dropped and reported.
+
+    `reserve` is (index, columns): a clippable segment before that index leaves the columns free.
+    """
     parts, used, dropped = [], 0, []
     for index, (segment, clipped) in enumerate(segments):
         safe = _safe(segment, caps)
         size = sum(display_width(text) for text, _ in safe) + (display_width(separator) if parts else 0)
-        room = width - used - (display_width(separator) if parts else 0)
-        if used + size > width and clipped and room >= 12:
+        limit = width - (reserve[1] if index < reserve[0] else 0)
+        room = limit - used - (display_width(separator) if parts else 0)
+        if used + size > limit and clipped and room >= 12:
             # A notice or failure is cut to the room left rather than hidden.
             safe = [(_fit("".join(text for text, _ in safe), room, caps), safe[0][1])]
-            size = width - used
+            size = limit - used
         if used + size <= width:
             if parts:
                 parts.append((separator, "label"))
@@ -1005,21 +1009,34 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
         segments.append(([(state.error, "error")], True))
     segments += [(segment, False) for segment in extra]
     refresh = refresh_label(state) if state.refresh_state != "idle" else None
+    at = len(segments)
     if seen.get("status") == "observed":
         ages = data_age(state, now)
         age = "unknown age" if ages["age"] is None else span(ages["age"]) + " old"
-        mixed = f"; mixed ages (oldest {span(ages['oldest'])})" if ages["oldest"] is not None else ""
-        segments.append(([(f"Data {seen.get('origin')} {age}" + (" STALE" if ages["stale"] else "") + mixed,
-                           "error" if ages["stale"] else "body")], False))
+        data = f"Data {seen.get('origin')} {age}" + (" STALE" if ages["stale"] else "")
+        oldest = None if ages["oldest"] is None else span(ages["oldest"])
+        # The age comes first; the mixed-ages note shortens, then drops, before the age would.
+        variants = ([data + f"; mixed ages (oldest {oldest})", data + f"; mixed (oldest {oldest})", data + "; mixed"]
+                    if oldest else []) + [data]
+        role = "error" if ages["stale"] else "body"
     else:
-        segments.append(([("Data unknown", "advisory")], False))
+        variants, role = ["Data unknown"], "advisory"
+    tail = []
     if refresh:
-        segments.append(([refresh], True))
-    segments.append(([("Native access unknown", "body")], False))
+        tail.append(([refresh], True))
+    tail.append(([("Native access unknown", "body")], False))
     if state.saved_at:
-        segments.append(([("Saved " + state.saved_at.astimezone().strftime("%H:%M:%S"), "body")], False))
+        tail.append(([("Saved " + state.saved_at.astimezone().strftime("%H:%M:%S"), "body")], False))
+    separator = glyph(caps, "dot")
+    for text in variants:
+        line, dropped = _pack(segments + [([(text, role)], False)] + tail, width, caps, separator)
+        if at not in dropped:
+            break
+    else:
+        # Even the bare age does not fit beside the notice, so the notice is cut to leave it room.
+        reserve = (at, display_width(safe_text(variants[-1], caps)) + display_width(separator))
+        line, _dropped = _pack(segments + [([(variants[-1], role)], False)] + tail, width, caps, separator, reserve)
     path = str(ts.preferences(state).get("path") or "")
-    line, _dropped = _pack(segments, width, caps, glyph(caps, "dot"))
     room = width - display_width(line.text) - display_width(glyph(caps, "dot")) - len("Config ")
     if path and room >= 16:
         text = "Config " + elide_middle(safe_text(path, caps), room, ascii_only=caps.ascii_only)
