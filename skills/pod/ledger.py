@@ -536,18 +536,20 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
     if state is None:
         return {"state": None, "map": None, "ctx": None, "status": status_projection(None, {}),
                 "label": label_qualification(None, {}, candidate), "report": None, "settlement": "none"}
-    settlement = "observed"
+    settlement, failure = "observed", None
     if native is None:
         from .operations import OrcaPort
         bound = tuple(row for row in state["admissions"].values()
                       if row["state"] == "bound" and binding_valid(row.get("native_binding")))
         try:
             native = OrcaPort(project).read_native(state.get("owner") or "", assignments=bound) if bound else None
-        except PodError:
-            native, settlement = None, "unverified"
+        except PodError as exc:
+            # The exact read is all-or-nothing; keep its code so status can name it (A1).
+            native, settlement, failure = None, "unverified", exc.code
     ctx = kernel_context(project, objective, state, native)
     map_state = map_of(state)
     view = {"state": state, "map": map_state, "ctx": ctx, "settlement": settlement,
+            "settlement_failure": failure,
             "status": status_projection(map_state, ctx),
             "label": label_qualification(map_state, ctx, candidate if candidate is not None else ctx["candidate"])}
     view["report"] = report_projection(map_state, ctx) if map_state is not None else None
