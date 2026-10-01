@@ -28,6 +28,8 @@ from .tui_render import Frame, frame
 TICK_MS = 200
 NOTICE_SECONDS = 4
 REFRESH_JOIN_S = 0.5
+AGE_REPAINT_S = 30   # data age and the stale mark are computed per frame; repaint so they keep moving
+OUTSIDE = "Preferences changed outside this window"
 
 
 def _now() -> datetime:
@@ -61,6 +63,17 @@ def _cache_stamp() -> tuple | None:
     return (metadata.st_mtime_ns, metadata.st_size, metadata.st_ino)
 
 
+def _seen(view: dict) -> dict:
+    """The projection's observation input from one `observations.load()` result."""
+    snapshot = view.get("snapshot")
+    diagnostics = list(view.get("diagnostics") or [])
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("sources"), dict):
+        return {"status": "unknown", "origin": view.get("origin"), "diagnostics": diagnostics, "sources": {}}
+    return {"status": "observed", "origin": view.get("origin"), "generation": snapshot.get("generation"),
+            "created_at": snapshot.get("created_at"), "stale": view.get("stale"), "age_s": view.get("age_s"),
+            "diagnostics": diagnostics, "sources": snapshot["sources"]}
+
+
 class Workspace:
     """One workspace session: projection reads, safe saves, refresh thread and file watching."""
 
@@ -72,12 +85,16 @@ class Workspace:
         self.cancel = threading.Event()
         self.results: queue.SimpleQueue = queue.SimpleQueue()
         self.thread: threading.Thread | None = None
-        self.prefs = self._preferences()
-        self.state = ts.initial(self._projection(self.prefs), self._previous(self.prefs))
+        try:
+            self.path: Path | None = config.personal_path(project)
+        except PodError:
+            self.path = None
+        self.prefs, projection, previous, self.watched = self._read()
+        self.state = ts.initial(projection, previous)
         self.state = ts.with_setup(self.state, self._setup_preview(self.prefs))
-        self.watched = (_digest(Path(self.prefs["path"])), _cache_stamp())
         self.pending_invalid: tuple | None = None
         self.notice_at: datetime | None = None
+        self.aged_at = clock()
         if automatic:
             self.maybe_auto_refresh()
 
@@ -89,12 +106,27 @@ class Workspace:
         except PodError as exc:
             return _unavailable(self.project, exc)
 
-    def _projection(self, prefs: dict, seen: dict | None = None) -> dict:
+    def _projection(self, prefs: dict, seen: dict) -> dict:
         return project_routes(self.project, preferences=prefs, observations=seen, now=self.clock())
 
-    def _previous(self, prefs: dict) -> dict | None:
-        """Per-route metrics from the snapshot the latest promotion replaced, through the same projection."""
-        older = observations.previous()
+    def _read(self) -> tuple[dict, dict, dict | None, tuple]:
+        """Preferences, projection and previous metrics, with the stamps they were read under.
+
+        The stamps are taken before the reads, so a change that lands during a read differs from
+        them and is read again on the next tick. Current and previous observations come from one
+        read under one cache lock, so they are always a coherent pair.
+        """
+        watched = (_digest(self.path) if self.path else None, _cache_stamp())
+        prefs = self._preferences()
+        try:
+            pair = observations.load_pair(now=self.clock())
+            seen, older = _seen(pair["current"]), pair["previous"]
+        except PodError as exc:
+            seen, older = {"status": "unavailable", "reason": exc.code, "sources": {}}, None
+        return prefs, self._projection(prefs, seen), self._previous(prefs, older), watched
+
+    def _previous(self, prefs: dict, older: dict | None) -> dict | None:
+        """Per-route metrics and AA profile from the snapshot the latest promotion replaced."""
         if older is None:
             return None
         seen = {"status": "observed", "origin": "cache", "generation": older["generation"],
@@ -103,7 +135,10 @@ class Workspace:
         return {"generation": older["generation"], "created_at": older["created_at"],
                 "methodology": {name: block.get("methodology") for name, block in older["sources"].items()},
                 "routes": {row["key"]: {name: row["metrics"][name]["value"] for name in METRICS}
-                           for row in projected["routes"]}}
+                           for row in projected["routes"]},
+                "profiles": {row["key"]: {name: row["metrics"]["intelligence"].get(name)
+                                          for name in ("source", "methodology", "qualifiers")}
+                             for row in projected["routes"]}}
 
     def _setup_preview(self, prefs: dict) -> dict | None:
         if prefs.get("status") != "setup_required":
@@ -114,19 +149,33 @@ class Workspace:
         except PodError:
             return None
 
-    def reload(self) -> str:
+    def _outside(self) -> bool:
+        """Whether the preference file differs from the bytes this window last read."""
+        return self.path is not None and _digest(self.path) != self.watched[0]
+
+    def reload(self, *, own: str | None = None, outside: bool = False) -> str:
         """Re-read preferences, projection and the previous snapshot, keeping view choices.
 
-        A route setup is rebuilt from the re-read bytes, so its expected revision is current; the
-        returned note says when that kept, cleared or closed the user's setup choices.
+        Returns what the user must be told: a preference change made outside this window (any
+        file change other than `own`, the revision this window just wrote, or `outside` when the
+        caller saw one first) and whether a rebuilt route setup kept, cleared or closed choices.
         """
-        self.prefs = self._preferences()
-        state = ts.with_projection(self.state, self._projection(self.prefs), self._previous(self.prefs),
-                                   keep_previous=False)
+        before = self.watched[0]
+        self.prefs, projection, previous, self.watched = self._read()
+        state = ts.with_projection(self.state, projection, previous, keep_previous=False)
         preview = self._setup_preview(self.prefs) if self.prefs.get("status") == "setup_required" else None
         self.state, note = ts.rebase_setup(state, preview)
-        self.watched = (_digest(Path(self.prefs["path"])), _cache_stamp())
-        return note
+        parts = []
+        if outside or self.watched[0] != before and (own is None or self.watched[0] != own):
+            status = self.prefs.get("status")
+            parts.append("Preferences unavailable - read-only" if status == "invalid"
+                         else "Preferences missing - read-only" if status == "missing" else OUTSIDE)
+        return "; ".join(parts + ([note] if note else []))
+
+    def _announce(self, message: str) -> None:
+        if message:
+            self.state = ts.with_notice(self.state, message)
+            self.notice_at = self.clock()
 
     # ----------------------------------------------------------------- refresh
 
@@ -165,13 +214,15 @@ class Workspace:
         outcome = result.get("outcome")
         detail = str(next(iter(result.get("diagnostics") or []), "") or "")
         if outcome == "promoted":
-            self.reload()
+            note = self.reload()
             counts = [row.get("counts") or {} for row in (result.get("diff") or {}).values()]
             empty = bool(counts) and not any(sum(row.values()) for row in counts)
             self.state = ts.with_refresh(self.state, "unchanged" if empty else "updated")
+            self._announce(note)
         elif outcome == "superseded":
-            self.reload()
+            note = self.reload()
             self.state = ts.with_refresh(self.state, "superseded")
+            self._announce(note)
         elif outcome in ("refused", "checked", "cancelled"):
             self.state = ts.with_refresh(self.state, outcome, detail if outcome == "refused" else "")
         else:
@@ -196,36 +247,45 @@ class Workspace:
             self._apply_setup(effect)
         return False
 
-    def _failed(self, exc: Exception) -> None:
-        note = self.reload()
-        if isinstance(exc, PodError) and exc.code == "config_changed_elsewhere":
-            reason = "changed elsewhere; review and press again"
-        else:
-            reason = str(exc) or type(exc).__name__
+    def _failed(self, exc: Exception, effect: ts.Effect | None = None) -> None:
+        changed = isinstance(exc, PodError) and exc.code == "config_changed_elsewhere"
+        # A refusal for an outside change already says so; the note then only explains a setup rebase.
+        note = self.reload(own=_digest(self.path) if changed and self.path else None)
+        if effect is not None and effect.bulk is not None:
+            # A refused bulk save shows a fresh preview to review; nothing unseen is ever saved.
+            reason = (ts.CHANGED_ELSEWHERE if changed
+                      else f"Not saved - {str(exc) or type(exc).__name__}; file unchanged")
+            self.state = ts.reopen_bulk(self.state, effect.bulk, reason + (f"; {note}" if note else ""))
+            return
+        reason = "changed elsewhere; review and press again" if changed else str(exc) or type(exc).__name__
         message = f"Not saved - {reason}; file unchanged" + (f"; {note}" if note else "")
         self.state = ts.with_notice(self.state, message, error=True)
 
     def _save(self, effect: ts.Effect) -> None:
+        outside = self._outside()
+        displayed = self.prefs if effect.displayed is None else effect.displayed
         try:
-            outcome = config.edit(Path(self.prefs["path"]), displayed=self.prefs, **effect.payload)
+            outcome = config.edit(Path(self.prefs["path"]), displayed=displayed, **effect.payload)
         except (PodError, OSError) as exc:
-            self._failed(exc)
+            self._failed(exc, effect)
             return
-        self.reload()
-        message = effect.label + (f"; {outcome['notice']}" if outcome.get("notice") else "")
+        note = self.reload(own=outcome.get("revision"), outside=outside)
+        message = (effect.label + (f"; {outcome['notice']}" if outcome.get("notice") else "")
+                   + (f"; {note}" if note else ""))
         self.state = ts.with_notice(self.state, "Saved: " + message, saved_at=self.clock())
         self.notice_at = self.clock()
 
     def _apply_setup(self, effect: ts.Effect) -> None:
+        outside = self._outside()
         try:
             outcome = config.setup_apply(Path(self.prefs["path"]), expected_revision=effect.payload["revision"],
                                          choices=effect.payload["choices"])
         except (PodError, OSError) as exc:
             self._failed(exc)
             return
-        self.reload()
-        self.state = ts.with_notice(self.state, f"Saved: route setup; original kept at {outcome['backup']}",
-                                    saved_at=self.clock())
+        note = self.reload(own=outcome.get("revision"), outside=outside)
+        self.state = ts.with_notice(self.state, f"Saved: route setup; original kept at {outcome['backup']}"
+                                    + (f"; {note}" if note else ""), saved_at=self.clock())
         self.notice_at = self.clock()
 
     # ----------------------------------------------------------------- polling
@@ -240,7 +300,7 @@ class Workspace:
                 break
             self._refresh_done(kind, result)
             dirty = True
-        current = (_digest(Path(self.prefs["path"])), _cache_stamp())
+        current = (_digest(self.path) if self.path else None, _cache_stamp())
         if current != self.watched:
             candidate = self._preferences()
             unreadable = candidate.get("status") in ("invalid", "missing")
@@ -249,19 +309,11 @@ class Workspace:
                 self.pending_invalid = ("held", current[0])
             else:
                 self.pending_invalid = None
-                prefs_changed = current[0] != self.watched[0]
-                note = self.reload()
-                message = ("Preferences changed outside this window" if prefs_changed
-                           else "Model data changed by another Pod process")
-                if candidate.get("status") == "invalid":
-                    message = "Preferences unavailable - read-only"
-                elif candidate.get("status") == "missing":
-                    message = "Preferences missing - read-only"
-                if note:
-                    message += "; " + note
-                self.state = ts.with_notice(self.state, message)
-                self.notice_at = self.clock()
+                self._announce(self.reload() or "Model data changed by another Pod process")
                 dirty = True
+        if (self.clock() - self.aged_at).total_seconds() >= AGE_REPAINT_S:
+            self.aged_at = self.clock()
+            dirty = True
         if self.notice_at and (self.clock() - self.notice_at).total_seconds() > NOTICE_SECONDS:
             self.state = ts.with_notice(self.state, "")
             self.notice_at = None

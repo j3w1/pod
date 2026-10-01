@@ -7,7 +7,7 @@ for routing. Edits leave the reducer as effects that the terminal loop saves.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field as data_field, replace
 from datetime import datetime
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -43,6 +43,11 @@ class Item:
 
 @dataclass(frozen=True)
 class Bulk:
+    """The dialog's choices and the exact preview the user is shown.
+
+    `changes`, `before`, `conflicts` and `displayed` are captured whenever the preview is built;
+    Enter saves exactly them against `displayed`, never a set recomputed from later data.
+    """
     scope: str = "model"
     action: str = "enabled"
     model: str | None = None
@@ -52,6 +57,10 @@ class Bulk:
     clear_preferred: bool = False
     field: int = 0
     scroll: int = 0
+    changes: dict = data_field(default_factory=dict)
+    before: dict = data_field(default_factory=dict)
+    conflicts: dict = data_field(default_factory=dict)
+    displayed: dict = data_field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -67,8 +76,12 @@ class Setup:
 @dataclass(frozen=True)
 class Effect:
     kind: str
-    payload: dict = field(default_factory=dict)
+    payload: dict = data_field(default_factory=dict)
     label: str = ""
+    # The preference values the edit was reviewed against, when not the session's latest read.
+    displayed: dict | None = None
+    # A bulk dialog to reopen with a fresh preview when its save is refused.
+    bulk: Bulk | None = None
 
 
 @dataclass(frozen=True)
@@ -248,8 +261,8 @@ def visible_keys(state: State) -> list[str]:
 
 
 def focused_item(state: State) -> Item | None:
-    rows = items(state)
-    return next((item for item in rows if item.key == state.focus), rows[0] if rows else None)
+    """The visibly focused row; None when no row is shown. Edits never fall back to another row."""
+    return next((item for item in items(state) if item.key == state.focus), None)
 
 
 def focused_route(state: State) -> dict | None:
@@ -267,48 +280,87 @@ def group_members(state: State, model: str | None) -> list[dict]:
 
 # --------------------------------------------------------------------------- derived comparisons
 
-def frontier(state: State) -> dict[str, str]:
-    """AA efficiency frontier among the shown comparable rows: "frontier", "dominated" or "unknown".
+def profile(row: dict, name: str = "intelligence") -> tuple:
+    """What makes two AA numbers like-for-like: source, methodology and AA profile qualifiers."""
+    metric = (row.get("metrics") or {}).get(name)
+    if not isinstance(metric, dict):
+        return (None, None, ())
+    return (metric.get("source"), metric.get("methodology"), tuple(metric.get("qualifiers") or ()))
 
-    Comparable rows have all three dimensions from one AA methodology. It is a display marker for
-    the rows on screen only; it never ranks routes for routing or changes eligibility.
+
+def profile_words(qualifiers: tuple | list) -> str:
+    return ", ".join(qualifiers) if qualifiers else "(none)"
+
+
+def profile_difference(first: tuple, second: tuple, joiner: str = " vs ") -> str:
+    """Names how two profiles differ, or "" when they are like-for-like."""
+    parts = []
+    if first[0] != second[0]:
+        parts.append(f"source {first[0] or 'none'}{joiner}{second[0] or 'none'}")
+    if first[1] != second[1]:
+        parts.append(f"methodology {first[1] or 'not stated'}{joiner}{second[1] or 'not stated'}")
+    if first[2] != second[2]:
+        parts.append(f"AA profile {profile_words(first[2])}{joiner}{profile_words(second[2])}")
+    return "; ".join(parts)
+
+
+def frontier_scope(row: dict) -> tuple | None:
+    """The like-for-like set a route's frontier dimensions belong to, or None when one is missing."""
+    scopes = {profile(row, name) for name in FRONTIER_DIMENSIONS}
+    if any(value(row, name) is None for name in FRONTIER_DIMENSIONS) or len(scopes) != 1:
+        return None
+    return scopes.pop()
+
+
+def frontier_scopes(state: State) -> list[tuple[tuple, int]]:
+    """Each like-for-like set among the shown routes with its size, largest first."""
+    counts: dict[tuple, int] = {}
+    for item in items(state):
+        scope = frontier_scope(item.route) if item.kind == "route" else None
+        if scope is not None:
+            counts[scope] = counts.get(scope, 0) + 1
+    return sorted(counts.items(), key=lambda entry: (-entry[1], str(entry[0])))
+
+
+def frontier(state: State) -> dict[str, str]:
+    """AA efficiency frontier among the shown rows: "frontier", "dominated" or "unknown".
+
+    A route is only compared with shown routes of the same source, methodology and AA profile
+    qualifiers, so each such set has its own frontier. It is a display marker for the rows on
+    screen only; it never ranks routes for routing or changes eligibility.
     """
-    rows = [item.route for item in items(state) if item.kind == "route"]
-    marks, known = {}, []
-    for row in rows:
-        metrics = row.get("metrics") or {}
-        sources = {metrics[name].get("source") for name in FRONTIER_DIMENSIONS}
-        methods = {metrics[name].get("methodology") for name in FRONTIER_DIMENSIONS}
-        if any(value(row, name) is None for name in FRONTIER_DIMENSIONS) or len(sources) != 1 or len(methods) != 1:
-            marks[row["key"]] = "unknown"
+    marks, scopes = {}, {}
+    for item in items(state):
+        if item.kind != "route":
+            continue
+        scope = frontier_scope(item.route)
+        if scope is None:
+            marks[item.key] = "unknown"
         else:
-            known.append(row)
-    methods = {(row["metrics"]["intelligence"].get("source"), row["metrics"]["intelligence"].get("methodology"))
-               for row in known}
-    if len(methods) > 1:
-        return {**marks, **{row["key"]: "unknown" for row in known}}
-    for row in known:
-        index, cost, first = (value(row, name) for name in FRONTIER_DIMENSIONS)
-        dominated = any(value(other, "intelligence") >= index and value(other, "usd_per_task") <= cost
-                        and value(other, "first_response_s") <= first
-                        and (value(other, "intelligence"), value(other, "usd_per_task"),
-                             value(other, "first_response_s")) != (index, cost, first)
-                        for other in known if other is not row)
-        marks[row["key"]] = "dominated" if dominated else "frontier"
+            scopes.setdefault(scope, []).append(item.route)
+    for members in scopes.values():
+        for row in members:
+            index, cost, first = (value(row, name) for name in FRONTIER_DIMENSIONS)
+            dominated = any(value(other, "intelligence") >= index and value(other, "usd_per_task") <= cost
+                            and value(other, "first_response_s") <= first
+                            and (value(other, "intelligence"), value(other, "usd_per_task"),
+                                 value(other, "first_response_s")) != (index, cost, first)
+                            for other in members if other is not row)
+            marks[row["key"]] = "dominated" if dominated else "frontier"
     return marks
 
 
 def comparable(base: dict, other: dict, name: str) -> bool:
-    first, second = (row["metrics"][name] for row in (base, other))
-    return (first.get("source") == second.get("source") and first.get("methodology") == second.get("methodology")
-            and first.get("value") is not None and second.get("value") is not None)
+    return (profile(base, name) == profile(other, name)
+            and value(base, name) is not None and value(other, name) is not None)
 
 
 def delta(base: dict, other: dict, name: str) -> str:
     """A bounded difference: index points, or a percentage with a valid nonzero baseline."""
     if not comparable(base, other, name):
-        missing = value(base, name) is None or value(other, name) is None
-        return "unknown" if missing else "not comparable (different source or methodology)"
+        if value(base, name) is None or value(other, name) is None:
+            return "unknown"
+        return "not comparable (" + profile_difference(profile(base, name), profile(other, name)) + ")"
     before, after = value(base, name), value(other, name)
     if name == "intelligence":
         change = after - before
@@ -327,6 +379,23 @@ def changes(state: State, key: str) -> list[tuple[str, object, object]]:
         return []
     return [(name, previous.get(name), value(current, name)) for name in METRICS
             if previous.get(name) != value(current, name)]
+
+
+def profile_change(state: State, key: str) -> str:
+    """How a route's AA source, methodology or profile differs from the previous snapshot; "" if not.
+
+    Only a route measured in both snapshots can change profile; a route that gained or lost its
+    measurement shows that as an unknown value instead.
+    """
+    entry = ((state.previous or {}).get("profiles") or {}).get(key)
+    current = route(state, key)
+    if not entry or current is None:
+        return ""
+    before = (entry.get("source"), entry.get("methodology"), tuple(entry.get("qualifiers") or ()))
+    after = profile(current)
+    if before[0] is None or after[0] is None:
+        return ""
+    return profile_difference(before, after, " -> ")
 
 
 def methodology_changed(state: State) -> bool:
@@ -505,6 +574,10 @@ def _view(state: State, **changes) -> State:
     return _keep_focus(state, replace(state, **changes))
 
 
+NO_ROW = "No row is shown, so nothing is focused; F clears filters and search; no change saved"
+ROW_COMMANDS = ("toggle", "enable", "disable", "unset", "preferred", "pin", "compare")
+
+
 def _refused(state: State) -> State | None:
     prefs = preferences(state)
     if editable(state):
@@ -575,19 +648,62 @@ def bulk_fields(bulk: Bulk, conflicts: dict) -> list[str]:
     return fields
 
 
+def _displayed(state: State) -> dict:
+    """The preference values this screen shows, in the shape the targeted compare-and-swap reads."""
+    prefs = preferences(state)
+    return {"revision": prefs.get("revision"),
+            "routes": {row["key"]: row["state"] for row in routes(state) if row["state"] in ("enabled", "disabled")},
+            **{name: prefs.get(name) for name in ("pinned", "preferred", "refresh", "max_active")}}
+
+
+def bulk_preview(state: State, bulk: Bulk) -> Bulk:
+    """Capture the exact preview for the current data: changes, prior states, clear targets, values."""
+    changed = bulk_changes(state, bulk)
+    return replace(bulk, changes=changed,
+                   before={key: (route(state, key) or {}).get("state", "not_set") for key in changed},
+                   conflicts=bulk_conflicts(state, bulk), displayed=_displayed(state))
+
+
+def bulk_stale(state: State) -> bool:
+    """Whether the data changed so that the shown bulk preview is no longer what Enter would save."""
+    bulk = state.bulk
+    if bulk is None:
+        return False
+    live = bulk_preview(state, bulk)
+    return (live.changes, live.before, live.conflicts) != (bulk.changes, bulk.before, bulk.conflicts)
+
+
+def reopen_bulk(state: State, bulk: Bulk, message: str) -> State:
+    """Show a fresh preview after a refused bulk save; consent to clear survives only for the same target."""
+    refused = _refused(state)
+    if refused is not None:
+        return with_notice(replace(refused, mode="browse", bulk=None), message, error=True)
+    fresh = bulk_preview(state, bulk)
+    fresh = replace(fresh, scroll=0,
+                    clear_pin=bulk.clear_pin and fresh.conflicts.get("pinned") == bulk.conflicts.get("pinned"),
+                    clear_preferred=(bulk.clear_preferred
+                                     and fresh.conflicts.get("preferred") == bulk.conflicts.get("preferred")))
+    return with_notice(replace(state, mode="bulk", bulk=fresh), message, error=True)
+
+
+CHANGED_ELSEWHERE = "Not saved - changed elsewhere; review again; file unchanged"
+
+
 def _open_bulk(state: State, scope: str = "model") -> State:
     refused = _refused(state)
     if refused is not None:
         return refused
     item = focused_item(state)
+    if scope == "model" and item is None:
+        return with_notice(state, NO_ROW)
     model = item.route["model"] if item and item.kind == "route" else (item.model if item and item.kind == "group"
                                                                         else (model_order(state) or [None])[0])
-    return replace(state, mode="bulk", bulk=Bulk(scope=scope, model=model))
+    return replace(state, mode="bulk", bulk=bulk_preview(state, Bulk(scope=scope, model=model)))
 
 
 def _bulk_key(state: State, key: str) -> tuple[State, Effect | None]:
     bulk = state.bulk
-    conflicts = bulk_conflicts(state, bulk)
+    conflicts = bulk.conflicts
     fields = bulk_fields(bulk, conflicts)
     current = fields[min(bulk.field, len(fields) - 1)]
     if key == "ESC":
@@ -601,36 +717,39 @@ def _bulk_key(state: State, key: str) -> tuple[State, Effect | None]:
         return replace(state, bulk=replace(bulk, scroll=max(0, bulk.scroll + step))), None
     if key in ("LEFT", "RIGHT", "SPACE", "h", "l"):
         step = -1 if key in ("LEFT", "h") else 1
+        if current in ("pinned", "preferred"):
+            # Consent to clear applies to the shown target only, so it never rebuilds the preview.
+            name = "clear_pin" if current == "pinned" else "clear_preferred"
+            return replace(state, bulk=replace(bulk, **{name: not getattr(bulk, name)})), None
         if current == "scope":
             changed = replace(bulk, scope=BULK_SCOPES[(BULK_SCOPES.index(bulk.scope) + step) % len(BULK_SCOPES)],
                               field=0, scroll=0, clear_pin=False, clear_preferred=False)
         elif current == "action":
             changed = replace(bulk, action="disabled" if bulk.action == "enabled" else "enabled",
                               clear_pin=False, clear_preferred=False, scroll=0)
-        elif current in ("low", "high"):
+        else:
             changed = replace(bulk, **{current: max(0, min(len(EFFORTS) - 1, getattr(bulk, current) + step))},
                               scroll=0)
-        else:
-            name = "clear_pin" if current == "pinned" else "clear_preferred"
-            changed = replace(bulk, **{name: not getattr(bulk, name)})
-        return replace(state, bulk=changed), None
+        return replace(state, bulk=bulk_preview(state, changed)), None
     if key == "ENTER":
-        changed = bulk_changes(state, bulk)
+        if bulk_stale(state):
+            return reopen_bulk(state, bulk, CHANGED_ELSEWHERE), None
+        changed = bulk.changes
         if not changed:
             return with_notice(state, "Nothing to change for this scope; no change saved"), None
-        blocked = [name for name, target in conflicts.items()
-                   if not (bulk.clear_pin if name == "pinned" else bulk.clear_preferred)]
+        blocked = [name for name in conflicts if not (bulk.clear_pin if name == "pinned" else bulk.clear_preferred)]
         if blocked:
             names = " and ".join(("Pin " if name == "pinned" else "Preferred ") + conflicts[name] for name in blocked)
             return with_notice(state, f"Not saved — this disables {names}; choose to clear it in this action "
                                       "or narrow the scope", error=True), None
-        payload = {"routes": changed}
+        payload = {"routes": dict(changed)}
         if bulk.clear_pin and "pinned" in conflicts:
             payload["pinned"] = None
         if bulk.clear_preferred and "preferred" in conflicts:
             payload["preferred"] = None
         label = ("Reset" if bulk.scope == "reset" else "Bulk") + f" saved {len(changed)} routes"
-        return replace(state, mode="browse", bulk=None), Effect("edit", payload, label)
+        return replace(state, mode="browse", bulk=None), Effect("edit", payload, label, displayed=bulk.displayed,
+                                                                bulk=bulk)
     return state, None
 
 
@@ -721,6 +840,8 @@ def run_command(state: State, command: str) -> tuple[State, Effect | None]:
     item = focused_item(state)
     if command == "quit":
         return state, Effect("quit")
+    if command in ROW_COMMANDS and item is None:
+        return with_notice(state, NO_ROW), None
     if command == "refresh":
         if state.refresh_state == "running":
             return with_notice(state, "A refresh is already running"), None
@@ -830,6 +951,14 @@ def _move(state: State, step: int, *, absolute: int | None = None) -> State:
 
 
 def reduce(state: State, key: str) -> tuple[State, Effect | None]:
+    """Apply one key. Afterwards focus always rests on a shown row whenever any row is shown."""
+    changed, effect = _reduce(state, key)
+    if changed.focus not in visible_keys(changed):
+        changed = _keep_focus(state, changed)
+    return changed, effect
+
+
+def _reduce(state: State, key: str) -> tuple[State, Effect | None]:
     if key == "CTRL_C":
         return state, Effect("quit")
     if key == "RESIZE":

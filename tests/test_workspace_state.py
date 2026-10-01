@@ -80,8 +80,8 @@ def press(current: ts.State, *keys: str) -> tuple[ts.State, list]:
     return current, effects
 
 
-def text(current: ts.State, cols: int = 100, rows: int = 30, ascii_only: bool = False) -> str:
-    return tr.frame(current, cols, rows, Capabilities(ascii_only, False), T0, strict=True).plain
+def text(current: ts.State, cols: int = 100, rows: int = 30, ascii_only: bool = False, now: datetime = T0) -> str:
+    return tr.frame(current, cols, rows, Capabilities(ascii_only, False), now, strict=True).plain
 
 
 def inspector(current: ts.State, tab: str, width: int = 400) -> str:
@@ -338,7 +338,8 @@ class ComparisonTests(unittest.TestCase):
             row = ts.route(current, key)
             index, cost, first = (ts.value(row, name) for name in ts.FRONTIER_DIMENSIONS)
             for other in ts.routes(current):
-                if marks.get(other["key"]) == "unknown" or other is row:
+                if (marks.get(other["key"]) == "unknown" or other is row
+                        or ts.frontier_scope(other) != ts.frontier_scope(row)):
                     continue
                 values = tuple(ts.value(other, name) for name in ts.FRONTIER_DIMENSIONS)
                 self.assertFalse(values[0] >= index and values[1] <= cost and values[2] <= first
@@ -398,7 +399,7 @@ class InspectorTests(unittest.TestCase):
             {**row, "qualifiers": row["qualifiers"] + (["estimated index"] if row["name"] == "GPT-6 Luna (high)" else [])}
             for row in rows]))
         self.assertIn("estimated", inspector(replace(estimated, focus="codex/gpt-6-luna/high"), "benchmarks"))
-        self.assertIn("*", text(replace(estimated, focus="codex/gpt-6-luna/high", sort="effort"), 100, 45))
+        self.assertIn("32~", text(replace(estimated, focus="codex/gpt-6-luna/high", sort="effort"), 100, 45))
 
     def test_failed_optional_source_shows_attempt_and_earlier_rows(self):
         snapshot = fixture_snapshot()
@@ -573,8 +574,8 @@ class WorkspaceSessionTests(unittest.TestCase):
         self.settle(workspace)
         self.assertEqual(workspace.state.refresh_state, "failed")
         self.assertIn("bot challenge", workspace.state.refresh_detail)
-        self.assertIn("STALE", text(workspace.state, 120, 30))
-        self.assertIn("Refresh failed", text(workspace.state, 120, 30))
+        self.assertIn("STALE", text(workspace.state, 120, 30, now=self.now))
+        self.assertIn("Refresh failed", text(workspace.state, 120, 30, now=self.now))
         self.calls.clear()
         self.now += timedelta(minutes=5)
         self.settle(self.open())
@@ -768,6 +769,303 @@ class WorkspaceSessionTests(unittest.TestCase):
         self.assertEqual((self.config.parent / "config.yaml.pod-v1").read_bytes(), SetupTests.V1)
         self.assertEqual(workspace.state.mode, "browse")
         self.assertIn("route setup", workspace.state.notice)
+
+
+OPUS_MAX = "claude/claude-opus-5-5/max"
+
+
+class AuditSessionTests(unittest.TestCase):
+    """FIX_TUI2 session regressions: bulk binding, outside-edit notices, ageing and coherent reads."""
+
+    setUp, clock, fetch, refresher, open, set_refresh = (WorkspaceSessionTests.setUp, WorkspaceSessionTests.clock,
+                                                          WorkspaceSessionTests.fetch, WorkspaceSessionTests.refresher,
+                                                          WorkspaceSessionTests.open, WorkspaceSessionTests.set_refresh)
+
+    def outside(self, **change) -> None:
+        config.edit(self.config, displayed=config.load(personal=self.config), **change)
+
+    def without(self, *keys: str) -> None:
+        document = yaml.safe_load(self.config.read_text())
+        document["refresh"] = "manual"
+        for key in keys:
+            document["routes"].pop(key)
+        self.config.write_text(yaml.safe_dump(document, sort_keys=False))
+
+    def test_bulk_enter_after_an_outside_edit_saves_nothing_and_previews_again(self):
+        self.without("codex/gpt-6-luna/low", "codex/gpt-6-luna/medium")
+        workspace = self.open()
+        for key in ("b", "RIGHT", "RIGHT"):
+            workspace.handle(key)
+        reviewed = dict(workspace.state.bulk.changes)
+        self.assertEqual(set(reviewed), {"codex/gpt-6-luna/low", "codex/gpt-6-luna/medium"})
+        self.outside(routes={OPUS_MAX: None})
+        self.assertTrue(workspace.poll())
+        self.assertIn("changed outside", workspace.state.notice)
+        self.assertEqual(workspace.state.bulk.changes, reviewed, "the shown preview stays the captured one")
+        self.assertTrue(ts.bulk_stale(workspace.state))
+        self.assertIn("changed since this preview", text(workspace.state))
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(workspace.state.mode, "bulk")
+        self.assertIn("changed elsewhere; review again", workspace.state.error)
+        self.assertEqual(set(workspace.state.bulk.changes), {*reviewed, OPUS_MAX})
+        workspace.handle("ENTER")
+        self.assertEqual(config.load(personal=self.config)["routes"][OPUS_MAX], "enabled")
+        self.assertIn("Bulk saved 3 routes", workspace.state.notice)
+
+    def test_bulk_refused_by_the_file_reopens_with_a_fresh_preview(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        for key in ("b", "DOWN", "RIGHT"):
+            workspace.handle(key)
+        self.assertEqual(len(workspace.state.bulk.changes), 5)
+        # The outside save lands after the last tick, so only the file's compare-and-swap can see it.
+        self.outside(routes={"claude/claude-opus-5-5/low": "disabled"})
+        before = self.config.read_bytes()
+        workspace.handle("ENTER")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(workspace.state.mode, "bulk")
+        self.assertIn("changed elsewhere; review again", workspace.state.error)
+        self.assertEqual(len(workspace.state.bulk.changes), 4)
+        self.assertNotIn("claude/claude-opus-5-5/low", workspace.state.bulk.changes)
+
+    def test_bulk_clear_pin_consent_is_bound_to_the_shown_pin(self):
+        self.set_refresh("manual")
+        self.outside(pinned="claude/claude-opus-5-5/high")
+        workspace = self.open()
+        for key in ("b", "DOWN", "RIGHT", "DOWN", "RIGHT"):
+            workspace.handle(key)
+        self.assertTrue(workspace.state.bulk.clear_pin)
+        self.assertEqual(workspace.state.bulk.conflicts, {"pinned": "claude/claude-opus-5-5/high"})
+        self.outside(pinned=OPUS_MAX)
+        workspace.poll()
+        self.assertEqual(workspace.state.bulk.conflicts, {"pinned": "claude/claude-opus-5-5/high"})
+        workspace.handle("ENTER")
+        self.assertEqual(config.load(personal=self.config)["pinned"], OPUS_MAX)
+        self.assertEqual(workspace.state.bulk.conflicts, {"pinned": OPUS_MAX})
+        self.assertFalse(workspace.state.bulk.clear_pin, "consent never moves to another pin")
+
+    def test_refresh_in_the_same_tick_still_announces_an_outside_edit_and_setup_note(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        promoted = {"outcome": "promoted", "diff": {sources.AA: {"counts": {"changed": 1}}}, "diagnostics": [],
+                    "sources": {}}
+        workspace.results.put(("done", promoted))
+        self.outside(routes={OPUS_MAX: "disabled"})
+        self.assertTrue(workspace.poll())
+        self.assertEqual(workspace.state.refresh_state, "updated")
+        self.assertIn("Preferences changed outside this window", workspace.state.notice)
+        self.config.write_bytes(SetupTests.V1)
+        setup = self.open()
+        setup.handle("RIGHT")
+        other = (b"schema: pod/v1\nselection: custom\nmodels:\n  gpt-6-astra: available\n"
+                 b"workers:\n  max_active: 2\npinned_model: gpt-6-astra\n")
+        self.config.write_bytes(other)
+        setup.results.put(("done", promoted))
+        setup.poll()
+        self.assertIn("Preferences changed outside this window", setup.state.notice)
+        self.assertIn("cleared the pin choice", setup.state.notice)
+
+    def test_a_save_in_the_same_tick_still_announces_an_outside_edit(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        self.outside(routes={"codex/gpt-6-luna/low": "disabled"})
+        workspace.handle(" ")
+        self.assertEqual(config.load(personal=self.config)["routes"][OPUS_MAX], "disabled")
+        self.assertIn("Saved: Disabled " + OPUS_MAX, workspace.state.notice)
+        self.assertIn("Preferences changed outside this window", workspace.state.notice)
+        self.assertEqual(ts.route(workspace.state, "codex/gpt-6-luna/low")["state"], "disabled")
+        workspace.handle(" ")
+        self.assertNotIn("outside", workspace.state.notice, "this window's own save is not an outside edit")
+
+    def test_open_session_repaints_so_age_and_stale_keep_moving(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        self.assertFalse(workspace.poll())
+        self.now += timedelta(seconds=tui.AGE_REPAINT_S)
+        self.assertTrue(workspace.poll(), "an idle window still repaints its data age")
+        self.assertIn("STALE", text(workspace.state, 120, 30, now=T0 + timedelta(days=8)))
+
+    def test_current_and_previous_are_read_as_one_pair_stamped_before_the_read(self):
+        self.set_refresh("manual")
+        calls = []
+        real = observations.load_pair
+        root = self.base / "cache" / "models"
+
+        def racing(now=None):
+            result = real(now=now)
+            calls.append(now)
+            if len(calls) == 1:
+                # A promotion lands just after this read: the window must notice it on the next tick.
+                root.mkdir(parents=True, exist_ok=True)
+                (root / "current.json").write_text(json.dumps(fixture_snapshot()))
+            return result
+
+        def separate(*_args, **_kwargs):
+            raise AssertionError("current and previous are read together through load_pair")
+
+        with patch.object(observations, "load_pair", racing), patch.object(observations, "load", separate), \
+                patch.object(observations, "previous", separate):
+            workspace = self.open()
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(workspace.poll())
+            self.assertEqual(len(calls), 2)
+            self.assertIn("Model data changed by another Pod process", workspace.state.notice)
+            self.assertEqual(workspace.state.projection["observations"]["origin"], "cache")
+
+
+class AuditRenderTests(unittest.TestCase):
+    """FIX_TUI2 pure regressions: profile marks and scopes, ages, disclaimer, labels, focus and hints."""
+
+    def test_profile_marks_follow_values_in_tables_details_compare_and_changes(self):
+        estimated = state(snapshot=fixture_snapshot(edit=lambda rows: [
+            {**row, "qualifiers": row["qualifiers"] + (["estimated index"] if row["name"] == "GPT-6 Luna (high)"
+                                                       else [])} for row in rows]))
+        for cols, rows in ((100, 30), (80, 24), (60, 20), (40, 12)):
+            table = text(estimated, cols, rows).splitlines()
+            opus = next(line for line in table if "Claude Opus 5.5" in line and "max" in line)
+            self.assertIn("58†", opus, (cols, rows))
+            astra = next((line for line in table if "GPT-6 Astra" in line and "max" in line), "")
+            self.assertNotIn("†", astra, (cols, rows))
+        details = inspector(replace(estimated, focus=OPUS_MAX), "details")
+        self.assertIn("AA profile with fallback: AA index 58†; $5.98†/task", details)
+        luna = inspector(replace(estimated, focus="codex/gpt-6-luna/high"), "details")
+        self.assertIn("AA profile estimated index: AA index 32~;", luna)
+        compared = replace(estimated, compare=(OPUS_MAX, "codex/gpt-6-luna/high"), tab="compare")
+        self.assertIn("1 Claude Opus 5.5 max: AA profile with fallback: AA index 58†", inspector(compared, "compare"))
+        ascii_text = text(replace(estimated, focus="codex/gpt-6-luna/high", sort="effort",
+                                  projection={**estimated.projection, "preferences": {
+                                      **estimated.projection["preferences"], "preferred": "codex/gpt-6-luna/high"}}),
+                          100, 45, ascii_only=True)
+        luna_row = next(line for line in ascii_text.splitlines() if "GPT-6 Luna" in line and " high " in line)
+        self.assertIn("32~", luna_row)
+        self.assertIn("58#", ascii_text)
+        help_text = " ".join(text(replace(estimated, mode="help"), 160, 45, ascii_only=True).split())
+        self.assertIn("# AA ran this profile with fallback", help_text)
+        self.assertIn("~ AA estimated index", help_text)
+        self.assertIn("* Preferred", help_text)
+        marks = {name: tr.glyph(Capabilities(True, False), name)
+                 for name in ("preferred", "pin", "enabled", "disabled", "not_set", "unknown", "frontier", "focus",
+                              "estimated", "fallback", "down", "up")}
+        self.assertEqual(len(set(marks.values())), len(marks), marks)
+
+    def test_mixed_source_ages_show_beside_the_data_age(self):
+        def older(snapshot):
+            snapshot["sources"][sources.OPENAI]["retrieved_at"] = "2026-09-28T11:00:00Z"
+            return snapshot
+        mixed = state(snapshot=older(fixture_snapshot()))
+        self.assertIn("Data cache 1h old; mixed ages (oldest 3d)", text(mixed, 120, 30))
+        self.assertNotIn("mixed ages", text(state(), 120, 30))
+
+    def test_frontier_is_found_within_each_profile_and_methodology(self):
+        def cheap_plain(rows):
+            return [{**row, "metrics": {**row["metrics"], "intelligence": 99, "usd_per_task": 0.01,
+                                        "first_response_s": 0.1}} if row["name"] == "GPT-6 Astra (max)" else row
+                    for row in rows]
+        current = replace(state(snapshot=fixture_snapshot(edit=cheap_plain)), frontier=True)
+        marks = ts.frontier(current)
+        self.assertEqual(marks["codex/gpt-6-astra/max"], "frontier")
+        self.assertEqual(marks[OPUS_MAX], "frontier", "a plain profile never dominates a fallback one")
+        self.assertEqual(len(ts.frontier_scopes(current)), 2)
+        self.assertIn("2 sets", text(current, 160, 40))
+        self.assertIn("AA profile with fallback", inspector(replace(current, focus=OPUS_MAX), "benchmarks"))
+
+    def test_compare_names_profile_differences_and_gives_no_delta_across_them(self):
+        current = replace(state(), compare=(OPUS_MAX, "codex/gpt-6-astra/max"), tab="compare")
+        rendered = inspector(current, "compare")
+        self.assertIn("Caveat: 1 and 2 are not like-for-like (AA profile with fallback vs (none))", rendered)
+        self.assertIn("AA index not comparable (AA profile with fallback vs (none))", rendered)
+        self.assertNotRegex(rendered.split("DIFFERENCES")[1], r"[+-]\d+ pts|[+-]\d+\.\d%")
+        same = inspector(replace(current, compare=(OPUS_MAX, "claude/claude-opus-5-5/high")), "compare")
+        self.assertNotIn("Caveat", same)
+        self.assertIn("pts", same)
+
+    def test_changed_data_reports_a_profile_change_not_a_model_change(self):
+        previous = {"generation": "1", "created_at": "2026-09-30T10:00:00Z",
+                    "methodology": {sources.AA: "Artificial Analysis Intelligence Index v4.3"},
+                    "routes": {OPUS_MAX: {"intelligence": 55, "usd_per_task": 5.0, "output_tps": 92,
+                                          "first_response_s": 703, "total_response_s": 708,
+                                          "context_tokens": 1_000_000}},
+                    "profiles": {OPUS_MAX: {"source": sources.AA,
+                                            "methodology": "Artificial Analysis Intelligence Index v4.3",
+                                            "qualifiers": ["with fallback"]}}}
+        plain = state(snapshot=fixture_snapshot(edit=lambda rows: [
+            {**row, "qualifiers": [q for q in row["qualifiers"] if q != "with fallback"]} for row in rows]))
+        moved = replace(plain, previous=previous, focus=OPUS_MAX)
+        rendered = inspector(moved, "benchmarks")
+        self.assertIn("AA measurement changed for this route (AA profile with fallback -> (none))", rendered)
+        self.assertIn("not a model change", rendered)
+        self.assertIn("AA index 55† -> 58 (not comparable", rendered)
+        self.assertNotIn("+3 pts", rendered)
+        same = replace(state(), previous=previous, focus=OPUS_MAX)
+        self.assertIn("AA index 55† -> 58† (+3 pts)", inspector(same, "benchmarks"))
+
+    def test_cost_or_time_column_never_appears_without_a_disclaimer(self):
+        base = state()
+        for cols, rows in ((40, 12), (45, 12), (60, 20), (80, 24), (100, 30), (160, 45), (40, 30), (200, 60)):
+            for sort in ts.SORTS:
+                for frontier in (False, True):
+                    current = replace(base, sort=sort, frontier=frontier)
+                    lines = text(current, cols, rows).splitlines()
+                    header = lines[2]
+                    with self.subTest(size=(cols, rows), sort=sort, frontier=frontier):
+                        if any(name in header for name in ("$/task", "First s", "Total s")):
+                            self.assertTrue(any(line in tr.SHORT_DISCLAIMERS for line in lines), "\n".join(lines))
+        self.assertIn(tr.DISCLAIMER, " ".join(text(replace(base, mode="help"), 160, 45).split()))
+
+    def test_narrow_labels_shorten_the_model_never_the_effort(self):
+        for cols in range(40, 80):
+            for sort in ts.SORTS:
+                for frontier in (False, True):
+                    current = replace(state(), sort=sort, frontier=frontier)
+                    columns = tr.table_columns(current, cols - 1)
+                    if columns[0].header != "Route":
+                        continue
+                    labels = tr.narrow_labels(ts.routes(current), columns[0].width, Capabilities(False, False))
+                    with self.subTest(cols=cols, sort=sort, frontier=frontier):
+                        self.assertEqual(len(set(labels.values())), len(labels))
+                        for key, label in labels.items():
+                            self.assertTrue(label.endswith(" " + key.rsplit("/", 1)[1]), label)
+                            self.assertLessEqual(tr.display_width(label), columns[0].width)
+
+    def test_focus_always_rests_on_a_shown_row_and_edits_only_that_row(self):
+        import random
+        current, _ = press(state(), "/", *"zzz", "ENTER", "f", "f", "/", "ENTER")
+        self.assertIn(current.focus, ts.visible_keys(current))
+        self.assertIn("▸", "".join(line[:1] for line in text(current).splitlines()[3:15]))
+        _, effects = press(current, "SPACE")
+        self.assertEqual(effects[0].payload["routes"], {current.focus: "disabled"})
+        empty, effects = press(current, "/", *"zzz", "ENTER", "SPACE", "p", "P", "b")
+        self.assertEqual(effects, [])
+        self.assertIn("No row is shown", empty.notice)
+        self.assertEqual(empty.mode, "browse")
+        keys = ("DOWN", "UP", "PAGE_DOWN", "HOME", "END", "s", "S", "g", "LEFT", "RIGHT", "ENTER", "ESC", "f", "o",
+                "F", "/", "z", "g", "p", "t", "BACKSPACE", "ENTER", "c", "e", "TAB", "SPACE", "P")
+        chooser = random.Random(36)
+        current = state()
+        for step in range(6000):
+            key = chooser.choice(keys)
+            current, effect = ts.reduce(current, key)
+            shown = ts.visible_keys(current)
+            if shown:
+                self.assertIn(current.focus, shown, (step, key))
+            if effect is not None and effect.kind == "edit":
+                touched = set(effect.payload.get("routes") or {}) | {
+                    value for name, value in effect.payload.items() if name in ("pinned", "preferred") and value}
+                self.assertLessEqual(touched, {current.focus}, (step, key))
+            if current.mode not in ("browse", "search"):
+                current = replace(current, mode="browse", bulk=None)
+            if effect is not None and effect.kind == "quit":
+                current = state()
+
+    def test_scroll_hints_name_the_keys_that_scroll(self):
+        bulk, _ = press(state(), "b", "RIGHT", "DOWN", "RIGHT")
+        self.assertIn("lines): Page Down", text(bulk, 80, 24))
+        self.assertNotIn("Tab, then", text(bulk, 80, 24))
+        self.assertIn("Tab, then Down or Page Down", text(state(), 80, 24))
+        self.assertIn("lines): Down or Page Down", text(replace(state(), pane="inspector"), 80, 24))
+        self.assertIn("lines): Down or Page Down", text(replace(state(), mode="help"), 80, 24))
 
 
 if __name__ == "__main__":

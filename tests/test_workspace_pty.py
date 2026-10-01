@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import time
 
-from pod.config import load as load_config
+from pod.config import edit as edit_config, load as load_config
 from tests.pty_harness import PtyCase, fixture_config
 
 DOWN, UP, RIGHT, LEFT = "\x1bOB", "\x1bOA", "\x1bOC", "\x1bOD"
@@ -122,10 +122,13 @@ class WorkspacePtyTests(PtyCase):
     def test_compare_tab_and_frontier_create_no_recommendation(self):
         session = self.open(cols=100, rows=30)
         session.send("c" + DOWN + "c" + DOWN + "c" + "e")
-        session.wait_for("AA frontier of shown rows")
+        session.wait_for("frontier per AA profile")
+        self.assertIn("not a recommendation", session.text())
         session.send(":show the comparison\r")
         session.wait_for("[Compare(3)]")
         session.wait_for("DIFFERENCES FROM 1")
+        session.send("\t\x1b[6~")
+        session.wait_for("pts")
         text = session.text()
         self.assertIn("pts", text)
         self.assertNotIn("Recommended", text)
@@ -275,3 +278,153 @@ class RefreshPtyTests(PtyCase):
         again = self.open(fetch="deny")
         again.settle(quiet=.6, timeout=1.5)
         self.assertEqual(self.fetches(), count, "a recent failed attempt is not repeated on reopening")
+
+
+class AuditCorrectionPtyTests(PtyCase):
+    """Real-terminal regressions for the FIX_TUI2 audit corrections (T1, T3, M1, M2, T5-T8, A11)."""
+
+    def saved(self):
+        return load_config(personal=self.config)
+
+    def outside(self, **change):
+        """Another window or `pod config` saves while this one is open."""
+        edit_config(self.config, displayed=self.saved(), **change)
+
+    def write_cache(self, required: timedelta, optional: timedelta | None = None) -> None:
+        from pod.observations import bundled
+        snapshot = bundled()
+        now = datetime.now(timezone.utc)
+        stamp = lambda age: (now - age).strftime("%Y-%m-%dT%H:%M:%SZ")
+        snapshot["created_at"] = stamp(required)
+        for block in snapshot["sources"].values():
+            block["retrieved_at"] = stamp(required if block["required"] or optional is None else optional)
+        self.cache.mkdir(parents=True, exist_ok=True)
+        (self.cache / "current.json").write_text(json.dumps(snapshot))
+
+    def test_bulk_saves_nothing_unreviewed_after_an_outside_not_set(self):
+        # Audit scenario A: the reviewed preview enabled two routes; another writer set a third to not set.
+        document = load_config(personal=self.config)
+        routes = dict(document["routes"])
+        for key in ("codex/gpt-6-luna/low", "codex/gpt-6-luna/medium"):
+            routes.pop(key)
+        fixture_config(self.config, routes=routes)
+        session = self.open(cols=100, rows=30)
+        session.send("b" + RIGHT + RIGHT)
+        session.wait_for("CHANGES (2)")
+        self.outside(routes={OPUS_MAX: None})
+        session.wait_for("changed since this preview")
+        before = self.config.read_bytes()
+        session.send("\r")
+        session.wait_for("changed elsewhere; review again")
+        self.assertEqual(self.config.read_bytes(), before, "nothing the user did not review is saved")
+        self.assertNotIn(OPUS_MAX, self.saved()["routes"])
+        session.wait_for("CHANGES (3)")
+        session.wait_for(OPUS_MAX + ": not set -> enabled")
+        session.send("\r")
+        session.wait_for(lambda _s: self.saved()["routes"].get(OPUS_MAX) == "enabled")
+        session.wait_for("Bulk saved 3 routes")
+
+    def test_bulk_clear_pin_consent_never_moves_to_another_pin(self):
+        # Audit scenario G: consent to clear the pin .../high must not clear a pin moved to .../max.
+        high = "claude/claude-opus-5-5/high"
+        fixture_config(self.config, pinned=high)
+        session = self.open(cols=100, rows=30)
+        session.send("b" + DOWN + RIGHT + DOWN + RIGHT)
+        session.wait_for(f"yes ({high} would be disabled)")
+        self.outside(pinned=OPUS_MAX)
+        session.wait_for("changed since this preview")
+        before = self.config.read_bytes()
+        session.send("\r")
+        session.wait_for("changed elsewhere; review again")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(self.saved()["pinned"], OPUS_MAX)
+        session.wait_for(f"no ({OPUS_MAX} would be disabled)")
+        session.send("\r")
+        session.wait_for(f"this disables Pin {OPUS_MAX}")
+        self.assertEqual(self.config.read_bytes(), before, "the moved pin needs its own consent")
+
+    def test_open_window_ages_and_turns_stale_without_a_reload(self):
+        self.write_cache(timedelta(days=7) - timedelta(seconds=3))
+        session = self.open(cols=100, rows=30)
+        self.assertIn("Data cache 6d old", session.text())
+        self.assertNotIn("STALE", session.text())
+        time.sleep(3.5)
+        session.send(DOWN)
+        session.wait_for("Data cache 7d old STALE")
+        session.wait_for("Data STALE")
+
+    def test_mixed_source_ages_are_never_hidden_behind_one_time(self):
+        self.write_cache(timedelta(hours=1), optional=timedelta(days=3))
+        session = self.open(cols=100, rows=30)
+        session.wait_for("Data cache 1h old; mixed ages (oldest 3d)")
+
+    def test_profile_marks_sit_beside_the_numbers_in_both_glyph_sets(self):
+        session = self.open(cols=80, rows=24)
+        lines = session.lines()
+        opus = next(line for line in lines if "Claude Opus 5.5" in line and " max " in line)
+        astra = next(line for line in lines if "GPT-6 Astra" in line and " max " in line)
+        self.assertRegex(opus, r"58†\s+\$5\.98†\s+\d+†")
+        self.assertNotIn("†", astra)
+        session.send("\t\x1b[6~")
+        session.wait_for("AA profile with fallback: AA index 58†")
+        plain = self.open(cols=80, rows=24, LC_ALL="C", NO_COLOR="1")
+        self.assertRegex(plain.text(), r"58#\s+\$5\.98#")
+        plain.send("?")
+        plain.wait_for("# AA ran this")
+
+    def test_compare_names_a_profile_difference_instead_of_a_delta(self):
+        session = self.open(cols=100, rows=30)
+        session.send("c" + DOWN * 6)
+        session.wait_for(lambda s: "GPT-6 Astra · max" in self.heading(s))
+        session.send("c:show the comparison\r")
+        session.wait_for("[Compare(2)]")
+        session.send("\t" + DOWN * 4)
+        session.wait_for("Caveat: 1 and 2 are not like-for-like")
+        session.wait_for("not comparable (AA profile with fallback vs (none))")
+
+    def test_cost_or_time_column_always_keeps_a_disclaimer_at_40_by_12(self):
+        session = self.open(cols=40, rows=12)
+        self.assertNotIn("$/task", session.text())
+        session.send("s")
+        session.wait_for("$/task")
+        session.wait_for("AA $ not your bill/quota; time not task")
+        session.send("ss")
+        session.wait_for(lambda s: "First s" in s.text() and "AA $ not your bill/quota; time not task" in s.text())
+
+    def test_narrow_labels_keep_the_effort_under_every_sort(self):
+        session = self.open(cols=40, rows=12)
+        for _ in range(8):  # every sort in turn
+            labels = [line[6:].split("  ")[0].strip() for line in session.lines()[3:]
+                      if line[:2].strip() in ("▸✓", "✓", "▸")]
+            self.assertTrue(labels, session.text())
+            for label in labels:
+                self.assertRegex(label, r" (low|medium|high|xhigh|max)$", session.text())
+            self.assertEqual(len(labels), len(set(labels)), session.text())
+            session.send("s")
+            session.settle()
+
+    def test_focus_stays_on_a_shown_row_and_edits_only_that_row(self):
+        # Audit T8: an empty search plus a filter change left no marker while edits hit the first row.
+        session = self.open(cols=100, rows=30)
+        session.send("/zzz\rff/\r")
+        session.wait_for("Filter provider=OpenAI")
+        session.settle()
+        marked = [line for line in session.lines()[3:15] if line.startswith("▸")]
+        self.assertEqual(len(marked), 1, session.text())
+        key = "codex/gpt-6-astra/max"
+        self.assertIn("GPT-6 Astra", marked[0])
+        session.send(" ")
+        session.wait_for(lambda _s: self.saved()["routes"][key] == "disabled")
+        session.send("/zzz")
+        session.wait_for("No rows match")
+        before = self.config.read_bytes()
+        session.send("\r ")
+        session.wait_for("No row is shown")
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_bulk_scroll_hint_names_the_key_that_scrolls(self):
+        session = self.open(cols=80, rows=24)
+        session.send("b" + RIGHT + DOWN + RIGHT)
+        session.wait_for("CHANGES (30)")
+        session.wait_for(lambda s: "more (" in s.text() and "lines): Page Down" in s.text())
+        self.assertNotIn("Tab, then", session.text())

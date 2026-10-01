@@ -7,17 +7,25 @@ can prove the layout for every supported size; the interactive path clips instea
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 from . import tui_state as ts
+from .observations import STALE_S
 from .term import Capabilities, clip, display_width, elide_middle, glyph, pad, safe_text, wrap
 
 DISCLAIMER = ("AA benchmark cost is not the user's subscription charge, quota consumption or Pod invoice; "
               "first/total benchmark response is not worker task duration.")
-SHORT_DISCLAIMERS = ("AA $/task is benchmark cost, not your bill, quota or Pod invoice; "
-                     "benchmark response is not worker task duration.",
-                     "AA $/task is not your bill or quota; response is not task duration.",
-                     "AA $ is not your bill; times not task time")
+# The longest that fits is shown under the table whenever it has a cost or time column.
+SHORT_DISCLAIMERS = (DISCLAIMER,
+                     "AA $/task is not your subscription, quota or Pod invoice; benchmark time is not task "
+                     "duration.",
+                     "AA $/task is not your subscription, quota or Pod invoice; time is not task time",
+                     "AA $ is not your bill, quota or Pod invoice; time not task time",
+                     "AA $ not your bill/quota; time not task")
+# Metrics that read like the user's own cost or wait, so the table never shows them without a disclaimer.
+COST_AND_TIME = ("usd_per_task", "first_response_s", "total_response_s")
+# AA profile qualifiers marked after the measured values they qualify.
+QUALIFIER_MARKS = (("estimated index", "estimated"), ("with fallback", "fallback"))
 WIDE, NORMAL = 140, 80
 MIN_COLUMNS, MIN_ROWS = 40, 12
 TAB_LABELS = {"details": ("Details", "Det"), "benchmarks": ("Benchmarks", "Bench"),
@@ -151,9 +159,25 @@ def _qualifiers(row: dict) -> list[str]:
     return list(row.get("qualifiers") or [])
 
 
+def marks_for(qualifiers: list | tuple, name: str, caps: Capabilities) -> str:
+    """The profile marks for one metric: ~ an AA estimated index, † (ASCII #) AA's "with fallback" run."""
+    return "".join(glyph(caps, mark) for qualifier, mark in QUALIFIER_MARKS
+                   if qualifier in qualifiers and (mark != "estimated" or name == "intelligence")
+                   and name != "context_tokens")
+
+
+def metric_text(row: dict, name: str, caps: Capabilities, *, reserve: bool = False) -> str:
+    """A metric value with its AA profile marks; `reserve` pads the marks so table digits align."""
+    found = ts.value(row, name)
+    marks = marks_for(_qualifiers(row), name, caps) if found is not None else ""
+    if reserve:
+        room = 0 if name == "context_tokens" else 2 if name == "intelligence" else 1
+        marks = marks + " " * max(0, room - display_width(marks))
+    return number(name, found, caps) + marks
+
+
 def _index_text(row: dict, caps: Capabilities) -> str:
-    text = number("intelligence", ts.value(row, "intelligence"), caps)
-    return text + ("*" if "estimated index" in _qualifiers(row) and ts.value(row, "intelligence") is not None else "")
+    return metric_text(row, "intelligence", caps)
 
 
 def _profile(row: dict) -> str:
@@ -171,20 +195,71 @@ def _when(value: object) -> datetime | None:
     return moment if moment.tzinfo else None
 
 
+def span(seconds: int) -> str:
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
 def age_text(value: object, now: datetime) -> str:
     moment = _when(value)
     if moment is None:
         return "unknown age"
-    seconds = max(0, int((now - moment).total_seconds()))
-    if seconds < 3600:
-        return f"{seconds // 60}m old"
-    if seconds < 86400:
-        return f"{seconds // 3600}h old"
-    return f"{seconds // 86400}d old"
+    return span(max(0, int((now - moment).total_seconds()))) + " old"
+
+
+def data_age(state: ts.State, now: datetime) -> dict:
+    """The data's age at render time, so an open window keeps ageing and turns stale on its own.
+
+    `age` is the oldest required source's age (None when one has no data), `stale` follows the
+    seven-day rule, and `oldest` is the oldest kept data from any source, so mixed ages show.
+    """
+    seen = state.projection.get("observations") or {}
+    blocks = seen.get("sources") or {}
+    ages = {}
+    for name, block in blocks.items():
+        moment = _when(block.get("retrieved_at"))
+        ages[name] = None if moment is None else max(0, int((now - moment).total_seconds()))
+    required = [ages[name] for name, block in blocks.items() if block.get("required")]
+    if required:
+        age = None if any(item is None for item in required) else max(required)
+    else:
+        age = seen.get("age_s")
+    kept = [ages[name] for name, block in blocks.items() if ages[name] is not None and block.get("rows")]
+    oldest = max(kept) if kept else None
+    mixed = oldest is not None and age is not None and span(oldest) != span(age)
+    return {"age": age, "stale": age is None or age >= STALE_S, "oldest": oldest if mixed else None}
 
 
 def _route_label(row: dict) -> str:
     return f"{row['name']} {row['effort']}"
+
+
+def _shortened(name: str, room: int, strategy: str, caps: Capabilities) -> str:
+    if strategy == "family" and " " in name:
+        name = name.split(" ", 1)[1]   # "Claude Opus 5.5" -> "Opus 5.5": the family word goes first
+    if strategy == "middle":
+        return elide_middle(name, room, ascii_only=caps.ascii_only)
+    return clip(name, room, ellipsis=True, ascii_only=caps.ascii_only)
+
+
+def narrow_labels(rows: list[dict], width: int, caps: Capabilities) -> dict[str, str]:
+    """Model+effort labels for a narrow column: the model name is shortened, never the effort.
+
+    Full names are kept when they all fit; otherwise the first shortening that keeps every model
+    distinct is used, so each label stays one exact route identity.
+    """
+    room = max(1, width - 1 - max((display_width(row["effort"]) for row in rows), default=0))
+    names = {row["model"]: safe_text(row["name"], caps) for row in rows}
+    chosen = names
+    if any(display_width(name) > room for name in names.values()):
+        for strategy in ("family", "full", "middle"):
+            chosen = {model: _shortened(name, room, strategy, caps) for model, name in names.items()}
+            if len(set(chosen.values())) == len(chosen):
+                break
+    return {row["key"]: f"{chosen[row['model']]} {row['effort']}" for row in rows}
 
 
 # --------------------------------------------------------------------------- table
@@ -248,7 +323,8 @@ def _marks(state: ts.State, item: ts.Item, caps: Capabilities, frontier: dict) -
     return text + " "
 
 
-def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, grouped: bool) -> tuple[str, str]:
+def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, grouped: bool,
+          labels: dict | None = None) -> tuple[str, str]:
     row = item.route or item.observation or {}
     if column.key == "name":
         if item.kind == "group":
@@ -264,7 +340,7 @@ def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, gr
             return ("  " if grouped else "") + str(row.get("row")), "body"
         name = ("  " + row["effort"]) if grouped else row["name"]
         if column.header == "Route" and not grouped:
-            name = _route_label(row)
+            name = (labels or {}).get(row["key"]) or _route_label(row)
         return name, "value"
     if item.kind == "group":
         return "", "body"
@@ -280,9 +356,7 @@ def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, gr
         return str(row.get("provider") or row.get("creator") or ""), "body"
     if column.key == "profile":
         return _profile(row), "body"
-    if column.key == "intelligence":
-        return _index_text(row, caps), "metric"
-    return number(column.key, ts.value(row, column.key), caps), "metric"
+    return metric_text(row, column.key, caps, reserve=True), "metric"
 
 
 def _header(state: ts.State, columns: tuple[Column, ...], caps: Capabilities) -> Line:
@@ -299,13 +373,13 @@ def _header(state: ts.State, columns: tuple[Column, ...], caps: Capabilities) ->
 
 
 def _row_line(state: ts.State, item: ts.Item, columns: tuple[Column, ...], caps: Capabilities,
-              frontier: dict) -> Line:
+              frontier: dict, labels: dict | None = None) -> Line:
     focused = item.key == state.focus
     active = focused and state.pane == "table" and state.mode == "browse"
     parts = [(glyph(caps, "focus") if focused else " ", "focus" if active else "key" if focused else "body"),
              (_marks(state, item, caps, frontier), "badge_" + item.route["state"] if item.route else "label")]
     for index, column in enumerate(columns):
-        text, role = _cell(state, item, column, caps, state.grouped)
+        text, role = _cell(state, item, column, caps, state.grouped, labels)
         text = safe_text(text, caps)
         cell = (" " * max(0, column.width - display_width(text)) + clip(text, column.width)) if column.right \
             else pad(text, column.width, ascii_only=caps.ascii_only)
@@ -317,31 +391,47 @@ def _row_line(state: ts.State, item: ts.Item, columns: tuple[Column, ...], caps:
     return _line(*parts)
 
 
-def _controls(state: ts.State, shown: int, start: int, count: int, width: int, caps: Capabilities) -> Line:
+def frontier_labels(state: ts.State) -> tuple[str, ...]:
+    """The frontier's scope, longest first: it is found within each set of one AA profile and methodology."""
+    count = len(ts.frontier_scopes(state))
+    sets = f"{count} sets" if count != 1 else "1 set"
+    return (f"AA frontier within each AA profile and methodology ({sets}); not a recommendation",
+            f"frontier per AA profile ({sets}); not a recommendation",
+            "frontier per AA profile; not a recommendation", "frontier per profile; not a recommendation")
+
+
+def _controls(state: ts.State, shown: int, start: int, count: int, width: int, caps: Capabilities,
+              now: datetime) -> Line:
     dot = glyph(caps, "dot")
     arrow = glyph(caps, "down" if state.descending else "up")
     filters = [label for label, value in (("provider", state.provider), ("model", state.model),
                                           ("effort", state.effort), ("state", state.state_filter))
                if value != "all"]
-    view = "Grouped" if state.grouped else "Ranked"
     total = len(ts.routes(state))
-    parts = [(f"Sort {ts.SORT_LABELS[state.sort]} {arrow}", "value")]
+    head = [(f"Sort {ts.SORT_LABELS[state.sort]} {arrow}", "value")]
     seen = state.projection.get("observations") or {}
-    if seen.get("status") == "observed" and seen.get("stale"):
+    if seen.get("status") == "observed" and data_age(state, now)["stale"]:
         # Stale data stays marked at every size, even when the status line has no room for its age.
-        parts += [(dot, "label"), ("Data STALE", "error")]
-    parts += [(dot, "label"), (view, "value")]
-    parts += [(dot, "label"), (f"{shown} rows" + (f" {start + 1}-{start + count}" if shown > count else ""), "body")]
+        head += [(dot, "label"), ("Data STALE", "error")]
+    view = [(dot, "label"), ("Grouped" if state.grouped else "Ranked", "value")]
+    tail = [(dot, "label"), (f"{shown} rows" + (f" {start + 1}-{start + count}" if shown > count else ""), "body")]
     if state.discovery != "supported":
-        parts += [(dot, "label"), ("Showing " + state.discovery, "advisory")]
+        tail += [(dot, "label"), ("Showing " + state.discovery, "advisory")]
     if filters:
-        parts += [(dot, "label"), ("Filter " + ", ".join(f"{name}={getattr(state, 'state_filter' if name == 'state' else name).replace('_', ' ')}"
-                                                         for name in filters), "advisory")]
+        tail += [(dot, "label"), ("Filter " + ", ".join(f"{name}={getattr(state, 'state_filter' if name == 'state' else name).replace('_', ' ')}"
+                                                        for name in filters), "advisory")]
     if state.query or state.mode == "search":
-        parts += [(dot, "label"), (f"Search {state.query}{'_' if state.mode == 'search' else ''}", "advisory")]
+        tail += [(dot, "label"), (f"Search {state.query}{'_' if state.mode == 'search' else ''}", "advisory")]
     if state.frontier:
-        parts += [(dot, "label"), (f"{glyph(caps, 'frontier')} AA frontier of shown rows (index up, $/task and "
-                                   "first response down); not a recommendation", "advisory")]
+        # The scope label replaces the route count and shortens until it fits; the view name gives way first.
+        labels = [f"{glyph(caps, 'frontier')} {text}" for text in frontier_labels(state)]
+        for parts in (head + view + tail, head + tail):
+            used = sum(display_width(safe_text(text, caps)) for text, _ in parts) + display_width(dot)
+            label = next((text for text in labels if used + display_width(safe_text(text, caps)) <= width), None)
+            if label is not None:
+                break
+        return _clip_line(_line(*_safe(parts + [(dot, "label"), (label or labels[-1], "advisory")], caps)), width, caps)
+    parts = head + view + tail
     if total and not state.query and not filters and state.discovery == "supported":
         parts += [(dot, "label"), (f"{total} supported routes", "body")]
     return _clip_line(_line(*_safe(parts, caps)), width, caps)
@@ -363,16 +453,21 @@ def disclaimer_line(width: int, caps: Capabilities) -> Line:
     return Line(_fit(text, width, caps), "advisory")
 
 
-def _table(state: ts.State, width: int, height: int, caps: Capabilities) -> tuple[list[Line], int, int]:
+def _table(state: ts.State, width: int, height: int, caps: Capabilities,
+           now: datetime) -> tuple[list[Line], int, int]:
     rows = ts.items(state)
     columns = table_columns(state, width)
     frontier = ts.frontier(state) if state.frontier else {}
-    keep_disclaimer = height >= 8
+    labels = narrow_labels([item.route for item in rows if item.kind == "route"], columns[0].width, caps) \
+        if columns[0].header == "Route" else None
+    # A cost or time column is never shown without the disclaimer; a short index-only table may omit it.
+    keep_disclaimer = height >= 8 or any(column.key in COST_AND_TIME for column in columns)
     count = max(1, height - 2 - (1 if keep_disclaimer else 0))
     focus = next((index for index, item in enumerate(rows) if item.key == state.focus), -1)
     start = _scroll(state.table_scroll, focus, count, len(rows))
-    lines = [_controls(state, len(rows), start, min(count, len(rows)), width, caps), _header(state, columns, caps)]
-    lines += [_clip_line(_row_line(state, item, columns, caps, frontier), width, caps)
+    lines = [_controls(state, len(rows), start, min(count, len(rows)), width, caps, now),
+             _header(state, columns, caps)]
+    lines += [_clip_line(_row_line(state, item, columns, caps, frontier, labels), width, caps)
               for item in rows[start:start + count]]
     if not rows:
         hidden = ts.hidden_selections(state)
@@ -389,11 +484,14 @@ def _table(state: ts.State, width: int, height: int, caps: Capabilities) -> tupl
 # --------------------------------------------------------------------------- inspector content
 
 def _metric_summary(row: dict, caps: Capabilities) -> str:
-    return (f"AA index {_index_text(row, caps)}; {number('usd_per_task', ts.value(row, 'usd_per_task'), caps)}/task; "
-            f"{number('output_tps', ts.value(row, 'output_tps'), caps)} tok/s; first "
-            f"{number('first_response_s', ts.value(row, 'first_response_s'), caps)} s; total "
-            f"{number('total_response_s', ts.value(row, 'total_response_s'), caps)} s; context "
-            f"{number('context_tokens', ts.value(row, 'context_tokens'), caps)}")
+    """Every measured value with its profile marks, led by AA's qualifier wording when there is one."""
+    qualifiers = _qualifiers(row)
+    lead = f"AA profile {', '.join(qualifiers)}: " if qualifiers and ts.value(row, "intelligence") is not None \
+        or qualifiers and any(ts.value(row, name) is not None for name in COST_AND_TIME) else ""
+    return (f"{lead}AA index {metric_text(row, 'intelligence', caps)}; "
+            f"{metric_text(row, 'usd_per_task', caps)}/task; {metric_text(row, 'output_tps', caps)} tok/s; "
+            f"first {metric_text(row, 'first_response_s', caps)} s; total "
+            f"{metric_text(row, 'total_response_s', caps)} s; context {metric_text(row, 'context_tokens', caps)}")
 
 
 def _preference_lines(state: ts.State, width: int, caps: Capabilities) -> list[Line]:
@@ -485,12 +583,14 @@ def details(state: ts.State, item: ts.Item | None, width: int, caps: Capabilitie
     return lines + _preference_lines(state, width, caps)
 
 
-def _change_text(name: str, before: object, after: object, caps: Capabilities, comparable: bool) -> str:
-    text = f"{METRIC_LABELS[name]} {number(name, before, caps)} -> {number(name, after, caps)}"
+def _change_text(name: str, before: object, after: object, caps: Capabilities, comparable: bool,
+                 marks: tuple[str, str] = ("", "")) -> str:
+    text = (f"{METRIC_LABELS[name]} {number(name, before, caps)}{marks[0] if before is not None else ''} -> "
+            f"{number(name, after, caps)}{marks[1] if after is not None else ''}")
     if before is None or after is None:
         return text
     if not comparable:
-        return text + " (methodology changed; not comparable)"
+        return text + " (not comparable: the AA methodology or profile changed)"
     if name == "intelligence":
         return text + f" ({after - before:+g} pts)"
     if before == 0:
@@ -510,23 +610,26 @@ def benchmarks(state: ts.State, item: ts.Item | None, width: int, caps: Capabili
     lines += _labelled("AA profile", profile or "no AA row maps to this route; metrics unknown", width, caps, "value")
     qualifiers = _qualifiers(row)
     if "with fallback" in qualifiers:
-        lines += _labelled("Fallback", "AA's harness ran this profile with fallback; it never enables Pod fallback",
-                           width, caps, "advisory")
+        lines += _labelled("Fallback", "AA's harness ran this profile with fallback (values shown with "
+                           f"{glyph(caps, 'fallback')}); it never enables Pod fallback", width, caps, "advisory")
     if "estimated index" in qualifiers:
-        lines += _labelled("Estimated", "AA marks this index as estimated (shown with *)", width, caps, "advisory")
+        lines += _labelled("Estimated", f"AA marks this index as estimated (shown with {glyph(caps, 'estimated')})",
+                           width, caps, "advisory")
     if first:
         lines += _labelled("Methodology", first.get("methodology") or "not stated by the source", width, caps)
         lines += _labelled("Retrieved", f"{first.get('retrieved_at')} ({age_text(first.get('retrieved_at'), now)}); "
                            f"measured {first.get('published_at') or 'date not published by the source'}", width, caps)
     for name in ts.METRICS:
-        lines += _labelled(METRIC_LABELS[name], f"{number(name, ts.value(row, name), caps)} ({UNITS[name]})",
+        lines += _labelled(METRIC_LABELS[name], f"{metric_text(row, name, caps)} ({UNITS[name]})",
                            width, caps, "metric")
     lines += _labelled("Rank scope", "Order among the rows shown in this table only; no global rank. Small "
                        "differences on one benchmark do not establish a winner.", width, caps)
     if state.frontier and item.kind == "route":
         mark = ts.frontier(state).get(row["key"], "unknown")
-        text = {"frontier": "on the AA frontier of the shown comparable rows",
-                "dominated": "another shown row is at least as good on index, $/task and first response",
+        scope = (f"shown rows with methodology {first.get('methodology') or 'not stated'} and AA profile "
+                 f"{ts.profile_words(tuple(qualifiers))}") if first else "shown rows"
+        text = {"frontier": f"on the AA frontier of the {scope}",
+                "dominated": f"another of the {scope} is at least as good on index, $/task and first response",
                 "unknown": "unknown: a dimension is missing or not comparable"}[mark]
         lines += _labelled("Frontier", text + "; display only, never a recommendation or eligibility rule",
                            width, caps, "advisory")
@@ -539,10 +642,16 @@ def benchmarks(state: ts.State, item: ts.Item | None, width: int, caps: Capabili
             if moved:
                 lines += _wrapped("The benchmark methodology changed between snapshots; differences are not "
                                   "model improvement.", width, caps, "advisory")
+            shift = ts.profile_change(state, row["key"])
+            if shift:
+                lines += _wrapped(f"AA measurement changed for this route ({shift}): a methodology or profile "
+                                  "change, not a model change, so no difference is shown.", width, caps, "advisory")
+            earlier = ((state.previous.get("profiles") or {}).get(row["key"]) or {}).get("qualifiers") or ()
             found = ts.changes(state, row["key"])
             for name, before, after in found:
-                comparable = not moved or name in ("context_tokens",)
-                lines += _wrapped(_change_text(name, before, after, caps, comparable), width, caps, "metric")
+                comparable = not (moved or shift) or name in ("context_tokens",)
+                marks = (marks_for(earlier, name, caps), marks_for(qualifiers, name, caps))
+                lines += _wrapped(_change_text(name, before, after, caps, comparable, marks), width, caps, "metric")
             if not found:
                 lines += _wrapped("No change for this route.", width, caps)
             changed = sum(bool(ts.changes(state, other["key"])) for other in ts.routes(state))
@@ -590,9 +699,10 @@ def sources(state: ts.State, item: ts.Item | None, width: int, caps: Capabilitie
         lines += _wrapped(text, width, caps, role)
     lines.append(_heading("OBSERVATION SNAPSHOT", width, caps))
     if seen.get("status") == "observed":
+        stale = data_age(state, now)["stale"]
         lines += _wrapped(f"{seen.get('origin')} snapshot, generation {seen.get('generation')}, created "
-                          f"{seen.get('created_at')}" + (" (stale)" if seen.get("stale") else ""), width, caps,
-                          "error" if seen.get("stale") else "body")
+                          f"{seen.get('created_at')}" + (" (stale)" if stale else ""), width, caps,
+                          "error" if stale else "body")
     else:
         lines += _wrapped(f"Observations {seen.get('status') or 'unknown'}: metrics show as unknown.", width, caps, "advisory")
     for message in seen.get("diagnostics") or []:
@@ -609,8 +719,10 @@ def sources(state: ts.State, item: ts.Item | None, width: int, caps: Capabilitie
         if status != "ok" and rows:
             text += "; these rows are from that earlier read"
         lines += _wrapped(text, width, caps, "error" if status != "ok" else "body", indent=2)
+        moment = _when(block.get("retrieved_at"))
+        stale = moment is None or (now - moment).total_seconds() >= STALE_S
         lines += _wrapped(f"Measured {block.get('published_at') or 'date not published by the source'}; methodology "
-                          f"{block.get('methodology') or 'not stated'}" + ("; stale" if block.get("stale") else ""),
+                          f"{block.get('methodology') or 'not stated'}" + ("; stale" if stale else ""),
                           width, caps, indent=2)
         for message in (block.get("diagnostics") or [])[:4]:
             lines += _wrapped(message, width, caps, "advisory", indent=2)
@@ -645,8 +757,13 @@ def compare(state: ts.State, width: int, caps: Capabilities, now: datetime) -> l
     if len(rows) > 1:
         lines.append(_heading(f"DIFFERENCES FROM 1 {_route_label(base)}", width, caps))
         lines += _wrapped("Index differences are points; others are percentages with a valid nonzero baseline "
-                          "from the same source and methodology.", width, caps)
+                          "from the same source, methodology and AA profile.", width, caps)
         for index, row in enumerate(rows[1:], 2):
+            if ts.value(base, "intelligence") is not None and ts.value(row, "intelligence") is not None:
+                difference = ts.profile_difference(ts.profile(base), ts.profile(row))
+                if difference:
+                    lines += _wrapped(f"Caveat: 1 and {index} are not like-for-like ({difference}); their AA "
+                                      "numbers are not compared.", width, caps, "advisory")
             parts = [f"{METRIC_LABELS[name]} {ts.delta(base, row, name)}" for name in ts.METRICS]
             lines += _wrapped(f"{index} {_route_label(row)}: " + "; ".join(parts), width, caps)
     return lines
@@ -684,16 +801,17 @@ def _tab_bar(state: ts.State, width: int, caps: Capabilities) -> Line:
     return _clip_line(_line(*_safe(parts, caps)), width, caps)
 
 
-def _page(lines: list[Line], count: int, width: int, caps: Capabilities, scroll: int) -> tuple[list[Line], int, int]:
-    """A scrolled page, its clamped start and the step to the next page; a cut page shows a hint."""
+def _page(lines: list[Line], count: int, width: int, caps: Capabilities, scroll: int,
+          hint: str = "Down or Page Down") -> tuple[list[Line], int, int]:
+    """A scrolled page, its clamped start and the step to the next page; a cut page names the keys that scroll it."""
     if count <= 0:
         return [], 0, 1
     start = max(0, min(scroll, max(0, len(lines) - count)))
     page = [_clip_line(line, width, caps) for line in lines[start:start + count]]
     marked = count >= 2 and len(lines) > start + count
     if marked:
-        page[-1] = Line(_fit(glyph(caps, "down") + f" more ({len(lines) - start - count + 1} lines): "
-                             "Tab, then Down or Page Down", width, caps), "advisory")
+        page[-1] = Line(_fit(glyph(caps, "down") + f" more ({len(lines) - start - count + 1} lines): " + hint,
+                             width, caps), "advisory")
     return page, start, max(1, count - 1 if marked else count)
 
 
@@ -718,12 +836,15 @@ def _help(state: ts.State, width: int, caps: Capabilities) -> list[Line]:
     lines += _wrapped(f"{glyph(caps, 'enabled')} enabled, {glyph(caps, 'disabled')} disabled, "
                       f"{glyph(caps, 'not_set')} not set; {glyph(caps, 'pin')} Pin; {glyph(caps, 'preferred')} "
                       f"Preferred; 1-4 compare order; {glyph(caps, 'frontier')} AA frontier; "
-                      f"{glyph(caps, 'focus')} focus.", width, caps)
+                      f"{glyph(caps, 'focus')} focus. After an AA value: {glyph(caps, 'fallback')} AA ran this "
+                      f"profile with fallback (AA's harness, never Pod fallback); {glyph(caps, 'estimated')} AA "
+                      "estimated index.", width, caps)
     lines.append(_heading("UNITS AND SCOPE", width, caps))
     lines += _wrapped("AA index: points. $/task: USD per AA benchmark task. Tok/s: median output tokens per second. "
                       "First s / Total s: benchmark seconds. Context: tokens. Unknown values show as a dash and "
-                      "sort last. Order is among the shown rows only; there is no global rank. * marks an AA "
-                      "estimated index.", width, caps)
+                      "sort last. Order is among the shown rows only; there is no global rank. Values with different "
+                      "AA profile marks or methodology are not compared, and the frontier is found within each "
+                      "such set.", width, caps)
     lines += _wrapped(DISCLAIMER, width, caps, "advisory")
     lines += _wrapped("Navigation, sorting, filters and comparisons never save, start workers or call models. "
                       "Edits save immediately to your one preference file.", width, caps)
@@ -754,14 +875,14 @@ def _palette(state: ts.State, width: int, height: int, caps: Capabilities) -> li
 
 def _field(label: str, text: str, focused: bool, caps: Capabilities, width: int) -> Line:
     parts = [(glyph(caps, "focus") + " " if focused else "  ", "focus" if focused else "body"),
-             (pad(label, 14, ascii_only=caps.ascii_only), "label"),
+             (pad(label, 16, ascii_only=caps.ascii_only), "label"),
              (("< " if focused else "") + text + (" >" if focused else ""), "value")]
     return _clip_line(_line(*_safe(parts, caps)), width, caps)
 
 
 def _bulk(state: ts.State, width: int, height: int, caps: Capabilities) -> list[Line]:
     bulk = state.bulk
-    conflicts = ts.bulk_conflicts(state, bulk)
+    conflicts = bulk.conflicts
     fields = ts.bulk_fields(bulk, conflicts)
     current = fields[min(bulk.field, len(fields) - 1)]
     scopes = {"model": f"All efforts of {ts.model_name(state, bulk.model)}",
@@ -785,14 +906,18 @@ def _bulk(state: ts.State, width: int, height: int, caps: Capabilities) -> list[
         lines += _wrapped("Enables exactly the supported routes listed below, the first-install default. Pin, "
                           "Preferred, worker limit and refresh setting stay as they are; routes added by a later "
                           "Pod update are not included.", width, caps, "advisory")
-    changed = ts.bulk_changes(state, bulk)
+    if ts.bulk_stale(state):
+        lines += _wrapped("The preferences changed since this preview; Enter saves nothing and shows the new "
+                          "preview to review.", width, caps, "error")
+    # The captured preview is exactly what Enter saves, so it is shown as captured.
+    changed = bulk.changes
     lines.append(_heading(f"CHANGES ({len(changed)})", width, caps))
-    body = [Line(_fit(f"{key}: {STATE_TEXT[(ts.route(state, key) or {}).get('state', 'not_set')]} -> "
-                      f"{STATE_TEXT[target]}", width, caps), "metric") for key, target in changed.items()]
+    body = [Line(_fit(f"{key}: {STATE_TEXT[bulk.before.get(key, 'not_set')]} -> {STATE_TEXT[target]}", width, caps),
+                 "metric") for key, target in changed.items()]
     if not body:
         body = [Line(_fit("Nothing to change for this scope", width, caps), "advisory")]
     room = max(1, height - len(lines))
-    page, start, _step = _page(body, room, width, caps, bulk.scroll)
+    page, start, _step = _page(body, room, width, caps, bulk.scroll, "Page Down")
     return lines + page
 
 
@@ -825,7 +950,7 @@ def _setup(state: ts.State, width: int, height: int, caps: Capabilities) -> list
         notes += _wrapped("- " + str(note.get("message")), width, caps)
     notes += [Line(_fit(f"{key}: {value}", width, caps), "metric") for key, value in (document.get("routes") or {}).items()]
     room = max(1, height - len(lines))
-    page, _start, _step = _page(notes, room, width, caps, setup.scroll)
+    page, _start, _step = _page(notes, room, width, caps, setup.scroll, "Page Down")
     return lines + page
 
 
@@ -881,10 +1006,11 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
     segments += [(segment, False) for segment in extra]
     refresh = refresh_label(state) if state.refresh_state != "idle" else None
     if seen.get("status") == "observed":
-        age = "unknown age" if seen.get("age_s") is None else age_text(
-            datetime.fromtimestamp(now.timestamp() - seen["age_s"], timezone.utc).isoformat(), now)
-        segments.append(([(f"Data {seen.get('origin')} {age}" + (" STALE" if seen.get("stale") else ""),
-                           "error" if seen.get("stale") else "body")], False))
+        ages = data_age(state, now)
+        age = "unknown age" if ages["age"] is None else span(ages["age"]) + " old"
+        mixed = f"; mixed ages (oldest {span(ages['oldest'])})" if ages["oldest"] is not None else ""
+        segments.append(([(f"Data {seen.get('origin')} {age}" + (" STALE" if ages["stale"] else "") + mixed,
+                           "error" if ages["stale"] else "body")], False))
     else:
         segments.append(([("Data unknown", "advisory")], False))
     if refresh:
@@ -989,9 +1115,10 @@ def frame(state: ts.State, cols: int, rows: int, caps: Capabilities, now: dateti
         body = _setup(state, width, body_rows, caps)
     else:
         dock = dock_height(body_rows)
-        table, table_scroll, table_page = _table(state, width, body_rows - dock, caps)
+        table, table_scroll, table_page = _table(state, width, body_rows - dock, caps, now)
+        hint = "Down or Page Down" if state.pane == "inspector" else "Tab, then Down or Page Down"
         content, inspector_scroll, inspector_page = _page(inspector_lines(state, width, caps, now), dock - 1, width,
-                                                          caps, state.inspector_scroll)
+                                                          caps, state.inspector_scroll, hint)
         body = table + [_tab_bar(state, width, caps)] + content
     body = body[:body_rows] + [Line("") for _ in range(body_rows - len(body))]
     lines = [title, *body, *([selections] if selections else []), _status(state, width, caps, now, overflow),
