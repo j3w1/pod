@@ -155,7 +155,8 @@ def _op_report(request: dict) -> dict:
         from .ledger import update_admission
         update_admission(Path(request["project"]), request["objective"],
                          owner=admission["owner"], admission_id=admission["admission_id"],
-                         update=lambda row: row["route_decision"].update(route_mismatch=True))
+                         update=lambda row: row["route_decision"].update(route_mismatch=True),
+                         expected_runtime=admission["runtime"])
         raise PodError("route_mismatch", "Native effective route changed after start")
     if (admission["route_decision"].get("effective_unknown")
             and all(effective[key] != "unknown" for key in ("agent", "model", "effort"))):
@@ -168,7 +169,7 @@ def _op_report(request: dict) -> dict:
                 row["effective_evidence"]["inherited"] = inherited
         update_admission(Path(request["project"]), request["objective"],
                          owner=admission["owner"], admission_id=admission["admission_id"],
-                         update=refresh)
+                         update=refresh, expected_runtime=admission["runtime"])
     validated = report(request["report"], request["packet"],
                        {"runtime": admission["runtime"], **{key: binding[key] for key in
                         ("runId", "taskId", "dispatchId", "workerId")}})

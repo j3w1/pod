@@ -1431,7 +1431,13 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
 
 
 def update_admission(project: Path, objective: str, *, owner: str, admission_id: str,
-                     update: Callable[[dict], None], open_required: bool = False) -> dict:
+                     update: Callable[[dict], None], open_required: bool = False,
+                     expected_runtime: str | None = None) -> dict:
+    """``expected_runtime`` is the runtime at which the update's native evidence was read.
+
+    Such an update never applies after a rebind to another runtime inside its own
+    authority join; the join refuses as it would without continuity.
+    """
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -1440,7 +1446,8 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
         if open_required:
             _require_open(state)
         require_authority(project, objective, owner=owner, state=state,
-                          run_id=state["admissions"][admission_id]["run_id"])
+                          run_id=state["admissions"][admission_id]["run_id"],
+                          expected_runtime=expected_runtime)
         row = state["admissions"][admission_id]
         admitted = ("admitted_seq" in row, row.get("admitted_seq"))
         update(row)
@@ -1494,7 +1501,9 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         row = state["admissions"].get(admission_id)
         if state["owner"] != owner or row is None:
             raise PodError("unknown_admission", "No owned admission identity")
-        authority = require_authority(project, objective, owner=owner, state=state, run_id=row["run_id"])
+        # The report path read its fresh identity at the observation's runtime (A2).
+        authority = require_authority(project, objective, owner=owner, state=state, run_id=row["run_id"],
+                                      expected_runtime=(observation.get("native_binding") or {}).get("runtime"))
         map_state = map_of(state)
         if map_state is None:
             raise refuse("unbound_assignment", "no_map", "a report joins an obligation map")

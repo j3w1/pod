@@ -420,7 +420,10 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
         row["route_decision"]["route_mismatch"] = mismatch
         row["route_decision"]["effective_unknown"] = any(
             effective[key] == "unknown" for key in ("agent", "model", "effort"))
-    return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply)
+    # The receipt and worker read were checked at this runtime; a rebind inside the write's
+    # own authority join would apply them at another one (A2).
+    return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply,
+                            expected_runtime=admission["runtime"])
 
 
 def _hold(project: Path, objective: str, *, owner: str, admission_id: str,
@@ -709,7 +712,7 @@ def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: s
                            "native_start_state": "refused",
                            "next": next_step}
     return update_admission(project, objective, owner=owner,
-                            admission_id=admission_id, update=apply)
+                            admission_id=admission_id, update=apply, expected_runtime=receipt["runtime"])
 
 
 def _current_authority(project: Path, objective: str, admission: dict, *, issue_port=None) -> None:

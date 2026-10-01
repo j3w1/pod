@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
+import fcntl
 import json
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+from pod import internal, ledger
 from pod.errors import PodError
 from pod.internal import run as internal_run
 from pod.ledger import (CONTINUITY_HISTORY, objective_root, read, update_admission)
@@ -18,6 +21,20 @@ from tests.kernel_support import KernelCase, FakePort, git
 AMBIGUOUS = "runtime_continuity_ambiguous"
 NATIVE_METHODS = ("capability", "resolve_worktree", "read_native", "start_worker", "request_show",
                   "find_worker", "show_worker")
+
+
+def lock_held(path: Path) -> bool:
+    """Whether the objective lock for this context is held; flock conflicts across open files."""
+    fd = os.open(path.parent / ".lock", os.O_RDWR)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
 
 
 class ContinuityPort(FakePort):
@@ -453,6 +470,60 @@ class ContinuityBoundaryTests(ContinuityCase):
         self.assertEqual(set(self.port.calls) - {"read_native", "show_worker", "find_worker"}, set())
         self.assertEqual(read(self.project, "objective")["owner"], owner)
         self.assertEqual(len(self.port.starts), 1)
+
+    def test_bind_read_before_a_runtime_change_that_destroyed_its_dispatch_refuses_and_stays_reserved(self):
+        first, = self.started()
+        update_admission(self.project, "objective", owner="owner", admission_id=first["admission_id"],
+                         update=lambda row: row.update(state="reserved", native_binding=None,
+                                                       request_uuid=None))
+        original = ContinuityPort.show_worker
+        reads = []
+
+        def show(port, dispatch):
+            shown = original(port, dispatch)
+            reads.append(dispatch)
+            if len(reads) == 2:  # the unique adoption validated it; this is the bind's own read
+                self.change_runtime()
+                port.workers.clear()  # the runtime change destroyed the Dispatch
+            return shown
+
+        def recover():
+            return recover_admission(self.project, "objective", owner="owner",
+                                     admission_id=first["admission_id"], worktree="current", port=self.port)
+        with patch.object(ContinuityPort, "show_worker", show):
+            # The refusal 0.6.6's authority join gives; the old runtime's read is never applied.
+            self.refused("native_authority_unverified", recover)
+        row = read(self.project, "objective")["admissions"][first["admission_id"]]
+        self.assertEqual((row["state"], row["native_binding"], row["runtime"]), ("reserved", None, "runtime"))
+        self.assertEqual(self.history(), [])
+        # The next recovery classifies the change itself; the destroyed Dispatch stays lost.
+        recovered = recover()
+        self.assertEqual([entry["verified"]["absent"] for entry in self.history()], [[first["admission_id"]]])
+        self.assertEqual((recovered["status"], recovered["admission"]["error"]["code"]),
+                         ("unresolved", "native_attempt_absent"))
+        self.assertNotIn("start_worker", self.port.calls)
+
+    def test_governor_reconcile_writes_its_rebind_under_the_objective_lock(self):
+        self.started()
+        writes = []
+        original_write = ledger._write
+        projection = internal._governor_projection
+
+        def write(path, value):
+            writes.append(lock_held(path))
+            return original_write(path, value)
+
+        def projection_then_runtime_change(*args, **kwargs):
+            result = projection(*args, **kwargs)
+            self.change_runtime()  # Orca restarts between the projection and reconcile
+            return result
+        with patch.object(ledger, "_write", write), \
+             patch.object(internal, "_governor_projection", projection_then_runtime_change):
+            self.refused("unknown_governed_action", internal_run, "governor-reconcile", {
+                "project": str(self.project), "objective": "objective", "owner": "owner",
+                "record_id": "no-such-record"})
+        self.assertEqual([entry["to_runtime"] for entry in self.history()], ["runtime-2"])
+        self.assertEqual(writes, [True])
 
     def test_rebind_past_the_history_bound_refuses_without_a_write(self):
         self.started()

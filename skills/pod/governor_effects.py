@@ -360,7 +360,9 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
     bounded_text(record_id, name="record_id", limit=128)
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
-    state = _owned_state(project, objective, owner, context_path)
+    with _lock(context_path):
+        # The authority join may rebind a runtime change; that write needs the objective lock (A2).
+        _owned_state(project, objective, owner, context_path)
     journal = _read_journal(record_path)
     row = _find_row(journal, record_id)
     if row["outcome"] not in ("UNKNOWN", "pending"):
