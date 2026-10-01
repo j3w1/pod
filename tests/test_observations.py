@@ -247,6 +247,33 @@ class RefreshTransactionTests(ObservationCase):
         self.assertEqual((snapshot["generation"], sol["metrics"]["usd_per_task"]), ("2", 0.55))
         self.assertEqual(observations.previous()["generation"], "1")
 
+    def test_load_pair_reads_current_and_previous_coherently(self):
+        self.assertEqual(observations.load_pair(T0)["previous"], None)
+        self.refresh()
+        done, seen = threading.Event(), []
+
+        def promote():
+            try:
+                for step in range(1, 16):
+                    self.refresh(now=T0 + timedelta(days=step))
+            finally:
+                done.set()
+
+        writer = threading.Thread(target=promote)
+        writer.start()
+        while not done.is_set():
+            pair = observations.load_pair(T0 + timedelta(days=20))
+            if pair["previous"] is not None:
+                seen.append((int(pair["current"]["snapshot"]["generation"]),
+                             int(pair["previous"]["generation"])))
+        writer.join(10)
+        pair = observations.load_pair(T0 + timedelta(days=20))
+        self.assertEqual((pair["current"]["origin"], pair["current"]["snapshot"]["generation"],
+                          pair["previous"]["generation"]), ("cache", "16", "15"))
+        self.assertEqual(pair["current"], observations.load(T0 + timedelta(days=20)))
+        self.assertTrue(seen)
+        self.assertEqual([item for item in seen if item[0] != item[1] + 1], [])
+
     def test_generation_stays_monotonic_after_a_corrupt_current(self):
         self.refresh()
         self.refresh(now=T0 + timedelta(days=1))

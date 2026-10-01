@@ -288,30 +288,43 @@ def _view(snapshot: dict | None, origin: str, moment: datetime, diagnostics: lis
             "diagnostics": diagnostics}
 
 
-def load(now: datetime | None = None) -> dict:
-    """Offline read: local cache, then the bundled snapshot, then unknown. Never fetches."""
-    moment, diagnostics = _now(now), []
+def _cached(moment: datetime, *, pair: bool) -> tuple[dict, dict | None]:
+    """The current view and, with ``pair``, the previous snapshot, read under one shared lock."""
+    diagnostics, older = [], None
     try:
         root = cache_root()
         with _lock(root, shared=True):
             snapshot = _try(root / "current.json", MAX_SNAPSHOT, diagnostics)
+            if pair:
+                older = _try(root / "previous.json", MAX_SNAPSHOT, [])
     except PodError as exc:
         diagnostics.append(f"Observation cache unavailable: {exc}")
         snapshot = None
     if snapshot is not None:
-        return _view(snapshot, "cache", moment, diagnostics)
+        return _view(snapshot, "cache", moment, diagnostics), older
     snapshot = _try(BUNDLED_PATH, MAX_BUNDLED, diagnostics)
-    return _view(snapshot, "bundled" if snapshot else "unknown", moment, diagnostics)
+    return _view(snapshot, "bundled" if snapshot else "unknown", moment, diagnostics), older
+
+
+def load(now: datetime | None = None) -> dict:
+    """Offline read: local cache, then the bundled snapshot, then unknown. Never fetches."""
+    return _cached(_now(now), pair=False)[0]
+
+
+def load_pair(now: datetime | None = None) -> dict:
+    """``load()`` and the previous snapshot from one shared-lock read, so the pair is coherent.
+
+    A promotion swaps both files under the exclusive lock, so readers never see one swap
+    without the other. A crash between the two swaps leaves previous and current both holding
+    the snapshot being replaced: still a valid pair, but the older previous generation is lost.
+    """
+    current, older = _cached(_now(now), pair=True)
+    return {"current": current, "previous": older}
 
 
 def previous() -> dict | None:
     """The snapshot that the latest promotion replaced, or None."""
-    try:
-        root = cache_root()
-        with _lock(root, shared=True):
-            return _try(root / "previous.json", MAX_SNAPSHOT, [])
-    except PodError:
-        return None
+    return load_pair()["previous"]
 
 
 def _status_record(root: Path) -> dict | None:
