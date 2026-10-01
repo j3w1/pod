@@ -284,6 +284,14 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                        "reconcile changes", "Before implementation"):
             self.assertIn(phrase, text)
 
+    def test_installed_guidance_keeps_the_pin_limits(self):
+        # The 0.7.0 rewrite once dropped these limits from the runtime text, leaving them only in
+        # repository specs a dispatch never loads.
+        read = lambda *path: " ".join((self.root.joinpath("skills", "pod", *path)).read_text().split())
+        self.assertIn("not user constraints or non-model authority", read("SKILL.md"))
+        self.assertIn("A pin never overrides direct user constraints, host restrictions, review independence, "
+                      "tool permissions or spending limits. Report pin conflicts.", read("references", "models.md"))
+
     def test_new_objective_worktree_requests_the_orca_branch(self):
         # A host default such as agent/<task> once became the objective branch because
         # the skill never asked for orca/<task-slug>; the request must stay explicit.

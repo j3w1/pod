@@ -34,8 +34,8 @@ or create one on `orca/<task-slug>`; preserve unrelated work. Read
 
 Read `pod config --json` before each delegated assignment. With empty `errors`, a non-null `pinned`
 route controls every Pod-routed role and correction at its exact model and effort, overriding
-repository model-selection rules. It excludes this coordinator, direct work and host-created helpers.
-Otherwise apply constraints and authority, choose a suitable `eligible` route with justified margin;
+repository model-selection rules, not user constraints or non-model authority; it excludes this
+coordinator, direct work and host-created helpers. Otherwise choose a suitable `eligible` route with justified margin;
 use `preferred` unless a material task-specific reason favors another. Record agent, model,
 exact effort, context `native_default` and reason. Review needs independent judgment, not
 automatically expensive models. Read [models and constraints](references/models.md).
@@ -83,7 +83,7 @@ decision. Efficiency exceptions never lift authority or correctness.
 Use `pod config --json`, `pod doctor --json`, `pod status --objective ID` and
 `pod internal <op> --input FILE`; use `--input -` for bounded piped JSON.
 If PATH has not refreshed, use
-`~/.local/bin/pod` with the same arguments. If the command is missing, point to
+`~/.local/bin/pod` with the same arguments. If missing, point to
 the one-shot installer from `main`:
 `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh`.
 Do not run a source-checkout helper or create another configuration source.
