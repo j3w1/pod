@@ -359,7 +359,9 @@ def measure() -> dict:
                 session.send("R")
                 data.append(session.wait_for(
                     lambda s: (log.exists() and log.read_text().count("\n") >= before + 3
-                               and "Data updated" in s.text() and "Refreshing" not in s.text()), timeout=3))
+                               # A repeat of identical fixture pages is honestly "no changes".
+                               and ("Data updated" in s.text() or "Data refreshed" in s.text())
+                               and "Refreshing" not in s.text()), timeout=3))
     cpu = "unknown"
     try:
         cpu = next(line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
