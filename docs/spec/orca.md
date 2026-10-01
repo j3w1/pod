@@ -34,9 +34,9 @@ Serialize admission under the objective lock, recording one logical reservation 
 
 ### R29 — Establish one authoritative coordinator per objective
 
-Type: H · Scenarios: [A21](coordination.md#a21), [A31](coordination.md#a31), [A60](#a60)
+Type: H · Scenarios: [A21](coordination.md#a21), [A31](coordination.md#a31), [A60](#a60), [A195](#a195), [A196](#a196), [A197](#a197)
 
-Establish one authoritative coordinator per objective. Adoption reconciles pending effects/native authority before dispatch. Before Governor preparation, admission, execution or any journal mutation, join the caller's stable native current-Run binding (Run, coordinator handle and consumer generation) to that objective's exact native references, runtime and existing Pod owner. Terminal self-identity alone is not authority; a missing, unrelated, changed, worker-only or takeover binding blocks. Failed authority still permits read-only diagnosis/status and safe direct work. A local lock is not distributed fencing; never manufacture a replacement controller or silently create/adopt a Run.
+Establish one authoritative coordinator per objective. Adoption reconciles pending effects/native authority before dispatch. Before Governor preparation, admission, execution or any journal mutation, join the caller's stable native current-Run binding (Run, coordinator handle and consumer generation) to that objective's exact native references, runtime and existing Pod owner; each authority-joining checkpoint records the generation it observed. Terminal self-identity alone is not authority; a missing, unrelated, changed, worker-only or takeover binding blocks. A changed runtime alone joins only through the runtime-continuity rebind of R98. Failed authority still permits read-only diagnosis/status and safe direct work. A local lock is not distributed fencing; never manufacture a replacement controller or silently create/adopt a Run.
 
 ### R35 — Use Orca-native messaging/events and blocking waits
 
@@ -104,6 +104,12 @@ Type: B,H · Scenarios: [A161](#a161)
 
 0.6.0 is a hard objective-state cutover. `pod update` prints a read-only notice of objectives on superseded schemas. Status and doctor list them with their schema and block them. Nothing converts them, and in-flight workers are settled through Orca. New objectives are unaffected.
 
+### R98 — Rebind an Orca runtime change only on proven continuity
+
+Type: H · Scenarios: [A195](#a195), [A196](#a196), [A197](#a197), [A198](#a198), [A199](#a199)
+
+When an objective's recorded runtime differs from the current one, each mutating runtime check (`require_authority`, the Governor projection, report reads, admission recovery and new worker admission) first classifies continuity from run-current and the exact worker and Run/Task reads Pod already makes, each at the current runtime. Equal Run, coordinator handle, recorded consumer generation and bound admission Run/Task/Dispatch/worker/worktree ids prove it: Pod rebinds under the objective lock, records old and new runtime, time, verified identities and provenance `automatic`, reports the rebind and continues. An unreadable identity, an unresolved admission, a reserved admission whose exact Run/Task lookup is unavailable, inconclusive or finds a Dispatch, a referenced Run run-current cannot show, or no recorded generation leaves it ambiguous: Pod writes nothing and refuses `runtime_continuity_ambiguous`, naming what it could not read. Only a direct `user_direct` Owner decision through `internal runtime-continuity`, naming the objective, both runtimes and that ambiguity and reclassified at write time, rebinds it with provenance `owner`; it changes only the recorded runtime and a missing generation. Any differing identity disproves continuity: the path keeps its existing refusal and nothing rebinds it. Status shows the bounded history and never rebinds; a rebind past eight entries refuses without a write. A rebind never changes the coordinator or owner, creates or adopts a Run, or starts, replays or recovers work; R25/R45 recovery stays a separate step.
+
 ## Acceptance scenarios
 
 - <a id="a08"></a>**A08** — Requested and effective launch values remain distinct; unknown or mismatched proof stays visible and blocks acceptance.
@@ -132,6 +138,11 @@ Type: B,H · Scenarios: [A161](#a161)
 - <a id="a132"></a>**A132** — Versioned records refuse other schemas without conversion; version drift blocks new mutation but leaves recovery available.
 - <a id="a138"></a>**A138** — No context control blocks no valid start; missing launch-preferences capability blocks only delegation.
 - <a id="a161"></a>**A161** — After an update, a 0.5 objective is reported with its schema and blocked, and it is not converted. `pod update` printed the notice. An in-flight 0.5 worker is settleable through Orca. A new objective works normally.
+- <a id="a195"></a>**A195** — After a checkpoint recorded the generation and only the runtime changed, a checkpoint write, a Governor mutation, a report read and a new worker admission each rebind automatically, report the rebind and continue, and status shows the history. A reserved admission whose exact Run/Task lookup returns no row does not block; its recovery rebinds, then continues as before.
+- <a id="a196"></a>**A196** — No run-current binding, an unreadable bound worker, an unresolved admission, a reserved admission whose lookup is unavailable, inconclusive or finds a Dispatch, a referenced Run run-current cannot show and a missing recorded generation each refuse `runtime_continuity_ambiguous`, naming what was unreadable, with the context and Governor journal byte-identical; recovery classifies before any hold. A matching exact-scope Owner decision rebinds with provenance `owner`; a stale, broad or mismatched one refuses, and a still-unreadable identity keeps blocking without skipping or closing an admission.
+- <a id="a197"></a>**A197** — A differing Run, coordinator, generation or bound Run/Task/Dispatch/worker/worktree id fails closed with the path's existing refusal code, no rebind and no write, with or without an Owner decision.
+- <a id="a198"></a>**A198** — An unchanged runtime runs no continuity path and status never rebinds. A rebind issues no worker start, request replay, Run creation, adoption or owner change, and a rebind past the history bound refuses without a write. For a reserved admission whose lookup finds a Dispatch, the Owner's rebind leaves it reserved and unbound, and a separate recovery call binds the single matching Dispatch.
+- <a id="a199"></a>**A199** — Sanitized incidents: an R17-shaped objective whose post-update checkpoint recorded its generation rebinds as proven, and R15's changed coordinator fails closed.
 
 
 ## Structured contracts
@@ -146,7 +157,7 @@ Type: B,H · Scenarios: [A161](#a161)
 | Admission | Intent, exact request and Run/Task/Dispatch/worker references, route decision, requested/effective values and recovery state. |
 | Failure | Attempt-local `rate_limited`, `unavailable`, `auth_failed` or `safety_refusal`, source, time, optional native retry-after, local reconsideration point and later clear provenance. |
 | Evidence/checkpoint | Candidate/source/policy/dependency/environment bindings, checks, remaining gates, native references, next safe action and Pod version. |
-| Obligation checkpoint | `pod-checkpoint/v3`: sequence, map revision, fixed governance source paths/base commits/byte revisions, obligations, proposals, coordinator slot, quiescence or closure. |
+| Obligation checkpoint | `pod-checkpoint/v3`: sequence, map revision, fixed governance source paths/base commits/byte revisions, obligations, proposals, coordinator slot, quiescence or closure, and optional runtime continuity: the recorded Run, coordinator and consumer generation and at most eight rebinds. |
 | Obligation packet | `pod-packet/v3`: `serves[]`, role, path/surface boundary, investigation decision and stopping condition. |
 | Obligation admission | `pod-admission/v4`: served obligations, role, boundary, Git-derived changed paths, boundary exceedance and result disposition. |
 

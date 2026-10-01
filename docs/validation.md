@@ -1,4 +1,4 @@
-# 0.6.6 verification contract
+# 0.6.7 verification contract
 
  Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
@@ -72,7 +72,7 @@ unavailable delegation suppresses that flag.
 Live Codex and Claude trials additionally exercise A143, A150, A158 and A159
 in disposable objectives. A missing live case remains `NOT_RUN`. Stage-1
 review is the fresh final independent audit under the mechanism installed
-before 0.6.6. After merge and installation, a separate 0.6.6 disposable objective
+before 0.6.7. After merge and installation, a separate 0.6.7 disposable objective
 records an assurance obligation, review attempt, triage and label decision as
 self-hosting evidence; it cannot promote stage-1 evidence.
 
@@ -110,15 +110,44 @@ concurrent installers and recovery. It does not touch ordinary host profiles.
 The installed copy must match the bundle; an incomplete installation reports a
 recoverable failure. The post-merge literal command is checked separately
 because a cached `main` endpoint can lag the SHA-pinned CI endpoint.
-An update trial begins with an installed 0.6.5 copy in a scrubbed disposable
-home, applies the 0.6.6 installer, checks user-file preservation and verifies
+An update trial begins with an installed 0.6.6 copy in a scrubbed disposable
+home, applies the 0.6.7 installer, checks user-file preservation and verifies
 the installed bundle, launcher and receipt.
-The exact public 0.6.5 parser and upgrade tests read genuine Git objects;
+The exact public 0.6.5 parser and the public 0.6.5 and 0.6.6 upgrade tests read genuine Git objects;
 hosted checkout uses `fetch-depth: 0` to make that history available.
 
 Issue 29 focused regressions cover normal sourced final-audit intake through production checkpoint/admission/report/acceptance, pin storage/atomic edits and every supported role, immutable pending replay, and controlled-time local failure reconsideration/success. PTY tests cover moving/clearing the radio group, focus, restart, hidden pins, all/custom refusal, concurrency, resize and ASCII/monochrome. Existing `tests.tui_snapshot.render` accepts the normal configured PTY screen for visual review; no special pin capture framework is needed.
 
 Public 0.6.4 consent fixtures under `tests/fixtures/pod-0.6.4/` were emitted by exact public main `372bcfc60845b5d49aa2f355023e33c47212aaf4` with native-authority/Git-observation stubs. They prove released-writer representability, not an installed-launcher/live/owner-state reproduction. Production current checkpoint/wait tests cover both unbound prepared and default/missing units; synthetic current-target controls remain labeled separately. Existing A147 tests retain legitimate trusted source removal and history controls. No migration or policy parser is introduced.
+
+Pod 0.6.7 focused regressions cover A1–A5. A1 status tests compare a verified
+read with the exact 0.6.6 `status.py` read from Git object
+`f4101feb8e517382cb4cc626a1afc702c6429f37` on the same fixture, and show
+unverified rows, the failed read's code, both runtimes and Orca-labelled
+attention for a changed runtime without a write (R97, A192–A194). A2 tests drive
+the real authority join through a fake Orca port that reports the current-Run
+binding: proven rebinds for a checkpoint, Governor mutation, report read, new
+admission and reserved-admission recovery; byte-identical refusals for each
+ambiguous case; exact-scope Owner decisions reclassified at write time; every
+compared identity disproven with the path's existing code; no start, replay,
+Run creation, adoption or owner change; and the eight-entry history bound
+(R29, R98, A195–A199). Sanitized R15 and R17 incidents keep only counts and
+which identities changed. A4 runs every `pod internal` operation through the
+helper entry with a sentinel value (R99, A200–A201). A5 uses disposable Git
+repositories and injected issue ports (R62–R64, A202–A204). Live native A1 and
+A2 need an Orca restart in a disposable objective the Owner schedules (on this
+host a restart ends live sessions and asks DRAINED), and live A5 needs a
+coordinator handed an EEL URL in a disposable repository; each stays `NOT_RUN`
+until exercised.
+
+Governor 0.6.6 journal fixtures under `tests/fixtures/governor-0.6.6/` were
+emitted by the unmodified 0.6.6 writer at
+`f4101feb8e517382cb4cc626a1afc702c6429f37` with stubbed native authority and an
+in-memory GitHub port carrying synthetic run events. They prove released-writer
+representability for A3's exact CI proof identity (A187–A191), not hosted or
+live provider behaviour. One UNKNOWN-outcome variant is a labelled synthetic
+control. A3's hosted or live proof needs a project with selective pull-request
+CI and remains `NOT_RUN`.
 
 ## Boundaries and evidence
 
