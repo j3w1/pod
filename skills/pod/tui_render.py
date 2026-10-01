@@ -321,7 +321,12 @@ def _controls(state: ts.State, shown: int, start: int, count: int, width: int, c
                if value != "all"]
     view = "Grouped" if state.grouped else "Ranked"
     total = len(ts.routes(state))
-    parts = [(f"Sort {ts.SORT_LABELS[state.sort]} {arrow}", "value"), (dot, "label"), (view, "value")]
+    parts = [(f"Sort {ts.SORT_LABELS[state.sort]} {arrow}", "value")]
+    seen = state.projection.get("observations") or {}
+    if seen.get("status") == "observed" and seen.get("stale"):
+        # Stale data stays marked at every size, even when the status line has no room for its age.
+        parts += [(dot, "label"), ("Data STALE", "error")]
+    parts += [(dot, "label"), (view, "value")]
     parts += [(dot, "label"), (f"{shown} rows" + (f" {start + 1}-{start + count}" if shown > count else ""), "body")]
     if state.discovery != "supported":
         parts += [(dot, "label"), ("Showing " + state.discovery, "advisory")]
@@ -576,9 +581,9 @@ def sources(state: ts.State, item: ts.Item | None, width: int, caps: Capabilitie
     seen = state.projection.get("observations") or {}
     lines = []
     if state.refresh_state != "idle":
+        text, role = refresh_label(state)
         lines.append(_heading("LAST REFRESH IN THIS WINDOW", width, caps))
-        lines += _wrapped(state.refresh_state + (": " + state.refresh_detail if state.refresh_detail else ""),
-                          width, caps, "error" if state.refresh_state == "failed" else "body")
+        lines += _wrapped(text, width, caps, role)
     lines.append(_heading("OBSERVATION SNAPSHOT", width, caps))
     if seen.get("status") == "observed":
         lines += _wrapped(f"{seen.get('origin')} snapshot, generation {seen.get('generation')}, created "
@@ -870,9 +875,7 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
     if state.error:
         segments.append(([(state.error, "error")], True))
     segments += [(segment, False) for segment in extra]
-    refresh = {"running": ("Refreshing data...", "advisory"), "failed": ("Refresh failed: " + state.refresh_detail, "error"),
-               "updated": ("Data updated", "advisory"), "unchanged": ("Refresh: " + state.refresh_detail, "advisory"),
-               "cancelled": ("Refresh cancelled", "advisory")}.get(state.refresh_state)
+    refresh = refresh_label(state) if state.refresh_state != "idle" else None
     if seen.get("status") == "observed":
         age = "unknown age" if seen.get("age_s") is None else age_text(
             datetime.fromtimestamp(now.timestamp() - seen["age_s"], timezone.utc).isoformat(), now)
@@ -932,6 +935,20 @@ def _footer(state: ts.State, width: int, caps: Capabilities) -> Line:
         if display_width(line.text) <= width or not droppable:
             return _clip_line(line, width, caps)
         items = [item for item in items if item[0] != droppable[0]]
+
+
+REFRESH_LABELS = {"running": ("Refreshing data...", "advisory"), "updated": ("Data updated", "advisory"),
+                  "unchanged": ("Data refreshed; no changes", "advisory"),
+                  "checked": ("Refresh checked; nothing saved", "advisory"),
+                  "refused": ("Refresh refused", "error"),
+                  "superseded": ("A newer refresh won; data reloaded", "advisory"),
+                  "cancelled": ("Refresh cancelled", "advisory"), "failed": ("Refresh failed", "error")}
+
+
+def refresh_label(state: ts.State) -> tuple[str, str]:
+    """The refresh outcome by name, with its diagnostic or error code when there is one."""
+    text, role = REFRESH_LABELS.get(state.refresh_state, ("Refresh " + state.refresh_state, "advisory"))
+    return text + (": " + state.refresh_detail if state.refresh_detail else ""), role
 
 
 def dock_height(body: int) -> int:

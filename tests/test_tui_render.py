@@ -130,6 +130,21 @@ class FrameTests(unittest.TestCase):
         self.assertIn("Pin codex/gpt-6.1-sol/high", narrow[0])
         self.assertIn("Preferred claude/claude-opus-5-5/medium", narrow[-2], "exact keys move, never shorten")
 
+    def test_stale_data_stays_marked_at_every_size_with_pin_and_preferred(self):
+        pin, preferred = "codex/gpt-6.1-sol/high", "claude/claude-opus-5-5/medium"
+        current = state(prefs(pinned=pin, preferred=preferred))
+        stale = replace(current, projection={**current.projection,
+                                             "observations": {**current.projection["observations"], "stale": True,
+                                                              "age_s": 10 * 86400}})
+        for size in SIZES:
+            for caps in (UNICODE, ASCII):
+                with self.subTest(size=size, ascii=caps.ascii_only):
+                    text = picture(stale, size, caps).plain
+                    self.assertIn("STALE", text)
+                    self.assertIn("Pin " + pin, text)
+                    self.assertIn("Preferred " + preferred, text)
+        self.assertNotIn("STALE", picture(current, (40, 12)).plain)
+
     def test_marks_are_distinct_from_focus_and_ascii_safe(self):
         key = "codex/gpt-6.1-sol/high"
         current = replace(state(prefs(pinned=key, preferred=key, routes={key: "enabled"})), focus=key)

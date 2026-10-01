@@ -453,6 +453,38 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(later.mode, "browse")
 
 
+class SetupRebaseTests(unittest.TestCase):
+    def chosen(self, raw: bytes) -> ts.State:
+        current = ts.with_setup(state(dict(prefs(), status="setup_required")), config.setup_preview(raw))
+        current, _ = press(current, "RIGHT", "RIGHT", "RIGHT", "DOWN", "RIGHT")
+        return current
+
+    def test_rebase_keeps_choices_that_still_apply(self):
+        current = self.chosen(SetupTests.V1)
+        before = ts.setup_choices(current)
+        changed = SetupTests.V1.replace(b"max_active: 3", b"max_active: 4")
+        rebased, note = ts.rebase_setup(current, config.setup_preview(changed))
+        self.assertEqual(rebased.setup.preview["revision"], config.setup_preview(changed)["revision"])
+        self.assertEqual(ts.setup_choices(rebased), before)
+        self.assertIn("your choices still apply", note)
+        self.assertEqual(ts.rebase_setup(rebased, config.setup_preview(changed)), (rebased, ""))
+
+    def test_rebase_clears_choices_that_no_longer_apply_and_says_so(self):
+        current = self.chosen(SetupTests.V1)
+        other = (b"schema: pod/v1\nselection: custom\nmodels:\n  gpt-6-astra: available\n"
+                 b"workers:\n  max_active: 2\npinned_model: gpt-6-astra\n")
+        rebased, note = ts.rebase_setup(current, config.setup_preview(other))
+        self.assertEqual((rebased.setup.pin, rebased.setup.preferred), (-1, 0))
+        self.assertIn("cleared the pin choice and the Preferred choice", note)
+        self.assertIsNone(ts.setup_choices(rebased), "the new pin still needs an explicit choice")
+
+    def test_rebase_closes_setup_when_the_file_is_no_longer_v1(self):
+        closed, note = ts.rebase_setup(self.chosen(SetupTests.V1), None)
+        self.assertIsNone(closed.setup)
+        self.assertEqual(closed.mode, "browse")
+        self.assertIn("no longer pod/v1", note)
+
+
 class WorkspaceSessionTests(unittest.TestCase):
     """Session I/O with disposable homes, an injected fetch and a controlled clock."""
 
@@ -624,6 +656,101 @@ class WorkspaceSessionTests(unittest.TestCase):
         workspace.poll()
         self.assertTrue(workspace.poll())
         self.assertEqual(ts.preferences(workspace.state)["status"], "invalid")
+        workspace.handle(" ")
+        self.assertIn("read-only", workspace.state.notice)
+
+    def test_setup_conflict_rebuilds_the_preview_so_a_second_confirm_saves(self):
+        self.config.write_bytes(SetupTests.V1)
+        workspace = self.open()
+        for key in ("RIGHT", "ENTER"):
+            workspace.handle(key)
+        changed = SetupTests.V1.replace(b"max_active: 3", b"max_active: 4")
+        self.config.write_bytes(changed)
+        workspace.handle("y")
+        self.assertIn("changed elsewhere", workspace.state.error)
+        self.assertIn("your choices still apply", workspace.state.error)
+        self.assertEqual(self.config.read_bytes(), changed)
+        self.assertEqual(workspace.state.setup.preview["revision"], config.setup_preview(changed)["revision"])
+        workspace.handle("ENTER")
+        workspace.handle("y")
+        saved = config.load(personal=self.config)
+        self.assertEqual((saved["status"], saved["max_active"], saved["pinned"]),
+                         ("valid", 4, "claude/claude-opus-5-5/low"))
+
+    def test_setup_follows_external_changes_while_open(self):
+        self.config.write_bytes(SetupTests.V1)
+        workspace = self.open()
+        workspace.handle("RIGHT")
+        other = (b"schema: pod/v1\nselection: custom\nmodels:\n  gpt-6-astra: available\n"
+                 b"workers:\n  max_active: 2\npinned_model: gpt-6-astra\n")
+        self.config.write_bytes(other)
+        self.assertTrue(workspace.poll())
+        self.assertIn("cleared the pin choice", workspace.state.notice)
+        self.assertEqual(workspace.state.setup.preview["revision"], config.setup_preview(other)["revision"])
+        document = config.defaults()
+        self.config.write_text(yaml.safe_dump(document, sort_keys=False))
+        self.assertTrue(workspace.poll())
+        self.assertIsNone(workspace.state.setup)
+        self.assertEqual(workspace.state.mode, "browse")
+        self.assertIn("no longer pod/v1", workspace.state.notice)
+
+    def test_refresh_outcomes_are_named_as_they_are(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        diff = {sources.AA: {"counts": {"added": 0, "removed": 0, "changed": 2}}}
+        cases = [
+            (("done", {"outcome": "promoted", "diff": diff}), "updated", "Data updated"),
+            (("done", {"outcome": "promoted", "diff": {sources.AA: {"counts": {"added": 0, "removed": 0,
+                                                                              "changed": 0}}}}),
+             "unchanged", "Data refreshed; no changes"),
+            (("done", {"outcome": "refused", "diagnostics": ["artificial_analysis: Coverage collapsed from 53 rows"]}),
+             "refused", "Refresh refused: artificial_analysis: Coverage collapsed from 53 rows"),
+            (("done", {"outcome": "superseded"}), "superseded", "A newer refresh won; data reloaded"),
+            (("done", {"outcome": "cancelled"}), "cancelled", "Refresh cancelled"),
+            (("done", {"outcome": "checked"}), "checked", "Refresh checked; nothing saved"),
+            (("done", {"outcome": "failed", "diagnostics": ["artificial_analysis: HTTP 403 bot challenge"],
+                       "sources": {sources.AA: {"status": "access_denied"},
+                                   sources.ANTHROPIC: {"status": "not_attempted"}}}),
+             "failed", "Refresh failed: access_denied: artificial_analysis: HTTP 403 bot challenge"),
+            (("error", "observations_busy: Another Pod process is updating observations"), "failed",
+             "Refresh failed: observations_busy: Another Pod process is updating observations"),
+        ]
+        for (kind, result), name, label in cases:
+            with self.subTest(name=name, label=label):
+                workspace._refresh_done(kind, result)
+                self.assertEqual(workspace.state.refresh_state, name)
+                self.assertEqual(tr.refresh_label(workspace.state)[0], label)
+                rendered = text(workspace.state, 200, 30)
+                self.assertIn(label, rendered)
+                if name in ("refused", "superseded", "unchanged", "checked", "cancelled", "updated"):
+                    self.assertNotIn("Refresh failed", rendered)
+
+    def test_coverage_collapse_is_reported_as_refused_not_failed(self):
+        self.set_refresh("manual")
+        tiny = ("<table><tr><th>Model</th><th>Context Window</th><th>Creator</th>"
+                "<th>Artificial Analysis Intelligence Index</th><th>Cost per TaskUSD</th><th>MedianTokens/s</th>"
+                "<th>LatencyFirst Chunk (s)</th><th>TotalResponse (s)</th></tr><tr><td>GPT-6.1 Sol (xhigh)</td>"
+                "<td>1M</td><td>OpenAI</td><td>51</td><td>$0.39</td><td>63</td><td>107.76</td><td>115.66</td></tr>"
+                "</table>")
+        self.fetch = lambda url, *, deadline, cancel: sources.Page(url, tiny if url == sources.SOURCES[0].url
+                                                                   else page(sources.ANTHROPIC))
+        workspace = self.open()
+        workspace.handle("R")
+        self.settle(workspace)
+        self.assertEqual(workspace.state.refresh_state, "refused")
+        self.assertIn("Coverage collapsed", workspace.state.refresh_detail)
+        self.assertNotIn("Refresh failed", text(workspace.state, 200, 30))
+        self.assertFalse((self.base / "cache" / "models" / "current.json").exists())
+
+    def test_missing_file_gets_a_read_only_notice_after_one_held_tick(self):
+        self.set_refresh("manual")
+        workspace = self.open()
+        self.config.unlink()
+        self.assertFalse(workspace.poll(), "one read of a missing file may be mid-write")
+        self.assertEqual(workspace.state.notice, "")
+        self.assertTrue(workspace.poll())
+        self.assertEqual(workspace.state.notice, "Preferences missing - read-only")
+        self.assertEqual(ts.preferences(workspace.state)["status"], "missing")
         workspace.handle(" ")
         self.assertIn("read-only", workspace.state.notice)
 

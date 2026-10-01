@@ -104,7 +104,8 @@ class State:
     notice: str = ""
     error: str = ""
     saved_at: datetime | None = None
-    refresh_state: str = "idle"   # idle | running | updated | unchanged | failed | cancelled
+    # idle | running | updated | unchanged | checked | refused | superseded | cancelled | failed
+    refresh_state: str = "idle"
     refresh_detail: str = ""
 
 
@@ -370,6 +371,47 @@ def with_setup(state: State, preview: dict | None) -> State:
     if preview is None:
         return replace(state, setup=None, mode="browse" if state.mode == "setup" else state.mode)
     return replace(state, setup=Setup(preview=preview), mode="setup")
+
+
+def rebase_setup(state: State, preview: dict | None) -> tuple[State, str]:
+    """Rebuild the route setup from freshly read bytes, keeping only choices that still apply.
+
+    Returns the new state and a note for the user; the note is empty when nothing changed.
+    """
+    old = state.setup
+    if preview is None:
+        if old is None:
+            return state, ""
+        return with_setup(state, None), "route setup closed: the preference file is no longer pod/v1"
+    if old is None:
+        return with_setup(state, preview), ""
+    if old.preview.get("revision") == preview.get("revision"):
+        return state, ""
+    old_pins, old_preferred = setup_options(state)
+    rebased = replace(state, setup=Setup(preview=preview))
+    new_pins, new_preferred = setup_options(rebased)
+    needs_pin = any(row.get("id") == "pin" for row in preview.get("choices", []))
+    lost, pin, preferred = [], -1, 0
+    if old.pin >= 0:
+        if not needs_pin:
+            lost.append("the pin choice")
+        elif old.pin >= len(old_pins):
+            pin = len(new_pins)
+        elif old_pins[old.pin] in new_pins:
+            pin = new_pins.index(old_pins[old.pin])
+        else:
+            lost.append("the pin choice")
+    if old.preferred:
+        key = old_preferred[old.preferred - 1]
+        if key in new_preferred:
+            preferred = new_preferred.index(key) + 1
+        else:
+            lost.append("the Preferred choice")
+    rebased = replace(rebased, setup=replace(rebased.setup, pin=pin, preferred=preferred))
+    note = "the preference file changed, so route setup was re-read; "
+    note += ("cleared " + " and ".join(lost) + " because it no longer applies" if lost
+             else "your choices still apply")
+    return rebased, note
 
 
 def with_viewport(state: State, *, table: int, table_page: int, inspector: int, inspector_page: int,

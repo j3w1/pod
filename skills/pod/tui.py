@@ -76,7 +76,7 @@ class Workspace:
         self.state = ts.initial(self._projection(self.prefs), self._previous(self.prefs))
         self.state = ts.with_setup(self.state, self._setup_preview(self.prefs))
         self.watched = (_digest(Path(self.prefs["path"])), _cache_stamp())
-        self.pending_invalid: str | None = None
+        self.pending_invalid: tuple | None = None
         self.notice_at: datetime | None = None
         if automatic:
             self.maybe_auto_refresh()
@@ -114,18 +114,19 @@ class Workspace:
         except PodError:
             return None
 
-    def reload(self) -> None:
-        """Re-read preferences, projection and the previous snapshot, keeping view choices."""
+    def reload(self) -> str:
+        """Re-read preferences, projection and the previous snapshot, keeping view choices.
+
+        A route setup is rebuilt from the re-read bytes, so its expected revision is current; the
+        returned note says when that kept, cleared or closed the user's setup choices.
+        """
         self.prefs = self._preferences()
         state = ts.with_projection(self.state, self._projection(self.prefs), self._previous(self.prefs),
                                    keep_previous=False)
-        if self.prefs.get("status") == "setup_required":
-            if state.setup is None:
-                state = ts.with_setup(state, self._setup_preview(self.prefs))
-        elif state.setup is not None:
-            state = ts.with_setup(state, None)
-        self.state = state
+        preview = self._setup_preview(self.prefs) if self.prefs.get("status") == "setup_required" else None
+        self.state, note = ts.rebase_setup(state, preview)
         self.watched = (_digest(Path(self.prefs["path"])), _cache_stamp())
+        return note
 
     # ----------------------------------------------------------------- refresh
 
@@ -157,18 +158,26 @@ class Workspace:
             self.results.put(("error", type(exc).__name__))
 
     def _refresh_done(self, kind: str, result: object) -> None:
+        """Name each refresh outcome as it is; only a real failure is called failed."""
         if kind == "error":
             self.state = ts.with_refresh(self.state, "failed", str(result))
             return
         outcome = result.get("outcome")
-        if outcome in ("promoted", "superseded"):
+        detail = str(next(iter(result.get("diagnostics") or []), "") or "")
+        if outcome == "promoted":
             self.reload()
-            self.state = ts.with_refresh(self.state, "updated")
-        elif outcome == "cancelled":
-            self.state = ts.with_refresh(self.state, "cancelled")
+            counts = [row.get("counts") or {} for row in (result.get("diff") or {}).values()]
+            empty = bool(counts) and not any(sum(row.values()) for row in counts)
+            self.state = ts.with_refresh(self.state, "unchanged" if empty else "updated")
+        elif outcome == "superseded":
+            self.reload()
+            self.state = ts.with_refresh(self.state, "superseded")
+        elif outcome in ("refused", "checked", "cancelled"):
+            self.state = ts.with_refresh(self.state, outcome, detail if outcome == "refused" else "")
         else:
-            detail = next(iter(result.get("diagnostics") or []), "") or outcome
-            self.state = ts.with_refresh(self.state, "failed", str(detail))
+            code = next((row.get("status") for row in (result.get("sources") or {}).values()
+                         if row.get("status") not in ("ok", "not_attempted")), outcome or "failed")
+            self.state = ts.with_refresh(self.state, "failed", f"{code}: {detail}" if detail else str(code))
 
     # ----------------------------------------------------------------- edits
 
@@ -188,12 +197,13 @@ class Workspace:
         return False
 
     def _failed(self, exc: Exception) -> None:
-        self.reload()
+        note = self.reload()
         if isinstance(exc, PodError) and exc.code == "config_changed_elsewhere":
             reason = "changed elsewhere; review and press again"
         else:
             reason = str(exc) or type(exc).__name__
-        self.state = ts.with_notice(self.state, f"Not saved - {reason}; file unchanged", error=True)
+        message = f"Not saved - {reason}; file unchanged" + (f"; {note}" if note else "")
+        self.state = ts.with_notice(self.state, message, error=True)
 
     def _save(self, effect: ts.Effect) -> None:
         try:
@@ -233,18 +243,22 @@ class Workspace:
         current = (_digest(Path(self.prefs["path"])), _cache_stamp())
         if current != self.watched:
             candidate = self._preferences()
-            if current[0] != self.watched[0] and candidate.get("status") == "invalid" \
-                    and self.pending_invalid != current[0]:
-                # A file that is invalid on one read may be half written; wait one more tick.
-                self.pending_invalid = current[0]
+            unreadable = candidate.get("status") in ("invalid", "missing")
+            if current[0] != self.watched[0] and unreadable and self.pending_invalid != ("held", current[0]):
+                # A file that is invalid or absent on one read may be mid-write; wait one more tick.
+                self.pending_invalid = ("held", current[0])
             else:
                 self.pending_invalid = None
                 prefs_changed = current[0] != self.watched[0]
-                self.reload()
+                note = self.reload()
                 message = ("Preferences changed outside this window" if prefs_changed
                            else "Model data changed by another Pod process")
                 if candidate.get("status") == "invalid":
                     message = "Preferences unavailable - read-only"
+                elif candidate.get("status") == "missing":
+                    message = "Preferences missing - read-only"
+                if note:
+                    message += "; " + note
                 self.state = ts.with_notice(self.state, message)
                 self.notice_at = self.clock()
                 dirty = True
