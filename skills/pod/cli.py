@@ -249,7 +249,7 @@ def _profile(row: dict) -> str:
     for name in ("intelligence", "usd_per_task", "first_response_s"):
         metric = row["metrics"][name]
         if metric.get("row"):
-            return ", ".join(metric.get("qualifiers") or []) or "standard"
+            return ", ".join(metric.get("qualifiers") or []) or "(none)"
     return "—"
 
 

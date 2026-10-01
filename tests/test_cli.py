@@ -93,7 +93,7 @@ class CliTests(unittest.TestCase):
             opus=next(line for line in text.splitlines() if line.startswith('claude/claude-opus-5-5/high '))
             luna=next(line for line in text.splitlines() if line.startswith('codex/gpt-6-luna/high '))
             self.assertTrue(opus.rstrip().endswith('with fallback'),opus)
-            self.assertTrue(luna.rstrip().endswith('standard'),luna)
+            self.assertTrue(luna.rstrip().endswith('(none)'),luna)
             for source in ('artificial_analysis','anthropic_models','openai_models'):
                 self.assertRegex(text,rf'  {source}: ok, retrieved \d{{4}}-')
             self.assertIn("not the user's subscription charge, quota consumption or Pod invoice",text)
