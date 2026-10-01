@@ -142,8 +142,9 @@ diagnostics; source-fetch metadata, not model-health policy) live in
 never inside the bundle, a worktree or the preference YAML. A corrupt, redirected, special (FIFO,
 device, directory), oversized or too deeply nested cache file is ignored by readers with a
 diagnostic, never read in full or waited on; readers fall back from the local cache to the bundled
-snapshot. A `.lock` or `refresh.json` that cannot be opened or written as a regular file makes
-`pod models refresh` refuse with `unsafe_cache` before any network read. With
+snapshot. A cache directory that is not a directory, a `.lock` that cannot be opened or a
+`refresh.json` that cannot be written makes `pod models refresh` refuse with `unsafe_cache` before
+any network read. With
 `refresh: automatic`, opening the workspace starts one asynchronous refresh when no local cache
 exists or the data is at least 24 hours old, unless the required source's Retry-After is active,
 a failed or refused attempt started within the last six hours, or a cancelled attempt (or one left

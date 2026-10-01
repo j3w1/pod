@@ -291,6 +291,16 @@ class RefreshTransactionTests(ObservationCase):
                     path.unlink()
                 if saved is not None:
                     path.write_bytes(saved)
+        # Second delta review E2: a regular file in place of the cache directory is refused too.
+        moved = self.root.with_name("models-saved")
+        self.root.rename(moved)
+        self.root.write_text("not a directory")
+        fetch = FakeFetch(pages())
+        with self.assertRaises(PodError) as caught:
+            observations.refresh(now=T0 + timedelta(days=1), fetch=fetch)
+        self.assertEqual((caught.exception.code, fetch.calls), ("unsafe_cache", []))
+        self.root.unlink()
+        moved.rename(self.root)
 
     def test_load_pair_reads_current_and_previous_coherently(self):
         self.assertEqual(observations.load_pair(T0)["previous"], None)

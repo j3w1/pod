@@ -83,7 +83,13 @@ def cache_root(project: Path | None = None) -> Path:
 def _make_root(root: Path) -> None:
     if root.is_symlink():
         raise PodError("unsafe_cache", "Observation cache directory is redirected")
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        # A regular file or other non-directory in place of the cache is refused, never a traceback.
+        raise PodError("unsafe_cache", "Observation cache directory cannot be created") from exc
+    if not root.is_dir():
+        raise PodError("unsafe_cache", "Observation cache directory is not a directory")
 
 
 @contextmanager
