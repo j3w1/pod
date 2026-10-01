@@ -517,6 +517,7 @@ def _surgical(raw: bytes, before: dict, after: dict) -> tuple[bytes, bool]:
         elif old is not None:
             changed, count = re.subn(line + r"(?:\r?\n|$)", "", changed, count=1)
         else:
+            changed = re.sub(r"(?m)^routes:[ \t]*\{\}([ \t]*(?:#.*)?)$", r"routes:\1", changed, count=1)
             indent = re.search(r"(?m)^([ \t]+)\S+:[ \t]*(?:enabled|disabled)[ \t]*(?:#.*)?$", changed)
             changed, count = re.subn(r"(?m)^(routes:[ \t]*(?:#.*)?)(\r?\n|$)",
                                      lambda match: (match[1] + "\n" + (indent[1] if indent else "  ")

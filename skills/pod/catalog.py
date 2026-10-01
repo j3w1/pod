@@ -110,8 +110,8 @@ def validate(data: object) -> dict:
         _identity(model, "model")
         model_id, provider = model["id"], model["provider"]
         efforts = model["efforts"]
-        if (not isinstance(efforts, list) or not efforts or len(efforts) != len(set(efforts))
-                or any(effort not in EFFORTS for effort in efforts)
+        if (not isinstance(efforts, list) or not efforts or any(effort not in EFFORTS for effort in efforts)
+                or len(efforts) != len(set(efforts))
                 or efforts != [effort for effort in EFFORTS if effort in efforts]):
             raise PodError("invalid_catalog", f"{model_id}: efforts must be verified native values in order")
         context = model["documented_context_tokens"]
