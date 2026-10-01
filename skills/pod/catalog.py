@@ -1,4 +1,8 @@
-"""Validated model identities, attributed guidance, and optional AA observations."""
+"""The shipped route registry: exact model ids, efforts, source aliases and attributed guidance.
+
+The registry holds shipped facts only. Benchmark measurements live in observations, and web
+data never extends this file; adding an ordinary model is a registry edit.
+"""
 
 from __future__ import annotations
 
@@ -12,18 +16,19 @@ from urllib.parse import urlparse
 
 from .errors import PodError
 
-IDS = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5",
-       "gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
+SCHEMA = "pod-catalog/v3"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# A documented non-reasoning variant stays informational until an adapter documents `none`.
+INFORMATIONAL_EFFORT = "none"
+AGENTS = {"claude": "Anthropic", "codex": "OpenAI"}
+PROVIDER_HOSTS = {"Anthropic": ("anthropic.com", "claude.com"), "OpenAI": ("chatgpt.com", "openai.com")}
 CATALOG_PATH = Path(__file__).with_name("catalog.json")
-REFERENCE_URL = "https://artificialanalysis.ai/leaderboards/models"
-UNKNOWN = {"effort": None, "profile": "Unknown", "intelligence": None,
-           "usd_per_task": None, "first_chunk_s": None, "total_response_s": None}
-# Guide prose is sized so every Details section is one line beside its label on an 80-column
-# terminal (79 drawable cells minus a 17-cell label column); "Limit: " prefixes limitations.
-DETAIL_LINE = 62
-GUIDE_LIMITS = {"suggested_use": 24, "best_for": DETAIL_LINE, "use_when": DETAIL_LINE,
-                "trade_off": DETAIL_LINE, "limitations": DETAIL_LINE - len("Limit: ")}
+MAX_CATALOG = 128 * 1024
+_ID = re.compile(r"[a-z0-9][a-z0-9.-]{0,62}[a-z0-9]")
+_SOURCE = re.compile(r"[a-z][a-z0-9_]{1,31}")
+MODEL_FIELDS = {"id", "name", "agent", "provider", "efforts", "documented_context_tokens",
+                "guidance", "sources", "guide", "aliases"}
+NOT_ROUTABLE_FIELDS = {"id", "name", "agent", "provider", "note", "aliases"}
 
 
 def _unique_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -42,7 +47,7 @@ def _exact(row: object, fields: set[str], name: str) -> dict:
 
 
 def _text(value: object, name: str, *, limit: int = 2048) -> str:
-    if (not isinstance(value, str) or not value or len(value) > limit
+    if (not isinstance(value, str) or not value.strip() or len(value) > limit
             or any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in value)):
         raise PodError("invalid_catalog", f"{name} must be bounded printable text")
     return value
@@ -67,121 +72,86 @@ def _url(value: object, name: str) -> str:
     return value
 
 
-def _record(row: object, model: dict) -> dict | None:
-    if not isinstance(row, dict) or set(row) not in (
-            {"effort", "profile", "intelligence", "usd_per_task", "first_chunk_s", "total_response_s"},
-            {"effort", "profile", "intelligence", "usd_per_task", "first_chunk_s", "total_response_s", "note"}):
-        return None
-    effort = row["effort"]
-    if effort not in (*model["efforts"], "none") or (effort == "none") != (row["profile"] == "Non-reasoning"):
-        return None
-    try:
-        _text(row["profile"], "benchmark profile", limit=80)
-        if "note" in row:
-            _text(row["note"], "benchmark note", limit=200)
-    except PodError:
-        return None
-    if effort != "none" and row["profile"] not in (effort, effort + " with fallback"):
-        return None
-    score = row["intelligence"]
-    if score is not None and (type(score) is not int or not 0 <= score <= 100):
-        return None
-    for key in ("usd_per_task", "first_chunk_s", "total_response_s"):
-        value = row[key]
-        if value is not None and (type(value) not in (float, int) or not 0 <= value <= 100000):
-            return None
-    return row
+def _identity(row: dict, name: str) -> None:
+    if not isinstance(row["id"], str) or not _ID.fullmatch(row["id"]):
+        raise PodError("invalid_catalog", f"{name} id is not an exact native model id")
+    if row["agent"] not in AGENTS or row["provider"] != AGENTS[row["agent"]]:
+        raise PodError("invalid_catalog", f"{row['id']}: agent or provider is unsupported")
+    _text(row["name"], f"{row['id']} name", limit=80)
 
 
-def _rows(document: dict, model: dict) -> list[dict]:
-    block = document.get("benchmarks")
-    groups = block.get("models") if isinstance(block, dict) else None
-    rows = groups.get(model["id"]) if isinstance(groups, dict) else None
-    if not isinstance(rows, list) or not 1 <= len(rows) <= 16:
-        return []
-    checked = [_record(row, model) for row in rows]
-    if any(row is None for row in checked) or len({row["effort"] for row in checked}) != len(rows):
-        return []
-    return checked
+def _aliases(value: object, owner: str, allowed: tuple[str | None, ...]) -> dict:
+    if not isinstance(value, dict) or len(value) > 8:
+        raise PodError("invalid_catalog", f"{owner}: aliases map source ids to exact row names")
+    for source, rows in value.items():
+        if not _SOURCE.fullmatch(source) or not isinstance(rows, dict) or len(rows) > 64:
+            raise PodError("invalid_catalog", f"{owner}: alias source {source!r} is invalid")
+        for name, effort in rows.items():
+            _text(name, f"{owner} alias", limit=120)
+            if effort not in allowed:
+                raise PodError("invalid_catalog", f"{owner}: alias {name!r} names an unsupported effort")
+    return value
 
 
 def validate(data: object) -> dict:
-    root = _exact(data, {"schema", "models", "benchmarks"}, "catalog")
-    if root["schema"] != "pod-catalog/v2":
+    root = _exact(data, {"schema", "max_guide", "models", "not_routable"}, "catalog")
+    if root["schema"] != SCHEMA:
         raise PodError("invalid_catalog", "Unsupported catalog schema")
-    models = root["models"]
-    if not isinstance(models, list) or [m.get("id") if isinstance(m, dict) else None for m in models] != list(IDS):
-        raise PodError("invalid_catalog", "Catalog needs exactly the six supported ids in order")
-    orders = []
+    _text(root["max_guide"], "max guide", limit=160)
+    models, others = root["models"], root["not_routable"]
+    if not isinstance(models, list) or not 1 <= len(models) <= 32:
+        raise PodError("invalid_catalog", "Catalog needs a bounded list of supported models")
+    if not isinstance(others, list) or len(others) > 32:
+        raise PodError("invalid_catalog", "Not-routable ids must be a bounded list")
+    seen: set[str] = set()
+    aliases: set[tuple[str, str]] = set()
     for model in models:
-        _exact(model, {"id", "name", "agent", "provider", "efforts", "native_default",
-                       "documented_context_tokens", "guidance", "sources", "guide"}, "model")
-        model_id = model["id"]
-        agent = "claude" if model_id.startswith("claude-") else "codex"
-        provider = "Anthropic" if agent == "claude" else "OpenAI"
-        if model["agent"] != agent or model["provider"] != provider:
-            raise PodError("invalid_catalog", "Model agent or provider differs from id")
-        _text(model["name"], "model name", limit=80)
+        _exact(model, MODEL_FIELDS, "model")
+        _identity(model, "model")
+        model_id, provider = model["id"], model["provider"]
         efforts = model["efforts"]
-        allowed = set(EFFORTS) | ({"ultra"} if model_id in IDS[3:5] else set())
-        if (not isinstance(efforts, list) or any(not isinstance(effort, str) for effort in efforts)
-                or len(efforts) != len(set(efforts)) or set(efforts) != allowed
-                or efforts[:5] != list(EFFORTS) or model["native_default"] not in efforts):
-            raise PodError("invalid_catalog", "Model efforts differ from documented native values")
+        if (not isinstance(efforts, list) or not efforts or len(efforts) != len(set(efforts))
+                or any(effort not in EFFORTS for effort in efforts)
+                or efforts != [effort for effort in EFFORTS if effort in efforts]):
+            raise PodError("invalid_catalog", f"{model_id}: efforts must be verified native values in order")
         context = model["documented_context_tokens"]
-        if (agent == "claude" and context != 1_000_000) or (agent == "codex" and context is not None):
-            raise PodError("invalid_catalog", "Documented context differs from checked sources")
+        if context is not None and (type(context) is not int or not 1 <= context <= 10_000_000):
+            raise PodError("invalid_catalog", f"{model_id}: documented context must be null or a token count")
         guidance = _text(model["guidance"], "guidance")
         if not 20 <= len(guidance.split()) <= 70 or not guidance.startswith(provider):
             raise PodError("invalid_catalog", "Provider description needs 20–70 words attributed to the provider")
         sources = model["sources"]
-        if not isinstance(sources, list) or not sources:
+        if not isinstance(sources, list) or not 1 <= len(sources) <= 6:
             raise PodError("invalid_catalog", "Model needs an official source")
         for source in sources:
             _exact(source, {"url", "checked"}, "source")
             _url(source["url"], "source URL")
             _date(source["checked"], "checked date")
-            allowed_hosts = ("anthropic.com", "claude.com") if agent == "claude" else ("chatgpt.com",)
             host = urlparse(source["url"]).hostname
-            if not isinstance(host, str) or not any(host == domain or host.endswith("." + domain) for domain in allowed_hosts):
+            if not isinstance(host, str) or not any(host == domain or host.endswith("." + domain)
+                                                    for domain in PROVIDER_HOSTS[provider]):
                 raise PodError("invalid_catalog", "Source is not the model provider's documentation")
-        guide = _exact(model["guide"], {"profile", "suggested_use", "best_for", "use_when", "ladder",
-                                        "trade_off", "examples", "limitations", "coding_order"}, "guide")
-        if guide["profile"] not in efforts or guide["profile"] == "ultra":
-            raise PodError("invalid_catalog", "Guide profile is not a selectable effort")
-        for key, limit in GUIDE_LIMITS.items():
-            _text(guide[key], key, limit=limit)
-        ladder = _exact(guide["ladder"], {"quick", "normal", "hard", "escalation"}, "ladder")
-        if any(value not in efforts or value == "ultra" for value in ladder.values()):
-            raise PodError("invalid_catalog", "Guide ladder has unsupported effort")
-        examples = guide["examples"]
-        if not isinstance(examples, list) or not 1 <= len(examples) <= 3:
-            raise PodError("invalid_catalog", "Guide needs one to three examples")
-        for example in examples:
-            _exact(example, {"effort", "text"}, "example")
-            if example["effort"] not in efforts or example["effort"] == "ultra":
-                raise PodError("invalid_catalog", "Example effort is unsupported")
-            if len(example["effort"]) + 2 + len(_text(example["text"], "example text", limit=DETAIL_LINE)) > DETAIL_LINE:
-                raise PodError("invalid_catalog", "Guide example must fit one Details line with its effort")
-        order = guide["coding_order"]
-        if type(order) is not int or not 1 <= order <= 6:
-            raise PodError("invalid_catalog", "Coding order must be 1–6")
-        orders.append(order)
-        # Optional benchmark data can be missing, but a present profile must resolve.
-        rows = _rows(root, model)
-    if sorted(orders) != list(range(1, 7)):
-        raise PodError("invalid_catalog", "Coding orders must be unique")
-    benchmark = root["benchmarks"]
-    if benchmark is not None:
-        if not isinstance(benchmark, dict) or set(benchmark) != {"source", "captured", "models"}:
-            raise PodError("invalid_catalog", "Benchmark block has unsupported fields")
-        _url(benchmark["source"], "benchmark source")
-        if benchmark["source"] != REFERENCE_URL:
-            raise PodError("invalid_catalog", "Benchmark source differs from AA")
-        _date(benchmark["captured"], "benchmark capture date")
-        groups = benchmark["models"]
-        if not isinstance(groups, dict) or set(groups) - set(IDS):
-            raise PodError("invalid_catalog", "Benchmark groups have unsupported ids")
+        guide = _exact(model["guide"], {"efforts", "use"}, "guide")
+        _text(guide["efforts"], "guide efforts", limit=80)
+        _text(guide["use"], "guide use", limit=120)
+        _aliases(model["aliases"], model_id, (*efforts, INFORMATIONAL_EFFORT, None))
+        if model_id in seen:
+            raise PodError("invalid_catalog", f"{model_id}: duplicate model id")
+        seen.add(model_id)
+    for row in others:
+        _exact(row, NOT_ROUTABLE_FIELDS, "not_routable")
+        _identity(row, "not_routable")
+        _text(row["note"], f"{row['id']} note", limit=160)
+        _aliases(row["aliases"], row["id"], (*EFFORTS, INFORMATIONAL_EFFORT, None))
+        if row["id"] in seen:
+            raise PodError("invalid_catalog", f"{row['id']}: duplicate model id")
+        seen.add(row["id"])
+    for row in (*models, *others):
+        for source, names in row["aliases"].items():
+            for name in names:
+                if (source, name) in aliases or name in seen:
+                    raise PodError("invalid_catalog", f"Alias {name!r} for {source} is ambiguous")
+                aliases.add((source, name))
     return root
 
 
@@ -190,7 +160,7 @@ def load(path: Path = CATALOG_PATH) -> dict:
         raw = path.read_bytes()
     except OSError as exc:
         raise PodError("invalid_catalog", "Catalog cannot be read") from exc
-    if len(raw) > 128 * 1024:
+    if len(raw) > MAX_CATALOG:
         raise PodError("invalid_catalog", "Catalog exceeds its size limit")
     try:
         document = json.loads(raw, object_pairs_hook=_unique_pairs)
@@ -199,48 +169,105 @@ def load(path: Path = CATALOG_PATH) -> dict:
     return validate(document)
 
 
-def by_id(document: dict | None = None) -> dict[str, dict]:
-    return {row["id"]: row for row in (load() if document is None else document)["models"]}
+_DEFAULT: tuple[tuple[int, int, int], dict, dict] | None = None
 
 
-def records(document: dict, model_id: str) -> list[dict]:
-    model = by_id(document)[model_id]
-    return _rows(document, model)
-
-
-def record(document: dict, model_id: str, effort: str) -> dict:
-    return next((row for row in records(document, model_id) if row["effort"] == effort),
-                {**UNKNOWN, "effort": effort, "profile": effort})
-
-
-def reference_entry(document: dict, model_id: str) -> dict:
-    model = by_id(document)[model_id]
-    rows = records(document, model_id)
-    selected = record(document, model_id, model["guide"]["profile"])
-    return {"reference_variant": selected["profile"], "variants": rows or [selected],
-            "complete": bool(rows and selected in rows)}
-
-
-def reference_rows(document: dict | None = None) -> dict[str, dict]:
-    doc = load() if document is None else document
-    return {model_id: record(doc, model_id, by_id(doc)[model_id]["guide"]["profile"]) for model_id in IDS}
-
-
-def ranks(document: dict | None = None) -> dict[str, int | None]:
-    scores = {model_id: row["intelligence"] for model_id, row in reference_rows(document).items()}
-    if any(score is None for score in scores.values()):
-        return {model_id: None for model_id in IDS}
-    return {model_id: 1 + sum(other > score for other in scores.values()) for model_id, score in scores.items()}
-
-
-def age(document: dict | None = None, *, today: date | None = None) -> int | None:
-    doc = load() if document is None else document
-    block = doc.get("benchmarks")
+def _default() -> tuple[dict, dict]:
+    """The shipped registry and its alias index, reread only when the file changes."""
+    global _DEFAULT
     try:
-        observed = _date(block.get("captured") if isinstance(block, dict) else None, "benchmark capture date")
+        info = CATALOG_PATH.stat()
+    except OSError as exc:
+        raise PodError("invalid_catalog", "Catalog cannot be read") from exc
+    stamp = (info.st_ino, info.st_size, info.st_mtime_ns)
+    if _DEFAULT is None or _DEFAULT[0] != stamp:
+        document = load()
+        _DEFAULT = (stamp, document, _index(document))
+    return _DEFAULT[1], _DEFAULT[2]
+
+
+def _doc(document: dict | None) -> dict:
+    return _default()[0] if document is None else document
+
+
+def by_id(document: dict | None = None) -> dict[str, dict]:
+    """Supported bases, in registry order."""
+    return {row["id"]: row for row in _doc(document)["models"]}
+
+
+def known(document: dict | None = None) -> dict[str, dict]:
+    """Supported and no-longer-supported ids, so older records stay readable."""
+    doc = _doc(document)
+    return {row["id"]: row for row in (*doc["models"], *doc["not_routable"])}
+
+
+def route_key(agent: str, model: str, effort: str) -> str:
+    return f"{agent}/{model}/{effort}"
+
+
+def parse_route_key(key: object) -> dict:
+    """Shape only: `agent/model/effort` with a known agent and effort vocabulary."""
+    parts = key.split("/") if isinstance(key, str) and len(key) <= 160 else []
+    if (len(parts) != 3 or parts[0] not in AGENTS or not _ID.fullmatch(parts[1])
+            or parts[2] not in EFFORTS):
+        raise PodError("invalid_route", "A route key is agent/model/effort with a supported effort")
+    return {"agent": parts[0], "model": parts[1], "effort": parts[2]}
+
+
+def routes(document: dict | None = None) -> list[dict]:
+    """Every shipped supported route, in registry and effort order."""
+    return [{"key": route_key(model["agent"], model["id"], effort), "agent": model["agent"],
+             "model": model["id"], "effort": effort, "name": model["name"],
+             "provider": model["provider"]}
+            for model in _doc(document)["models"] for effort in model["efforts"]]
+
+
+def route_keys(document: dict | None = None) -> tuple[str, ...]:
+    return tuple(row["key"] for row in routes(document))
+
+
+def supported_route(key: object, document: dict | None = None) -> dict | None:
+    """The registry route for an exact key, or None when it is not a supported route."""
+    try:
+        shape = parse_route_key(key)
     except PodError:
         return None
-    return ((today or date.today()) - observed).days
+    model = by_id(document).get(shape["model"])
+    if model is None or model["agent"] != shape["agent"] or shape["effort"] not in model["efforts"]:
+        return None
+    return {"key": key, **shape, "name": model["name"], "provider": model["provider"]}
+
+
+def _index(document: dict) -> dict:
+    supported = {row["id"] for row in document["models"]}
+    index = {}
+    for row in (*document["models"], *document["not_routable"]):
+        routable = row["id"] in supported
+        for source, names in row["aliases"].items():
+            for name, effort in names.items():
+                route = (route_key(row["agent"], row["id"], effort)
+                         if routable and effort not in (None, INFORMATIONAL_EFFORT) else None)
+                index[(source, name)] = {"route": route, "model": row["id"], "effort": effort,
+                                         "informational": route is None, "supported": routable}
+        index[(None, row["id"])] = {"route": None, "model": row["id"], "effort": None,
+                                    "informational": True, "supported": routable}
+    return index
+
+
+def match(source_id: str, row_name: str, document: dict | None = None) -> dict | None:
+    """Exact source-row mapping; no fuzzy matching, and unknown names stay unmapped.
+
+    A row maps through the source's explicit alias, or, for any source, when the row
+    name is exactly a registry id. The result is
+    `{"route", "model", "effort", "informational", "supported"}`: `route` is a supported
+    route key or None; `informational` is true for every non-route match, such as a
+    non-reasoning variant, a model-level provider row or a no-longer-supported id.
+    """
+    index = _default()[1] if document is None else _index(document)
+    if not isinstance(source_id, str) or not isinstance(row_name, str):
+        return None
+    found = index.get((source_id, row_name)) or index.get((None, row_name))
+    return dict(found) if found is not None else None
 
 
 def format_usd(value: int | float | None) -> str:
@@ -257,28 +284,6 @@ def format_latency(value: int | float | None) -> str:
     return f"{value:.0f} s" if value >= 100 else f"{value:.1f} s"
 
 
-def guide_projection(document: dict | None = None) -> list[dict]:
-    """Compact display guidance for the dispatch-free config JSON path."""
-    doc = load() if document is None else document
-    return [{key: model[key] for key in ("id", "name", "agent", "efforts", "guidance")}
-            | {"suggested_use": model["guide"]["suggested_use"], "ladder": model["guide"]["ladder"].copy()}
-            for model in doc["models"]]
-
-
-def benchmark_warnings(document: dict) -> list[str]:
-    block = document.get("benchmarks")
-    if not isinstance(block, dict):
-        return ["benchmark rows are missing"]
-    warnings = []
-    for model in document["models"]:
-        rows = records(document, model["id"])
-        if not rows:
-            warnings.append(f"{model['id']}: benchmark rows are missing or incomplete")
-        elif model["guide"]["profile"] not in {row["effort"] for row in rows}:
-            warnings.append(f"{model['id']}: guide profile benchmark row is missing")
-    return warnings
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.catalog")
     parser.add_argument("--check", action="store_true", required=True)
@@ -288,10 +293,10 @@ def main(argv: list[str] | None = None) -> int:
     except PodError as exc:
         print(f"Catalog validation failed: {exc}")
         return 1
-    warnings = benchmark_warnings(document)
-    print(f"Catalog valid: six models; AA captured {document['benchmarks']['captured'] if document['benchmarks'] else 'unknown'}")
-    for warning in warnings:
-        print("Benchmark warning: " + warning)
+    aliases = sum(len(names) for row in (*document["models"], *document["not_routable"])
+                  for names in row["aliases"].values())
+    print(f"Catalog valid: {len(document['models'])} supported models, {len(routes(document))} routes, "
+          f"{aliases} source aliases, {len(document['not_routable'])} not routable")
     return 0
 
 

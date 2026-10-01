@@ -10,13 +10,14 @@ import yaml
 
 from .errors import PodError
 
-BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "agents/openai.yaml", "scripts/pod.py",
+BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agents/openai.yaml", "scripts/pod.py",
                "references/execution-spec.md", "references/planning.md", "references/models.md",
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md")
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py", "cli.py", "config.py", "context.py",
                   "errors.py", "github.py", "gitio.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py",
-                  "obligations.py", "operations.py", "orca.py", "placement.py", "records.py", "selection.py",
+                  "obligations.py", "observations.py", "operations.py", "orca.py", "placement.py", "records.py",
+                  "routes.py", "selection.py", "sources.py",
                   "skill_validation.py", "status.py", "term.py", "tui.py", "tui_render.py",
                   "tui_state.py", "traces.py", "util.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))
