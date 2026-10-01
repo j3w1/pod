@@ -40,7 +40,7 @@ Type: H · Scenarios: [A18](#a18), [A19](#a19), [A130](#a130), [A143](#a143), [A
 
 ### R27 — Only the coordinator delegates unless direct
 
-Type: H · Scenarios: [A16](models.md#a16), [A19](#a19), [A20](orca.md#a20), [A21](#a21)
+Type: H · Scenarios: [A16](models/routing.md#a16), [A19](#a19), [A20](orca.md#a20), [A21](#a21)
 
 Only the coordinator delegates unless direct user intent explicitly permits a descendant. Every Pod-managed descendant needs its own objective reservation under the same ceiling. Native limits and hidden provider fan-out are not Pod observations.
 
@@ -153,7 +153,7 @@ Corrections use ordinary direct-work/delegation judgment and current eligible po
 - <a id="a02"></a>**A02** — Trivial mechanical work uses tools/current session with zero unnecessary workers or milestone ceremony.
 - <a id="a03"></a>**A03** — Plan-only permits appropriate investigation but no implementation worker or product edit.
 - <a id="a04"></a>**A04** — Plan-then-execute proceeds without redundant approval; real scope/authority changes stop dependent actions.
-- <a id="a05"></a>**A05** — A suitable eligible model is chosen with an assignment-specific reason; Preferred only breaks close suitability ties.
+- <a id="a05"></a>**A05** — A suitable eligible exact route is chosen with an assignment-specific reason; the Preferred route is used when suitable, and overriding it names a material task-specific tradeoff.
 - <a id="a06"></a>**A06** — An unsuitable or unavailable choice yields another eligible suitable proposal or a precise blocker without silently widening the pool.
 - <a id="a18"></a>**A18** — Five Orca-ready Tasks, each serving a distinct unsatisfied obligation, with a ceiling of two. Two admit. The third is refused `logical_capacity_full` and records a `capacity` wait naming both reservations. After exact assignment settlement (including a stopped failed Dispatch with a retained terminal), the capacity wait is invalid at the next checkpoint and the next obligation-bound Task admits. A ready Task serving only a proposal is refused `unbound_assignment`, even with a free reservation.
 - <a id="a19"></a>**A19** — `workers.max_active` accepts 0–8 and cannot be widened by an objective constraint.

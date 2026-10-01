@@ -2,11 +2,11 @@
 
 ## Requirements
 
-### R03 — Expose pod, pod status, pod doctor
+### R03 — Expose pod, pod models, pod status, pod doctor
 
-Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119)
+Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119), [A216](#a216)
 
-Expose `pod`, `pod status`, `pod doctor`, `pod update`, `pod config`/`config edit`, and `pod --version`. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
+Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status`, `pod doctor`, `pod update`, `pod config`/`config edit`, and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
 
 ### R04 — Maintain one canonical inline skill policy
 
@@ -16,9 +16,9 @@ Maintain one canonical inline skill policy with generated host metadata and rele
 
 ### R48 — Read-only status and doctor report preferences
 
-Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models.md#a49), [A71](#a71), [A133](#a133), [A175](#a175)
+Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175)
 
-Read-only status and doctor report preferences including the pin, resolved paths, current native work, constraints, decisions, mismatches, installed bundle identity drift, catalog/benchmark age, blockers and next actions. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
+Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
 
 ### R49 — The one-shot installer places both agent
 
@@ -98,29 +98,35 @@ Type: B,H · Scenarios: [A114](#a114), [A115](#a115), [A180](#a180)
 
 Keep SKILL at most 750 words, each conditional reference at most 700 words and all references together at most 2200 words. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle; repository docs provide the detailed contracts.
 
-### R73 — The TUI shows all six models
+### R73 — The model workspace is one table of exact routes
 
-Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140), [A178](models.md#a178), [A183](#a183)
+Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140), [A178](models/catalog.md#a178), [A183](#a183), [A217](#a217)
 
-The TUI shows all six models, effective states and a persistent focus-driven Details panel with attributed provider guidance, Pod guide examples and effort ladder, native/default details and dated AA reference records. State edits save immediately; `p` moves or clears one radio-style pin, distinct from focus and base state, with ASCII/monochrome equivalents and hidden-pin summary. Invalidating edits are refused atomically. `r` reversibly toggles All models and My selection without erasing saved choices. Suggested-use and guide-profile columns adapt to width; a split view starts at 140 columns and a POOL legend fills space beneath its table. AA is informational.
+`pod` and `pod models` open the model workspace on a TTY; otherwise they print the cached route table and exit nonzero unless preferences are valid. The workspace is one table of exact model+effort routes from the joined projection, with stable identity, a sticky heading, scrolling and a focus distinct from state, Preferred, Pin, compare and frontier marks, each with an ASCII equivalent. It sorts by AA index descending by default, with unknown values last in either direction and registry and effort order breaking ties, and also sorts by benchmark cost per task, output tokens per second, first and total response, model, effort and state in either direction. A collapsible model-grouped view lists each model's routes by effort for managing them. New and unsupported observations stay out of the default supported view, remain reachable through the discovery filter, and are never routable. Fixed wide (from 140 columns), normal (from 80) and narrow presets move secondary fields to the inspector, keep the sort metric visible, and work down to 40×12; Help documents units and that ranks are per source, never global.
 
-### R74 — The TUI works on ordinary Linux
+### R74 — The workspace works on ordinary Linux terminals
 
-Type: B,H · Scenarios: [A139](#a139), [A140](#a140), [A178](models.md#a178)
+Type: B,H · Scenarios: [A139](#a139), [A140](#a140), [A178](models/catalog.md#a178), [A219](#a219)
 
-The TUI works on ordinary Linux terminals and over SSH: arrow focus, Space state cycle, search, recommended/model/intelligence/benchmark-cost/first-response sorts, provider filter, help, expansion, quit, resize, monochrome, ASCII and non-TTY summary. All six rows remain visible at supported sizes; stacked views use a label column to fit every Details section at 80×24, while 40×12 pages Details. `LANG=C` with coerced C.UTF-8 renders ASCII. Focus is a model id across sort/filter/reload; no-results and tiny terminals stay usable. Reading and navigation do not write.
+The workspace works on ordinary Linux terminals and over SSH and is complete from the keyboard. A searchable command palette (`:` or Ctrl+P) exposes refresh, state, Preferred and Pin, bulk and reset, the refresh setting, route setup, sorting, grouping, filters, compare, frontier, inspector tabs and help, while common shortcuts remain. Provider, model, effort, state and discovery filters compose with search over display and native identity; focus and hidden Preferred/Pin summaries survive filtering, sorting, refresh and reload. It supports resize, monochrome and `NO_COLOR`, ASCII under C/POSIX locales or limited `TERM` values, a too-small notice below 40×12, and Ctrl+C, SIGTERM and SIGHUP. Mouse input is not required. Reading, navigation, sorting, filtering and comparison never write, start workers or call models.
 
-### R75 — Each focused model's Details panel is
+### R75 — A full-width bottom inspector explains the focused route
 
-Type: B,H · Scenarios: [A122](models.md#a122), [A139](#a139), [A178](models.md#a178)
+Type: B,H · Scenarios: [A122](models/catalog.md#a122), [A139](#a139), [A178](models/catalog.md#a178), [A218](#a218)
 
-Each focused model has an always-present Details guide with a 20–70 word attributed provider description, separate Pod examples and four-stage effort ladder, exact id, native/default capability and dated AA records. Guide fields fit one 80-column Details line: `suggested_use` ≤24 characters; `best_for`, `use_when` and `trade_off` ≤62; `limitations` ≤55; each effort example ≤62. Runtime labels distinguish “Orca worker launch: supported / not advertised / Orca offline / unknown” from “Model access: not verified by Pod”. Expanded detail shows all variant records and caveats. Rank scope is six supported base models; AA records stay paired and informational, with source and age visible. First response is not task duration.
+A full-width bottom inspector dock, never a right-side panel, has Details, Benchmarks, Routing and Sources tabs, plus Compare while routes are marked, with focus and scrolling independent of the table; short terminals keep a compact dock that pages to every line. Details shows the exact route, native identity, state and selection, documented context and that native access is unknown. Benchmarks shows the AA profile with its fallback and estimated-index caveats, methodology, retrieval time, every metric with units, the scoped frontier status and changes since the previous snapshot. Routing renders authored guidance, not a prediction for an unspecified task. Sources shows each source's URL, attribution, latest attempt, data age, methodology and diagnostics, the route's alias mapping and native evidence limits. The disclaimer stays visible: “AA benchmark cost is not the user's subscription charge, quota consumption or Pod invoice; first/total benchmark response is not worker task duration.”
 
-### R76 — Preference edits save immediately with lock
+### R76 — Preference edits save immediately through the safe writer
 
-Type: B,H · Scenarios: [A128](models.md#a128), [A140](#a140), [A183](#a183)
+Type: B,H · Scenarios: [A128](models/preferences.md#a128), [A140](#a140), [A183](#a183), [A219](#a219), [A221](#a221)
 
-Preference edits save immediately with lock, targeted compare-and-swap, validation, atomic replacement and honest success/failure feedback. Open TUIs reload external changes promptly without blocking keys on runtime reads; a conflict never overwrites another editor's targeted value.
+Explicit edits save immediately through the one safe preference writer with honest feedback. Space toggles a route's state; `p` and `P` move or clear the Pin and the Preferred route. Bulk actions (all efforts of a model, shown routes in an effort range, shown routes that are not set, or reset to shipped defaults) preview the exact routes changed and save once; reset enables exactly the listed shipped routes and keeps Pin, Preferred, worker limit and refresh setting, and no bulk action covers routes added later. A bulk change that would disable the Pin or Preferred route needs an explicit clear in the same save. Refusals, conflicts and failures report “Not saved” and leave the file unchanged. Open workspaces notice external edits and refreshed data promptly without blocking keys. Invalid preferences make the workspace read-only; a kept `pod/v1` file opens the route setup screen, which saves nothing until the user confirms. An automatic or manual data refresh writes the observation cache only, never preferences.
+
+### R104 — Comparisons and changed data stay non-authorizing
+
+Type: B · Scenarios: [A220](#a220)
+
+Compare holds up to four exact routes using existing data only, with no calls or benchmarks. Index differences are absolute points; other metrics show percentage deltas only between values from the same source and methodology with a nonzero baseline, and there is no “twice as intelligent” claim. An optional frontier marks shown comparable routes that no other shown route matches or beats on index, benchmark cost per task and first response; missing or non-comparable dimensions are unknown, and the label states its scope and dimensions and that it is not a recommendation or eligibility rule. Changed data compares supported routes with the one previous snapshot, mainly in the inspector; a methodology change is shown as not comparable, never as model improvement. There is no long-term history.
 
 ### R79 — The one-shot installer and explicit update
 
@@ -165,7 +171,7 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a113"></a>**A113** — README covers the one-shot installer, normal session journey, TUI, limits, update and removal with linked detailed guidance.
 - <a id="a114"></a>**A114** — SKILL remains at most 750 words, each conditional reference at most 700 and their combined total at most 2200; Execution Spec loads only for issue/spec work.
 - <a id="a115"></a>**A115** — Human status names selected objective/source, worktree, relevant native work, blocker, next action, assignments, retained terminals and remaining gates; JSON retains detailed derived evidence without side effects.
-- <a id="a117"></a>**A117** — Focus updates the always-visible Details panel; model edits save immediately and the All models toggle restores saved states.
+- <a id="a117"></a>**A117** — Focus updates the inspector without a model call; Space, `p` and `P` save exact-route edits immediately; a kept `pod/v1` file opens route setup instead of allowing edits, and saves only after confirmation.
 - <a id="a118"></a>**A118** — The root `VERSION` holds one MAJOR.MINOR.PATCH line and is the only authored version; the bundle's `VERSION` links to it, an installed copy carries it as a file, `doctor` reports it, and no other file declares a version.
 - <a id="a119"></a>**A119** — Public commands and JSON/private output match the small launcher contract, with no accidental installer or artwork output in machine reads.
 - <a id="a133"></a>**A133** — Status and doctor show preference path/revision, constraints, native evidence, drift, mismatch and next action read-only.
@@ -173,14 +179,14 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a135"></a>**A135** — Unit, PTY/subprocess, installed-bundle, hosted, live and review evidence are recorded separately.
 - <a id="a136"></a>**A136** — Root VERSION is the only authored version and installed skills and launcher report it consistently.
 - <a id="a137"></a>**A137** — A truncated download or interrupted dependency/skill copy yields no false success, and rerun repairs an incomplete installation.
-- <a id="a139"></a>**A139** — The six model rows and guide-profile labels remain readable from wide to 40×12 terminals; Details is always present, uses labelled sections at 80×24, pages at 40×12 and other short heights without skipping a line, keeps essential roles legible in 16-colour light and dark palettes, and exposes dated AA records and source caveats. Strict frames sweep widths 40–200 and height 6 without line overflow; `LANG=C` uses ASCII.
-- <a id="a140"></a>**A140** — State edits save immediately, All models toggles back to saved choices across restarts/external edits, and browsing, sorting, filtering and paging never write.
+- <a id="a139"></a>**A139** — The route table and a full-width bottom dock with its four tabs remain readable at 160×45, 100×30, 80×24, 60×20 and 40×12, never as a right-hand panel; short heights page to every inspector line, essential roles stay legible in 16-colour light and dark palettes, strict frames sweep widths 40–200 without overflow, and `LANG=C` uses ASCII.
+- <a id="a140"></a>**A140** — Edits save immediately and survive restart and external edits, while browsing, sorting, filtering, grouping, paging and comparing never write.
 - <a id="a142"></a>**A142** — A new install and explicit update leave ordinary agent sessions and running workers unchanged; coordinators reload before new starts.
 - <a id="a175"></a>**A175** — Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments with Orca's own attention for each active one (`unknown` when Orca gives none), gates, progress and next action without writes or invented telemetry.
 - <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
 
 
-- <a id="a183"></a>**A183** — Real PTY pin/move/unpin uses one radio marker, distinct focus and preserved base states. Restart, sorting, filtering, resize, all/custom, narrow/wide and ASCII/monochrome retain identity and expose a hidden pin, including persistent refusal/save-error notices at 80×24 and 40×12. Full failure feedback remains reachable through Details paging. Invalidating edits, stale concurrent pin edits and persistence failures change no settings; no action starts workers.
+- <a id="a183"></a>**A183** — In a real terminal, Pin and Preferred moves and clears use marks distinct from focus and route state, survive restart, sorting, filtering, resize, grouped and narrow views and ASCII/monochrome output, and stay visible as hidden summaries; invalidating edits, stale concurrent edits and persistence failures change no settings, and no action starts workers.
 - <a id="a192"></a>**A192** — With a changed runtime and N open admissions, status reports 0 active and N under `assignments.unverified`, its render counts the N as unverified, and no progress line or next action waits for their delivery.
 - <a id="a193"></a>**A193** — The same status names the failed read's code, the objective's bound and current runtime (unknown when unread) and Orca's attention for each unverified row, labelled as Orca's.
 - <a id="a194"></a>**A194** — A verified read serializes and renders exactly as 0.6.6 for the same fixture, apart from absent new fields, including an objective whose checkpoint recorded its consumer generation and has no rebind history; with a changed runtime the kernel's outstanding set is unchanged and status writes nothing. A sanitized R15-shaped incident (5 finished Dispatches, 4 consumed reports) shows 0 active and 5 unverified.
@@ -189,6 +195,12 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a202"></a>**A202** — Issue intake, including `internal issue-intake`, returns no binding and refuses `issue_is_evidence_ledger` for an `EEL:` title, or for the exact format line as the first non-empty unindented body line with or without `<br>` and with LF or CRLF endings; the refusal says the issue is evidence only and implementation needs a separate Pod Execution Spec citing it.
 - <a id="a203"></a>**A203** — A bound Pod Execution Spec issue that later gains either marker, including only a title change, is refused at the next recheck; continuation, affected admission, final verification and `internal issue-recheck` surface the EEL refusal, not `issue_reconciliation_required`.
 - <a id="a204"></a>**A204** — A Pod Execution Spec citing an EEL is accepted unchanged; an indented or later marker line, inside a code block or not, a lowercase or non-prefix title and an amendment do not mark an issue; direct objectives and EEL source references are unaffected; the convention appears once, in the Execution Spec reference.
+- <a id="a216"></a>**A216** — `pod models [--json]`, `pod models refresh [--check] [--json]` and `pod models status [--json]` print the projection, delegate to the refresh and offline status, exit nonzero for a refresh that promotes or checks nothing, report a busy cache or missing observation module as a blocked envelope, and keep `pod update` software-only.
+- <a id="a217"></a>**A217** — The table lists exact routes from the shared projection sorted by AA index descending with unknowns last and stable ties; every metric, model, effort and state sort works in both directions with the sort metric visible; the grouped view collapses and keeps routes reachable; filters compose with search; new and unsupported observations are reachable but not routable; focus and hidden selections survive filtering, sorting and refresh.
+- <a id="a218"></a>**A218** — Inspector tabs show the disclaimer, profiles and qualifiers, units, each source's latest attempt with its earlier rows, authored routing guidance and native limits; the status line reports enabled count, Pin, Preferred, data age, refresh state, native status, last save and the config path; table and inspector scroll independently.
+- <a id="a219"></a>**A219** — The palette runs the same commands as the shortcuts; bulk scopes preview exact routes and save once; reset enables only the listed shipped routes and keeps Pin and Preferred; a bulk change that disables the pinned route requires an explicit clear; read-only and setup-required files refuse edits.
+- <a id="a220"></a>**A220** — Compare holds at most four routes with bounded point and percentage deltas, unknown or not-comparable values and no zero-baseline percentage; the frontier marks only shown comparable rows and says it is not a recommendation; changed data and methodology changes are reported against the one previous snapshot.
+- <a id="a221"></a>**A221** — Opening the workspace renders cached data and runs one automatic refresh only when due, writing the cache only; manual-only makes no network call until an explicit refresh; data at least seven days old is stale; a reopen after a failure is restrained; quitting cancels without promotion while keys stay responsive; refresh keeps focus, view and compare marks.
 
 ## Public interfaces
 
@@ -196,11 +208,14 @@ These elaborate the requirements above; there is one command implementation in t
 
 | Command | Contract |
 | --- | --- |
-| `pod` | Opens the model TUI on a TTY; otherwise prints a concise plain summary. |
-| `pod config [--json]` | Read personal path, byte revision, mode, pin, saved/effective states, eligible ids, worker ceiling and compact catalog guidance. |
+| `pod` | Opens the model workspace on a TTY; otherwise prints the cached route table, exiting nonzero unless preferences are valid. |
+| `pod models [--json]` | The same workspace on a TTY; otherwise the cached route table, or the joined `pod-routes/v1` projection with `--json`. |
+| `pod models refresh [--check] [--json]` | Fetches, validates and atomically promotes public model observations; `--check` saves no observations. Exit 0 only for `promoted` or `checked`. Never writes preferences or starts workers. |
+| `pod models status [--json]` | Offline source, cache, mapping and automatic-refresh diagnostics. |
+| `pod config [--json]` | Read the personal path, byte revision, preference status and any setup action, eligible routes, every supported route's state, Preferred and Pin, worker ceiling, refresh setting, bounded diagnostics and the registry's guide profiles. Reads no observations. |
 | `pod config edit` | Opens the personal YAML in `$VISUAL` or `$EDITOR`, validates afterward, retains invalid edits and reports them. |
 | `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments (active, settled, or unverified when the exact native read fails), runtime rebinds, gates, progress, blockers and next action. Shared Runs require explicit selection. |
-| `pod doctor [--json]` | Read-only installation, catalog, preference, runtime capability and version diagnostics. |
+| `pod doctor [--json]` | Read-only installation, registry, preference, route summary, observation cache, runtime capability and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
 | `pod --version` | Reports the installed root `VERSION` before dependency checks. |
 | `pod internal <op> --input FILE` or `--input -` | Hidden structured operation for the skill; bounded JSON from a regular file or stdin, with no public command tree. A refusal is a blocked envelope with its code, message and detail; an input-shape refusal names the operation, record and fields, never values. An unexpected failure is the blocked code `internal_error`, with the traceback only on stderr. |

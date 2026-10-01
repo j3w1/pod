@@ -16,7 +16,7 @@ Workers report scope changes, checks/results, failures, evidence, uncertainty an
 
 ### R40 — Run cheap discriminating checks early, focused
 
-Type: B · Scenarios: [A28](models.md#a28), [A66](#a66), [A155](#a155), [A185](#a185)
+Type: B · Scenarios: [A28](models/routing.md#a28), [A66](#a66), [A155](#a155), [A185](#a185)
 
 Run cheap discriminating checks early, focused checks during development and required complete gates at milestones. At normal intake, bind a trusted final independent audit as a source-cited `project_policy` assurance obligation, not a model constraint or optional coordinator assurance. Preserve it through checkpoints, admission, reports and applicable delivery. Unavailable review stays incomplete; only scoped direct-user waiver or genuinely gone newly trusted policy withdraws it. A waiver is distinct from passing review. Otherwise independently review substantial or high-risk changes. Request review through assurance obligations (R87). Review receives the exact candidate and reproducible evidence without being primed to approve.
 
@@ -28,7 +28,7 @@ Bind verification to commit/tree where applicable, relevant dirty/source identit
 
 ### R42 — Keep implemented, locally verified, independently reviewed
 
-Type: H · Scenarios: [A27](#a27), [A28](models.md#a28), [A68](#a68), [A157](#a157)
+Type: H · Scenarios: [A27](#a27), [A28](models/routing.md#a28), [A68](#a68), [A157](#a157)
 
 Keep implemented, locally verified, independently reviewed, hosted proof complete, accepted, merged and deployed/released distinct. `independently reviewed` follows R88. The coordinator assesses the objective under project acceptance authority; worker success and synthetic fixtures cannot promote later labels.
 

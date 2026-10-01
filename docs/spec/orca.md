@@ -16,19 +16,19 @@ Resolve the applicable Orca runtime through installed discovery and guide. Valid
 
 ### R24 — Before a new start validate current
 
-Type: H · Scenarios: [A08](#a08), [A20](#a20), [A57](#a57), [A124](models.md#a124), [A129](#a129)
+Type: H · Scenarios: [A08](#a08), [A20](#a20), [A57](#a57), [A124](models/preferences.md#a124), [A129](#a129)
 
 Before a new start validate current authority, placement, logical ceiling, packet/source bindings, version and selected route. Record requested and observed effective model/effort/context separately; absent and null launch fields stay unknown, except verified same-terminal reuse binds the prior settled attempt's known effective route as inherited evidence with provenance. Known relevant disagreements are mismatches. Objective-bound acceptance holds recorded route mismatches and unknown effective routes; caller claims cannot supply route proof. Pending replay retains its admitted request and does not become a new preference decision.
 
 ### R25 — Treat accepted input, started reasoning, native
 
-Type: B · Scenarios: [A22](models.md#a22), [A58](#a58), [A95](#a95)
+Type: B · Scenarios: [A22](models/preferences.md#a22), [A58](#a58), [A95](#a95)
 
 Treat accepted input, started reasoning, native settlement and accepted output as different native observations. Silence/lost responses do not prove failure, justify resending input or authorize replacement work. Recover the same immutable admission through Orca request-show: record a completed receipt, join a pending request with Orca's UUID, or inspect exact Run/Task/Dispatch identity after an absent result or when no UUID was recorded. Missing, ambiguous or contradictory evidence holds and never starts fresh; a later incomplete observation cannot erase a known request-identity conflict. Preserve native start responses before classification in immutable admission-bound private evidence, including unknown refusal codes, observed request references, malformed output and transport outcomes. Recording returned facts uses the existing owned reservation even if native contact is lost; it cannot change admission state, routes or effect authority. Classification and subsequent effects still require current native authority. Evidence reads verify integrity; unavailable earlier values are never backfilled.
 
 ### R28 — Serialize admission under the objective lock
 
-Type: H · Scenarios: [A18](coordination.md#a18), [A21](coordination.md#a21), [A22](models.md#a22), [A59](#a59), [A96](#a96)
+Type: H · Scenarios: [A18](coordination.md#a18), [A21](coordination.md#a21), [A22](models/preferences.md#a22), [A59](#a59), [A96](#a96)
 
 Serialize admission under the objective lock, recording one logical reservation before each worker start. Reserved and unresolved attempts remain outstanding; an exact Run/Task/Dispatch readback with settled outcome and terminal Dispatch status frees a bound slot, including a failed stopped attempt. Do not census other objectives or reconstruct physical occupancy. Documented effect-free Orca refusals defer; uncertain errors require exact request and worker readback.
 
@@ -48,11 +48,11 @@ Use Orca-native messaging/events and blocking waits directly. Pod freezes packet
 
 Type: B · Scenarios: [A26](#a26), [A95](#a95), [A131](#a131)
 
-Orca owns worker reuse and request recovery. A new assignment or changed route requires a fresh selection. Verified same-terminal and worktree reuse binds the prior settled attempt’s known effective route with provenance and rechecks model eligibility; known Orca disagreement is a mismatch. No model or effort flag accompanies `--terminal`. Pending replay joins only its original request UUID.
+Orca owns worker reuse and request recovery. A new assignment or changed route requires a fresh selection. Verified same-terminal and worktree reuse binds the prior settled attempt’s known effective route with provenance and rechecks route eligibility and the exact pin; known Orca disagreement is a mismatch. No model or effort flag accompanies `--terminal`. Pending replay joins only its original request UUID.
 
 ### R38 — Worker reuse, retention, release and terminal/resource
 
-Type: B,H · Scenarios: [A22](models.md#a22), [A26](#a26), [A96](#a96)
+Type: B,H · Scenarios: [A22](models/preferences.md#a22), [A26](#a26), [A96](#a96)
 
 Worker reuse, retention, release and terminal/resource disposition are explicit Orca operations outside Pod's mutation adapter. Pod records no cleanup state and never infers or initiates release. Exact assignment settlement, not terminal release, frees the objective's logical slot. Never kill work or delete uncommitted work/evidence.
 
@@ -64,7 +64,7 @@ Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`
 
 ### R45 — Recovery selects the objective and reads
 
-Type: B · Scenarios: [A22](models.md#a22), [A31](coordination.md#a31), [A60](#a60), [A69](#a69), [A95](#a95)
+Type: B · Scenarios: [A22](models/preferences.md#a22), [A31](coordination.md#a31), [A60](#a60), [A69](#a69), [A95](#a95)
 
 Recovery selects the objective and reads native state before action. Native request-show governs completed/pending/absent request recovery; exact Run/Task/Dispatch readback may bind only one matching attempt. Missing, ambiguous or unresolved own evidence keeps its logical reservation outstanding and never justifies relaunch. There is no Pod retry, release or lifecycle loop and no daemon.
 
@@ -94,9 +94,9 @@ Discover Orca progressively from its installed guide and operation-specific capa
 
 ### R80 — Stamp the running {version, bundle_digest} in
 
-Type: H · Scenarios: [A124](models.md#a124), [A132](#a132), [A142](interface.md#a142)
+Type: H · Scenarios: [A124](models/preferences.md#a124), [A132](#a132), [A142](interface.md#a142)
 
-Stamp the running `{version, bundle_digest}` in each checkpoint and refuse a new admission or Governor mutation if either differs, including a checkpoint missing the digest. Reload the skill and write a fresh checkpoint; existing native request recovery remains available. Record preference and Governor policy revisions separately so a model edit does not supersede candidate proof.
+Stamp the running `{version, bundle_digest}` in each checkpoint and refuse a new admission or Governor mutation if either differs, including a checkpoint missing the digest. Reload the skill and write a fresh checkpoint; existing native request recovery remains available. Record preference and Governor policy revisions separately so a route edit does not supersede candidate proof.
 
 ### R90 — 0.6.0 is a hard objective-state cutover
 
@@ -133,7 +133,7 @@ When an objective's recorded runtime differs from the current one, each mutating
 - <a id="a109"></a>**A109** — Final cleanup reads this objective only, protects uncertain and foreign resources, and removes a worktree only after scoped consent, integration or verified archive, and a fresh guarded plan.
 - <a id="a110"></a>**A110** — Installed Orca guidance is loaded progressively and missing delegation controls do not block safe direct work or diagnostics; no wrapper/shared-setting workaround appears.
 - <a id="a126"></a>**A126** — Missing runtime metadata stays unknown without account probes or inferred native capability.
-- <a id="a129"></a>**A129** — Supported effort is used or omitted as native default; context is omitted without native control and effective metadata remains honest. Null, absent and irrelevant extra launch fields do not create a mismatch, while known contradictions do. Objective-bound acceptance holds a recorded route mismatch or unknown effective route despite passing caller checks and owner authorization; a known matching route can pass.
+- <a id="a129"></a>**A129** — A new start sends its exact supported effort, while recovery of an older `native_default` admission omits the effort flag; context is omitted without native control and effective metadata remains honest. Null, absent and irrelevant extra launch fields do not create a mismatch, while known contradictions do. Objective-bound acceptance holds a recorded route mismatch or unknown effective route despite passing caller checks and owner authorization; a known matching route can pass.
 - <a id="a131"></a>**A131** — A settled same-Task terminal reuse rechecks eligibility and sends no model or effort flag. When native terminal and worktree identity match the prior bound or closed attempt, its known effective route binds as inherited evidence with admission, dispatch, terminal and field provenance; a known Orca disagreement is a mismatch.
 - <a id="a132"></a>**A132** — Versioned records refuse other schemas without conversion; version drift blocks new mutation but leaves recovery available.
 - <a id="a138"></a>**A138** — No context control blocks no valid start; missing launch-preferences capability blocks only delegation.
@@ -152,7 +152,7 @@ When an objective's recorded runtime differs from the current one, each mutating
 | Objective source | Issue identity, locator, body digest and amendments, without copied body. |
 | Worktree binding | Exact Git common-dir, worktree path/branch and authorized placement. |
 | Constraints | Objective-local kind, provenance (`user_direct`, `issue`, `repository`, `worker`), target and active exception. Indirect sources only narrow. |
-| Route decision | Agent/model, requested effort/context, short reason, mode, preference and Governor revisions, constraint refs, Pod version, then observed effective values or `unknown`. |
+| Route decision | Agent/model, exact route key, requested effort/context, short reason, Preferred and Pinned routes, preference schema, preference and Governor revisions, constraint refs, Pod version, then observed effective values or `unknown`. Older rows also carry `mode`. |
 | Worker packet | Objective/criteria, scope, source references, candidate, route, preference revision, reporting contract and authorized actions. |
 | Admission | Intent, exact request and Run/Task/Dispatch/worker references, route decision, requested/effective values and recovery state. |
 | Failure | Attempt-local `rate_limited`, `unavailable`, `auth_failed` or `safety_refusal`, source, time, optional native retry-after, local reconsideration point and later clear provenance. |
@@ -181,14 +181,13 @@ An edit after row persistence is after this boundary and does not alter the
 attempt. Pending same-UUID replay checks authority, runtime, placement, issue
 body and checkpoint core but does not re-check preferences. Completed and absent
 request diagnosis remains read-only. A new assignment on a reused worker gets a
-new eligibility read; `--terminal` reuse carries no model or effort flag and
-copies the prior effective route.
+new eligibility read; `--terminal` reuse carries no model or effort flag, copies
+the prior effective route and must equal the requested and any pinned route exactly.
 
 A direct user constraint may narrow agents/models, exclude models, select a
-role model or lower maximum workers. Only direct user intent may allow a named
-Disabled model or descendant delegation, and the exception lapses when the
-model's saved state or selection mode changes. Constraints never edit global
-YAML. A temporary unavailable failure holds its route until meaningful native retry-after or the 60-second local reconsideration point in R19; expiry launches nothing. Actual auth/capacity/safety restrictions remain; a
+role model or lower maximum workers. Only direct user intent may allow one exact
+Disabled route or descendant delegation, and the route exception lapses when the
+personal file changes. Constraints never edit global YAML. A temporary unavailable failure holds its route until meaningful native retry-after or the 60-second local reconsideration point in R19; expiry launches nothing. Actual auth/capacity/safety restrictions remain; a
 replacement waits for settlement or proven no-start. Safety refusal bars a
 same-Task alternative. There is no scheduler or blind retry.
 
