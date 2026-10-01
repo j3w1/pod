@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 from pathlib import Path
 import re
@@ -179,7 +180,20 @@ def validate_skill(root: Path) -> dict:
     _check_interface(root)
     from .catalog import load as load_catalog
     load_catalog(root / "catalog.json")
+    _check_observations(root)
     return {"status": "valid", "name": "pod", "version": version(), "files": sorted(actual)}
+
+
+def _check_observations(root: Path) -> None:
+    """The bundled observation fallback is a valid, bounded snapshot."""
+    from .observations import validate as validate_observations
+    raw = (root / "observations.json").read_bytes()
+    if len(raw) > MAX_SKILL:
+        raise PodError("invalid_skill", "Bundled observations exceed the bundle text limit")
+    try:
+        validate_observations(json.loads(raw))
+    except ValueError as exc:
+        raise PodError("invalid_skill", "Bundled observations are not valid JSON") from exc
 
 
 def compare_bundle(actual: dict[str, bytes]) -> list[str]:
