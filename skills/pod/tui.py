@@ -318,7 +318,8 @@ def _styles(caps: Capabilities) -> dict[str, int]:
 
 
 def _draw(window, picture: Frame, styles: dict[str, int]) -> None:
-    window.erase()
+    # A full repaint: diff-based erasing can leave stale cells on terminals that skip erase sequences.
+    window.clear()
     limit = max(0, picture.columns - 1)
     for row, line in enumerate(picture.lines[:picture.rows]):
         focused = bool(line.styled and line.styled[0].role == "focus")

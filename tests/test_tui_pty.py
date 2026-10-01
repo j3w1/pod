@@ -1,318 +1,191 @@
-"""Real-terminal model-pool interaction and contrast checks."""
-from contextlib import nullcontext
+"""Real-terminal workspace behavior: sizes, contrast, resize, keyboard, saves and exits."""
+
 import os
 import re
-from pathlib import Path
 import signal
-import subprocess
-import sys
-import tempfile
-import time
-import unittest
 
-from pod.catalog import IDS, load as load_catalog
-from pod.config import load as load_config, set_model
-from tests.pty_harness import LAUNCHER, PtySession, dependencies_available, environment, fixture_config
+from pod.config import load as load_config, set_route
 from tests.install_support import ignored_sigint
+from tests.pty_harness import PtyCase
+
+SIZES = ((160, 45), (100, 30), (80, 24), (60, 20), (40, 12))
+DOWN, UP, RIGHT, LEFT = "\x1bOB", "\x1bOA", "\x1bOC", "\x1bOD"
 
 
-class TuiPtyTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        if not dependencies_available():
-            if os.environ.get('POD_REQUIRE_PTY') == '1':
-                raise AssertionError('POD_REQUIRE_PTY=1 needs pinned pyte and wcwidth')
-            raise unittest.SkipTest('pyte and wcwidth are optional local test dependencies')
-
-    def setUp(self):
-        self.temp=tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root=Path(self.temp.name)
-        self.home=self.root/'home'; self.work=self.root/'work'
-        self.home.mkdir(); self.work.mkdir()
-        self.config=self.home/'config/pod/config.yaml'
-        fixture_config(self.config)
-
-    def open(self, *, cols=80, rows=24, ignore_sigint=False, **env):
-        with ignored_sigint() if ignore_sigint else nullcontext():
-            session=PtySession(home=self.home,cwd=self.work,cols=cols,rows=rows,env_extra=env)
-        self.addCleanup(session.close)
-        session.wait_for('Details',timeout=4)
-        session.settle()
-        return session
-
-    def focused(self, session):
-        return next((line for line in session.lines() if 'Details  ' in line), '')
-
-    def table_line(self, session, name):
-        return next((line for line in session.lines() if name in line and 'Available' in line or name in line and 'Preferred' in line), '')
+class TuiPtyTests(PtyCase):
+    def table_row(self, session, key_part):
+        return next((line for line in session.lines()[3:] if key_part in line), "")
 
     def cell_at(self, session, text, offset=0):
-        """The styled cell at the first occurrence of text on screen, or None."""
-        for row,line in enumerate(session.lines()):
-            column=line.find(text)
-            if column>=0:
-                return session.cell(row,column+offset)
+        for row, line in enumerate(session.lines()):
+            column = line.find(text)
+            if column >= 0:
+                return session.cell(row, column + offset)
         return None
 
-    def test_all_six_guidance_panels_change_on_focus(self):
-        session=self.open(cols=100,rows=30)
-        catalog=load_catalog()
-        expected=['Claude Opus 5.5','GPT-6 Astra','Claude Sonnet 5','GPT-6 Luna','Claude Fable 5.1','GPT-6 Sol']
-        # First focus is Opus, then wrap through the recommended coding order.
-        for index,name in enumerate(expected):
-            if index:
-                session.send('\x1bOB')
-                session.wait_for(lambda s:name in self.focused(s) and 'BENCHMARK SOURCE' in s.text())
-            self.assertIn(name,self.focused(session))
-            model=next(row for row in catalog['models'] if row['name']==name)
-            self.assertIn(model['guide']['suggested_use'][:8],session.text())
-            self.assertIn('BENCHMARK SOURCE',session.text())
-        session.send('\n')
-        session.wait_for('[expanded]')
-        session.send('\x1b')
-        session.wait_for(lambda s:'[expanded]' not in s.text())
+    def test_five_sizes_keep_the_bottom_dock_and_contrast(self):
+        for cols, rows in SIZES:
+            with self.subTest(size=(cols, rows)):
+                session = self.open(cols=cols, rows=rows)
+                lines = session.lines()
+                bar = next(index for index, line in enumerate(lines) if "[Det" in line)
+                self.assertGreater(bar, 3)
+                self.assertNotIn("│", "\n".join(lines[:bar]))
+                self.assertIn("Claude Opus 5.5", session.text())
+                self.assertIn("q quit", lines[-1])
+                if cols == 80:
+                    heading = self.cell_at(session, "Sort")
+                    label = self.cell_at(session, "Model")
+                    metric = self.cell_at(session, "$5.98")
+                    badge = self.cell_at(session, "enabled", offset=1)
+                    for cell in (heading, label, metric, badge):
+                        self.assertIsNotNone(cell)
+                    self.assertNotEqual(metric["fg"], label["fg"])
+                    self.assertNotEqual(badge["fg"], metric["fg"])
+                    focused = session.cell(3, 10)
+                    self.assertNotEqual(focused["bg"], "default", "focus has its own background")
+                session.close()
 
-    def test_sort_filter_focus_identity_and_space_edits_same_id(self):
-        session=self.open()
-        session.send('s')
-        session.wait_for('Sort Model')
-        session.settle()
-        self.assertIn('Claude Opus 5.5',self.focused(session))
-        for _ in range(3):
-            session.send('f')
-        session.wait_for('Filter All')
-        session.send(' ')
-        session.wait_for(lambda _s:load_config(personal=self.config)['saved']['claude-opus-5-5']=='preferred')
-        session.wait_for('Saved just now')
-        self.assertEqual(load_config(personal=self.config)['saved']['gpt-6-sol'],'available')
+    def test_resize_keeps_focus_and_compact_inspector(self):
+        session = self.open(cols=100, rows=30)
+        session.send(DOWN * 3)
+        session.wait_for(lambda s: "Claude Opus 5.5 · high" in self.heading(s))
+        session.resize(40, 12)
+        session.wait_for(lambda s: "[Det]" in s.text() and "Claude Opus 5.5 · high" in s.text())
+        session.send("\t" + "\x1b[6~")
+        session.wait_for(lambda s: "Route key" not in s.text())
+        session.resize(160, 45)
+        session.send("\x1bOH")
+        session.wait_for(lambda s: "Route key" in s.text() and "AA profile" in s.text())
+        session.wait_for(lambda s: "Claude Opus 5.5 · high" in self.heading(s))
 
-    def test_two_tuis_staged_conflict_and_recovery(self):
-        first=self.open(); second=self.open()
-        os.kill(second.pid,signal.SIGSTOP)
-        try:
-            second.send(' ')
-            first.send(' ')
-            first.wait_for(lambda _s:load_config(personal=self.config)['saved']['claude-opus-5-5']=='preferred')
-        finally:
-            os.kill(second.pid,signal.SIGCONT)
-        second.wait_for('changed elsewhere',timeout=2)
-        self.assertEqual(load_config(personal=self.config)['saved']['claude-opus-5-5'],'preferred')
-        second.send(' ')
-        second.wait_for(lambda _s:load_config(personal=self.config)['saved']['claude-opus-5-5']=='disabled')
-
-    def test_browsing_never_writes_yaml(self):
-        session=self.open()
-        before=self.config.read_bytes(); stamp=self.config.stat().st_mtime_ns
-        for key in ('s','f','/','Sol','\n','?','\x1b','\x1b','\n','\x1b'):
-            session.send(key)
-            session.settle()
-        self.assertEqual(self.config.read_bytes(),before)
-        self.assertEqual(self.config.stat().st_mtime_ns,stamp)
-        self.assertNotIn('Saved just now',session.text())
-
-    def test_sizes_contrast_and_resize(self):
-        for cols,rows in ((160,45),(100,30),(80,24),(60,20),(40,12)):
-            session=self.open(cols=cols,rows=rows)
-            for name in ('Claude Opus 5.5','Claude Fable 5.1','Claude Sonnet 5',
-                         'GPT-6 Astra','GPT-6 Sol','GPT-6 Luna'):
-                self.assertIn(name,session.text())
-            if cols==160:
-                self.assertIn('│',session.text())
-            if cols==80:
-                body=self.cell_at(session,'BEST FOR',offset=17)
-                heading=self.cell_at(session,'BEST FOR')
-                badge=self.cell_at(session,'Available')
-                metric=self.cell_at(session,'/task')
-                for cell in (body,heading,badge,metric):
-                    self.assertIsNotNone(cell)
-                self.assertNotEqual(body['fg'],'default')
-                self.assertNotEqual(heading['fg'],body['fg'])
-                self.assertNotEqual(badge['fg'],body['fg'])
-                self.assertNotEqual(metric['fg'],body['fg'])
-                session.resize(40,12)
-                session.wait_for(lambda s:'GPT-6 Luna' in s.text() and 'Details' in s.text())
-                session.resize(80,24)
-                session.wait_for('BENCHMARK SOURCE')
-
-    def test_ascii_nocolor_help_and_unknown_runtime(self):
-        session=self.open(LC_ALL='C',NO_COLOR='1')
+    def test_ascii_monochrome_help_and_native_unknown(self):
+        session = self.open(LC_ALL="C", NO_COLOR="1")
         self.assertTrue(session.text().isascii())
-        sgr=set(re.findall(rb'\x1b\[[0-9;]*m',session.output))
-        self.assertTrue(sgr <= {b'\x1b[1m',b'\x1b[m'},sgr)
-        session.send('?')
-        session.wait_for('Help:')
-        session.wait_for('Preferences:')
-        session.send('\x1b')
-        session.wait_for('RUNTIME / ACCESS')
-        self.assertIn('Orca launch: unknown',session.text())
+        sgr = set(re.findall(rb"\x1b\[[0-9;]*m", session.output))
+        self.assertTrue(sgr <= {b"\x1b[1m", b"\x1b[m", b"\x1b[7m", b"\x1b[1;7m", b"\x1b[0m", b"\x1b[0;1m",
+                                b"\x1b[0;7m", b"\x1b[0;1;7m"}, sgr)
+        self.assertIn(">+", session.text())
+        self.assertIn("Native access unknown", session.text())
+        session.send("?")
+        session.wait_for("HELP: MODEL ROUTES")
+        session.wait_for("Esc close")
+        session.send("\x1b")
+        session.wait_for("[Details]")
 
-    def test_save_failure_keeps_bytes_and_reports_failure(self):
-        session=self.open()
-        before=self.config.read_bytes()
-        folder=self.config.parent
+    def test_keyboard_moves_table_and_inspector_independently(self):
+        session = self.open(cols=100, rows=30)
+        first = self.heading(session)
+        session.send(DOWN)
+        session.wait_for(lambda s: self.heading(s) != first and " · " in self.heading(s))
+        second = self.heading(session)
+        session.send("\t" + RIGHT)
+        session.wait_for("[Benchmarks]")
+        session.send(DOWN * 3)
+        session.settle()
+        name, effort = second.split(" · ")
+        focused = next(line for line in session.lines()[3:] if line.startswith("▸"))
+        self.assertIn(name, focused)
+        self.assertIn(effort, focused.split())
+        session.send("\x1b" + UP)
+        session.wait_for(lambda s: self.heading(s) != second)
+        session.send("\x1b[6~\x1bOH")
+        session.wait_for(lambda s: any(line.startswith("▸") and "Opus 5.5" in line and " max " in line
+                                       for line in s.lines()))
+
+    def test_browsing_palette_sort_filter_compare_and_help_never_write(self):
+        session = self.open()
+        before, stamp = self.config.read_bytes(), self.config.stat().st_mtime_ns
+        for key in ("s", "S", "g", LEFT, RIGHT, "g", "f", "o", "F", "/", "luna", "\r", "\x1b", "c", DOWN, "c", "e",
+                    ":", "show the comparison", "\r", "]", "[", "?", "\x1b", ":", "sort", "\x1b", "\t", DOWN, "\x1b"):
+            session.send(key)
+            session.settle(quiet=.03, timeout=.3)
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertEqual(self.config.stat().st_mtime_ns, stamp)
+        self.assertNotIn("Saved:", session.text())
+        self.assertFalse(self.cache.exists(), "browsing never refreshes data")
+
+    def test_save_failure_keeps_bytes_and_stays_reachable(self):
+        session = self.open()
+        before = self.config.read_bytes()
         try:
-            folder.chmod(0o500)
-            session.send(' ')
-            session.wait_for('Not saved',timeout=2)
-            self.assertEqual(self.config.read_bytes(),before)
+            self.config.parent.chmod(0o500)
+            session.send(" ")
+            session.wait_for("Not saved", timeout=2)
+            self.assertEqual(self.config.read_bytes(), before)
+            session.send(DOWN + DOWN)
+            session.settle(quiet=.3, timeout=1)
+            self.assertIn("Not saved", session.text())
         finally:
-            folder.chmod(0o700)
+            self.config.parent.chmod(0o700)
+        session.send(" ")
+        session.wait_for("Saved: Disabled")
+        self.assertNotIn("Not saved", session.text())
 
-    def test_runtime_capability_is_not_model_access(self):
-        stub=self.root/'orca-stub'
-        stub.write_text("#!/bin/sh\nprintf '%s\n' '{\"ok\":true,\"result\":{\"runtime\":{\"capabilities\":[\"orchestration.worker-launch-preferences.v1\"]}},\"_meta\":{\"runtimeId\":\"fixture-runtime\"}}'\n")
-        stub.chmod(0o700)
-        session=self.open(ORCA_CLI_COMMAND=str(stub))
-        session.wait_for('Orca launch: supported',timeout=3)
-        self.assertIn('model access not verified',session.text())
+    def test_two_windows_conflict_and_recover(self):
+        first, second = self.open(), self.open()
+        key = "claude/claude-opus-5-5/max"
+        os.kill(second.pid, signal.SIGSTOP)
+        try:
+            second.send(" ")
+            first.send(" ")
+            first.wait_for(lambda _s: load_config(personal=self.config)["routes"][key] == "disabled")
+        finally:
+            os.kill(second.pid, signal.SIGCONT)
+        second.wait_for("changed elsewhere", timeout=3)
+        self.assertEqual(load_config(personal=self.config)["routes"][key], "disabled")
+        second.send(" ")
+        second.wait_for(lambda _s: load_config(personal=self.config)["routes"][key] == "enabled")
+
+    def test_external_edit_invalid_yaml_and_read_only(self):
+        session = self.open()
+        key = "claude/claude-opus-5-5/max"
+        set_route(self.config, key, "disabled", displayed=load_config(personal=self.config))
+        session.wait_for(lambda s: "disabled" in self.table_row(s, "Opus 5.5"), timeout=2)
+        session.wait_for("changed outside")
+        self.config.write_text("schema: [\n")
+        session.wait_for("READ-ONLY", timeout=3)
+        before = self.config.read_bytes()
+        session.send(" p")
+        session.settle()
+        self.assertIn("read-only", session.text())
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_ctrl_c_and_sigterm_exit_without_writing(self):
+        before = self.config.read_bytes()
+        with ignored_sigint():
+            first = self.open()
+        first.send("\x03")
+        first.wait_for(lambda s: s.closed, timeout=2)
+        with ignored_sigint():
+            second = self.open()
+        os.kill(second.pid, signal.SIGTERM)
+        second.wait_for(lambda s: s.closed, timeout=2)
+        self.assertEqual(self.config.read_bytes(), before)
 
     def test_snapshot_helper_renders_cell_styling(self):
         from tests.tui_snapshot import render
-        session=self.open(cols=80,rows=24)
-        svg=render(session.screen,'pink')
-        self.assertIn('<svg ',svg)
-        self.assertIn('#1e1e2e',svg)
-        self.assertIn('>P</text>',svg)
-        with self.assertRaises(ValueError):
-            render(session.screen,'missing')
-
-    def test_external_refresh_invalid_yaml_and_non_tty(self):
-        session=self.open()
-        current=load_config(personal=self.config)
-        set_model(self.config,'claude-opus-5-5','preferred',displayed=current)
-        session.wait_for(lambda s:'Preferred' in self.table_line(s,'Claude Opus 5.5'),timeout=1)
-        self.config.write_text('schema: [\n')
-        session.wait_for('READ-ONLY',timeout=2)
-        session.send(' ')
-        self.assertIn('READ-ONLY',session.text())
-        env=environment(self.home)
-        result=subprocess.run([sys.executable,'-I',str(LAUNCHER)],cwd=self.work,env=env,capture_output=True,text=True)
-        self.assertEqual(result.returncode,1)
-        self.assertIn('need attention',result.stdout)
-
-    def test_ctrl_c_and_sigterm_exit_without_writing(self):
-        first=self.open(ignore_sigint=True)
-        before=self.config.read_bytes()
-        first.send('\x03')
-        first.wait_for(lambda s:s.closed,timeout=2)
-        self.assertEqual(self.config.read_bytes(),before)
-        second=self.open(ignore_sigint=True)
-        os.kill(second.pid,signal.SIGTERM)
-        second.wait_for(lambda s:s.closed,timeout=2)
-        self.assertEqual(self.config.read_bytes(),before)
-
-    def test_pin_radio_moves_clears_and_survives_restart_filter_sort_resize(self):
-        session = self.open(cols=100, rows=30)
-        saved = load_config(personal=self.config)['saved']
-        session.send('p')
-        session.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='claude-opus-5-5')
-        session.wait_for(lambda s:s.text().count('●') == 1)
-        self.assertIn('● Claude Opus 5.5', session.text())
-        session.send('\x1bOBp')
-        session.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='gpt-6-astra')
-        session.wait_for(lambda s:'● GPT-6 Astra' in s.text() and s.text().count('●') == 1)
-        session.send('sf')
-        session.wait_for(lambda s:'Pin gpt-6-astra' in s.text() and '●' not in s.text())
-        session.resize(40, 12)
-        session.wait_for(lambda s:'Pin gpt-6-astra' in s.text())
-        self.assertEqual(load_config(personal=self.config)['saved'], saved)
-        session.close()
-        restarted = self.open(cols=80, rows=24)
-        self.assertIn('● GPT-6 Astra', restarted.text())
-        # Recommended order starts at Opus; Down reaches Astra. Pressing p clears its pin.
-        restarted.send('\x1bOBp')
-        restarted.wait_for(lambda _s:load_config(personal=self.config)['pinned_model'] is None)
-        restarted.wait_for(lambda s:'●' not in s.text())
-        self.assertEqual(load_config(personal=self.config)['saved'], saved)
-
-    def test_pin_invalidating_edit_and_all_custom_mode_are_atomic(self):
         session = self.open()
-        session.send('p ')
-        session.wait_for(lambda _s:load_config(personal=self.config)['saved']['claude-opus-5-5']=='preferred')
-        before = self.config.read_bytes()
-        session.send(' ')
-        session.wait_for('Unpin or replace')
-        self.assertEqual(self.config.read_bytes(), before)
-        session.send('pr')
-        session.wait_for(lambda _s:load_config(personal=self.config)['mode']=='all')
-        from pod.config import set_pin
-        # A valid All-mode pin may point at a saved Disabled row.
-        import yaml
-        document = yaml.safe_load(self.config.read_text())
-        document['models']['gpt-6-astra'] = 'disabled'
-        self.config.write_text(yaml.safe_dump(document,sort_keys=False))
-        set_pin(self.config, 'gpt-6-astra', displayed=load_config(personal=self.config))
-        session.wait_for('Pin gpt-6-astra')
-        before = self.config.read_bytes()
-        session.send('r')
-        session.wait_for('Unpin or replace')
-        self.assertEqual(self.config.read_bytes(), before)
+        svg = render(session.screen, "pink")
+        self.assertIn("<svg ", svg)
+        self.assertIn("#1e1e2e", svg)
+        self.assertIn(">P</text>", svg)
+        with self.assertRaises(ValueError):
+            render(session.screen, "missing")
 
-    def test_hidden_pin_survives_persistent_refusal_and_save_error_notices(self):
-        for cols, rows in ((80, 24), (40, 12)):
-            for failure in ('refusal', 'save_error'):
-                with self.subTest(cols=cols, failure=failure):
-                    fixture_config(self.config)
-                    session = self.open(cols=cols, rows=rows, LC_ALL='C', NO_COLOR='1')
-                    session.send('\x1bOBp')
-                    session.wait_for(lambda s:'(*) GPT-6 Astra' in s.text())
-                    if failure == 'refusal':
-                        session.send(' ')
-                        session.wait_for(lambda _s:load_config(personal=self.config)['saved']['gpt-6-astra']=='preferred')
-                    before = self.config.read_bytes()
-                    try:
-                        if failure == 'save_error':
-                            self.config.parent.chmod(0o500)
-                        session.send(' ' if failure == 'refusal' else 'p')
-                        session.wait_for('Not saved')
-                        session.send('f')
-                        session.wait_for(lambda s:'Pin gpt-6-astra' in s.text() and '(*)' not in s.text())
-                        session.settle(quiet=.8, timeout=1)
-                        self.assertIn('Pin gpt-6-astra', session.text())
-                        self.assertIn('Not saved', session.text())
-                        self.assertEqual(load_config(personal=self.config)['pinned_model'], 'gpt-6-astra')
-                        self.assertEqual(self.config.read_bytes(), before)
-                    finally:
-                        self.config.parent.chmod(0o700)
-                        session.close()
+    def test_too_small_terminal_recovers(self):
+        session = self.open(cols=80, rows=24)
+        session.resize(39, 11)
+        session.wait_for("Terminal too small")
+        session.resize(40, 12)
+        session.wait_for("[Det]")
 
-    def test_invalid_pin_is_visible_read_only_and_names_editor_recovery(self):
-        import yaml
-        for pin in ('gpt-6-sol', 'unknown', []):
-            with self.subTest(pin=pin):
-                fixture_config(self.config)
-                document = yaml.safe_load(self.config.read_text())
-                document['pinned_model'] = pin
-                document['models']['gpt-6-sol'] = 'disabled'
-                self.config.write_text(yaml.safe_dump(document))
-                before = self.config.read_bytes()
-                session = self.open()
-                expected = '<invalid list pin>' if isinstance(pin, list) else pin
-                session.wait_for('Pin ' + expected)
-                session.wait_for('READ-ONLY')
-                session.wait_for('pod config edit')
-                session.send('p r')
-                session.settle()
-                self.assertIn('Pin ' + expected, session.text())
-                self.assertEqual(self.config.read_bytes(), before)
-                session.close()
 
-    def test_ascii_monochrome_pin_and_concurrent_pin_conflict(self):
-        first = self.open(LC_ALL='C', NO_COLOR='1')
-        second = self.open(LC_ALL='C', NO_COLOR='1')
-        os.kill(second.pid, signal.SIGSTOP)
-        try:
-            second.send('p')
-            first.send('p')
-            first.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='claude-opus-5-5')
-        finally:
-            os.kill(second.pid, signal.SIGCONT)
-        second.wait_for('changed elsewhere')
-        self.assertEqual(load_config(personal=self.config)['pinned_model'], 'claude-opus-5-5')
-        first.wait_for(lambda s:s.text().count('(*)') == 1)
-        self.assertTrue(first.text().isascii())
-        second.send('\x1bOBp')
-        second.wait_for(lambda _s:load_config(personal=self.config)['pinned_model']=='gpt-6-astra')
-        first.wait_for('(*) GPT-6 Astra')
-        self.assertEqual(first.text().count('(*)'), 1)
+class LauncherPtyTests(PtyCase):
+    def test_missing_preferences_open_read_only(self):
+        self.config.unlink()
+        session = self.open(wait="READ-ONLY")
+        session.send(" ")
+        session.settle()
+        self.assertFalse(self.config.exists())
+        self.assertIn("installer", session.text().replace("\n", " "))

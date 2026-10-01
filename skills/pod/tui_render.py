@@ -821,9 +821,14 @@ def _pack(segments: list[tuple[list[tuple[str, str]], bool]], width: int, caps: 
           separator: str) -> tuple[Line, list[int]]:
     """Fit segments in order; a segment that does not fit is dropped and reported."""
     parts, used, dropped = [], 0, []
-    for index, (segment, _required) in enumerate(segments):
+    for index, (segment, clipped) in enumerate(segments):
         safe = _safe(segment, caps)
         size = sum(display_width(text) for text, _ in safe) + (display_width(separator) if parts else 0)
+        room = width - used - (display_width(separator) if parts else 0)
+        if used + size > width and clipped and room >= 12:
+            # A notice or failure is cut to the room left rather than hidden.
+            safe = [(_fit("".join(text for text, _ in safe), room, caps), safe[0][1])]
+            size = width - used
         if used + size <= width:
             if parts:
                 parts.append((separator, "label"))
@@ -845,9 +850,9 @@ def _title(state: ts.State, width: int, caps: Capabilities) -> tuple[Line, list]
                  ((prefs.get("preferred") or "none") + (" (hidden)" if hidden["preferred"] else ""), "value")]
     if width < NORMAL - 1:
         count = (count[0].replace(" enabled", " on"), count[1])
-        segments = [([count], True), (pin, True), (preferred, True)]
+        segments = [([count], False), (pin, False), (preferred, False)]
     else:
-        segments = [([("Pod", "title")], True), (pin, True), (preferred, True), ([count], True)]
+        segments = [([("Pod", "title")], False), (pin, False), (preferred, False), ([count], False)]
     line, dropped = _pack(segments, width, caps, glyph(caps, "dot"))
     return line, [segments[index][0] for index in dropped]
 
@@ -859,7 +864,7 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
         segments.append(([(state.notice, "advisory")], True))
     if state.error:
         segments.append(([(state.error, "error")], True))
-    segments += [(segment, True) for segment in extra]
+    segments += [(segment, False) for segment in extra]
     refresh = {"running": ("Refreshing data...", "advisory"), "failed": ("Refresh failed: " + state.refresh_detail, "error"),
                "updated": ("Data updated", "advisory"), "unchanged": ("Refresh: " + state.refresh_detail, "advisory"),
                "cancelled": ("Refresh cancelled", "advisory")}.get(state.refresh_state)
@@ -869,12 +874,12 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
         age = "unknown age" if seen.get("age_s") is None else age_text(
             datetime.fromtimestamp(now.timestamp() - seen["age_s"], timezone.utc).isoformat(), now)
         segments.append(([(f"Data {seen.get('origin')} {age}" + (" STALE" if seen.get("stale") else ""),
-                           "error" if seen.get("stale") else "body")], True))
+                           "error" if seen.get("stale") else "body")], False))
     else:
-        segments.append(([("Data unknown", "advisory")], True))
-    segments.append(([("Native access unknown", "body")], True))
+        segments.append(([("Data unknown", "advisory")], False))
+    segments.append(([("Native access unknown", "body")], False))
     if state.saved_at:
-        segments.append(([("Saved " + state.saved_at.astimezone().strftime("%H:%M:%S"), "body")], True))
+        segments.append(([("Saved " + state.saved_at.astimezone().strftime("%H:%M:%S"), "body")], False))
     path = str(ts.preferences(state).get("path") or "")
     line, _dropped = _pack(segments, width, caps, glyph(caps, "dot"))
     room = width - display_width(line.text) - display_width(glyph(caps, "dot")) - len("Config ")
