@@ -10,7 +10,7 @@ On Linux, with Python 3.13+ (including `venv`), Node/npx, curl or wget, and acce
 curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh
 ```
 
-This installs the Pod skill for Codex and Claude Code, a user-local `pod` command, and a small isolated Python dependency environment. It creates six Available model preferences if no personal file exists. Open a new shell if the installer adds `~/.local/bin` to your PATH. For a download, inspect, then run path and removal details, see [installation and security](docs/installation.md).
+This installs the Pod skill for Codex and Claude Code, a user-local `pod` command, and a small isolated Python dependency environment. If you have no personal preference file, it enables every supported model+effort route; an existing file is never rewritten. Open a new shell if the installer adds `~/.local/bin` to your PATH. For a download, inspect, then run path and removal details, see [installation and security](docs/installation.md).
 
 ## Contents
 
@@ -52,11 +52,19 @@ A small task can finish with zero workers. Missing Orca delegation support block
 
 ## Models and the terminal view
 
-`pod` opens an optional model TUI in a terminal; without a TTY it prints a short summary. The TUI shows six supported base models, a focus-driven guide with suggested uses and effort examples, native capability information, and dated Artificial Analysis records. All six rows stay visible at supported sizes. Wide terminals split the pool and guide with a POOL legend; compact terminals stack labelled guide sections, and the narrowest view pages Details. Runtime launch capability and unverified model access are shown separately. Space cycles Available, Preferred, and Disabled; `p` moves or clears the radio pin while keeping those states. `r` switches My selection and All models while retaining saved choices. Search, sort, and provider filters affect display only.
+`pod`, or `pod models`, opens the model workspace in a terminal; without a TTY it prints the route table. Each row is one exact route, a model at one effort such as `codex/gpt-6.1-sol/high`. The supported models are Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 (`claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5-5`) and GPT-6 Astra, GPT-6.1 Sol and GPT-6 Luna (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`), each at `low`, `medium`, `high`, `xhigh` and `max`.
 
-The personal YAML at `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` is the single model preference authority. `pod config --json` shows the effective pool and path; `pod config edit` opens that file in your editor. A custom map can leave a model unset, which means not eligible. The six exact model ids are `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`.
+The table starts sorted by Artificial Analysis (AA) index, with unknown values last. `s` and `S` change the sort, `g` groups routes by model, `/` searches, `f` and `o` filter by provider and discovery, `:` or Ctrl+P opens the command palette, and `?` lists every key. A full-width inspector at the bottom has Details, Benchmarks, Routing and Sources tabs. `c` marks up to four routes to compare, and `e` marks the AA frontier of the shown rows; both are display only. AA benchmark cost is not your subscription charge, quota or Pod invoice, and benchmark response time is not worker task duration.
 
-The coordinator chooses a suitable eligible model and supported effort for each assignment. Preferred is only a modest tie-breaker. An optional `pinned_model` in the same YAML sends every new Pod-routed worker role to that eligible model, with adaptive effort and precedence over repository model rules. It leaves the running coordinator, direct work and outside helpers unchanged. Unpin restores ordinary routing; an unavailable pin waits without switching models. Orca has per-worker model and effort preferences but no scoped context flag, so Pod omits a context flag and records `native_default`. Catalog benchmarks are reference data, not a promise of native availability, billing, or the model Pod will choose.
+Space enables or disables the focused route, `P` makes it your Preferred route and `p` pins it; pressing again clears them. `b` previews a bulk change, such as all efforts of one model, and saves it once. Edits save immediately to your personal file; browsing, sorting, filtering and comparing never do.
+
+The personal YAML at `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` is the single route preference authority. `pod config --json` shows its path, status, enabled routes, Preferred and Pin; `pod config edit` opens it in your editor. A route the file does not list is not set, which means not eligible.
+
+The coordinator chooses a suitable enabled route and an exact effort for each assignment. It uses your Preferred route when that route suits the work; choosing another needs a material task-specific reason, which Pod records. A Pin sends every new Pod-routed worker role, including corrections, to that exact model and effort with precedence over repository model rules, or nothing is dispatched; it never falls back or changes effort. It leaves the running coordinator, direct work and outside helpers unchanged, and clearing it restores ordinary routing. Orca has per-worker model and effort preferences but no scoped context flag, so Pod omits a context flag and records `native_default`. Benchmarks are dated observations, not a promise of native availability, billing, or the route Pod will choose.
+
+With the default `refresh: automatic`, opening the workspace refreshes public model data in the background when it is missing or at least a day old. `pod models refresh` refreshes explicitly, `pod models refresh --check` validates and compares without saving, and `pod models status` diagnoses sources and the cache offline. Set `refresh: manual` to stop automatic network access. A refresh never changes your preferences.
+
+When you update from 0.6.x, Pod keeps your preference file unchanged and asks for a route setup before new delegation. Open `pod` in a terminal to review the proposed routes and notes, choose an exact effort for an earlier pin or clear it, and confirm; the original stays next to it as `config.yaml.pod-v1`. Sonnet 5.5 and GPT-6.1 Sol are not enabled from your earlier Sonnet 5 or GPT-6 Sol choices.
 
 Temporary readiness failures remain local observations with unknown cause. Pod honors native retry-after or a 60-second reconsideration point; a later coordinator decision can retry, while expiry itself starts nothing. Preferences and the pin stay unchanged.
 
@@ -68,15 +76,15 @@ After an authorized merge, Pod verifies the exact delivery record before closing
 
 ## Troubleshooting
 
-`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, catalog age, and available Orca capability without starting a worker. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. If Pod cannot verify native settlement, for example after an Orca runtime change, open assignments are shown as unverified rather than active, with the failed read and both runtimes. The next mutation rebinds an objective whose Run, coordinator and workers are unchanged, and asks for your decision when it cannot tell. When a Run has several objectives, status lists choices instead of picking one. A missing or invalid preference file leaves no eligible models; use `pod config edit` to correct it.
+`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, cached model observations, and available Orca capability without starting a worker or fetching anything. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. If Pod cannot verify native settlement, for example after an Orca runtime change, open assignments are shown as unverified rather than active, with the failed read and both runtimes. The next mutation rebinds an objective whose Run, coordinator and workers are unchanged, and asks for your decision when it cannot tell. When a Run has several objectives, status lists choices instead of picking one. A missing or invalid preference file leaves no eligible routes; use `pod config edit` to correct it. A preference file from 0.6.x needs the route setup described above before new delegation.
 
 Lost worker-start replies retain the same Orca request for reconciliation. A known effect-free refusal is deferred; an uncertain response remains unresolved until exact native readback. A provider safety refusal never triggers a same-Task model switch. See [installation troubleshooting](docs/installation.md) for PATH, duplicate skills, and interrupted installs.
 
 ## What's inside
 
 - One `skills/pod` tree serves as the skill and importable Python package.
-- One personal YAML file stores model states and the logical worker ceiling.
-- One bundled catalog holds official model guidance and a dated benchmark snapshot.
+- One personal YAML file stores exact route states, the Preferred and Pinned routes, the logical worker ceiling and the refresh setting.
+- One shipped registry holds exact model ids, efforts and attributed guidance; a small bundled snapshot and a user cache hold dated public model observations.
 - A bounded admission/checkpoint record joins Pod decisions to Orca references.
 - The Governor keeps candidate-bound `ALLOW`, `REUSE`, and `DEFER` decisions.
 
@@ -92,7 +100,7 @@ Pod has no scheduler, provider launcher, model account manager, billing system, 
 
 ## Updating and removing
 
-Run `pod update` to fetch the current `main` bundle through the same staged installer. It preserves valid preferences and changed skill copies, and tells active coordinators to reload before new starts; running workers are untouched. The installer owns only identified user-local paths. See [the removal map](docs/installation.md#removal) before deleting anything. There are no release packages or tags.
+Run `pod update` to fetch the current `main` bundle through the same staged installer. It never rewrites your preference file, preserves changed skill copies, and tells active coordinators to reload before new starts; running workers are untouched. The installer owns only identified user-local paths. See [the removal map](docs/installation.md#removal) before deleting anything. There are no release packages or tags.
 
 ## Contributing
 
