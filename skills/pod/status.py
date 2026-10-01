@@ -35,13 +35,33 @@ def _attention_note(attention: dict | str) -> str:
     return f"; needs attention: {', '.join(categories)}" if attention["requires_action"] else ""
 
 
-def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
+def _orca_attention_label(attention: dict | str) -> str:
+    """Orca's own attention for a row Pod cannot verify, labelled as Orca's rather than Pod's."""
+    if attention == "unknown":
+        return "Orca attention unknown"
+    label = "Orca attention: " + (", ".join(clean(item)[:64] for item in attention["categories"]) or "none")
+    return label + ("; Orca requires action" if attention["requires_action"] else "")
+
+
+def settlement_failure(state: dict, view: dict | None, workers: dict) -> dict | None:
+    """Name a failed exact native read: its code and the bound and current runtimes, or unknown."""
+    if not isinstance(view, dict) or view.get("settlement") != "unverified":
+        return None
+    refs = (state.get("checkpoint") or {}).get("native_refs")
+    runtimes = {row.get("runtime") for row in refs if isinstance(row, dict)} if isinstance(refs, list) else set()
+    bound = next(iter(runtimes)) if len(runtimes) == 1 and isinstance(next(iter(runtimes)), str) else "unknown"
+    current = workers.get("runtime")
+    return {"code": view.get("settlement_failure") or "unknown", "bound_runtime": bound,
+            "current_runtime": current if isinstance(current, str) and current else "unknown"}
+
+
+def _objective_details(state: dict, view: dict | None, workers: dict, failure: dict | None = None) -> dict:
     checkpoint = state["checkpoint"]
     map_state = view["map"] if isinstance(view, dict) else None
     outstanding = (set((view.get("ctx") or {}).get("outstanding", [])) if isinstance(view, dict)
                    else {key for key, row in state["admissions"].items()
                          if row["state"] not in ("closed", "deferred")})
-    active, settled, retained = [], [], []
+    active, settled, retained, unverified = [], [], [], []
     native_rows = {row.get("dispatchId"): row for row in workers.get("workers", [])
                    if isinstance(row, dict) and isinstance(row.get("dispatchId"), str)}
     for key, row in state["admissions"].items():
@@ -49,6 +69,11 @@ def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
         item = {"admission": key, "role": row["role"], "serves": list(row["serves"]),
                 "route": row["route_decision"], "dispatch": binding.get("dispatchId"),
                 "state": row["state"]}
+        if failure is not None and row["state"] not in ("closed", "deferred"):
+            # Presentation only: without exact native evidence an open row is neither active nor settled.
+            item["orca_attention"] = _attention(native_rows.get(binding.get("dispatchId")))
+            unverified.append(item)
+            continue
         if key in outstanding:
             item["attention"] = _attention(native_rows.get(binding.get("dispatchId")))
         (active if key in outstanding else settled).append(item)
@@ -70,9 +95,15 @@ def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
     remaining = list(checkpoint.get("remaining_gates", []))
     progress = []
     by_admission = {row["admission"]: row for row in active}
+    by_unverified = {row["admission"]: row for row in unverified}
     for ob in obligations:
         if ob["state"] == "active" and ob["executor"] == "coordinator":
             progress.append(f"coordinator: {ob['id']} ({ob.get('check') or ob.get('resolves') or 'current work'})")
+        elif ob["state"] == "active" and ob["executor"] in by_unverified:
+            attempt = by_unverified[ob["executor"]]
+            progress.append(f"settlement unverified for {attempt['role']} (dispatch "
+                            f"{attempt['dispatch'] or 'pending'}); "
+                            + _orca_attention_label(attempt["orca_attention"]))
         elif ob["state"] == "active":
             attempt = by_admission.get(ob["executor"])
             if attempt:
@@ -89,6 +120,10 @@ def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
             progress.append("remaining gate: " + str(gate)[:160])
     if authority:
         next_action = "obtain authority for " + authority[0]["obligation"]
+    elif failure is not None:
+        next_action = (f"native settlement is unverified ({failure['code']}; bound runtime "
+                       f"{failure['bound_runtime']}, current runtime {failure['current_runtime']}): "
+                       f"{len(unverified)} open admission(s) stay unverified until an exact native read succeeds")
     elif active:
         next_action = "wait for the exact outstanding assignment result"
     elif remaining:
@@ -99,7 +134,10 @@ def _objective_details(state: dict, view: dict | None, workers: dict) -> dict:
         next_action = progress[0]
     else:
         next_action = "read the objective map and choose the next ready obligation"
-    return {"assignments": {"active": active, "settled": settled},
+    assignments = {"active": active, "settled": settled}
+    if failure is not None:
+        assignments["unverified"] = unverified
+    return {"assignments": assignments,
             "retained_terminals": retained,
             "gates": {"remaining": remaining, "blocked_external": external, "authority_waits": authority},
             "progress": progress, "recorded_next_action": checkpoint.get("next_safe_action"),
@@ -257,8 +295,15 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 result["next_safe_action"] = checkpoint["quiescence"]["interim_report"]
         except PodError as exc:
             result["obligations"] = {"error": exc.code}
+    continuity = checkpoint.get("continuity") if isinstance(checkpoint, dict) else None
+    if isinstance(continuity, dict) and continuity.get("history"):
+        # The objective's runtime rebind history only, read-only; status never rebinds (A2).
+        result["runtime_continuity"] = {"history": list(continuity["history"])}
     if state is not None and checkpoint is not None:
-        result.update(_objective_details(state, view, workers))
+        failure = settlement_failure(state, view, workers)
+        if failure is not None:
+            result["native_settlement_failure"] = failure
+        result.update(_objective_details(state, view, workers, failure))
     if result["installed_version_drift"]:
         result["blocker"] = "installed_version_changed"
         result["next_safe_action"] = RELOAD_ACTION
@@ -268,7 +313,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     if result.get("blocker") in ("installed_version_changed", "route_mismatch", "effective_unknown",
                                  "preferences_unavailable"):
         result["next_action"] = result["next_safe_action"]
-    elif native_error is not None:
+    elif native_error is not None and "native_settlement_failure" not in result:
         result["next_action"] = "inspect the native Run before deciding worker state"
     return result
 
@@ -302,7 +347,18 @@ def render(result: dict) -> None:
             print(line)
         if result.get("assignments"):
             assignments = result["assignments"]
-            print(f"Assignments: {len(assignments['active'])} active, {len(assignments['settled'])} settled")
+            print(f"Assignments: {len(assignments['active'])} active, {len(assignments['settled'])} settled"
+                  + (f", {len(assignments['unverified'])} unverified" if "unverified" in assignments else ""))
+            failure = result.get("native_settlement_failure")
+            if failure:
+                print(f"Native settlement unverified: {failure['code']}; bound runtime "
+                      f"{failure['bound_runtime']}, current runtime {failure['current_runtime']}")
+            for item in assignments.get("unverified", []):
+                print(f"  Unverified {item['role']} (dispatch {item['dispatch'] or 'pending'}): "
+                      + _orca_attention_label(item["orca_attention"]))
+        for entry in (result.get("runtime_continuity") or {}).get("history", []):
+            print(f"Runtime rebind: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
+                  f"{clean(entry['at'])} ({entry['provenance']})")
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})")
         for line in result.get("progress", []):

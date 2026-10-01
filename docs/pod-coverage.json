@@ -691,7 +691,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_governor.DecisionTests.test_reuse_attaches_to_a_running_action_and_returns_evidence",
+      "offline_test": [
+        "tests.test_governor.DecisionTests.test_reuse_attaches_to_a_running_action_and_returns_evidence",
+        "tests.test_ci_proof_identity.ExactRunReuseTests.test_an_identical_dispatch_attaches_then_reuses_its_read_back_run"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -869,7 +872,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_issue_intake_target_and_content_reconciliation",
+      "offline_test": [
+        "tests.test_github.RepositoryAndIssueTests.test_issue_intake_target_and_content_reconciliation",
+        "tests.test_eel_intake.EelMarkerTests.test_marker_gained_after_binding_is_refused_at_every_recheck"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1768,6 +1774,231 @@
       "offline_test": [
         "tests.test_issue29_boundaries.LegacyConsentTests.test_released_writer_records_leave_real_checkpoint_authority_wait_applicable",
         "tests.test_issue29_boundaries.LegacyConsentTests.test_synthetic_current_consent_controls_share_status_and_wait_truth"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A187",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_ci_proof_identity.ExactRunReuseTests.test_an_identical_dispatch_attaches_then_reuses_its_read_back_run",
+        "tests.test_ci_proof_identity.ExactRunReuseTests.test_other_inputs_are_another_proof",
+        "tests.test_ci_proof_identity.ExactRunReuseTests.test_a_pass_without_pod_readback_is_not_proof"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A188",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_ci_proof_identity.SameRunRerunTests.test_a_failed_dispatch_run_reruns_its_failed_jobs_in_the_same_run",
+        "tests.test_ci_proof_identity.SameRunRerunTests.test_rerun_selection_keying_and_gating_are_unchanged_for_a_publication_run",
+        "tests.test_ci_proof_identity.NoCrossRunCompositionTests.test_the_github_port_gains_no_job_level_read",
+        "tests.test_ci_proof_identity.NoCrossRunCompositionTests.test_another_runs_passing_jobs_never_complete_a_failed_dispatch"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A189",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_ci_proof_identity.UnclearEquivalenceTests.test_unknown_and_other_events_are_allowed_when_the_checks_pass",
+        "tests.test_ci_proof_identity.UnclearEquivalenceTests.test_a_failed_run_of_another_event_still_gates_the_key",
+        "tests.test_ci_proof_identity.UnclearEquivalenceTests.test_an_unsettled_publication_defers_without_claiming_its_run",
+        "tests.incidents.test_r16_selective_ci_reuse.SelectiveCiReuse.test_a_pending_selective_run_does_not_answer_a_full_dispatch",
+        "tests.incidents.test_r16_selective_ci_reuse.SelectiveCiReuse.test_a_passing_selective_run_does_not_answer_a_full_dispatch_and_the_full_run_decides"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A190",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_ci_proof_identity.UnclearEquivalenceTests.test_push_dispatch_then_pr_opened_binds_only_the_dispatch_run",
+        "tests.test_governor.DecisionTests.test_a_publication_journals_the_validation_it_starts"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A191",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_ci_proof_identity.OldJournalTests.test_the_journal_loads_without_conversion_and_keys_are_unchanged",
+        "tests.test_ci_proof_identity.OldJournalTests.test_publication_derived_rows_never_satisfy_a_dispatch",
+        "tests.test_ci_proof_identity.OldJournalTests.test_a_settled_dispatch_row_never_counts_and_is_not_read_again",
+        "tests.test_ci_proof_identity.OldJournalTests.test_a_pending_row_without_a_run_attaches_and_counts_only_for_a_dispatch_run",
+        "tests.test_ci_proof_identity.OldJournalTests.test_a_pending_row_bound_to_another_events_run_neither_binds_nor_blocks",
+        "tests.test_ci_proof_identity.OldJournalTests.test_an_unknown_row_bound_to_another_events_run_resolves_by_readback",
+        "tests.test_ci_proof_identity.OldJournalTests.test_a_pending_row_bound_to_its_dispatch_run_counts_after_readback",
+        "tests.test_ci_proof_identity.OldJournalTests.test_remote_diagnostic_reuse_is_unchanged"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A192",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_status_unverified.UnverifiedStatusTests.test_unverified_rows_are_not_active_and_no_line_waits_for_delivery"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A193",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_status_unverified.UnverifiedStatusTests.test_failure_code_runtimes_and_orca_attention_are_named"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A194",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_status_unverified.UnverifiedStatusTests.test_verified_read_matches_066_output_and_kernel_outstanding_is_unchanged",
+        "tests.incidents.test_runtime_change_incidents.R15StatusIncident.test_finished_rows_after_a_runtime_change_are_unverified_not_active",
+        "tests.test_status_unverified.RecordedGenerationStatusTests.test_verified_read_with_a_recorded_generation_matches_066_without_a_continuity_field"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A195",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_runtime_continuity.ProvenContinuityTests.test_checkpoint_records_generation_and_proven_change_rebinds_checkpoint_write",
+        "tests.test_runtime_continuity.ProvenContinuityTests.test_governor_mutation_report_read_and_new_admission_each_rebind_and_continue",
+        "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_admission_proven_absent_rebinds_then_continues_recovery",
+        "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_state_alone_without_a_lookup_result_does_not_rebind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A196",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_each_ambiguous_case_refuses_with_the_distinct_code_and_writes_nothing",
+        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_missing_recorded_generation_is_ambiguous_and_owner_decision_rebinds",
+        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_changed_facts_refuse_the_owner_decision_and_unreadable_identity_keeps_blocking",
+        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_admission_recovery_classifies_before_writing_any_hold"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A197",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_runtime_continuity.DisprovenContinuityTests.test_each_compared_identity_fails_closed_with_the_existing_code"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A198",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_unchanged_runtime_runs_no_continuity_path",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_status_never_rebinds",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_starts_replays_creates_adopts_and_reassigns_nothing",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_past_the_history_bound_refuses_without_a_write",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_a_runtime_change_that_destroyed_its_dispatch_refuses_and_stays_reserved",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_another_calls_locked_rebind_refuses_and_stays_reserved",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_another_calls_checkpoint_rebind_refuses_and_stays_reserved",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_report_read_before_another_calls_rebind_refuses_without_consuming",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_governor_reconcile_writes_its_rebind_under_the_objective_lock",
+        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_reserved_dispatch_found_needs_the_owner_then_separate_recovery_binds_it"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A199",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.incidents.test_runtime_change_incidents.R17ProvenIncident.test_same_run_coordinator_and_generation_rebind_as_proven",
+        "tests.incidents.test_runtime_change_incidents.R15DisprovenIncident.test_changed_coordinator_fails_closed_without_a_rebind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A200",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_input_refusals.OperationFieldRefusalTests.test_every_operation_names_operation_record_and_both_fields_without_values",
+        "tests.test_input_refusals.OperationFieldRefusalTests.test_non_object_names_only_the_expected_type"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A201",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_input_refusals.ExactRefusalTests.test_acceptance_and_codes_are_unchanged",
+        "tests.test_input_refusals.ExactRefusalTests.test_caller_supplied_error_keeps_obligation_refusals_unchanged",
+        "tests.test_input_refusals.ExactRefusalTests.test_echoed_names_are_bounded_and_stripped_of_control_characters",
+        "tests.test_input_refusals.ExactRefusalTests.test_other_invalid_refusals_do_not_gain_an_operation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A202",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_eel_intake.EelMarkerTests.test_intake_refuses_title_and_each_body_marker_form_without_a_binding",
+        "tests.test_eel_intake.EelMarkerTests.test_internal_issue_intake_refuses_with_the_eel_code"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A203",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_eel_intake.EelMarkerTests.test_marker_gained_after_binding_is_refused_at_every_recheck",
+        "tests.test_eel_intake.EelCallerTests.test_affected_admission_and_pending_continuation_surface_the_eel_code"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A204",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_eel_intake.EelMarkerTests.test_nothing_else_changes",
+        "tests.test_eel_intake.EelMarkerTests.test_convention_and_rule_are_documented_once"
       ],
       "status": "NOT_RUN"
     }

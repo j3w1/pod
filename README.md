@@ -29,7 +29,7 @@ This installs the Pod skill for Codex and Claude Code, a user-local `pod` comman
 
 Your existing authenticated session remains the coordinator, with its current model and effort. Orca owns Runs, Tasks, Dispatches, worker tabs, messages, request recovery, worktrees, and lifecycle. Pod makes assignment choices, checks them at admission, and binds evidence to the objective. Your project decides what counts as accepted.
 
-Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. A direct objective follows the same process without an issue.
+Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. An Evidence Evaluation Ledger issue, titled `EEL:` or marked with its format line, is evidence only: Pod refuses to execute from it, and implementation needs a separate Pod Execution Spec that cites it. A direct objective follows the same process without an issue.
 
 ## The basic workflow
 
@@ -68,7 +68,7 @@ After an authorized merge, Pod verifies the exact delivery record before closing
 
 ## Troubleshooting
 
-`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, catalog age, and available Orca capability without starting a worker. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. When a Run has several objectives, status lists choices instead of picking one. A missing or invalid preference file leaves no eligible models; use `pod config edit` to correct it.
+`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, catalog age, and available Orca capability without starting a worker. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. If Pod cannot verify native settlement, for example after an Orca runtime change, open assignments are shown as unverified rather than active, with the failed read and both runtimes. The next mutation rebinds an objective whose Run, coordinator and workers are unchanged, and asks for your decision when it cannot tell. When a Run has several objectives, status lists choices instead of picking one. A missing or invalid preference file leaves no eligible models; use `pod config edit` to correct it.
 
 Lost worker-start replies retain the same Orca request for reconciliation. A known effect-free refusal is deferred; an uncertain response remains unresolved until exact native readback. A provider safety refusal never triggers a same-Task model switch. See [installation troubleshooting](docs/installation.md) for PATH, duplicate skills, and interrupted installs.
 

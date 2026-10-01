@@ -1,0 +1,518 @@
+{
+  "actions": [
+    {
+      "action": {
+        "authorization": {
+          "authorized_by": "owner",
+          "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reference": "tasks/pod/authorization.md",
+          "schema": "pod-authorization/v1",
+          "scope": [
+            "publish"
+          ],
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "utc": "2026-09-21T00:00:00Z"
+        },
+        "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "diagnostic": null,
+        "effects": null,
+        "inputs": {},
+        "kind": "pr_update",
+        "reason": "converged candidate",
+        "target": "origin/agent/release",
+        "unit": "release"
+      },
+      "at": "2026-09-21T00:00:00+00:00",
+      "attempt": 1,
+      "branch": {
+        "base": "main",
+        "branch": "agent/release",
+        "remote": "origin"
+      },
+      "cancel_safe": true,
+      "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+      "classification": null,
+      "classifications": [],
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": "ALLOW",
+      "derived_from": null,
+      "effects": [
+        "workflow:ci.yml"
+      ],
+      "exception": null,
+      "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+      "logical_key": "a43127dc9134ebade16e996410b356a4c48090f1bd3be8dda221ef175518fb72",
+      "outcome": "PASS",
+      "phase": "candidate",
+      "purpose": "validation",
+      "reasons": [],
+      "receipt": {
+        "detail": null,
+        "evidence": [],
+        "finished_at": "2026-09-21T00:00:00+00:00",
+        "observed_elapsed_s": 0.0,
+        "provider": {
+          "branch": "origin/agent/release",
+          "pr": 7,
+          "pr_reused": false,
+          "pr_url": "https://example.invalid/pull/7",
+          "remote_head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "triggered": {
+            "ci.yml": {
+              "conclusion": null,
+              "created_at": "2026-09-21T00:00:01+00:00",
+              "event": "pull_request",
+              "id": "100",
+              "status": "in_progress",
+              "url": "https://example.invalid/run"
+            }
+          }
+        },
+        "started_at": "2026-09-21T00:00:00+00:00"
+      },
+      "record_id": "896eb78e00cf4ec3637b83b599d1a765e2df582dc7b84ffb642fc72672a06ca7",
+      "warnings": []
+    },
+    {
+      "action": {
+        "authorization": null,
+        "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "diagnostic": null,
+        "effects": null,
+        "inputs": {},
+        "kind": "workflow_dispatch",
+        "reason": "started by pr_update 896eb78e00cf",
+        "target": "ci.yml",
+        "unit": "release"
+      },
+      "at": "2026-09-21T00:00:00+00:00",
+      "attempt": 1,
+      "cancel_safe": true,
+      "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+      "classification": null,
+      "classifications": [],
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": "ALLOW",
+      "derived_from": "896eb78e00cf4ec3637b83b599d1a765e2df582dc7b84ffb642fc72672a06ca7",
+      "effects": [
+        "workflow:ci.yml"
+      ],
+      "exception": null,
+      "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+      "logical_key": "93145293e4c22450793b94cd84aa36de0fba5fbd33b57c791b77d1531e7f2c40",
+      "outcome": "PASS",
+      "phase": "candidate",
+      "purpose": "validation",
+      "reasons": [],
+      "receipt": {
+        "detail": null,
+        "evidence": [],
+        "finished_at": "2026-09-21T00:00:00+00:00",
+        "observed_elapsed_s": 0.0,
+        "provider": {
+          "conclusion": "success",
+          "created_at": "2026-09-21T00:00:01+00:00",
+          "ref_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "100",
+          "status": "completed",
+          "url": "https://example.invalid/run"
+        },
+        "started_at": "2026-09-21T00:00:00+00:00"
+      },
+      "record_id": "5fbfe65967011b67ed6db6e3a0b2c9622d5ac6fcd444f47f11dd264fbc3b7748",
+      "warnings": [
+        "derived_from_publication"
+      ]
+    },
+    {
+      "action": {
+        "authorization": {
+          "authorized_by": "owner",
+          "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reference": "tasks/pod/authorization.md",
+          "schema": "pod-authorization/v1",
+          "scope": [
+            "publish"
+          ],
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "utc": "2026-09-21T00:00:00Z"
+        },
+        "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "diagnostic": null,
+        "effects": null,
+        "inputs": {},
+        "kind": "workflow_dispatch",
+        "reason": "converged candidate",
+        "target": "release.yml",
+        "unit": "release"
+      },
+      "at": "2026-09-21T00:00:00+00:00",
+      "attempt": 1,
+      "cancel_safe": true,
+      "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+      "classification": null,
+      "classifications": [],
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": "ALLOW",
+      "derived_from": null,
+      "effects": [
+        "workflow:release.yml"
+      ],
+      "exception": null,
+      "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+      "logical_key": "3648253247b0462b79fd696de41f032a9c3de68880275da2983fc8c84d91d7cc",
+      "outcome": "PASS",
+      "phase": "remotely_verified",
+      "purpose": "validation",
+      "reasons": [],
+      "receipt": {
+        "detail": null,
+        "evidence": [],
+        "finished_at": "2026-09-21T00:00:00+00:00",
+        "observed_elapsed_s": 0.0,
+        "provider": {
+          "conclusion": "success",
+          "created_at": "2026-09-21T00:00:02+00:00",
+          "ref_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "101",
+          "status": "completed",
+          "url": "https://example.invalid/run"
+        },
+        "started_at": "2026-09-21T00:00:00+00:00"
+      },
+      "record_id": "a53449e6b8ab28ec66e437f0af04d6c2bc5252b1d2baab3bbad3307e2d1a824c",
+      "warnings": []
+    },
+    {
+      "action": {
+        "authorization": {
+          "authorized_by": "owner",
+          "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reference": "tasks/pod/authorization.md",
+          "schema": "pod-authorization/v1",
+          "scope": [
+            "publish"
+          ],
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "utc": "2026-09-21T00:00:00Z"
+        },
+        "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "diagnostic": null,
+        "effects": null,
+        "inputs": {},
+        "kind": "workflow_dispatch",
+        "reason": "converged candidate",
+        "target": "nightly.yml",
+        "unit": "release"
+      },
+      "at": "2026-09-21T00:00:00+00:00",
+      "attempt": 1,
+      "cancel_safe": true,
+      "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+      "classification": null,
+      "classifications": [],
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": "ALLOW",
+      "derived_from": null,
+      "effects": [
+        "workflow:nightly.yml"
+      ],
+      "exception": null,
+      "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+      "logical_key": "7a895a713e740f6988cc2d906ee2f74fe15177c8ec9a74c3f08f9336f3894dee",
+      "outcome": "pending",
+      "phase": "remotely_verified",
+      "purpose": "validation",
+      "reasons": [],
+      "receipt": {
+        "detail": "dispatched; no run visible yet",
+        "evidence": [],
+        "finished_at": null,
+        "observed_elapsed_s": null,
+        "provider": {
+          "ref_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "started_at": "2026-09-21T00:00:00+00:00"
+      },
+      "record_id": "b4532db8af38aeb3448cea4bb054717c15a607340bac91aaba733c8e5c2d327c",
+      "warnings": []
+    },
+    {
+      "action": {
+        "authorization": {
+          "authorized_by": "owner",
+          "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reference": "tasks/pod/authorization.md",
+          "schema": "pod-authorization/v1",
+          "scope": [
+            "publish"
+          ],
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "utc": "2026-09-21T00:00:00Z"
+        },
+        "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "diagnostic": null,
+        "effects": null,
+        "inputs": {},
+        "kind": "workflow_dispatch",
+        "reason": "converged candidate",
+        "target": "full.yml",
+        "unit": "release"
+      },
+      "at": "2026-09-21T00:00:00+00:00",
+      "attempt": 1,
+      "cancel_safe": true,
+      "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+      "classification": null,
+      "classifications": [],
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": "ALLOW",
+      "derived_from": null,
+      "effects": [
+        "workflow:full.yml"
+      ],
+      "exception": null,
+      "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+      "logical_key": "7ed78ed9e89282f208753b3daafc8bb6e8fce9c50ccad7072687a6c65480c431",
+      "outcome": "pending",
+      "phase": "remotely_verified",
+      "purpose": "validation",
+      "reasons": [],
+      "receipt": {
+        "detail": null,
+        "evidence": [],
+        "finished_at": null,
+        "observed_elapsed_s": null,
+        "provider": {
+          "conclusion": null,
+          "created_at": "2026-09-21T00:00:05+00:00",
+          "ref_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "104",
+          "status": "in_progress",
+          "url": "https://example.invalid/run"
+        },
+        "started_at": "2026-09-21T00:00:00+00:00"
+      },
+      "record_id": "1f54d0d9c28f85a2abc739e3b6b18dea011cfb0d34dbaa8a18cf4ba65f25dbe6",
+      "warnings": []
+    },
+    {
+      "action": {
+        "authorization": {
+          "authorized_by": "owner",
+          "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reference": "tasks/pod/authorization.md",
+          "schema": "pod-authorization/v1",
+          "scope": [
+            "publish"
+          ],
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "utc": "2026-09-21T00:00:00Z"
+        },
+        "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "diagnostic": null,
+        "effects": null,
+        "inputs": {},
+        "kind": "workflow_dispatch",
+        "reason": "converged candidate",
+        "target": "deep.yml",
+        "unit": "release"
+      },
+      "at": "2026-09-21T00:00:00+00:00",
+      "attempt": 1,
+      "cancel_safe": true,
+      "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+      "classification": null,
+      "classifications": [],
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": "ALLOW",
+      "derived_from": null,
+      "effects": [
+        "workflow:deep.yml"
+      ],
+      "exception": null,
+      "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+      "logical_key": "ba8077d8c41728e6541f91756cb8183f261f181ffd1ad122224544c9780f588c",
+      "outcome": "pending",
+      "phase": "remotely_verified",
+      "purpose": "validation",
+      "reasons": [],
+      "receipt": {
+        "detail": null,
+        "evidence": [],
+        "finished_at": null,
+        "observed_elapsed_s": null,
+        "provider": {
+          "conclusion": null,
+          "created_at": "2026-09-21T00:00:06+00:00",
+          "ref_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "105",
+          "status": "in_progress",
+          "url": "https://example.invalid/run"
+        },
+        "started_at": "2026-09-21T00:00:00+00:00"
+      },
+      "record_id": "4cc1e8127aeede62a512a3ae93efa3f3cc7275e94b0019f71f0db05048743abb",
+      "warnings": []
+    },
+    {
+      "action": {
+        "authorization": {
+          "authorized_by": "owner",
+          "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reference": "tasks/pod/authorization.md",
+          "schema": "pod-authorization/v1",
+          "scope": [
+            "publish"
+          ],
+          "tree": "cccccccccccccccccccccccccccccccccccccccc",
+          "utc": "2026-09-21T00:00:00Z"
+        },
+        "candidate": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "diagnostic": {
+          "check": "permission probe",
+          "local_limitation": "local credentials do not represent that actor",
+          "question": "can the workflow actor read the ruleset field?",
+          "stopping_condition": "record the result; no unchanged repeat"
+        },
+        "effects": null,
+        "inputs": {},
+        "kind": "remote_diagnostic",
+        "reason": "converged candidate",
+        "target": "probe.yml",
+        "unit": "release"
+      },
+      "at": "2026-09-21T00:00:00+00:00",
+      "attempt": 1,
+      "cancel_safe": true,
+      "candidate_id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+      "classification": null,
+      "classifications": [],
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decision": "ALLOW",
+      "derived_from": null,
+      "effects": [
+        "workflow:probe.yml"
+      ],
+      "exception": null,
+      "inputs": "1cd79729023b6fd42f18771fa1d0bb5e1b8194a81b5e5e51ec4b104a56f8d52a",
+      "logical_key": "e24aaa4a75f5ebd1e8ee64d82fe6a9bce8b55d584c1ed4eb79740ca816337ef0",
+      "outcome": "PASS",
+      "phase": "remotely_verified",
+      "purpose": "diagnostic",
+      "reasons": [],
+      "receipt": {
+        "detail": null,
+        "evidence": [],
+        "finished_at": "2026-09-21T00:00:00+00:00",
+        "observed_elapsed_s": 0.0,
+        "provider": {
+          "conclusion": "success",
+          "created_at": "2026-09-21T00:00:07+00:00",
+          "ref_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "106",
+          "status": "completed",
+          "url": "https://example.invalid/run"
+        },
+        "started_at": "2026-09-21T00:00:00+00:00"
+      },
+      "record_id": "8ee747ee160b9fee02bc594d1c480116de99b6d0a86e27b89842fb8f5c84597e",
+      "warnings": [
+        "early_diagnostic"
+      ]
+    }
+  ],
+  "counters": {
+    "attachments": 0,
+    "cancellations": 0,
+    "decisions": {
+      "ALLOW": 6,
+      "DEFER": 0,
+      "REUSE": 0
+    },
+    "deferrals": {},
+    "evidence_reused": 0,
+    "exceptions_applied": 0,
+    "failures_interrupted": 0,
+    "observed_deferrals": 0,
+    "outcomes": {
+      "CANCELED": 0,
+      "FAILED": 0,
+      "PASS": 4,
+      "UNKNOWN": 0
+    },
+    "warnings": {
+      "early_diagnostic": 1
+    }
+  },
+  "revision": 18,
+  "schema": "pod-governor/v2",
+  "units": {
+    "release": {
+      "branch": {
+        "base": "main",
+        "branch": "agent/release",
+        "remote": "origin"
+      },
+      "candidate": {
+        "base": {
+          "commit": "1111111111111111111111111111111111111111",
+          "merge_base": "1111111111111111111111111111111111111111",
+          "ref": "origin/main"
+        },
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dirty_paths": 0,
+        "environment": {},
+        "generation": 1,
+        "id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+        "policy_revision": "r",
+        "prepared_at": "2026-09-21T00:00:00+00:00",
+        "schema": "pod-candidate/v1",
+        "supersedes": null,
+        "toolchain": {
+          "python": "3.13.0"
+        },
+        "tree": "cccccccccccccccccccccccccccccccccccccccc",
+        "unit": "release",
+        "verification": [
+          "unit"
+        ],
+        "workflows": {
+          ".github/workflows/ci.yml": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "generation": 1,
+      "history": [
+        "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde"
+      ],
+      "last_decision": {
+        "at": "2026-09-21T00:00:00+00:00",
+        "codes": [],
+        "decision": "ALLOW",
+        "kind": "remote_diagnostic",
+        "next_action": null,
+        "record_id": "8ee747ee160b9fee02bc594d1c480116de99b6d0a86e27b89842fb8f5c84597e",
+        "target": "probe.yml"
+      },
+      "name": "release",
+      "preflight": {
+        "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde": {
+          "unit": {
+            "at": "2026-09-21T00:00:00+00:00",
+            "report": null,
+            "status": "PASS"
+          },
+          "workflow-lint": {
+            "at": "2026-09-21T00:00:00+00:00",
+            "report": null,
+            "status": "PASS"
+          }
+        }
+      },
+      "published": {
+        "origin/agent/release": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "tasks": []
+    }
+  }
+}

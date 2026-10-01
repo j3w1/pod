@@ -64,21 +64,21 @@ Keep host integration optional. Pod works on a suitable Linux environment withou
 
 ### R62 — Keep one conditional execution-spec.md as the
 
-Type: B · Scenarios: [A97](#a97), [A98](#a98)
+Type: B · Scenarios: [A97](#a97), [A98](#a98), [A204](#a204)
 
-Keep one conditional `execution-spec.md` as the authoring and interpretation source for human-readable Pod Execution Specs, numbered Proof of Done items and explicit delivery endpoints. Equivalent clear Markdown is valid; there is no parser, DSL, required frontmatter or second template.
+Keep one conditional `execution-spec.md` as the authoring and interpretation source for human-readable Pod Execution Specs, numbered Proof of Done items, explicit delivery endpoints and the Evidence Evaluation Ledger (EEL) convention. An EEL issue's title starts with `EEL:` or its first non-empty unindented body line is exactly `**Format:** Evidence Evaluation Ledger v1`, optionally ending `<br>`; it is evidence only, never executed or restated as a direct objective to execute it, and implementation needs a separate Pod Execution Spec citing it. Equivalent clear Markdown is valid; there is no parser, DSL, required frontmatter, EEL section check or second template.
 
 ### R63 — Accept a direct objective or a
 
-Type: B,H · Scenarios: [A99](#a99), [A100](#a100), [A101](#a101)
+Type: B,H · Scenarios: [A99](#a99), [A100](#a100), [A101](#a101), [A202](#a202)
 
-Accept a direct objective or a canonical GitHub issue URL through one workflow. Retrieve the complete issue with authorized host access, validate returned identity and target against the actual checkout, treat issue content as scope rather than authority, block inaccessible/incomplete/mismatched sources, and reconcile a closed issue with user intent before repeated work.
+Accept a direct objective or a canonical GitHub issue URL through one workflow. Retrieve the complete issue with authorized host access, validate returned identity and target against the actual checkout, treat issue content as scope rather than authority, block inaccessible/incomplete/mismatched sources, and reconcile a closed issue with user intent before repeated work. An issue carrying either EEL marker is refused as an objective source (`issue_is_evidence_ledger`) before any binding; reading or citing it as evidence stays allowed.
 
 ### R64 — Bind issue identity, canonical locator, body
 
-Type: B,H · Scenarios: [A102](#a102), [A103](#a103)
+Type: B,H · Scenarios: [A102](#a102), [A103](#a103), [A203](#a203)
 
-Bind issue identity, canonical locator, body digest and relevant amendment references into checkpoints, packets and final verification without copying the issue body into state. Recheck at intake, continuation, affected admission and final verification. Body change requires reconciliation; metadata alone does not. Preserve unaffected proof and never replace an admitted uncertain native request with a revised packet.
+Bind issue identity, canonical locator, body digest and relevant amendment references into checkpoints, packets and final verification without copying the issue body into state. Recheck at intake, continuation, affected admission and final verification. Body change requires reconciliation; metadata alone does not, except that a title gaining the EEL marker stops execution like the body marker, and every caller surfaces the EEL refusal itself. Amendments are not checked for markers. Preserve unaffected proof and never replace an admitted uncertain native request with a revised packet.
 
 ### R69 — Keep the public product independent of
 
@@ -128,6 +128,18 @@ Type: B,I · Scenarios: [A134](#a134), [A136](#a136), [A137](#a137), [A142](#a14
 
 The one-shot installer and explicit update use a staged checked bundle, isolated dependency environment and owned user-local launcher, preserve user-edited files and report PATH or duplicate-copy limitations. Installation is separate from runtime connection and authentication.
 
+### R97 — Status separates unverified settlement from active work
+
+Type: B · Scenarios: [A192](#a192), [A193](#a193), [A194](#a194)
+
+When status's exact native settlement read fails, every open admission is listed under `assignments.unverified`, not active, and the human summary counts it separately. Status names the failed read's code and the objective's bound and current runtime, or unknown, labels Orca's attention for those rows as Orca's and claims no wait for their delivery; the next action names the unverified settlement. This is presentation only: the kernel's outstanding set, settlement rules, logical slots and fail-closed mutation are unchanged, and a verified read's output is unchanged apart from new fields that are empty or absent.
+
+### R99 — Input refusals name their fields
+
+Type: B · Scenarios: [A200](#a200), [A201](#a201)
+
+An `exact()` refusal names its record and its missing and unsupported field names, never a value; a non-object names only the expected type. Echoed names are bounded in count and length and stripped of control characters, and a `pod internal` refusal also names the operation. The same inputs are accepted and refused with the same codes; a caller passing its own error, the obligation kernel, keeps its refusal. There are no prose examples or generated schemas.
+
 ## Acceptance scenarios
 
 - <a id="a32"></a>**A32** — Global/local coexistence preserves project policy and diagnoses duplicate/shadowed/mismatched skills.
@@ -146,7 +158,7 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 - <a id="a99"></a>**A99** — Complete authorized issue intake returns the full body and exact identity, while inaccessible or incomplete reads fail clearly without requesting credentials or claiming success.
 - <a id="a100"></a>**A100** — An issue for another repository is rejected against actual Git identity before implementation; issue text/comments cannot grant authority.
 - <a id="a101"></a>**A101** — A closed issue requires outcome and user-intent reconciliation rather than silently repeating work.
-- <a id="a102"></a>**A102** — Body changes require reconciliation while metadata-only updates preserve valid derived work; relevant amendment bindings remain bounded.
+- <a id="a102"></a>**A102** — Body changes require reconciliation while metadata-only updates preserve valid derived work, except a title that gains the `EEL:` marker, which is refused; relevant amendment bindings remain bounded.
 - <a id="a103"></a>**A103** — Continuation reuses objective/native state across linked worktrees, preserves unaffected evidence and prevents a revised packet from replacing an uncertain same-Task attempt.
 - <a id="a111"></a>**A111** — Generic tracked-source/artifact hygiene detects representative private residue while permitting Pod identity, public links and sanitized fixtures.
 - <a id="a112"></a>**A112** — Public code and guidance require no external metadata service; AGENTS keeps only the short upstream ownership notice and introduces no competing writer.
@@ -169,6 +181,14 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 
 
 - <a id="a183"></a>**A183** — Real PTY pin/move/unpin uses one radio marker, distinct focus and preserved base states. Restart, sorting, filtering, resize, all/custom, narrow/wide and ASCII/monochrome retain identity and expose a hidden pin, including persistent refusal/save-error notices at 80×24 and 40×12. Full failure feedback remains reachable through Details paging. Invalidating edits, stale concurrent pin edits and persistence failures change no settings; no action starts workers.
+- <a id="a192"></a>**A192** — With a changed runtime and N open admissions, status reports 0 active and N under `assignments.unverified`, its render counts the N as unverified, and no progress line or next action waits for their delivery.
+- <a id="a193"></a>**A193** — The same status names the failed read's code, the objective's bound and current runtime (unknown when unread) and Orca's attention for each unverified row, labelled as Orca's.
+- <a id="a194"></a>**A194** — A verified read serializes and renders exactly as 0.6.6 for the same fixture, apart from absent new fields, including an objective whose checkpoint recorded its consumer generation and has no rebind history; with a changed runtime the kernel's outstanding set is unchanged and status writes nothing. A sanitized R15-shaped incident (5 finished Dispatches, 4 consumed reports) shows 0 active and 5 unverified.
+- <a id="a200"></a>**A200** — For every `pod internal` operation, a request missing one required field and carrying one unknown field is refused naming the operation, the record and both fields; a sentinel value in the request appears on neither stdout nor stderr. A non-object names only the expected type.
+- <a id="a201"></a>**A201** — The same inputs are accepted and refused with the same codes, obligation-kernel refusals are unchanged, and numerous, long or control-character field names are bounded and cleaned.
+- <a id="a202"></a>**A202** — Issue intake, including `internal issue-intake`, returns no binding and refuses `issue_is_evidence_ledger` for an `EEL:` title, or for the exact format line as the first non-empty unindented body line with or without `<br>` and with LF or CRLF endings; the refusal says the issue is evidence only and implementation needs a separate Pod Execution Spec citing it.
+- <a id="a203"></a>**A203** — A bound Pod Execution Spec issue that later gains either marker, including only a title change, is refused at the next recheck; continuation, affected admission, final verification and `internal issue-recheck` surface the EEL refusal, not `issue_reconciliation_required`.
+- <a id="a204"></a>**A204** — A Pod Execution Spec citing an EEL is accepted unchanged; an indented or later marker line, inside a code block or not, a lowercase or non-prefix title and an amendment do not mark an issue; direct objectives and EEL source references are unaffected; the convention appears once, in the Execution Spec reference.
 
 ## Public interfaces
 
@@ -179,11 +199,11 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod` | Opens the model TUI on a TTY; otherwise prints a concise plain summary. |
 | `pod config [--json]` | Read personal path, byte revision, mode, pin, saved/effective states, eligible ids, worker ceiling and compact catalog guidance. |
 | `pod config edit` | Opens the personal YAML in `$VISUAL` or `$EDITOR`, validates afterward, retains invalid edits and reports them. |
-| `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments, gates, progress, blockers and next action. Shared Runs require explicit selection. |
+| `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments (active, settled, or unverified when the exact native read fails), runtime rebinds, gates, progress, blockers and next action. Shared Runs require explicit selection. |
 | `pod doctor [--json]` | Read-only installation, catalog, preference, runtime capability and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
 | `pod --version` | Reports the installed root `VERSION` before dependency checks. |
-| `pod internal <op> --input FILE` or `--input -` | Hidden structured operation for the skill; bounded JSON from a regular file or stdin, with no public command tree. A refusal is a blocked envelope with its code, message and detail; an unexpected failure is the blocked code `internal_error`, with the traceback only on stderr. |
+| `pod internal <op> --input FILE` or `--input -` | Hidden structured operation for the skill; bounded JSON from a regular file or stdin, with no public command tree. A refusal is a blocked envelope with its code, message and detail; an input-shape refusal names the operation, record and fields, never values. An unexpected failure is the blocked code `internal_error`, with the traceback only on stderr. |
 
 Codex invokes `$pod ...` and Claude Code invokes `/pod ...` inside an existing
 conversation. The global launcher is user-local; the one-shot installer from `main`

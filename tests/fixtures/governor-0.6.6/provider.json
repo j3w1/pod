@@ -1,0 +1,117 @@
+{
+  "candidate": {
+    "base": {
+      "commit": "1111111111111111111111111111111111111111",
+      "merge_base": "1111111111111111111111111111111111111111",
+      "ref": "origin/main"
+    },
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dirty_paths": 0,
+    "environment": {},
+    "generation": 1,
+    "id": "5b2a1ed3b7222208880b19c3a6b701eee369bb5cd9663e91137d143370343dde",
+    "policy_revision": "r",
+    "prepared_at": "2026-09-21T00:00:00+00:00",
+    "schema": "pod-candidate/v1",
+    "supersedes": null,
+    "toolchain": {
+      "python": "3.13.0"
+    },
+    "tree": "cccccccccccccccccccccccccccccccccccccccc",
+    "unit": "release",
+    "verification": [
+      "unit"
+    ],
+    "workflows": {
+      ".github/workflows/ci.yml": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  "listed": {
+    "ci.yml aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [
+      "100"
+    ],
+    "deep.yml aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [
+      "105"
+    ],
+    "full.yml aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [
+      "103",
+      "104"
+    ],
+    "nightly.yml aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [
+      "102"
+    ],
+    "probe.yml aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [
+      "106"
+    ],
+    "release.yml aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": [
+      "101"
+    ]
+  },
+  "rows": {
+    "derived_pass": "5fbfe65967011b67ed6db6e3a0b2c9622d5ac6fcd444f47f11dd264fbc3b7748",
+    "diagnostic_pass": "8ee747ee160b9fee02bc594d1c480116de99b6d0a86e27b89842fb8f5c84597e",
+    "dispatch_pass": "a53449e6b8ab28ec66e437f0af04d6c2bc5252b1d2baab3bbad3307e2d1a824c",
+    "dispatch_pending_bound": "4cc1e8127aeede62a512a3ae93efa3f3cc7275e94b0019f71f0db05048743abb",
+    "dispatch_pending_misbound": "1f54d0d9c28f85a2abc739e3b6b18dea011cfb0d34dbaa8a18cf4ba65f25dbe6",
+    "dispatch_pending_unbound": "b4532db8af38aeb3448cea4bb054717c15a607340bac91aaba733c8e5c2d327c",
+    "publication": "896eb78e00cf4ec3637b83b599d1a765e2df582dc7b84ffb642fc72672a06ca7"
+  },
+  "runs": {
+    "100": {
+      "conclusion": "success",
+      "created_at": "2026-09-21T00:00:01+00:00",
+      "event": "pull_request",
+      "id": "100",
+      "status": "completed",
+      "url": "https://example.invalid/run"
+    },
+    "101": {
+      "conclusion": "success",
+      "created_at": "2026-09-21T00:00:02+00:00",
+      "event": "workflow_dispatch",
+      "id": "101",
+      "status": "completed",
+      "url": "https://example.invalid/run"
+    },
+    "102": {
+      "conclusion": null,
+      "created_at": "2026-09-21T00:00:03+00:00",
+      "event": "workflow_dispatch",
+      "id": "102",
+      "status": "in_progress",
+      "url": "https://example.invalid/run"
+    },
+    "103": {
+      "conclusion": null,
+      "created_at": "2026-09-21T00:00:04+00:00",
+      "event": "workflow_dispatch",
+      "id": "103",
+      "status": "in_progress",
+      "url": "https://example.invalid/run"
+    },
+    "104": {
+      "conclusion": null,
+      "created_at": "2026-09-21T00:00:05+00:00",
+      "event": "pull_request",
+      "id": "104",
+      "status": "in_progress",
+      "url": "https://example.invalid/run"
+    },
+    "105": {
+      "conclusion": null,
+      "created_at": "2026-09-21T00:00:06+00:00",
+      "event": "workflow_dispatch",
+      "id": "105",
+      "status": "in_progress",
+      "url": "https://example.invalid/run"
+    },
+    "106": {
+      "conclusion": "success",
+      "created_at": "2026-09-21T00:00:07+00:00",
+      "event": "workflow_dispatch",
+      "id": "106",
+      "status": "completed",
+      "url": "https://example.invalid/run"
+    }
+  }
+}

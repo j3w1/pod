@@ -35,11 +35,22 @@ def _outcome_from_run(run: dict) -> tuple[str, str | None]:
 
 def _provider_run(run: dict) -> dict:
     return {"run_id": str(run.get("id")), "url": run.get("url"), "status": run.get("status"),
-            "conclusion": run.get("conclusion"), "created_at": run.get("created_at")}
+            "conclusion": run.get("conclusion"), "created_at": run.get("created_at"), "event": run.get("event")}
 
 
-def _pick_run(runs: list[dict], *, since: str) -> dict | None:
-    """The newest run of this workflow for this commit created at or after the submission."""
+DISPATCH_EVENT = "workflow_dispatch"
+
+
+def _requested_dispatch(row: dict) -> bool:
+    """A workflow_dispatch row the coordinator asked for, as opposed to one a publication started."""
+    return row["action"]["kind"] == "workflow_dispatch" and row.get("derived_from") is None
+
+
+def _pick_run(runs: list[dict], *, since: str, event: str | None = None) -> dict | None:
+    """The newest run of this workflow for this commit created at or after the submission.
+
+    With an event, only runs whose read-back event is exactly that one are candidates.
+    """
     try:
         # GitHub reports run creation to the second; the floor must not be finer.
         floor = datetime.fromisoformat(since).replace(microsecond=0)
@@ -47,6 +58,8 @@ def _pick_run(runs: list[dict], *, since: str) -> dict | None:
         floor = None
     candidates = []
     for run in runs:
+        if event is not None and run.get("event") != event:
+            continue
         created = run.get("created_at")
         try:
             stamp = datetime.fromisoformat(str(created).replace("Z", "+00:00")) if created else None
@@ -123,8 +136,12 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
         if kind == "remote_diagnostic":
             commit = unit["published"].get(branch["remote"] + "/" + branch["branch"]) or commit
         lookup = {"ref_commit": commit}
+        # A requested dispatch binds only a workflow_dispatch run, never a push or pull-request
+        # run that happens to sit on the same commit.
+        event = DISPATCH_EVENT if _requested_dispatch(row) else None
         try:
-            run = _pick_run(port.runs(workflow=workflow, commit=commit), since=row["receipt"]["started_at"])
+            run = _pick_run(port.runs(workflow=workflow, commit=commit), since=row["receipt"]["started_at"],
+                            event=event)
         except PodError as exc:
             if _uncertain(exc):
                 return "pending", lookup, "dispatched; run identity not read back yet"
@@ -150,7 +167,7 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
         return "pending", {"run_id": run_id, "rerun": True}, None
     if kind == "cancel_validation":
         target = _find_row(journal, row["action"]["target"])
-        run_id = (target["receipt"].get("provider") or {}).get("run_id")
+        run_id = _bound_run_id(target)
         older_same_unit = (target["action"]["unit"] == row["action"]["unit"]
                            and target.get("candidate_id") != row.get("candidate_id"))
         if target["outcome"] != "pending" or not target.get("cancel_safe") or not run_id or not older_same_unit:
@@ -164,6 +181,13 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
             raise
         return "PASS", {"run_id": str(run_id), "canceled_record": target["record_id"]}, None
     raise PodError("invalid_action", f"{kind} is decided by the governor but performed by project governance")
+
+
+def _bound_run_id(row: dict) -> str | None:
+    """The run a row is bound to; a run its readback rejected for another event is not one."""
+    if row.get("rejected_run") is not None:
+        return None
+    return (row["receipt"].get("provider") or {}).get("run_id")
 
 
 def _triggered_runs(port: GitHubPort, row: dict, commit: str) -> dict:
@@ -182,6 +206,40 @@ def _triggered_runs(port: GitHubPort, row: dict, commit: str) -> dict:
         if run is not None:
             triggered[workflow] = run
     return triggered
+
+
+def _record_run_event(row: dict, provider: dict | None) -> None:
+    """Record the event Pod itself read back for a workflow row's bound run.
+
+    Only execution and readback reach here; a caller-supplied provider receipt never sets it.
+    """
+    from .governor import DISPATCH_KINDS
+    if (row["action"]["kind"] in (*DISPATCH_KINDS, "validation_rerun") and provider is not None
+            and provider.get("run_id") and "event" in provider):
+        row["run_event"] = provider["event"]
+        if (row.get("rejected_run") or {}).get("run_id") not in (None, str(provider["run_id"])):
+            # A later readback bound the dispatch's own run; the rejected one stays out of it.
+            row.pop("rejected_run")
+
+
+def _reject_run(project: Path, objective: str, *, owner: str, record_id: str, run_id: str,
+                event: object) -> dict:
+    """Record that a requested dispatch's bound run is another event's; the row neither binds nor counts it."""
+    from .governor import _owned_state, _find_row, _read_journal, _record_path, _write_journal
+    context_path = _path(project, objective)
+    record_path = _record_path(project, objective)
+    with _lock(context_path):
+        _owned_state(project, objective, owner, context_path)
+        journal = _read_journal(record_path)
+        row = _find_row(journal, record_id)
+        row["rejected_run"] = {"run_id": run_id, "event": event if isinstance(event, str) else None}
+        _write_journal(record_path, journal)
+        return dict(row)
+
+
+def _rejected_reason(rejected: dict) -> str:
+    return (f"run {rejected['run_id']} was triggered by {rejected.get('event') or 'an unknown event'}, "
+            "not workflow_dispatch; it is not this dispatch's run")
 
 
 def _record_execution(project: Path, objective: str, *, owner: str, record_id: str, outcome: str,
@@ -203,8 +261,10 @@ def _record_execution(project: Path, objective: str, *, owner: str, record_id: s
                 row["receipt"]["provider"] = {**(row["receipt"].get("provider") or {}), **provider}
             if detail is not None:
                 row["receipt"]["detail"] = detail
+            _record_run_event(row, provider)
         else:
             _settle(journal, row, outcome=outcome, provider=provider, evidence=[], detail=detail, moment=moment)
+            _record_run_event(row, provider)
             if outcome == "PASS" and row["action"]["kind"] == "cancel_validation":
                 target = _find_row(journal, row["action"]["target"])
                 if target["outcome"] == "pending":
@@ -248,7 +308,7 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
         journal = _read_journal(_record_path(project, objective))
         for stale in admitted["superseded_validation"]:
             stale_row = _find_row(journal, stale)
-            if not (stale_row["receipt"].get("provider") or {}).get("run_id"):
+            if not _bound_run_id(stale_row):
                 # Nothing to cancel remotely; the row settles by readback or stays superseded.
                 result["cancellations"].append({"target": stale, "record_id": None, "decision": "DEFER",
                                                 "outcome": None, "detail": "no run identity to cancel"})
@@ -300,7 +360,9 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
     bounded_text(record_id, name="record_id", limit=128)
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
-    state = _owned_state(project, objective, owner, context_path)
+    with _lock(context_path):
+        # The authority join may rebind a runtime change; that write needs the objective lock (A2).
+        _owned_state(project, objective, owner, context_path)
     journal = _read_journal(record_path)
     row = _find_row(journal, record_id)
     if row["outcome"] not in ("UNKNOWN", "pending"):
@@ -332,17 +394,31 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
                                     provider=provider, detail=detail, now=moment) if outcome != "UNKNOWN" else row
         return {"status": settled["outcome"], "record_id": record_id, "action": "readback", "receipt": settled["receipt"]}
     if kind in DISPATCH_KINDS or kind == "validation_rerun":
-        run_id = provider.get("run_id")
+        rejected = row.get("rejected_run")
+        run_id = provider.get("run_id") if rejected is None else None
         lookup = provider.get("ref_commit") or commit
+        event = DISPATCH_EVENT if _requested_dispatch(row) else None
+        run = None
         if run_id:
             run = remote.run(run_id=str(run_id))
-        elif lookup is None:
-            return {"status": row["outcome"], "record_id": record_id, "action": "hold",
-                    "reason": "the row carries neither a run identity nor a commit to look up",
-                    "receipt": row["receipt"]}
-        else:
+            if event is not None and run.get("event") != event:
+                # A run bound before its event was read (a 0.6.6 row) that turns out to be another
+                # event's is not this dispatch's run: it is neither bound nor counted, and the row
+                # stops attaching identical requests. The row is then read back like one with no run.
+                rejected = _reject_run(project, objective, owner=owner, record_id=record_id,
+                                       run_id=str(run_id), event=run.get("event"))["rejected_run"]
+                run = None
+        if run is None and not (run_id and rejected is None):
+            if lookup is None:
+                return {"status": row["outcome"], "record_id": record_id, "action": "hold",
+                        "reason": "the row carries neither a run identity nor a commit to look up",
+                        "receipt": row["receipt"]}
             run = _pick_run(remote.runs(workflow=row["action"]["target"], commit=lookup),
-                            since=row["receipt"]["started_at"])
+                            since=row["receipt"]["started_at"], event=event)
+        if run is None and rejected is not None:
+            current = _find_row(_read_journal(record_path), record_id)
+            return {"status": current["outcome"], "record_id": record_id, "action": "hold",
+                    "reason": _rejected_reason(rejected), "receipt": current["receipt"]}
         if run is None:
             return {"status": "UNKNOWN", "record_id": record_id, "action": "hold",
                     "reason": "no run for this workflow and commit is visible since the submission",

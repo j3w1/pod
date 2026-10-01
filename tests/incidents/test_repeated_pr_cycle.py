@@ -79,8 +79,8 @@ class RepeatedPullRequestCycle(unittest.TestCase):
             self.assertEqual(port.calls, [])
 
             # The fourth correction is checked locally first: one publication, and the run it
-            # starts is journaled, so asking for the same validation attaches instead of
-            # starting a second run.
+            # starts is journaled. That push run is the validation the incident needed; it is
+            # not proof for an explicit dispatch, which would run its own (A3).
             candidate = prepare(4)
             for check in ("workflow-validation", "release-boundary-tests"):
                 record_preflight(project, "objective", owner="owner", unit="release-boundary",
@@ -90,11 +90,7 @@ class RepeatedPullRequestCycle(unittest.TestCase):
             self.assertFalse(published["receipt"]["provider"]["pr_reused"])
             run = ci_row(candidate)
             self.assertEqual(run["provider"]["run_id"], "100")
-            attached = execute(project, "objective", owner="owner", port=port, now=NOW,
-                               action=dispatch(unit="release-boundary", candidate=candidate["id"],
-                                               authorization=consent(candidate)))
-            self.assertEqual((attached["decision"], attached["reuse"]["kind"], attached["record_id"]),
-                             ("REUSE", "attach", run["record_id"]))
+            self.assertEqual(run["provider"]["event"], "push")
 
             # The run fails on a remote-only question. The reflex was another push; the
             # governor asks for a classification, then admits one narrow probe.
@@ -137,10 +133,10 @@ class RepeatedPullRequestCycle(unittest.TestCase):
             self.assertEqual([call for call in port.calls if call[0] == "cancel"], [("cancel", "101")])
             final = ci_row(candidate)
             self.assertEqual(final["provider"]["run_id"], "102")
-            self.assertEqual(execute(project, "objective", owner="owner", port=port, now=NOW,
-                                     action=dispatch(unit="release-boundary", candidate=candidate["id"],
-                                                     authorization=consent(candidate)))["decision"],
-                             "REUSE")
+            explicit = decide(project, "objective", owner="owner", now=NOW,
+                              action=dispatch(unit="release-boundary", candidate=candidate["id"],
+                                              authorization=consent(candidate)))
+            self.assertEqual((explicit["decision"], explicit["reuse"]), ("ALLOW", None))
 
             projection = status(project, "objective")
             started = sorted(port.run_status)
@@ -149,8 +145,8 @@ class RepeatedPullRequestCycle(unittest.TestCase):
                              [("dispatch", "probe.yml", "agent/release", {})])
             self.assertEqual(projection["counters"]["decisions"]["DEFER"], 5)
             self.assertEqual(projection["counters"]["deferrals"]["local_preflight_missing"], 3)
-            self.assertEqual(projection["counters"]["decisions"], {"ALLOW": 4, "DEFER": 5, "REUSE": 3})
-            self.assertEqual(projection["counters"]["attachments"], 3)
+            self.assertEqual(projection["counters"]["decisions"], {"ALLOW": 5, "DEFER": 5, "REUSE": 1})
+            self.assertEqual(projection["counters"]["attachments"], 1)
             self.assertEqual(projection["counters"]["evidence_reused"], 0)
             self.assertEqual(projection["counters"]["cancellations"], 1)
             self.assertEqual(projection["units"]["release-boundary"]["generation"], 5)

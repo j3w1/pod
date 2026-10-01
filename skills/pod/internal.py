@@ -8,7 +8,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from .errors import PodError
+from .errors import FieldRefusal, PodError
 from .records import (acceptance, integration_observation, packet, report, source_identity,
                       verify_sources)
 from .util import bounded_json, bounded_stdin_json, exact, route_flags
@@ -18,7 +18,7 @@ from .context import execution_brief
 def _governor_projection(project: Path, objective: str, owner: str, *, mutating: bool,
                          version_exempt: bool = False) -> dict:
     """Join Governor work to stable current-Run authority and objective assignments."""
-    from .ledger import bound_assignments, logical_projection, read
+    from .ledger import continuity_locked, logical_projection, read
     from .operations import OrcaPort
 
     state = read(project, objective)
@@ -31,9 +31,47 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     if mutating and not version_exempt:
         from .bundle import require_current_identity
         require_current_identity(state.get("checkpoint"))
+    port = OrcaPort(project)
+    authority_runs, runtimes, assignments = _governor_references(state)
+
+    def observe() -> dict:
+        return port.read_native(owner, authority_runs=tuple(sorted(authority_runs)) if mutating else (),
+                                assignments=tuple(assignments))
+    try:
+        native = observe()
+    except PodError:
+        # A mutating Governor path classifies a runtime change before its own runtime check (A2).
+        if not mutating or continuity_locked(project, objective, owner=owner, port=port) is None:
+            raise
+        state = read(project, objective)
+        authority_runs, runtimes, assignments = _governor_references(state)
+        native = observe()
+    else:
+        if (mutating and runtimes and native.get("runtime") not in runtimes
+                and continuity_locked(project, objective, owner=owner, port=port, current=native) is not None):
+            state = read(project, objective)
+            authority_runs, runtimes, assignments = _governor_references(state)
+            native = observe()
+    projection = logical_projection(project, native, objective=objective)
+    if not mutating:
+        return projection
+    if (native.get("authoritative") is not True or native.get("owner") != owner
+            or projection.get("authoritative") is not True
+            or projection.get("owner") != owner
+            or projection.get("runtime") != native.get("runtime")):
+        raise PodError("native_authority_unverified",
+                       "Governor mutation requires the current native objective owner")
+    if not authority_runs or any(runtime != native["runtime"] for runtime in runtimes):
+        raise PodError("native_authority_unverified",
+                       "Governor evidence belongs to another Orca Run or runtime")
+    return projection
+
+
+def _governor_references(state: dict | None) -> tuple[set[str], set[object], tuple[dict, ...]]:
+    """Run references, recorded runtimes and bound assignments the Governor joins."""
+    from .ledger import bound_assignments
     authority_runs: set[str] = set()
     runtimes: set[object] = set()
-    assignments = bound_assignments(state)
     if state is not None:
         for row in state.get("admissions", {}).values():
             if not isinstance(row, dict):
@@ -52,22 +90,7 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
                     and isinstance(ref_runtime, str) and ref_runtime):
                 authority_runs.add(run_id)
                 runtimes.add(ref_runtime)
-    native = OrcaPort(project).read_native(
-        owner, authority_runs=tuple(sorted(authority_runs)) if mutating else (),
-        assignments=tuple(assignments))
-    projection = logical_projection(project, native, objective=objective)
-    if not mutating:
-        return projection
-    if (native.get("authoritative") is not True or native.get("owner") != owner
-            or projection.get("authoritative") is not True
-            or projection.get("owner") != owner
-            or projection.get("runtime") != native.get("runtime")):
-        raise PodError("native_authority_unverified",
-                       "Governor mutation requires the current native objective owner")
-    if not authority_runs or any(runtime != native["runtime"] for runtime in runtimes):
-        raise PodError("native_authority_unverified",
-                       "Governor evidence belongs to another Orca Run or runtime")
-    return projection
+    return authority_runs, runtimes, bound_assignments(state)
 
 
 def _op_brief(request: dict) -> dict:
@@ -110,8 +133,18 @@ def _op_report(request: dict) -> dict:
             or admission.get("packet_id") != request["packet"].get("packet_id")):
         raise PodError("report_attempt_unverified", "No exact native admission binding")
     from .operations import OrcaPort, _binding_from_show, _reuse_effective_evidence
+    port = OrcaPort(Path(request["project"]))
     binding = admission["native_binding"]
-    shown = OrcaPort(Path(request["project"])).show_worker(binding["dispatchId"])
+    shown = port.show_worker(binding["dispatchId"])
+    if shown.get("runtime") != admission["runtime"]:
+        # A report read classifies a runtime change before its own runtime check (A2).
+        from .ledger import continuity_locked
+        if continuity_locked(Path(request["project"]), request["objective"], owner=admission["owner"],
+                             port=port) is not None:
+            state = read(Path(request["project"]), request["objective"])
+            admission = state["admissions"][request["admission_id"]]
+            binding = admission["native_binding"]
+            shown = port.show_worker(binding["dispatchId"])
     fresh = _binding_from_show(shown, admission, binding["dispatchId"])
     if fresh != binding:
         raise PodError("report_attempt_unverified", "Fresh native identity differs from admission")
@@ -122,7 +155,8 @@ def _op_report(request: dict) -> dict:
         from .ledger import update_admission
         update_admission(Path(request["project"]), request["objective"],
                          owner=admission["owner"], admission_id=admission["admission_id"],
-                         update=lambda row: row["route_decision"].update(route_mismatch=True))
+                         update=lambda row: row["route_decision"].update(route_mismatch=True),
+                         expected_runtime=admission["runtime"])
         raise PodError("route_mismatch", "Native effective route changed after start")
     if (admission["route_decision"].get("effective_unknown")
             and all(effective[key] != "unknown" for key in ("agent", "model", "effort"))):
@@ -135,7 +169,7 @@ def _op_report(request: dict) -> dict:
                 row["effective_evidence"]["inherited"] = inherited
         update_admission(Path(request["project"]), request["objective"],
                          owner=admission["owner"], admission_id=admission["admission_id"],
-                         update=refresh)
+                         update=refresh, expected_runtime=admission["runtime"])
     validated = report(request["report"], request["packet"],
                        {"runtime": admission["runtime"], **{key: binding[key] for key in
                         ("runId", "taskId", "dispatchId", "workerId")}})
@@ -402,6 +436,16 @@ def _op_admission(request: dict) -> dict:
                          reuse_of=request.get("reuse_of"), accompanying=request.get("map"))
 
 
+def _op_runtime_continuity(request: dict) -> dict:
+    exact(request, {"project", "objective", "owner", "decision"},
+          {"project", "objective", "owner", "decision"}, name="request")
+    from .ledger import owner_continuity
+    from .operations import OrcaPort
+    project = Path(request["project"])
+    return owner_continuity(project, request["objective"], owner=request["owner"],
+                            decision=request["decision"], port=OrcaPort(project))
+
+
 def _op_cleanup_plan(request: dict) -> dict:
     exact(request, {"project", "objective", "expect", "archives"}, {"project", "objective"}, name="request")
     from .cleanup import plan
@@ -440,6 +484,7 @@ _OPERATIONS = {
     'governor-reconcile': _op_governor_reconcile,
     'governor-status': _op_governor_status,
     'admission': _op_admission,
+    'runtime-continuity': _op_runtime_continuity,
     'cleanup-plan': _op_cleanup_plan,
     'map': _op_map,
 }
@@ -449,19 +494,31 @@ def run(operation: str, request: dict) -> dict:
     handler = _OPERATIONS.get(operation)
     if handler is None:
         raise PodError("unknown_operation", "Unsupported private helper operation")
-    return handler(request)
+    from .ledger import continuity_events
+    events = continuity_events()
+    token = events.set([])
+    try:
+        result = handler(request)
+        rebinds = events.get()
+    except FieldRefusal as exc:
+        # exact() cannot know the operation; the entry names it beside the record and fields.
+        exc.args = (f"internal {operation}: {exc}",)
+        exc.detail = {**(exc.detail or {}), "operation": operation}
+        raise
+    except PodError as exc:
+        # A rebind is recorded before the mutation's own checks; a later refusal still reports it.
+        if events.get() and (exc.detail is None or isinstance(exc.detail, dict)):
+            exc.detail = {**(exc.detail or {}), "runtime_continuity": events.get()}
+        raise
+    finally:
+        events.reset(token)
+    # A mutation that rebound a proven runtime continuity reports it (A2).
+    return {**result, "runtime_continuity": rebinds} if rebinds and isinstance(result, dict) else result
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
-    parser.add_argument("operation", choices=("brief", "packet", "report", "source",
-                                               "verify-sources", "acceptance", "integration-observe",
-                                               "issue-intake", "issue-recheck", "project-context",
-                                               "checkpoint", "admission", "constraint", "route-failure",
-                                               "governor", "governor-outcome", "governor-prepare",
-                                               "governor-preflight", "governor-classify",
-                                               "governor-correct", "governor-execute",
-                                               "governor-reconcile", "governor-status", "cleanup-plan", "map"))
+    parser.add_argument("operation", choices=tuple(_OPERATIONS))
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
