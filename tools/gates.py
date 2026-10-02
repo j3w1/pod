@@ -26,7 +26,7 @@ def commands(interpreter: str, empty_tree: str, root: Path) -> dict[str, list[st
         "unit": [interpreter, "-m", "unittest", "discover", "-s", "tests", "-v"],
         "incidents": [interpreter, "-m", "unittest", "discover", "-s", "tests/incidents",
                       "-t", ".", "-v"],
-        "pty": [interpreter, "-m", "unittest", "tests.test_tui_pty",
+        "pty": [interpreter, "-m", "unittest", "tests.test_tui_pty", "tests.test_workspace_pty",
                 "tests.test_sparse_toggle_pty", "tests.test_catalog_optional_pty", "-v"],
         "installer": [interpreter, "-m", "unittest", "tests.test_installer",
                       "tests.test_bundle_install", "-v"],

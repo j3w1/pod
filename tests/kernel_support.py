@@ -181,7 +181,7 @@ class GovernorFakePort:
 
 REQUEST='11111111-1111-4111-8111-111111111111'
 OTHER='22222222-2222-4222-8222-222222222222'
-ROUTE={'agent':'codex','model':'gpt-6-sol','effort':'medium','context':'native_default',
+ROUTE={'agent':'codex','model':'gpt-6.1-sol','effort':'medium','context':'native_default',
        'reason':'bounded implementation with tests'}
 
 

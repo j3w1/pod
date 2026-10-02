@@ -65,14 +65,18 @@ def assert_test_reference_exists(root: Path, path: str) -> None:
         raise ValueError(f"offline_test case does not exist: {path}")
 
 
+def spec_paths(root: Path) -> list[Path]:
+    """The index and every domain file, including nested ones such as docs/spec/models/."""
+    return [root / "docs" / "pod-spec.md", *sorted((root / "docs" / "spec").rglob("*.md"))]
+
+
 def spec_text(root: Path) -> str:
-    paths = [root / "docs" / "pod-spec.md", *sorted((root / "docs" / "spec").glob("*.md"))]
-    return "\n".join(path.read_text() for path in paths)
+    return "\n".join(path.read_text() for path in spec_paths(root))
 
 
 def spec_inventory(root: Path):
     text = spec_text(root)
-    requirements = re.findall(r"^### (R\d{2}) — .*\n\nType: ([BHI,]+) · Scenarios: (.*)$",
+    requirements = re.findall(r"^### (R\d{2,3}) — .*\n\nType: ([BHI,]+) · Scenarios: (.*)$",
                               text, flags=re.M)
     scenarios = re.findall(r'^- <a id="(a\d{2,3})"></a>\*\*(A\d{2,3})\*\*',
                            text, flags=re.M)
@@ -125,7 +129,8 @@ class InventoryIntegrityTests(unittest.TestCase):
         requirements, scenarios = spec_inventory(root)
         ids = [id for id, _, _ in requirements]
         scenario_ids = [id for _, id in scenarios]
-        self.assertEqual(sorted(ids), [f"R{i:02}" for i in range(1, len(ids) + 1)])
+        self.assertEqual(sorted(ids, key=lambda id: int(id[1:])),
+                         [f"R{i:02}" for i in range(1, len(ids) + 1)])
         self.assertEqual(sorted(scenario_ids, key=lambda id: int(id[1:])),
                          [f"A{i:02}" for i in range(1, len(scenario_ids) + 1)])
         self.assertEqual([anchor for anchor, id in scenarios], [id.lower() for id in scenario_ids])
@@ -176,7 +181,8 @@ class InventoryIntegrityTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         spec = spec_text(root)
         validation = (root / "docs" / "validation.md").read_text()
-        for phrase in ("All models", "My selection", "preference_changed",
+        for phrase in ("pod/v2", "setup_required", "config.yaml.pod-v1", "pod-catalog/v3",
+                       "pod-observations/v1", "preference_changed",
                        "Pending same-UUID replay", "native_default", "pod-context/v4",
                        "one-shot installer", "cleanup-plan", "--match-head-commit",
                        "delivery: {record}", "selection_required", "critical-path"):
@@ -185,14 +191,41 @@ class InventoryIntegrityTests(unittest.TestCase):
                              (root / "skills" / "pod" / "references").glob("*.md"))
         for phrase in ("publish", "merge_commit", "cleanup-plan", "`expect`",
                        "`pod internal map`", "Optimize time to a verified result",
-                       "Preferred is a small tie-breaker"):
+                       "Valid Preferred overrides", "Report pin conflicts"):
             self.assertIn(phrase, guidance)
+        skill = (root / "skills" / "pod" / "SKILL.md").read_text()
+        for phrase in ("material task-specific reason", "exact model and effort", "`preferred`"):
+            self.assertIn(phrase, skill)
         for phrase in ("POD_REQUIRE_PTY=1", "pod.catalog --check", "SHA-pinned public install",
                        "independent review", "live native"):
             self.assertIn(phrase, validation)
         for obsolete in ("config " + "approve", "pod setup", "quota_" + "fresh_seconds",
-                         "pod-context/" + "v3"):
+                         "pod-context/" + "v3", "effort stays " + "adaptive", "adaptive " + "effort",
+                         "selection: " + "custom", "All " + "models", "My " + "selection",
+                         "small " + "tie-breaker", "Recommended " + "ordering"):
             self.assertNotIn(obsolete, spec + validation)
+        for obsolete in ("small " + "tie-breaker", "effort stays " + "adaptive", "adaptive " + "effort",
+                         "The six " + "ids"):
+            self.assertNotIn(obsolete, guidance + (root / "skills" / "pod" / "SKILL.md").read_text())
+
+    def test_nested_model_specs_hold_each_model_rule_once(self):
+        root = Path(__file__).resolve().parents[1]
+        models = root / "docs" / "spec" / "models"
+        self.assertEqual(sorted(path.name for path in models.glob("*.md")),
+                         ["catalog.md", "preferences.md", "routing.md"])
+        index = (root / "docs" / "spec" / "models.md").read_text()
+        self.assertNotRegex(index, r"(?m)^### R\d")
+        self.assertNotIn('<a id="a', index)
+        homes = {}
+        for path in models.glob("*.md"):
+            for requirement in re.findall(r"(?m)^### (R\d{2,3}) — ", path.read_text()):
+                homes.setdefault(requirement, []).append(path.name)
+        for requirement, home in (("R09", "routing.md"), ("R15", "routing.md"), ("R101", "routing.md"),
+                                  ("R10", "preferences.md"), ("R21", "preferences.md"),
+                                  ("R100", "preferences.md"), ("R14", "catalog.md"),
+                                  ("R102", "catalog.md"), ("R103", "catalog.md")):
+            self.assertEqual(homes[requirement], [home])
+        self.assertIn(models / "routing.md", spec_paths(root))
 
     def test_referenced_fixture_cases_exist(self):
         root = Path(__file__).resolve().parents[1]
@@ -250,6 +283,14 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         for phrase in ("a direct objective uses the same flow", "Plan-only",
                        "reconcile changes", "Before implementation"):
             self.assertIn(phrase, text)
+
+    def test_installed_guidance_keeps_the_pin_limits(self):
+        # The 0.7.0 rewrite once dropped these limits from the runtime text, leaving them only in
+        # repository specs a dispatch never loads.
+        read = lambda *path: " ".join((self.root.joinpath("skills", "pod", *path)).read_text().split())
+        self.assertIn("not user constraints or non-model authority", read("SKILL.md"))
+        self.assertIn("A pin never overrides direct user constraints, host restrictions, review independence, "
+                      "tool permissions or spending limits. Report pin conflicts.", read("references", "models.md"))
 
     def test_new_objective_worktree_requests_the_orca_branch(self):
         # A host default such as agent/<task> once became the objective branch because

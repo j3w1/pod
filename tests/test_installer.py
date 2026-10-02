@@ -160,10 +160,13 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("pod-install: Preflight ready", first.stdout)
         self.assertIn("pod-install: Installed Codex skill:", first.stdout)
         from pod.bundle import BUNDLE_FILES
-        from pod.catalog import IDS
+        from pod.catalog import route_keys
         from pod.installer import bundle_digest
         from pod.config import load
-        self.assertEqual(load(personal=self.config)["eligible"], list(IDS))
+        fresh = load(personal=self.config)
+        self.assertEqual(fresh["eligible"], list(route_keys()))
+        self.assertEqual((fresh["schema"], fresh["preferred"], fresh["pinned"], fresh["max_active"], fresh["refresh"]),
+                         ("pod/v2", None, None, 2, "automatic"))
         self.assertEqual(self.launcher.stat().st_mode & 0o777, 0o755)
         self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT / "VERSION").read_text().strip())
         self.assertEqual(self.receipt.is_file(), True)
@@ -216,10 +219,10 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(self.config.exists())
 
     def test_valid_and_old_shape_preferences_are_preserved(self):
-        from pod.config import DEFAULT
+        from pod.config import defaults
         import yaml
         self.config.parent.mkdir(parents=True)
-        original = b"# mine\n" + yaml.safe_dump(DEFAULT, sort_keys=False).encode()
+        original = b"# mine\n" + yaml.safe_dump({**defaults(), "routes": {}}, sort_keys=False).encode()
         self.config.write_bytes(original)
         self.installed()
         self.assertEqual(self.config.read_bytes(), original)
@@ -235,6 +238,17 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), incompatible)
             report = json.loads(run_pod(env, "config", "--json").stdout)
             self.assertEqual(report["eligible"], [])
+            # A valid 0.6.x file is kept byte for byte and waits for its explicit route setup.
+            kept = (b"schema: pod/v1 # mine\nselection: custom\nmodels:\n  gpt-6-luna: disabled\n"
+                    b"workers: {max_active: 4}\n")
+            path.write_bytes(kept)
+            result = run_install(env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Preferences need route setup", result.stdout)
+            self.assertEqual(path.read_bytes(), kept)
+            report = json.loads(run_pod(env, "config", "--json").stdout)
+            self.assertEqual((report["status"], report["eligible"], report["setup"]["from_schema"]),
+                             ("setup_required", [], "pod/v1"))
 
     def test_exact_public_065_upgrade_preserves_no_pin_and_066_preserves_a_pin(self):
         # Both installers run only in a scrubbed home with offline dependencies/npx.
@@ -256,12 +270,15 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(upgraded.returncode, 0, upgraded.stdout + upgraded.stderr)
         self.assertEqual(self.config.read_bytes(), before)
         self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT/"VERSION").read_text().strip())
-        self.assertIsNone(json.loads(run_pod(self.env,"config","--json").stdout)["pinned_model"])
+        report = json.loads(run_pod(self.env,"config","--json").stdout)
+        self.assertEqual((report["status"], report["eligible"], report["pin_diagnostic"]), ("setup_required", [], None))
         self.config.write_bytes(before + b"pinned_model: gpt-6-sol\n")
         pinned = self.config.read_bytes()
         self.installed()
         self.assertEqual(self.config.read_bytes(), pinned)
-        self.assertEqual(json.loads(run_pod(self.env,"config","--json").stdout)["pinned_model"], "gpt-6-sol")
+        report = json.loads(run_pod(self.env,"config","--json").stdout)
+        self.assertEqual((report["status"], report["pinned"], report["pin_diagnostic"]),
+                         ("setup_required", None, "gpt-6-sol"))
 
     def test_exact_public_066_update_installs_the_current_version_and_keeps_preferences(self):
         # The 0.6.6 installer and update path run only in a scrubbed home with offline dependencies/npx.
@@ -283,7 +300,8 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(upgraded.returncode, 0, upgraded.stdout + upgraded.stderr)
         self.assertEqual(self.config.read_bytes(), pinned)
         self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT/"VERSION").read_text().strip())
-        self.assertEqual(json.loads(run_pod(self.env,"config","--json").stdout)["pinned_model"], "gpt-6-sol")
+        report = json.loads(run_pod(self.env,"config","--json").stdout)
+        self.assertEqual((report["status"], report["pin_diagnostic"]), ("setup_required", "gpt-6-sol"))
 
     def test_path_blocks_symlink_and_real_shell_resolution(self):
         self.installed()

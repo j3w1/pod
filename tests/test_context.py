@@ -23,6 +23,9 @@ class ContextTests(unittest.TestCase):
             execution_brief(['a','b'],[{'criterion':'a','check':'unit'}])
 
     def test_feedback_never_writes_or_infers_savings(self):
-        observed=[{'route':'gpt-6-sol','outcome':'blocked'}]*3
+        observed=[{'route':'codex/gpt-6.1-sol/high','outcome':'blocked'}]*3
         self.assertFalse(feedback(observed)['writes'])
+        self.assertEqual(feedback(observed)['suggestion'], 'Review the saved preference for codex/gpt-6.1-sol/high')
+        mixed=observed[:2]+[{'route':'codex/gpt-6.1-sol/xhigh','outcome':'blocked'}]
+        self.assertIsNone(feedback(mixed)['suggestion'])
         self.assertIsNone(feedback(observed[:2])['suggestion'])

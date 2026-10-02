@@ -13,9 +13,11 @@ from tests.kernel_support import KernelCase
 
 class StatusProjectionTests(unittest.TestCase):
     def test_unselected_run_has_the_existing_json_shape(self):
-        preferences = {"path": "/fixture/config.yaml", "revision": "r", "mode": "all",
-                       "eligible": [], "not_set": [], "max_active": 2, "errors": [],
-                       "pinned_model": None}
+        preferences = {"path": "/fixture/config.yaml", "schema": "pod/v2", "status": "valid",
+                       "revision": "r", "routes": {"codex/gpt-6.1-sol/high": "enabled"},
+                       "eligible": ["codex/gpt-6.1-sol/high"], "preferred": None,
+                       "pinned": "codex/gpt-6.1-sol/high", "max_active": 2, "refresh": "manual",
+                       "errors": [], "setup": None}
         with patch("pod.status.load_config", return_value=preferences), \
              patch("pod.status.running_identity", return_value={"version": "0.6.4", "bundle_digest": "d"}), \
              patch("pod.cli.current_run", return_value={"run": None}):
@@ -24,7 +26,10 @@ class StatusProjectionTests(unittest.TestCase):
             "schema": "pod-cli/v4", "status": "selection_required", "run": None,
             "bundle_identity": {"running": {"version": "0.6.4", "bundle_digest": "d"},
                                 "checkpoint": None, "drift": None},
-            "preferences": preferences, "constraints": [], "route_decisions": [],
+            "preferences": {key: value for key, value in preferences.items() if key != "routes"},
+            "routes": {"routes": 30, "enabled": 1, "disabled": 0, "not_set": 29, "preferred": None,
+                       "pinned": "codex/gpt-6.1-sol/high", "unmapped": 0},
+            "constraints": [], "route_decisions": [],
             "route_mismatch": False, "active_constraints": [], "effective_unknown": False,
             "installed_version_drift": False, "blocker": None,
             "next_safe_action": "select a native Run", "usage": "unknown", "cost": "unknown"})

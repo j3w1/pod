@@ -50,10 +50,13 @@ def safe_text(value: object, caps: Capabilities) -> str:
 
 def glyph(caps: Capabilities, name: str) -> str:
     symbols = {
-        "focus": (">", "▸"), "preferred": ("*", "★"),
-        "available": ("+", "✓"), "disabled": ("x", "⊘"),
+        "focus": (">", "▸"), "preferred": ("*", "★"), "pin": ("@", "●"),
+        "enabled": ("+", "✓"), "available": ("+", "✓"), "disabled": ("x", "⊘"), "not_set": ("-", "·"),
+        "unknown": ("?", "?"), "frontier": ("F", "◆"), "collapsed": ("[+]", "[+]"), "expanded": ("[-]", "[-]"),
+        # AA profile marks after a metric value; each stays distinct from every other mark.
+        "estimated": ("~", "~"), "fallback": ("#", "†"),
         "dash": ("-", "—"), "dot": (" | ", " · "),
-        "rule": ("-", "─"), "down": ("v", "↓"),
+        "rule": ("-", "─"), "down": ("v", "↓"), "up": ("^", "↑"),
     }
     pair = symbols[name]
     return pair[0] if caps.ascii_only else pair[1]

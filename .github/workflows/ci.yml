@@ -110,7 +110,7 @@ jobs:
           config = json.loads(pathlib.Path(sys.argv[2]).read_text())
           receipt = json.loads(pathlib.Path(sys.argv[3]).read_text())
           assert receipt['status'] == 'installed'
-          assert len(config['eligible']) == 6
+          assert config['eligible'] and set(config['eligible']) == {row['key'] for row in config['routes']}
           assert doctor['installation_checks']['healthy']
           assert doctor['installation_checks']['digest_matches']
           PY

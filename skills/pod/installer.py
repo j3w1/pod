@@ -224,6 +224,10 @@ def _path_label(path_status: str, notes: list[str]) -> str:
     return "ready" if "already on PATH" in path_status else "open a new shell"
 
 
+def _preference_label(status: str) -> str:
+    return {"invalid": "needs attention", "setup_required": "kept; route setup required"}.get(status, status)
+
+
 def _tty_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path_status: str,
                  notes: list[str], duplicates: list[str], preserved: Path | None) -> None:
     home = paths["home"]
@@ -233,11 +237,11 @@ def _tty_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path_sta
     _field("Codex skill", _display_path(paths["canonical"], home))
     _field("Claude Code skill", _display_path(paths["claude"] / "skills/pod", home))
     _field("pod command", _display_path(paths["launcher"], home))
-    state = "needs attention" if prefs[0] == "invalid" else prefs[0]
+    state = _preference_label(prefs[0])
     _field("Preferences", f"{state}  {_display_path(paths['config'] / 'config.yaml', home)}")
     _field("PATH", path_label)
     if prefs[1]:
-        _field("Attention", f"{prefs[1]}; run pod config edit")
+        _field("Attention", prefs[1] if prefs[0] == "setup_required" else f"{prefs[1]}; run pod config edit")
     if preserved:
         _field("Preserved", _display_path(preserved, home))
     for duplicate in duplicates:
@@ -261,6 +265,8 @@ def _tty_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path_sta
         print("  Resolve the PATH note above before using the pod command.", flush=True)
     if prefs[0] == "invalid":
         print("  Correct preferences with pod config edit before delegation.", flush=True)
+    elif prefs[0] == "setup_required":
+        print("  Open pod in a terminal and confirm the route setup before delegation.", flush=True)
     print("  Codex       $pod <objective>", flush=True)
     print("  Claude Code /pod <issue-url>", flush=True)
     print("  Optional    pod  (review models)", flush=True)
@@ -645,12 +651,16 @@ def _preferences(paths: dict[str, Path], python: Path) -> tuple[str, str | None]
     config = paths["config"] / "config.yaml"
     env = os.environ.copy()
     env["PYTHONPATH"] = str(paths["canonical"].parent)
+    # An existing file is never rewritten; a kept pod/v1 file waits for its explicit route setup.
     program = ("import json,sys\nfrom pathlib import Path\n"
-               "from pod.config import read_yaml,write_defaults\nfrom pod.errors import PodError\n"
+               "from pod.config import load,write_defaults\nfrom pod.errors import PodError\n"
                "p=Path(sys.argv[1]); made=False\n"
                "try:\n"
                " if not p.exists(): write_defaults(p); made=True\n"
-               " read_yaml(p); print(json.dumps({'status':'created' if made else 'kept'}))\n"
+               " s=load(personal=p)\n"
+               " if s['status']=='valid': print(json.dumps({'status':'created' if made else 'kept'}))\n"
+               " elif s['setup']: print(json.dumps({'status':'setup_required','reason':s['setup']['action']}))\n"
+               " else: print(json.dumps({'status':'invalid','reason':s['errors'][0]['message']}))\n"
                "except PodError as e: print(json.dumps({'status':'invalid','reason':str(e)}))\n")
     result = subprocess.run([str(python), "-c", program, str(config)], env=env,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
@@ -729,7 +739,8 @@ def _print_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path: 
     _say(f"Command: {paths['launcher']} ({path})")
     _say(f"Preferences: {paths['config'] / 'config.yaml'} ({prefs[0]})")
     if prefs[1]:
-        _say(f"Preferences need attention: {prefs[1]}; run pod config edit")
+        _say(f"Preferences need route setup: {prefs[1]}" if prefs[0] == "setup_required"
+             else f"Preferences need attention: {prefs[1]}; run pod config edit")
     if preserved:
         _say(f"Preserved changed skill at {preserved}")
     for duplicate in duplicates:
@@ -776,8 +787,8 @@ def install(stage: Path) -> int:
             prefs = _preferences(paths, python)
             if prefs[0] == "failed":
                 raise InstallError(1, (prefs[1] or "Preferences could not be prepared") + "; rerun the installer")
-            _stage("Preferences", state="warn" if prefs[0] == "invalid" else "ok",
-                   detail="needs attention" if prefs[0] == "invalid" else prefs[0])
+            _stage("Preferences", state="ok" if prefs[0] in ("created", "kept") else "warn",
+                   detail=_preference_label(prefs[0]))
             path_status, notes = _path(paths)
             _stage("PATH", state="ok" if _path_label(path_status, notes) == "ready" else "warn",
                    detail=_path_label(path_status, notes), plain="PATH: " + path_status)
@@ -823,9 +834,8 @@ def install(stage: Path) -> int:
         prefs = _preferences(paths, python)
         if prefs[0] == "failed":
             raise InstallError(3, (prefs[1] or "Preferences could not be prepared") + "; rerun the installer")
-        _stage("Preferences", state="warn" if prefs[0] == "invalid" else "ok",
-               detail="needs attention" if prefs[0] == "invalid" else prefs[0],
-               plain="Preferences: " + prefs[0])
+        _stage("Preferences", state="ok" if prefs[0] in ("created", "kept") else "warn",
+               detail=_preference_label(prefs[0]), plain="Preferences: " + prefs[0])
         path_status, notes = _path(paths)
         _stage("PATH", state="warn" if _path_label(path_status, notes) != "ready" else "ok",
                detail=_path_label(path_status, notes), plain="PATH: " + path_status)

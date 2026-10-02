@@ -103,15 +103,16 @@ class RequiredAuditTests(ks.KernelCase):
     def test_model_free_policy_pin_report_and_acceptance_preserve_audit(self):
         self.draft_intake()
         pref = load(self.project)
-        set_pin(Path(pref['path']), 'gpt-6-sol', displayed=pref)
+        set_pin(Path(pref['path']), 'codex/gpt-6.1-sol/medium', displayed=pref)
         from pod.ledger import constraints_update
         constraints_update(self.project, 'objective', owner='owner', action='add', value=
             {'id':'review-route','kind':'role_model','provenance':'repository',
              'role':'writer','value':'claude-opus-5-5'})
         frozen = self.packet(['PA'], role='review')
         admission = self.start('fresh-review', frozen)['admission']
-        self.assertEqual(admission['route_decision']['pinned_model'], 'gpt-6-sol')
-        self.assertIn('personal pin selected the model', admission['route_decision']['reason'])
+        self.assertEqual(admission['route_decision']['pinned_model'], 'gpt-6.1-sol')
+        self.assertEqual(admission['route_decision']['pinned_route'], 'codex/gpt-6.1-sol/medium')
+        self.assertIn('personal pin selected the route', admission['route_decision']['reason'])
         self.assertIn('review-route', admission['route_decision']['constraint_refs'])
         self.settle(admission)
         bad = self.stored()[:1]
@@ -206,14 +207,16 @@ class PinRoleBoundaryTests(ks.KernelCase):
         row = (ks.governance_policy(self) if role == 'review' else self.sub('S'))
         self.intake(row)
         pref = load(self.project)
-        set_pin(Path(pref['path']), 'gpt-6-sol', displayed=pref)
+        set_pin(Path(pref['path']), 'codex/gpt-6.1-sol/medium', displayed=pref)
         extras = {'resolves':'bounded question','stop_condition':'one answer'} if role == 'investigate' else {}
         frozen = self.packet([row['id']], role=role, **extras)
         admitted = self.start(role, frozen)['admission']
-        self.assertEqual(admitted['request']['model'], 'gpt-6-sol')
+        self.assertEqual(admitted['request']['model'], 'gpt-6.1-sol')
         self.assertEqual(admitted['request']['effort'], 'medium')
         self.assertEqual(admitted['role'], role)
-        self.assertEqual(admitted['route_decision']['pinned_model'], 'gpt-6-sol')
+        self.assertEqual(admitted['route_decision']['pinned_model'], 'gpt-6.1-sol')
+        self.assertEqual(admitted['route_decision']['route'], 'codex/gpt-6.1-sol/medium')
+        self.assertEqual(admitted['route_decision']['pinned_route'], 'codex/gpt-6.1-sol/medium')
 
     def test_implementation_role_uses_pin(self): self.admitted_role('implement')
     def test_investigation_role_uses_pin(self): self.admitted_role('investigate')

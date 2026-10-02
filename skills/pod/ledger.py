@@ -1234,6 +1234,9 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
     if body.get("policy_revision") != snapshot["policy_revision"]:
         raise PodError("policy_revision_mismatch", "Packet Governor policy changed")
     revision_changed = body.get("route", {}).get("preference_revision") != snapshot["revision"]
+    if snapshot.get("setup"):
+        # A kept 0.6.x file names its route setup rather than an empty worker ceiling.
+        raise PodError("setup_required", snapshot["errors"][0]["message"])
     ceiling = worker_ceiling(snapshot, state["constraints"])
     if len(projection["outstanding"]) >= ceiling:
         raise PodError("logical_capacity_full", "Objective logical worker ceiling is occupied")
@@ -1277,15 +1280,20 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
                     run_id: str, task_id: str, plan_revision: str, packet_id: str,
                     worktree: str, reuse_of: str | None, accompanying: dict | None) -> tuple[dict, dict]:
     from . import __version__
+    from .catalog import route_key
     from .obligations import admit, reserved_admission_shape
     stamp = moment.isoformat()
+    pinned = snapshot.get("pinned")
+    # Earlier rows keep `mode` and model-only `pinned_model`; new rows add the exact routes.
     decision = {"agent": requested["agent"], "model": requested["model"],
                 "requested_effort": requested["effort"], "requested_context": requested["context"],
-                "reason": requested["reason"] + ("; personal pin selected the model"
-                          if snapshot.get("pinned_model") else ""),
+                "reason": requested["reason"] + ("; personal pin selected the route" if pinned else ""),
                 "preference_revision": snapshot["revision"],
-                "policy_revision": snapshot["policy_revision"], "mode": snapshot["mode"],
-                "pinned_model": snapshot.get("pinned_model"),
+                "policy_revision": snapshot["policy_revision"],
+                "pinned_model": pinned.split("/")[1] if pinned else None,
+                "route": route_key(requested["agent"], requested["model"], requested["effort"]),
+                "preferred_route": snapshot.get("preferred"), "pinned_route": pinned,
+                "preference_schema": snapshot.get("schema"),
                 "constraint_refs": [c.get("id") for c in state["constraints"] if c.get("active", True)],
                 "pod_version": __version__, "effective": {"agent": "unknown", "model": "unknown",
                 "effort": "unknown", "context": "unknown"},

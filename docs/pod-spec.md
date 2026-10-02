@@ -2,14 +2,14 @@
 
 Status: requirements for the version in the root `VERSION` on the same commit. A test result does not revise a requirement; a behavior change updates its requirement, scenario and coverage row.
 
-Pod coordinates the current coding conversation toward a verified objective. The coordinator skill makes task decisions; bounded Python helpers validate admission and evidence. Orca remains authoritative for Runs, Tasks, Dispatches, placement and worker lifecycle. The kernel keeps objective obligations, a serialized admission boundary, exact native references and Governor decisions. One personal YAML file controls the eligible worker pool and logical ceiling; the bundled catalog supplies attributed model guidance and informational benchmarks. Host rules, direct user authorization and project governance keep their own authority.
+Pod coordinates the current coding conversation toward a verified objective. The coordinator skill makes task decisions; bounded Python helpers validate admission and evidence. Orca remains authoritative for Runs, Tasks, Dispatches, placement and worker lifecycle. The kernel keeps objective obligations, a serialized admission boundary, exact native references and Governor decisions. One personal YAML file controls the eligible exact model+effort routes, the Preferred and Pinned routes and the logical ceiling; the shipped registry supplies exact identities and attributed guidance, and dated public observations stay informational. Host rules, direct user authorization and project governance keep their own authority.
 
 Requirements use **B** for behavior, **H** for hard authorization and **I** for implementation. A requirement links to observable acceptance scenarios; scenario text is the expected result, not proof. `docs/pod-coverage.json` maps scenarios to unit, PTY, installed bundle, hosted CI, live native or independent review evidence. `NOT_RUN` remains unavailable evidence.
 
 ## Domains
 
 - [Coordination and obligations](spec/coordination.md)
-- [Models and preferences](spec/models.md)
+- [Models](spec/models.md): [routing](spec/models/routing.md), [preferences](spec/models/preferences.md) and [catalog](spec/models/catalog.md)
 - [Orca integration and recovery](spec/orca.md)
 - [Assurance and evidence](spec/assurance.md)
 - [Delivery and cleanup](spec/delivery.md)

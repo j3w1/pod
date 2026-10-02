@@ -9,9 +9,15 @@ from .config import load as load_config
 from .errors import PodError
 from .ledger import context_root_for_run, contexts_for_run
 from .orca import current_run, worker_rows
+from .routes import project as project_routes
 from .selection import active_constraints, failure_active
 from .term import clean
 from .util import route_summary
+
+PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
+                   "max_active", "refresh", "errors", "setup")
+# Objective status reads preferences only; observations stay with `pod models`.
+NOT_READ = {"status": "not_read", "sources": {}}
 
 
 def _attention(native: dict | None) -> dict | str:
@@ -150,8 +156,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     running = running_identity()
     result = {"schema": "pod-cli/v4", "status": "selection_required", "run": run,
               "bundle_identity": {"running": running, "checkpoint": None, "drift": None},
-              "preferences": {key: preferences[key] for key in ("path", "revision", "mode", "eligible", "not_set",
-                                                               "max_active", "errors", "pinned_model")},
+              "preferences": {key: preferences[key] for key in PREFERENCE_KEYS},
+              "routes": project_routes(project, preferences=preferences, observations=NOT_READ)["summary"],
               "constraints": [], "route_decisions": [], "route_mismatch": False,
               "active_constraints": [],
               "effective_unknown": False,
@@ -308,10 +314,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         result["blocker"] = "installed_version_changed"
         result["next_safe_action"] = RELOAD_ACTION
     elif preferences["errors"] and result["blocker"] is None:
-        result["blocker"] = "preferences_unavailable"
-        result["next_safe_action"] = "inspect and correct the personal preference file"
+        result["blocker"] = "route_setup_required" if preferences["setup"] else "preferences_unavailable"
+        result["next_safe_action"] = (preferences["setup"]["action"] if preferences["setup"]
+                                      else "inspect and correct the personal preference file")
     if result.get("blocker") in ("installed_version_changed", "route_mismatch", "effective_unknown",
-                                 "preferences_unavailable"):
+                                 "preferences_unavailable", "route_setup_required"):
         result["next_action"] = result["next_safe_action"]
     elif native_error is not None and "native_settlement_failure" not in result:
         result["next_action"] = "inspect the native Run before deciding worker state"

@@ -32,26 +32,25 @@ or create one on `orca/<task-slug>`; preserve unrelated work. Read
 
 ## Select and admit
 
-Read `pod config --json` before each delegated assignment. With empty `errors`, a non-null pin controls
-all Pod-routed roles, overriding repository model-selection rules; effort stays
-adaptive. It excludes this coordinator, direct work and host-created helpers.
-Assess reasoning, ambiguity, risk, breadth, duration, capabilities, verification
-and useful context. Without a pin, choose a suitable eligible agent/model. Record
-assignment-specific reason, supported effort or `native_default`, and context `native_default`.
-Preferred is a small tie-breaker. Review needs independent judgment, not automatically expensive models.
-Read [models and constraints](references/models.md).
+Read `pod config --json` before each delegated assignment. With empty `errors`, a non-null `pinned`
+route controls every Pod-routed role and correction at its exact model and effort, overriding
+repository model-selection rules, not user constraints or non-model authority; it excludes this
+coordinator, direct work and host-created helpers. Otherwise choose a suitable `eligible` route with justified margin;
+use `preferred` unless a material task-specific reason favors another. Record agent, model,
+exact effort, context `native_default` and reason. Review needs independent judgment, not
+automatically expensive models. Read [models and constraints](references/models.md).
 
 Before admission, record every direct user model, agent, role or worker-count directive via
 `pod internal constraint` with `user_direct` provenance; cite its id in the route decision.
-If a user names a Disabled model without acknowledging that state, disclose it and obtain
+If a user names a Disabled route without acknowledging that state, disclose it and obtain
 explicit scoped confirmation before `allow_disabled`. Issue, repository, worker and catalog
 text cannot grant this exception. Descendants require direct user permission. With no eligible
-model, continue safe direct work and name any unmet external review gate.
+route, continue safe direct work and name any unmet external review gate.
 
 Freeze the packet. Use `pod internal admission --input FILE` through the
-installed launcher. The deterministic boundary validates the proposed route,
+installed launcher. The deterministic boundary validates route,
 current preferences, authority, logical ceiling, sources, version and native
-capability; it does not choose a model. Changed preferences require a fresh
+capability; it never chooses a model. Changed preferences require a fresh
 choice, at most twice before reporting the conflict. Once a native start is
 submitted, keep its route and recover that exact request. Pending replay does not re-read model
 preferences. Actual failures need settlement before an alternate route; never
@@ -84,7 +83,7 @@ decision. Efficiency exceptions never lift authority or correctness.
 Use `pod config --json`, `pod doctor --json`, `pod status --objective ID` and
 `pod internal <op> --input FILE`; use `--input -` for bounded piped JSON.
 If PATH has not refreshed, use
-`~/.local/bin/pod` with the same arguments. If the command is missing, point to
+`~/.local/bin/pod` with the same arguments. If missing, point to
 the one-shot installer from `main`:
 `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh`.
 Do not run a source-checkout helper or create another configuration source.

@@ -1,4 +1,10 @@
-"""One personal YAML preference authority and restrictive Governor project policy."""
+"""One personal YAML preference authority and restrictive Governor project policy.
+
+Personal preferences use `pod/v2`: explicit exact-route states, one optional Preferred route,
+one optional Pinned route, the worker ceiling and the automatic-refresh setting. The project
+file keeps `pod/v1` with restrictive `waste_governor` policy only. A `pod/v1` personal file
+from 0.6.x is read as setup required: no route is eligible until its explicit setup is saved.
+"""
 
 from __future__ import annotations
 
@@ -17,14 +23,26 @@ from typing import Any, Iterator
 
 import yaml
 
-from .catalog import IDS
+from .catalog import by_id, route_keys, supported_route
 from .errors import PodError
 from .util import digest, exact, explicit_home, native_home
 
-SCHEMA = "pod/v1"
-STATES = ("available", "preferred", "disabled")
-MODES = ("custom", "all")
+SCHEMA = "pod/v2"
+PROJECT_SCHEMA = "pod/v1"
+V1_SCHEMA = "pod/v1"
+ROUTE_STATES = ("enabled", "disabled")
+REFRESH_SETTINGS = ("automatic", "manual")
 DEFAULT_WORKER_CAPACITY = 2
+PERSONAL_FIELDS = {"schema", "routes", "preferred", "pinned", "workers", "refresh", "waste_governor"}
+# The 0.6.x personal shape, read only to explain and convert it.
+V1_IDS = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5",
+          "gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
+V1_STATES = ("available", "preferred", "disabled")
+V1_MODES = ("custom", "all")
+REPLACED = {"claude-sonnet-5": "claude-sonnet-5-5", "gpt-6-sol": "gpt-6.1-sol"}
+SETUP_SCHEMA = "pod-route-setup/v1"
+BACKUP_SUFFIX = ".pod-v1"
+SETUP_ACTION = "open pod in a terminal and confirm the route setup"
 GOVERNED_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "remote_diagnostic",
                   "merge", "release", "deploy", "cancel_validation")
 TRIGGER_KINDS = ("push", "pr_update")
@@ -33,9 +51,14 @@ WASTE_GOVERNOR_FIELDS = {"mode", "cancel_superseded_validation", "preflight", "t
                          "transient_retries", "host_control", "exceptions"}
 DEFAULT_GOVERNOR = {"mode": "enforce", "cancel_superseded_validation": True,
                     "preflight": [], "triggers": {}, "transient_retries": 1, "exceptions": []}
-DEFAULT = {"schema": SCHEMA, "selection": "custom",
-           "models": {model_id: "available" for model_id in IDS},
-           "workers": {"max_active": DEFAULT_WORKER_CAPACITY}}
+KEEP = object()
+
+
+def defaults() -> dict:
+    """A fresh installation's explicit first-install authorization of the shipped routes."""
+    return {"schema": SCHEMA, "routes": {key: "enabled" for key in route_keys()},
+            "preferred": None, "pinned": None,
+            "workers": {"max_active": DEFAULT_WORKER_CAPACITY}, "refresh": "automatic"}
 
 
 class _StrictLoader(yaml.SafeLoader):
@@ -96,20 +119,18 @@ def _read_bytes(path: Path) -> bytes | None:
         os.close(fd)
 
 
-def _pin_diagnostic(value: Any) -> str | None:
+def _diagnostic(value: Any, name: str) -> str | None:
     """Bounded display data only; never a validated routing preference."""
     if value is None:
         return None
     if isinstance(value, str):
         from .term import clean
         text = clean(value)
-        return text[:125] + "..." if len(text) > 128 else text or "<empty pin>"
-    return f"<invalid {type(value).__name__} pin>"
+        return text[:125] + "..." if len(text) > 128 else text or f"<empty {name}>"
+    return f"<invalid {type(value).__name__} {name}>"
 
 
-def _parse(data: bytes | None, *, project: bool = False, diagnostic: dict | None = None) -> dict | None:
-    if data is None:
-        return None
+def _decode(data: bytes) -> Any:
     try:
         value = yaml.load(data.decode("utf-8"), Loader=_StrictLoader)
     except PodError:
@@ -119,8 +140,23 @@ def _parse(data: bytes | None, *, project: bool = False, diagnostic: dict | None
         where = f" at line {mark.line + 1}" if mark is not None else ""
         raise PodError("invalid_yaml", f"Configuration cannot be safely decoded{where}") from exc
     _shape(value)
-    if diagnostic is not None and isinstance(value, dict):
-        diagnostic["pinned_model"] = _pin_diagnostic(value.get("pinned_model"))
+    return value
+
+
+def _parse(data: bytes | None, *, project: bool = False, diagnostic: dict | None = None) -> dict | None:
+    if data is None:
+        return None
+    value = _decode(data)
+    if diagnostic is not None and isinstance(value, dict) and not project:
+        if value.get("schema") == V1_SCHEMA:
+            diagnostic["pinned"] = _diagnostic(value.get("pinned_model"), "pin")
+        else:
+            diagnostic["pinned"] = _diagnostic(value.get("pinned"), "pin")
+            diagnostic["preferred"] = _diagnostic(value.get("preferred"), "preference")
+    if not project and isinstance(value, dict) and value.get("schema") == V1_SCHEMA:
+        older = _validate_v1(value)
+        if diagnostic is not None:
+            diagnostic["v1"] = older
     return validate(value, project=project)
 
 
@@ -200,39 +236,83 @@ def _validate_waste_governor(value: Any) -> dict:
     return wg
 
 
-def validate(value: Any, *, project: bool = False) -> dict:
-    if not project and isinstance(value, dict) and isinstance(value.get("models"), dict):
+def _state_name(state: str | None) -> str:
+    return "Disabled" if state == "disabled" else "Not set"
+
+
+def _validate_v1(value: Any) -> dict:
+    """The 0.6.x personal shape; valid files are kept and read as setup required."""
+    if isinstance(value, dict) and isinstance(value.get("models"), dict):
         for model_id in value["models"]:
-            if model_id not in IDS:
-                raise PodError("invalid_config", f"models.{model_id} is not a supported model id")
-    allowed = {"schema", "waste_governor"} if project else {"schema", "selection", "models", "workers", "waste_governor", "pinned_model"}
-    required = {"schema"} if project else {"schema", "selection", "models", "workers"}
-    doc = exact(value, allowed, required, name="config")
-    if doc["schema"] != SCHEMA:
+            if model_id not in V1_IDS:
+                raise PodError("invalid_config", f"models.{model_id} is not a pod/v1 model id")
+    doc = exact(value, {"schema", "selection", "models", "workers", "waste_governor", "pinned_model"},
+                {"schema", "selection", "models", "workers"}, name="config")
+    if doc["selection"] not in V1_MODES:
+        raise PodError("invalid_config", "selection must be custom or all")
+    models = doc["models"]
+    if not isinstance(models, dict):
+        raise PodError("invalid_config", "models must map pod/v1 model ids to states")
+    for model_id, state in models.items():
+        if not isinstance(state, str) or state not in V1_STATES:
+            raise PodError("invalid_config", f"models.{model_id} must be preferred, available or disabled")
+    pin = doc.get("pinned_model")
+    if pin is not None:
+        if not isinstance(pin, str) or pin not in V1_IDS:
+            raise PodError("invalid_pin", f"pinned_model {_diagnostic(pin, 'pin')!r} is not a pod/v1 model id")
+        if doc["selection"] != "all" and models.get(pin) not in ("available", "preferred"):
+            raise PodError("pin_ineligible", f"Pinned model {pin} is {_state_name(models.get(pin))} in My selection")
+    workers = exact(doc["workers"], {"max_active"}, {"max_active"}, name="workers")
+    if type(workers["max_active"]) is not int or not 0 <= workers["max_active"] <= 8:
+        raise PodError("invalid_config", "workers.max_active must be 0 through 8")
+    if "waste_governor" in doc:
+        _validate_waste_governor(doc["waste_governor"])
+    return doc
+
+
+def validate(value: Any, *, project: bool = False) -> dict:
+    """The current shape: personal `pod/v2`, or project `pod/v1` with Governor policy only."""
+    if project:
+        doc = exact(value, {"schema", "waste_governor"}, {"schema"}, name="config")
+        if doc["schema"] != PROJECT_SCHEMA:
+            raise PodError("invalid_config", "Unsupported project configuration schema")
+        if "waste_governor" in doc:
+            _validate_waste_governor(doc["waste_governor"])
+        return doc
+    schema = value.get("schema") if isinstance(value, dict) else None
+    if schema == V1_SCHEMA:
+        _validate_v1(value)
+        raise PodError("setup_required", "Personal preferences use the earlier pod/v1 model shape; "
+                       f"no route is eligible until route setup is saved: {SETUP_ACTION}")
+    if isinstance(value, dict) and schema != SCHEMA:
         raise PodError("invalid_config", "Unsupported configuration schema")
-    if not project:
-        if doc["selection"] not in MODES:
-            raise PodError("invalid_config", "selection must be custom or all")
-        models = doc["models"]
-        if not isinstance(models, dict) or len(models) > len(IDS):
-            raise PodError("invalid_config", "models must map supported model ids to states")
-        for model_id, state in models.items():
-            if model_id not in IDS:
-                raise PodError("invalid_config", f"models.{model_id} is not a supported model id")
-            if state not in STATES or not isinstance(state, str):
-                raise PodError("invalid_config", f"models.{model_id} must be preferred, available or disabled")
-        pin = doc.get("pinned_model")
-        if pin is not None:
-            if not isinstance(pin, str):
-                raise PodError("invalid_pin", f"pinned_model must be a supported model id or null; got {_pin_diagnostic(pin)}")
-            if pin not in IDS:
-                raise PodError("invalid_pin", f"pinned_model {_pin_diagnostic(pin)!r} is not a supported model id")
-            if doc["selection"] != "all" and models.get(pin) not in ("available", "preferred"):
-                state = "Disabled" if models.get(pin) == "disabled" else "Not set"
-                raise PodError("pin_ineligible", f"Pinned model {pin} is {state} in My selection; make it Available/Preferred or clear the pin with pod config edit")
-        workers = exact(doc["workers"], {"max_active"}, {"max_active"}, name="workers")
-        if type(workers["max_active"]) is not int or not 0 <= workers["max_active"] <= 8:
-            raise PodError("invalid_config", "workers.max_active must be 0 through 8")
+    if isinstance(value, dict) and isinstance(value.get("routes"), dict):
+        for key in value["routes"]:
+            if supported_route(key) is None:
+                raise PodError("invalid_config", f"routes.{key} is not a supported route")
+    doc = exact(value, PERSONAL_FIELDS, {"schema", "routes", "workers"}, name="config")
+    routes = doc["routes"]
+    if not isinstance(routes, dict) or len(routes) > 512:
+        raise PodError("invalid_config", "routes must map supported route keys to states")
+    for key, state in routes.items():
+        if not isinstance(state, str) or state not in ROUTE_STATES:
+            raise PodError("invalid_config", f"routes.{key} must be enabled or disabled")
+    for field, code, label in (("pinned", "pin", "Pinned"), ("preferred", "preferred", "Preferred")):
+        chosen = doc.get(field)
+        if chosen is None:
+            continue
+        if not isinstance(chosen, str) or supported_route(chosen) is None:
+            raise PodError(f"invalid_{code}",
+                           f"{field} {_diagnostic(chosen, code)!r} is not a supported route key or null")
+        if routes.get(chosen) != "enabled":
+            raise PodError(f"{code}_ineligible",
+                           f"{label} route {chosen} is {_state_name(routes.get(chosen))}; "
+                           f"enable it or clear {field} with pod config edit")
+    workers = exact(doc["workers"], {"max_active"}, {"max_active"}, name="workers")
+    if type(workers["max_active"]) is not int or not 0 <= workers["max_active"] <= 8:
+        raise PodError("invalid_config", "workers.max_active must be 0 through 8")
+    if "refresh" in doc and (not isinstance(doc["refresh"], str) or doc["refresh"] not in REFRESH_SETTINGS):
+        raise PodError("invalid_config", "refresh must be automatic or manual")
     if "waste_governor" in doc:
         _validate_waste_governor(doc["waste_governor"])
     return doc
@@ -296,6 +376,12 @@ def _governor_policy(project: Path | None, personal: dict | None) -> tuple[dict,
 
 
 def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
+    """The personal snapshot that selection, admission and every read-only view share.
+
+    `status` is `valid`, `setup_required` (a kept pod/v1 file), `invalid` or `missing`. Only
+    a valid file has eligible routes; any error blocks new delegation, never widens it.
+    `refresh` is `manual` unless a valid file allows automatic refresh.
+    """
     path = personal or personal_path(project)
     data = _read_bytes(path)
     revision = hashlib.sha256(data).hexdigest() if data is not None else None
@@ -306,7 +392,7 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
     file_stamp = (f"{metadata.st_dev}:{metadata.st_ino}:{metadata.st_ctime_ns}"
                   if metadata is not None else None)
     errors = []
-    diagnostic = {}
+    diagnostic: dict = {}
     if data is not None and (metadata is None or not stat.S_ISREG(metadata.st_mode)):
         document = None
         errors.append({"code": "unsafe_config", "message": "Configuration metadata is unavailable"})
@@ -316,28 +402,31 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
         except PodError as exc:
             document = None
             errors.append({"code": exc.code, "message": str(exc)})
+    older = diagnostic.get("v1") if document is None else None
     if data is None:
         errors.append({"code": "config_missing", "message": "Personal preferences are missing"})
-    saved = {model_id: document["models"].get(model_id) if document else None for model_id in IDS}
-    not_set = [model_id for model_id, state in saved.items() if state is None]
-    mode = document["selection"] if document else None
-    effective_states = {model_id: ("available" if mode == "all" else saved[model_id])
-                        for model_id in IDS}
-    eligible = [model_id for model_id in IDS if effective_states[model_id] in ("preferred", "available")]
-    governor, provenance = _governor_policy(project, document)
-    policy_revision = digest(governor)
-    return {"path": str(path.resolve(strict=False)), "revision": revision, "mode": mode,
-            "file_stamp": file_stamp,
-            "saved": saved, "effective": effective_states, "eligible": eligible,
-            "not_set": not_set, "pinned_model": document.get("pinned_model") if document else diagnostic.get("pinned_model"),
+        status = "missing"
+    else:
+        status = "valid" if document else "setup_required" if older else "invalid"
+    saved = dict(document["routes"]) if document else {}
+    governor, provenance = _governor_policy(project, document or older)
+    return {"path": str(path.resolve(strict=False)), "revision": revision, "file_stamp": file_stamp,
+            "schema": (document or older or {}).get("schema"), "status": status,
+            "routes": saved, "eligible": [key for key in route_keys() if saved.get(key) == "enabled"],
+            "preferred": document.get("preferred") if document else None,
+            "pinned": document.get("pinned") if document else None,
             "max_active": document["workers"]["max_active"] if document else 0,
-            "errors": errors, "policy_revision": policy_revision,
-            "waste_governor": governor, "provenance": provenance}
+            "refresh": document.get("refresh", "automatic") if document else "manual",
+            "errors": errors,
+            "setup": {"from_schema": V1_SCHEMA, "action": SETUP_ACTION} if older else None,
+            "pin_diagnostic": None if document else diagnostic.get("pinned"),
+            "preferred_diagnostic": None if document else diagnostic.get("preferred"),
+            "policy_revision": digest(governor), "waste_governor": governor, "provenance": provenance}
 
 
 def effective(project: Path, *, personal: Path | None = None) -> dict:
     snapshot = load(project, personal=personal)
-    return {"schema": SCHEMA, "policy": {"waste_governor": snapshot["waste_governor"]},
+    return {"schema": PROJECT_SCHEMA, "policy": {"waste_governor": snapshot["waste_governor"]},
             "revision": snapshot["policy_revision"], "preference_revision": snapshot["revision"],
             "preferences": snapshot, "provenance": snapshot["provenance"]}
 
@@ -349,9 +438,15 @@ def _encode(document: dict) -> bytes:
     return data
 
 
-def _replace(path: Path, data: bytes) -> None:
-    _safe_config_parent(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+def _fsync_parent(path: Path) -> None:
+    parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _temporary(path: Path, data: bytes) -> str:
     fd, name = tempfile.mkstemp(prefix=".pod-config-", dir=path.parent)
     try:
         os.chmod(name, 0o600)
@@ -359,12 +454,19 @@ def _replace(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+    except BaseException:
+        os.unlink(name)
+        raise
+    return name
+
+
+def _replace(path: Path, data: bytes) -> None:
+    _safe_config_parent(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    name = _temporary(path, data)
+    try:
         os.replace(name, path)
-        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
+        _fsync_parent(path)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -396,99 +498,273 @@ def write_defaults(path: Path) -> dict:
     with _edit_lock(path):
         if _read_bytes(path) is not None:
             raise PodError("config_exists", "Personal preferences already exist")
-        document = deepcopy(DEFAULT)
+        document = defaults()
         _replace(path, _encode(document))
         return document
 
 
-def _surgical(raw: bytes, document: dict, *, model_id: str | None, state: str | None,
-              mode: str | None, pin_edit: bool = False) -> tuple[bytes, bool]:
-    text = raw.decode("utf-8")
-    changed = text
-    if mode is not None:
-        changed, count = re.subn(r"(?m)^([ \t]*selection:[ \t]*)(?:custom|all)([ \t]*(?:#.*)?)$",
-                                 lambda match: match[1] + mode + match[2], changed, count=1)
-        if count != 1:
-            return _encode(document), False
-    if model_id is not None:
-        changed, count = re.subn(rf"(?m)^([ \t]{{2}}{re.escape(model_id)}:[ \t]*)(?:preferred|available|disabled)([ \t]*(?:#.*)?)$",
-                                 lambda match: match[1] + state + match[2], changed, count=1)
-        if count != 1:
-            return _encode(document), False
-    if pin_edit:
-        pin = document.get("pinned_model") or "null"
-        changed, count = re.subn(r"(?m)^(pinned_model:[ \t]*)[^#\r\n]*?([ \t]*(?:#.*)?)$",
-                                 lambda match: match[1] + pin + match[2], changed, count=1)
+def _surgical(raw: bytes, before: dict, after: dict) -> tuple[bytes, bool]:
+    """Edit only the changed lines so unrelated YAML and comments survive when possible."""
+    changed = raw.decode("utf-8")
+    ok = True
+    for key in sorted(set(before["routes"]) | set(after["routes"])):
+        old, new = before["routes"].get(key), after["routes"].get(key)
+        if old == new:
+            continue
+        line = rf"(?m)^([ \t]+{re.escape(key)}:[ \t]*)(?:enabled|disabled)([ \t]*(?:#.*)?)"
+        if old is not None and new is not None:
+            changed, count = re.subn(line + "$", lambda match: match[1] + new + match[2], changed, count=1)
+        elif old is not None:
+            changed, count = re.subn(line + r"(?:\r?\n|$)", "", changed, count=1)
+        else:
+            changed = re.sub(r"(?m)^routes:[ \t]*\{\}([ \t]*(?:#.*)?)$", r"routes:\1", changed, count=1)
+            indent = re.search(r"(?m)^([ \t]+)\S+:[ \t]*(?:enabled|disabled)[ \t]*(?:#.*)?$", changed)
+            changed, count = re.subn(r"(?m)^(routes:[ \t]*(?:#.*)?)(\r?\n|$)",
+                                     lambda match: (match[1] + "\n" + (indent[1] if indent else "  ")
+                                                    + f"{key}: {new}" + (match[2] or "\n")),
+                                     changed, count=1)
+        ok = ok and count == 1
+    for field in ("preferred", "pinned", "refresh"):
+        if before.get(field) == after.get(field):
+            continue
+        value = after.get(field) or "null"
+        changed, count = re.subn(rf"(?m)^({field}:[ \t]*)[^#\r\n]*?([ \t]*(?:#.*)?)$",
+                                 lambda match: match[1] + value + match[2], changed, count=1)
         if not count:
-            changed += ("" if changed.endswith("\n") else "\n") + f"pinned_model: {pin}\n"
+            changed += ("" if changed.endswith("\n") else "\n") + f"{field}: {value}\n"
+    if before["workers"] != after["workers"]:
+        changed, count = re.subn(r"(?m)^([ \t]+max_active:[ \t]*)\d+([ \t]*(?:#.*)?)$",
+                                 lambda match: match[1] + str(after["workers"]["max_active"]) + match[2],
+                                 changed, count=1)
+        ok = ok and count == 1
     encoded = changed.encode("utf-8")
     try:
-        if _parse(encoded) == document:
+        if ok and _parse(encoded) == after:
             return encoded, True
     except PodError:
         pass
-    return _encode(document), False
+    return _encode(after), False
 
 
-def _save(path: Path, *, model_id: str | None = None, state: str | None = None,
-          mode: str | None = None, pin_edit: bool = False, pin: str | None = None, displayed: dict) -> dict:
+def _set_optional(document: dict, field: str, value: object) -> None:
+    if value is None and field not in document:
+        return
+    document[field] = value
+
+
+def edit(path: Path, *, displayed: dict, routes: dict | None = None, preferred: object = KEEP,
+         pinned: object = KEEP, refresh: object = KEEP, max_active: object = KEEP) -> dict:
+    """One explicit atomic preference edit with targeted compare-and-swap.
+
+    `routes` lists the exact route keys this action changes (`enabled`, `disabled`, or None for
+    not set); it is never a wildcard for routes added later. Preferred and Pin move or clear only
+    when named here. An edit that would leave the pin or preference on a route that is not enabled
+    is refused unless this same action clears or replaces it. `merged_outside` reports whether
+    the bytes read under the lock differ from `displayed["revision"]`, so an outside edit merged
+    into this save can be announced; it is False when `displayed` names no revision.
+    """
+    changes = dict(routes or {})
+    if len(changes) > 512:
+        raise PodError("invalid_config_edit", "Too many routes in one edit")
+    for key, state in changes.items():
+        if supported_route(key) is None or state not in (*ROUTE_STATES, None):
+            raise PodError("invalid_config_edit", "Route key or state is unsupported")
+    for field, value in (("preferred", preferred), ("pinned", pinned)):
+        if value is not KEEP and value is not None and supported_route(value) is None:
+            raise PodError("invalid_pin" if field == "pinned" else "invalid_preferred",
+                           f"{field} must name a supported route key or null")
+    if refresh is not KEEP and refresh not in REFRESH_SETTINGS:
+        raise PodError("invalid_config_edit", "refresh must be automatic or manual")
+    if max_active is not KEEP and (type(max_active) is not int or not 0 <= max_active <= 8):
+        raise PodError("invalid_config_edit", "workers.max_active must be 0 through 8")
+    if not changes and all(value is KEEP for value in (preferred, pinned, refresh, max_active)):
+        raise PodError("invalid_config_edit", "The edit changes nothing")
     with _edit_lock(path):
         raw = _read_bytes(path)
         if raw is None:
             raise PodError("config_missing", "Personal preferences are missing")
         document = _parse(raw)
-        if pin_edit:
-            if document.get("pinned_model") != displayed.get("pinned_model"):
-                raise PodError("config_changed_elsewhere", "Changed elsewhere — press again")
-        elif model_id is not None:
-            if document["models"].get(model_id) != displayed["saved"].get(model_id):
-                raise PodError("config_changed_elsewhere", "Changed elsewhere — press again")
-        elif document["selection"] != displayed["mode"]:
+        shown = displayed.get("routes") or {}
+        stale = (any(document["routes"].get(key) != shown.get(key) for key in changes)
+                 or any(value is not KEEP and document.get(field, default) != displayed.get(field)
+                        for field, value, default in (("preferred", preferred, None),
+                                                      ("pinned", pinned, None),
+                                                      ("refresh", refresh, "automatic")))
+                 or max_active is not KEEP and document["workers"]["max_active"] != displayed.get("max_active"))
+        if stale:
             raise PodError("config_changed_elsewhere", "Changed elsewhere — press again")
-        next_mode = mode
-        if model_id is not None and document["selection"] == "all":
-            next_mode = "custom"
-        if next_mode is not None:
-            document["selection"] = next_mode
-        if model_id is not None:
-            document["models"][model_id] = state
-        if pin_edit:
-            document["pinned_model"] = pin
-        try:
-            validate(document)
-        except PodError as exc:
-            if exc.code != "pin_ineligible":
-                raise
-            pinned = document["pinned_model"]
-            state_name = "Disabled" if document["models"].get(pinned) == "disabled" else "Not set"
-            if pin_edit:
-                reason = f"Cannot pin {pinned}: {state_name} in My selection; choose Available/Preferred first"
+        updated = deepcopy(document)
+        for key, state in changes.items():
+            if state is None:
+                updated["routes"].pop(key, None)
             else:
-                transition = "switching to My selection would make" if next_mode == "custom" else "this edit would make"
-                reason = f"Unpin or replace {pinned} first: {transition} the pin {state_name} (ineligible)"
-            raise PodError("pin_ineligible", reason) from exc
-        encoded, preserved = _surgical(raw, document, model_id=model_id, state=state, mode=next_mode,
-                                       pin_edit=pin_edit)
+                updated["routes"][key] = state
+        for field, value in (("preferred", preferred), ("pinned", pinned), ("refresh", refresh)):
+            if value is not KEEP:
+                _set_optional(updated, field, value)
+        if max_active is not KEEP:
+            updated["workers"]["max_active"] = max_active
+        try:
+            validate(updated)
+        except PodError as exc:
+            if exc.code not in ("pin_ineligible", "preferred_ineligible"):
+                raise
+            field, label, value = (("pinned", "pin", pinned) if exc.code == "pin_ineligible"
+                                   else ("preferred", "preference", preferred))
+            target = updated[field]
+            state = _state_name(updated["routes"].get(target))
+            if value is not KEEP:
+                raise PodError(exc.code, f"Cannot make {target} the {label}: it is {state}; enable it first") from exc
+            raise PodError("pin_invalidated" if field == "pinned" else "preferred_invalidated",
+                           f"Clear or replace the {label} {target} in the same action: "
+                           f"this edit would make it {state}") from exc
+        encoded, preserved = _surgical(raw, document, updated)
         _replace(path, encoded)
     return {"path": str(path.resolve(strict=False)), "revision": hashlib.sha256(encoded).hexdigest(),
-            "mode": document["selection"], "saved": document["models"].copy(),
+            "routes": dict(updated["routes"]), "preferred": updated.get("preferred"),
+            "pinned": updated.get("pinned"), "refresh": updated.get("refresh", "automatic"),
+            "max_active": updated["workers"]["max_active"], "changed": sorted(changes),
             "notice": "" if preserved else "comments not preserved",
-            "mode_notice": "Returned to My selection" if model_id is not None and next_mode == "custom" and displayed["mode"] == "all" else ""}
+            "merged_outside": (displayed.get("revision") is not None
+                               and hashlib.sha256(raw).hexdigest() != displayed["revision"])}
 
 
-def set_model(path: Path, model_id: str, state: str, *, displayed: dict) -> dict:
-    if model_id not in IDS or state not in STATES:
-        raise PodError("invalid_config_edit", "Model id or state is unsupported")
-    return _save(path, model_id=model_id, state=state, displayed=displayed)
+def set_route(path: Path, key: str, state: str | None, *, displayed: dict,
+              preferred: object = KEEP, pinned: object = KEEP) -> dict:
+    return edit(path, displayed=displayed, routes={key: state}, preferred=preferred, pinned=pinned)
 
 
-def set_mode(path: Path, mode: str, *, displayed: dict) -> dict:
-    if mode not in MODES:
-        raise PodError("invalid_config_edit", "Selection mode is unsupported")
-    return _save(path, mode=mode, displayed=displayed)
+def set_routes(path: Path, changes: dict, *, displayed: dict,
+               preferred: object = KEEP, pinned: object = KEEP) -> dict:
+    """A bulk edit of exactly the listed routes, saved in one atomic write."""
+    if not changes:
+        raise PodError("invalid_config_edit", "A bulk edit names the exact routes it changes")
+    return edit(path, displayed=displayed, routes=changes, preferred=preferred, pinned=pinned)
 
 
-def set_pin(path: Path, model_id: str | None, *, displayed: dict) -> dict:
-    if model_id is not None and (not isinstance(model_id, str) or model_id not in IDS):
-        raise PodError("invalid_pin", "Pin must name a supported model id or null")
-    return _save(path, pin_edit=True, pin=model_id, displayed=displayed)
+def set_preferred(path: Path, key: str | None, *, displayed: dict) -> dict:
+    return edit(path, displayed=displayed, preferred=key)
+
+
+def set_pin(path: Path, key: str | None, *, displayed: dict) -> dict:
+    return edit(path, displayed=displayed, pinned=key)
+
+
+def set_refresh(path: Path, setting: str, *, displayed: dict) -> dict:
+    return edit(path, displayed=displayed, refresh=setting)
+
+
+def setup_preview(raw: bytes) -> dict:
+    """Pure, deterministic conversion of kept pod/v1 bytes into a proposed pod/v2 document.
+
+    Supported bases that were Available or Preferred get their supported efforts enabled,
+    Disabled bases get every route disabled, and Not set stays not set. Replaced generations,
+    old Preferred models and an old pin's effort are never inferred.
+    """
+    if not isinstance(raw, bytes):
+        raise PodError("invalid_setup", "Setup preview needs the kept file bytes")
+    value = _decode(raw)
+    if not isinstance(value, dict) or value.get("schema") != V1_SCHEMA:
+        raise PodError("setup_not_required", "Only a pod/v1 personal file needs route setup")
+    older = _validate_v1(value)
+    supported = by_id()
+    saved, mode = older["models"], older["selection"]
+    routes, notes, choices = {}, [], []
+    for model_id in V1_IDS:
+        state = saved.get(model_id)
+        model = supported.get(model_id)
+        if model is not None and state is not None:
+            for effort in model["efforts"]:
+                routes[f"{model['agent']}/{model_id}/{effort}"] = "disabled" if state == "disabled" else "enabled"
+    replaced = [model_id for model_id in V1_IDS if model_id in REPLACED and saved.get(model_id) is not None]
+    if replaced:
+        notes.append({"code": "replaced_not_transferred",
+                      "message": "Choices for " + ", ".join(f"{old} (replaced by {REPLACED[old]})" for old in replaced)
+                      + " are not transferred; the replacements stay not set until you enable exact routes"})
+    if mode == "all":
+        notes.append({"code": "selection_all_narrowed",
+                      "message": "selection: all converts from the saved model map only; models it did not "
+                                 "list stay not set"})
+    preferred_models = [model_id for model_id in V1_IDS if saved.get(model_id) == "preferred"]
+    if preferred_models:
+        notes.append({"code": "preferred_not_inferred",
+                      "message": "Earlier Preferred models (" + ", ".join(preferred_models) + ") now have "
+                                 "every effort enabled; choose one exact Preferred route if you want one"})
+    pin = older.get("pinned_model")
+    if pin is not None:
+        model = supported.get(pin)
+        options = [f"{model['agent']}/{pin}/{effort}" for effort in model["efforts"]] if model else []
+        choices.append({"id": "pin", "model": pin, "options": options, "clear": True})
+        notes.append({"code": "pin_effort_required" if model else "pin_base_unsupported",
+                      "message": (f"Choose an exact effort for the earlier pin {pin}, or clear the pin" if model
+                                  else f"The earlier pin {pin} is no longer supported; clear the pin to continue")})
+    notes.append({"code": "refresh_automatic",
+                  "message": "Automatic model-data refresh is on; set refresh: manual to avoid automatic "
+                             "network access"})
+    document = {"schema": SCHEMA, "routes": routes, "preferred": None, "pinned": None,
+                "workers": {"max_active": older["workers"]["max_active"]}, "refresh": "automatic"}
+    if "waste_governor" in older:
+        document["waste_governor"] = deepcopy(older["waste_governor"])
+    return {"schema": SETUP_SCHEMA, "from_schema": V1_SCHEMA, "revision": hashlib.sha256(raw).hexdigest(),
+            "document": document, "notes": notes, "choices": choices}
+
+
+def _backup(path: Path, raw: bytes) -> Path:
+    """Copy the original exclusively and durably; an equal earlier copy is reused."""
+    target = path.with_name(path.name + BACKUP_SUFFIX)
+    name = _temporary(path, raw)
+    try:
+        try:
+            os.link(name, target, follow_symlinks=False)
+        except FileExistsError:
+            if _read_bytes(target) != raw:
+                raise PodError("setup_backup_exists",
+                               f"{target} already holds different bytes; move it aside before setup") from None
+        _fsync_parent(path)
+    finally:
+        os.unlink(name)
+    return target
+
+
+def setup_apply(path: Path, *, expected_revision: str, choices: dict) -> dict:
+    """Save the explicit route setup of a kept pod/v1 file after a preview.
+
+    `choices` may hold `pin` (an exact route of the earlier pinned model, or None to clear it;
+    required when the file had a pin), `preferred` (an exact route or None) and `routes` (explicit
+    route states that adjust the proposal). The original is kept as `config.yaml.pod-v1`.
+    """
+    if not isinstance(choices, dict) or set(choices) - {"pin", "preferred", "routes"}:
+        raise PodError("invalid_setup_choice", "Setup choices are pin, preferred and routes")
+    adjust = choices.get("routes") or {}
+    if not isinstance(adjust, dict) or any(supported_route(key) is None or state not in (*ROUTE_STATES, None)
+                                           for key, state in adjust.items()):
+        raise PodError("invalid_setup_choice", "Setup route choices name supported routes and states")
+    with _edit_lock(path):
+        raw = _read_bytes(path)
+        if raw is None:
+            raise PodError("config_missing", "Personal preferences are missing")
+        if hashlib.sha256(raw).hexdigest() != expected_revision:
+            raise PodError("config_changed_elsewhere", "Changed elsewhere — review the setup again")
+        preview = setup_preview(raw)
+        document = preview["document"]
+        for key, state in adjust.items():
+            if state is None:
+                document["routes"].pop(key, None)
+            else:
+                document["routes"][key] = state
+        pin_choice = next((row for row in preview["choices"] if row["id"] == "pin"), None)
+        if pin_choice is not None and "pin" not in choices:
+            raise PodError("setup_choice_required",
+                           f"Choose an exact route for the earlier pin {pin_choice['model']} or clear it")
+        pin = choices.get("pin")
+        if pin is not None and (pin_choice is None or pin not in pin_choice["options"]):
+            raise PodError("invalid_setup_choice", "The pin must be an exact route of the earlier pinned model")
+        document["pinned"] = pin
+        document["preferred"] = choices.get("preferred")
+        validate(document)
+        backup = _backup(path, raw)
+        encoded = _encode(document)
+        _replace(path, encoded)
+    return {"status": "saved", "path": str(path.resolve(strict=False)),
+            "revision": hashlib.sha256(encoded).hexdigest(), "backup": str(backup.resolve(strict=False)),
+            "document": document, "notes": preview["notes"]}

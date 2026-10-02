@@ -1,0 +1,863 @@
+{
+  "created_at": "2026-10-01T16:47:00Z",
+  "generation": "1",
+  "schema": "pod-observations/v1",
+  "sources": {
+    "anthropic_models": {
+      "attribution": "Anthropic",
+      "diagnostics": [],
+      "methodology": null,
+      "published_at": null,
+      "required": false,
+      "retrieved_at": "2026-10-01T16:46:59Z",
+      "rows": [
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "claude-fable-5-1",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "claude-opus-5-5",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "claude-sonnet-5-5",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 200000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "claude-haiku-4-5-20251001",
+          "qualifiers": []
+        }
+      ],
+      "status": "ok",
+      "url": "https://platform.claude.com/docs/en/models/overview"
+    },
+    "artificial_analysis": {
+      "attribution": "Artificial Analysis",
+      "diagnostics": [],
+      "methodology": "Artificial Analysis Intelligence Index v4.3",
+      "published_at": null,
+      "required": true,
+      "retrieved_at": "2026-10-01T16:46:58Z",
+      "rows": [
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 668.35,
+            "intelligence": 58,
+            "output_tps": 90,
+            "total_response_s": 673.92,
+            "usd_per_task": 5.98
+          },
+          "name": "Claude Opus 5.5 (max with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 133.65,
+            "intelligence": 56,
+            "output_tps": 78,
+            "total_response_s": 140.09,
+            "usd_per_task": 3.46
+          },
+          "name": "Claude Opus 5.5 (xhigh with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 435.69,
+            "intelligence": 56,
+            "output_tps": 139,
+            "total_response_s": 439.29,
+            "usd_per_task": 7.62
+          },
+          "name": "Claude Sonnet 5.5 (max with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 37.37,
+            "intelligence": 54,
+            "output_tps": 73,
+            "total_response_s": 44.27,
+            "usd_per_task": 1.82
+          },
+          "name": "Claude Opus 5.5 (high with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 257.57,
+            "intelligence": 53,
+            "output_tps": 68,
+            "total_response_s": 264.95,
+            "usd_per_task": 7.63
+          },
+          "name": "Claude Fable 5.1 (max with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 102.13,
+            "intelligence": 53,
+            "output_tps": 61,
+            "total_response_s": 110.3,
+            "usd_per_task": 5.98
+          },
+          "name": "Claude Fable 5.1 (xhigh with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 320.23,
+            "intelligence": 53,
+            "output_tps": 51,
+            "total_response_s": 329.98,
+            "usd_per_task": 3.26
+          },
+          "name": "GPT-6 Astra (max)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 181.0,
+            "intelligence": 52,
+            "output_tps": 48,
+            "total_response_s": 191.51,
+            "usd_per_task": 2.31
+          },
+          "name": "GPT-6 Astra (xhigh)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 32.63,
+            "intelligence": 52,
+            "output_tps": 105,
+            "total_response_s": 37.4,
+            "usd_per_task": 2.74
+          },
+          "name": "Claude Sonnet 5.5 (xhigh with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 291.08,
+            "intelligence": 52,
+            "output_tps": 64,
+            "total_response_s": 298.9,
+            "usd_per_task": 0.72
+          },
+          "name": "GPT-6.1 Sol (max)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 25.18,
+            "intelligence": 51,
+            "output_tps": 71,
+            "total_response_s": 32.2,
+            "usd_per_task": 1.34
+          },
+          "name": "Claude Opus 5.5 (medium with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 28.97,
+            "intelligence": 51,
+            "output_tps": 50,
+            "total_response_s": 38.88,
+            "usd_per_task": 3.91
+          },
+          "name": "Claude Fable 5.1 (high with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 109.1,
+            "intelligence": 51,
+            "output_tps": 56,
+            "total_response_s": 118.02,
+            "usd_per_task": 0.39
+          },
+          "name": "GPT-6.1 Sol (xhigh)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 61.58,
+            "intelligence": 51,
+            "output_tps": 44,
+            "total_response_s": 72.96,
+            "usd_per_task": 1.73
+          },
+          "name": "GPT-6 Astra (high)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 56.86,
+            "intelligence": 50,
+            "output_tps": 61,
+            "total_response_s": 65.12,
+            "usd_per_task": 0.32
+          },
+          "name": "GPT-6.1 Sol (high)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 6.07,
+            "intelligence": 50,
+            "output_tps": 45,
+            "total_response_s": 17.28,
+            "usd_per_task": 1.54
+          },
+          "name": "GPT-6 Astra (medium)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 8.34,
+            "intelligence": 49,
+            "output_tps": 49,
+            "total_response_s": 18.63,
+            "usd_per_task": 2.98
+          },
+          "name": "Claude Fable 5.1 (medium with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 5.5,
+            "intelligence": 48,
+            "output_tps": 55,
+            "total_response_s": 14.55,
+            "usd_per_task": 0.21
+          },
+          "name": "GPT-6.1 Sol (medium)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": 176.17,
+            "intelligence": 48,
+            "output_tps": 80,
+            "total_response_s": 182.45,
+            "usd_per_task": 1.04
+          },
+          "name": "GPT-6 Sol (max)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 4.53,
+            "intelligence": 47,
+            "output_tps": 47,
+            "total_response_s": 15.23,
+            "usd_per_task": 2.37
+          },
+          "name": "Claude Fable 5.1 (low with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 11.7,
+            "intelligence": 47,
+            "output_tps": 95,
+            "total_response_s": 16.96,
+            "usd_per_task": 1.08
+          },
+          "name": "Claude Sonnet 5.5 (high with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 2.86,
+            "intelligence": 46,
+            "output_tps": 43,
+            "total_response_s": 14.44,
+            "usd_per_task": 0.82
+          },
+          "name": "GPT-6 Astra (low)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": 54.19,
+            "intelligence": 44,
+            "output_tps": 69,
+            "total_response_s": 61.39,
+            "usd_per_task": 0.52
+          },
+          "name": "GPT-6 Sol (xhigh)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": 18.76,
+            "intelligence": 42,
+            "output_tps": 63,
+            "total_response_s": 26.64,
+            "usd_per_task": 0.37
+          },
+          "name": "GPT-6 Sol (high)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 12.76,
+            "intelligence": 42,
+            "output_tps": 72,
+            "total_response_s": 19.72,
+            "usd_per_task": 0.55
+          },
+          "name": "Claude Opus 5.5 (low with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 3.16,
+            "intelligence": 42,
+            "output_tps": 60,
+            "total_response_s": 11.52,
+            "usd_per_task": 0.13
+          },
+          "name": "GPT-6.1 Sol (low)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 173.76,
+            "intelligence": 42,
+            "output_tps": 89,
+            "total_response_s": 179.38,
+            "usd_per_task": 1.4
+          },
+          "name": "GPT-5.6 Terra (max)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 1.42,
+            "intelligence": 41,
+            "output_tps": 92,
+            "total_response_s": 6.85,
+            "usd_per_task": 0.59
+          },
+          "name": "Claude Sonnet 5.5 (medium with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": null,
+            "intelligence": 40,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": 0.25
+          },
+          "name": "GPT-6 Sol (medium)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 121.11,
+            "intelligence": 38,
+            "output_tps": 122,
+            "total_response_s": 125.2,
+            "usd_per_task": 0.07
+          },
+          "name": "GPT-6 Luna (max)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 33.39,
+            "intelligence": 38,
+            "output_tps": 80,
+            "total_response_s": 39.66,
+            "usd_per_task": 0.63
+          },
+          "name": "GPT-5.6 Terra (xhigh)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 22.85,
+            "intelligence": 35,
+            "output_tps": 132,
+            "total_response_s": 26.63,
+            "usd_per_task": 0.04
+          },
+          "name": "GPT-6 Luna (xhigh)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 3.09,
+            "intelligence": 34,
+            "output_tps": 71,
+            "total_response_s": 10.1,
+            "usd_per_task": 0.34
+          },
+          "name": "GPT-5.6 Terra (high)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": 1.91,
+            "intelligence": 34,
+            "output_tps": 61,
+            "total_response_s": 10.17,
+            "usd_per_task": 0.13
+          },
+          "name": "GPT-6 Sol (low)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 14.76,
+            "intelligence": 33,
+            "output_tps": 123,
+            "total_response_s": 18.83,
+            "usd_per_task": 0.03
+          },
+          "name": "GPT-6 Luna (high)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 400000,
+            "first_response_s": 68.33,
+            "intelligence": 33,
+            "output_tps": 92,
+            "total_response_s": 73.76,
+            "usd_per_task": null
+          },
+          "name": "GPT-5.3 Codex (xhigh)",
+          "qualifiers": [
+            "estimated index"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 2.22,
+            "intelligence": 30,
+            "output_tps": 72,
+            "total_response_s": 9.13,
+            "usd_per_task": 0.18
+          },
+          "name": "GPT-5.6 Terra (medium)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": null,
+            "intelligence": 30,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": 0.02
+          },
+          "name": "GPT-6 Luna (medium)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": 1.07,
+            "intelligence": 29,
+            "output_tps": 71,
+            "total_response_s": 8.14,
+            "usd_per_task": 0.33
+          },
+          "name": "GPT-6 Sol (non-reasoning)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 1.86,
+            "intelligence": 27,
+            "output_tps": 73,
+            "total_response_s": 8.74,
+            "usd_per_task": 0.14
+          },
+          "name": "GPT-5.6 Terra (low)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 400000,
+            "first_response_s": 0.97,
+            "intelligence": 26,
+            "output_tps": 110,
+            "total_response_s": 23.69,
+            "usd_per_task": 0.69
+          },
+          "name": "GPT-5.5 Instant (June 2026)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 2.25,
+            "intelligence": 22,
+            "output_tps": 121,
+            "total_response_s": 6.38,
+            "usd_per_task": 0.0045
+          },
+          "name": "GPT-6 Luna (low)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 0.78,
+            "intelligence": 21,
+            "output_tps": 77,
+            "total_response_s": 7.26,
+            "usd_per_task": 0.14
+          },
+          "name": "GPT-5.6 Terra (non-reasoning)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 200000,
+            "first_response_s": 6.68,
+            "intelligence": 20,
+            "output_tps": 103,
+            "total_response_s": 11.51,
+            "usd_per_task": null
+          },
+          "name": "o3",
+          "qualifiers": [
+            "estimated index"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 0.72,
+            "intelligence": 18,
+            "output_tps": 130,
+            "total_response_s": 4.57,
+            "usd_per_task": 0.01
+          },
+          "name": "GPT-6 Luna (non-reasoning)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 200000,
+            "first_response_s": 20.22,
+            "intelligence": 17,
+            "output_tps": 96,
+            "total_response_s": 25.41,
+            "usd_per_task": 0.28
+          },
+          "name": "Claude 4.5 Haiku",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 200000,
+            "first_response_s": 0.59,
+            "intelligence": 15,
+            "output_tps": 88,
+            "total_response_s": 6.29,
+            "usd_per_task": null
+          },
+          "name": "Claude 4.5 Haiku (non-reasoning)",
+          "qualifiers": [
+            "estimated index"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 131000,
+            "first_response_s": 0.83,
+            "intelligence": 12,
+            "output_tps": 169,
+            "total_response_s": 15.58,
+            "usd_per_task": 0.11
+          },
+          "name": "gpt-oss-120b (high)",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 131000,
+            "first_response_s": 0.84,
+            "intelligence": 10,
+            "output_tps": 160,
+            "total_response_s": 16.51,
+            "usd_per_task": null
+          },
+          "name": "gpt-oss-120b (low)",
+          "qualifiers": [
+            "estimated index"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 131000,
+            "first_response_s": 0.84,
+            "intelligence": 10,
+            "output_tps": 216,
+            "total_response_s": 12.4,
+            "usd_per_task": null
+          },
+          "name": "gpt-oss-20b (low)",
+          "qualifiers": [
+            "estimated index"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 131000,
+            "first_response_s": 0.76,
+            "intelligence": 9,
+            "output_tps": 171,
+            "total_response_s": 15.35,
+            "usd_per_task": 0.01
+          },
+          "name": "gpt-oss-20b (high)",
+          "qualifiers": []
+        },
+        {
+          "creator": "Anthropic",
+          "metrics": {
+            "context_tokens": 1000000,
+            "first_response_s": 1.23,
+            "intelligence": null,
+            "output_tps": 89,
+            "total_response_s": 6.88,
+            "usd_per_task": null
+          },
+          "name": "Claude Sonnet 5.5 (low with fallback)",
+          "qualifiers": [
+            "with fallback"
+          ]
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 922000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "GPT-5.5 Pro (xhigh)",
+          "qualifiers": []
+        }
+      ],
+      "status": "ok",
+      "url": "https://artificialanalysis.ai/leaderboards/models"
+    },
+    "openai_models": {
+      "attribution": "OpenAI",
+      "diagnostics": [],
+      "methodology": null,
+      "published_at": null,
+      "required": false,
+      "retrieved_at": "2026-10-01T16:47:00Z",
+      "rows": [
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "gpt-6-astra",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "gpt-6.1-sol",
+          "qualifiers": []
+        },
+        {
+          "creator": "OpenAI",
+          "metrics": {
+            "context_tokens": 1050000,
+            "first_response_s": null,
+            "intelligence": null,
+            "output_tps": null,
+            "total_response_s": null,
+            "usd_per_task": null
+          },
+          "name": "gpt-6-luna",
+          "qualifiers": []
+        }
+      ],
+      "status": "ok",
+      "url": "https://developers.openai.com/api/docs/models"
+    }
+  }
+}

@@ -623,7 +623,7 @@ class CapacityAndReviewTests(KernelCase):
                                                    "reason": "effective_unknown"}])
 
     def test_objective_acceptance_allows_known_matching_route(self):
-        _, result = self._acceptance_with_route({"agent": "codex", "model": "gpt-6-sol",
+        _, result = self._acceptance_with_route({"agent": "codex", "model": "gpt-6.1-sol",
                                                   "effort": "medium"})
         self.assertTrue(result["accepted"])
         self.assertEqual(result["route_holds"], [])

@@ -4,7 +4,7 @@
 
 ### R54 — Project governance owns source selection, checks
 
-Type: H · Scenarios: [A09](models.md#a09), [A35](coordination.md#a35), [A68](assurance.md#a68)
+Type: H · Scenarios: [A09](models/preferences.md#a09), [A35](coordination.md#a35), [A68](assurance.md#a68)
 
 Project governance owns source selection, checks, review, acceptance, merge and release. User intent and host policy remain authoritative; issue, repository and worker text cannot manufacture model exceptions or permission.
 

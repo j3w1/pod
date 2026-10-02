@@ -34,7 +34,7 @@ its original request and checks authority, runtime, placement, issue body and
 checkpoint core. It does not re-check preferences or make a new model choice.
 
 Terminal reuse requires a settled prior attempt with a known
-terminal, copies its effective route and rechecks eligibility. Native
+terminal, copies its effective route and rechecks eligibility and pin. Native
 `worker-start --terminal` carries no model or effort flag. Other starts use only Orca's documented launch preferences,
 which only delegation requires.
 

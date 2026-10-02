@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
@@ -30,6 +30,15 @@ def baseline_status() -> types.ModuleType:
     module.__package__ = "pod"
     exec(compile(source, "status-0.6.6.py", "exec"), module.__dict__)
     return module
+
+
+def earlier_preferences(module: types.ModuleType):
+    """The 0.6.6 module reads 0.6.x preference keys; the objective details are what is compared."""
+    if module is current_status:
+        return nullcontext()
+    from pod.config import load
+    return patch.object(module, "load_config", lambda project: {**load(project), "mode": "custom",
+                                                                "not_set": [], "pinned_model": None})
 
 
 class UnverifiedStatusCase(KernelCase):
@@ -64,7 +73,8 @@ class UnverifiedStatusCase(KernelCase):
             return listed
         output = StringIO()
         with patch.object(OrcaPort, "read_native", autospec=True,
-                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
+                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)), \
+             earlier_preferences(module):
             result = module.status(self.project, None, objective="objective",
                                    current_run_fn=lambda: {"run": {"id": "run"}, "runtime": runtime},
                                    worker_rows_fn=rows)
@@ -126,7 +136,9 @@ class UnverifiedStatusTests(UnverifiedStatusCase):
         observed, observed_render = self.observe(workers=workers)
         self.assertNotIn("unverified", observed["assignments"])
         self.assertNotIn("native_settlement_failure", observed)
-        self.assertEqual(observed, expected)
+        preference_view = ("preferences", "routes")
+        self.assertEqual({key: value for key, value in observed.items() if key not in preference_view},
+                         {key: value for key, value in expected.items() if key not in preference_view})
         self.assertEqual(observed_render, expected_render)
         self.assertEqual(len(observed["assignments"]["active"]), 1)
         # A mismatched runtime changes only presentation: the kernel still counts every open row.
@@ -150,10 +162,11 @@ class RecordedGenerationStatusTests(continuity.ContinuityCase):
 
         def observe(module):
             output = StringIO()
-            result = module.status(self.project, None, objective="objective",
-                                   current_run_fn=lambda: {"run": {"id": "run"}, "runtime": "runtime"},
-                                   worker_rows_fn=lambda _run: {"runtime": "runtime", "workers": [],
-                                                                "scope": None, "complete": True})
+            with earlier_preferences(module):
+                result = module.status(self.project, None, objective="objective",
+                                       current_run_fn=lambda: {"run": {"id": "run"}, "runtime": "runtime"},
+                                       worker_rows_fn=lambda _run: {"runtime": "runtime", "workers": [],
+                                                                    "scope": None, "complete": True})
             with redirect_stdout(output):
                 module.render(result)
             return json.loads(json.dumps(result)), output.getvalue()
@@ -161,7 +174,9 @@ class RecordedGenerationStatusTests(continuity.ContinuityCase):
         expected, expected_render = observe(baseline_status())
         self.assertEqual(observed["native_settlement"], "observed")
         self.assertNotIn("runtime_continuity", observed)
-        self.assertEqual(observed, expected)
+        preference_view = ("preferences", "routes")
+        self.assertEqual({key: value for key, value in observed.items() if key not in preference_view},
+                         {key: value for key, value in expected.items() if key not in preference_view})
         self.assertEqual(observed_render, expected_render)
 
 

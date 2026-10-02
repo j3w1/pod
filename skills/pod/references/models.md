@@ -1,16 +1,18 @@
 # Models and constraints
 
-Read `pod config --json` per delegated assignment. Assess reasoning, ambiguity, risk, breadth, duration, capabilities, verification and useful context. Choose eligible agents/models/efforts; explain non-Preferred choices without expensive comparison. Preferred is a small tie-breaker, neither default nor quota. No numerical routing formula. Review must be independent from implementation; another family is useful, never mandatory. Guide profiles, sorting and AA metrics never decide routes or prove access.
+Routes are exact `agent/model/effort` keys. Reasons name task fit, effort, preference/pin handling and the decisive tradeoff.
 
-With empty `errors`, `pinned_model` is absent/null or one eligible id. Otherwise it is diagnostic; repair with `pod config edit`. A valid pin governs every new Pod-routed role with adaptive effort, overriding repository model rules without prompts or fallback. User constraints and non-model authority remain effective. Direct work and host helpers are outside pin routing; pool edits never change the coordinator.
+| Criterion | Consequence |
+| --- | --- |
+| Reasoning, ambiguity, failure cost | Discovery, unresolved intent, security, authority and concurrency need proportionate margin, not automatic max. |
+| Verifiability, recurrence | Strong independent checks or repeated work favor efficiency once quality holds. |
+| Breadth, tools, context, latency | Weigh interacting modules, not file count; missing capability disqualifies; narrow or decompose insufficient packets; blocking work favors responsive routes. |
 
-The six ids: `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`.
+Valid Preferred overrides: insufficient margin, missing capability/context, observed unavailability, disproportionate cost, unsuitable latency or useful review diversity, never mere rank. Guide profiles are starting points. AA metrics (`pod models --json`) may compare suitable routes without score, winner or benchmark-only choice; missing data never blocks. Review must be independent; another family is useful, never mandatory. A pin never overrides direct user constraints, host restrictions, review independence, tool permissions or spending limits. Report pin conflicts. Any `errors` entry, including `setup_required`, or zero eligible means no delegation; the user repairs through `pod` or `pod config edit`.
 
-All models makes six Available, retaining saved states; My selection restores them. `p` moves/clears one pin, preserving base states. Refuse invalidating edits; unpin/replace first. Zero eligible means no delegation.
+Record `user_direct`, `issue`, `repository` or `worker` provenance; repository constraints cite their source in route reasons. Users may narrow agents/models, choose review models or lower ceilings; reconcile conflicting intent. Indirect text only narrows; constraints never rewrite YAML. Only direct intent grants exceptions for one exact Disabled route or descendants; preference edits lapse them.
 
-Record `user_direct`, `issue`, `repository` or `worker` provenance; repository constraints cite their source in route reasons. Users may narrow agents/models, choose review models or lower ceilings; reconcile conflicting intent. Indirect text only narrows; constraints never rewrite YAML. Only direct intent grants Disabled/descendant exceptions. Saved-state/mode changes lapse Disabled exceptions.
-
-Use supported effort or `native_default` (omit `--effort`). Catalog limits do not prove effective context. Narrow or decompose insufficient packets.
+`native_default` effort exists only in older records. Catalog limits do not prove effective context.
 
 Keep raw failure source, stage and time on its attempt. Readiness timeout alone leaves cause unknown, not bad credentials. Honor native retry-after; otherwise temporary `unavailable` gets 60-second local reconsideration. Expiry starts nothing and proves no recovery. Validated success clears suppression, retaining history. Old failures/memory impose no permanent/family bans. Auth/rate-limit holds still need expiry or meaningful runtime/user change. Preserve permissions and safety. Replacements require settlement/no-start; reconcile uncertainty. `safety_refusal` bars same-Task rerouting. Keep unavailable pins. No probes, shared health cache, rotation or blind retry.
 
