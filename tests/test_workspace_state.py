@@ -1311,6 +1311,30 @@ class DeltaAuditRenderTests(unittest.TestCase):
                                     if mode != "table" or name == "none":
                                         self.assertIn("Data cache ", status)
 
+    def test_title_overflow_keeps_the_count_and_placeholders_without_displacing_the_age(self):
+        # Fourth delta review G1/G3: the enabled count and a "none" placeholder are never removed from
+        # the frame by the status-line rule; below 20 rows they follow the age, and they never displace it.
+        pin, key = "claude/claude-opus-5-5/high", "claude/claude-opus-5-5/max"
+        both = state(prefs(pinned=pin, preferred=key))
+        for rows in (12, 19, 20, 24):
+            for cols in range(80, 93):
+                frame = text(both, cols, rows)
+                with self.subTest(rows=rows, cols=cols):
+                    self.assertRegex(frame, r"30/30 (enabled|on)")
+                    self.assertIn("Data cache ", frame.splitlines()[-2])
+        only = ts.with_notice(state(prefs(pinned=pin)), "Saved: Disabled claude/claude-opus-5-5/max")
+        for rows in (12, 19, 24):
+            for cols in range(43, 60):
+                frame = text(only, cols, rows)
+                with self.subTest(rows=rows, cols=cols, case="pin+notice"):
+                    self.assertIn("Data cache ", frame.splitlines()[-2])
+                    if rows >= 20:
+                        self.assertIn("Preferred none", frame)
+        stale = ts.with_notice(both, "Saved: Disabled claude/claude-opus-5-5/max")
+        for cols in range(80, 85):
+            with self.subTest(cols=cols, case="both+stale+notice"):
+                self.assertIn("Data cache 8d old STALE", text(stale, cols, 12, now=T0 + timedelta(days=8)).splitlines()[-2])
+
     def test_changed_data_gives_no_context_delta_across_a_profile_change(self):
         plain = state(snapshot=fixture_snapshot(edit=lambda rows: [
             {**row, "qualifiers": [q for q in row["qualifiers"] if q != "with fallback"]} for row in rows]))

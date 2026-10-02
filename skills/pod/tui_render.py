@@ -1000,8 +1000,14 @@ def _title(state: ts.State, width: int, caps: Capabilities) -> tuple[Line, list]
     return line, [segments[index][0] for index in dropped]
 
 
+def _exact_key(segment: list) -> bool:
+    """A title segment naming an exact Pin or Preferred route key (not a "none" placeholder or count)."""
+    return (len(segment) == 2 and segment[0][0] in ("Pin ", "Preferred ")
+            and not segment[1][0].startswith("none"))
+
+
 def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extra: list, *,
-            age_first: bool = False) -> Line:
+            age_first: bool = False, after: list | None = None) -> Line:
     seen = state.projection.get("observations") or {}
     segments = []
     if state.notice and state.notice != state.error:
@@ -1024,7 +1030,7 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
         role = "error" if ages["stale"] else "body"
     else:
         variants, role = ["Data unknown"], "advisory"
-    tail = list(later)
+    tail = list(later) + [(segment, False) for segment in after or []]
     if refresh:
         tail.append(([refresh], True))
     tail.append(([("Native access unknown", "body")], False))
@@ -1117,16 +1123,15 @@ def frame(state: ts.State, cols: int, rows: int, caps: Capabilities, now: dateti
         return Frame((Line(_fit("Terminal too small", width, caps), "error"),
                       Line(_fit("Resize or press q to quit", width, caps))), cols, rows)
     title, overflow = _title(state, width, caps)
-    # Only exact Pin and Preferred keys carry over from the title; a "none" placeholder or the enabled
-    # count never displaces the data age.
-    overflow = [segment for segment in overflow
-                if len(segment) == 2 and segment[0][0] in ("Pin ", "Preferred ")
-                and not segment[1][0].startswith("none")]
     # Selections that do not fit the title get their own line when there is height for it.
     selections = None
     if overflow and rows >= 20:
         selections, _dropped = _pack([(segment, False) for segment in overflow], width, caps, glyph(caps, "dot"))
         overflow = []
+    # Below that height they share the status line: only exact Pin and Preferred keys may precede the
+    # data age; a "none" placeholder and the enabled count follow it, shown when there is room.
+    exact = [segment for segment in overflow if _exact_key(segment)]
+    minor = [segment for segment in overflow if not _exact_key(segment)]
     body_rows = rows - 3 - (1 if selections else 0)
     table_scroll, table_page = state.table_scroll, state.table_page
     inspector_scroll, inspector_page, help_scroll = state.inspector_scroll, state.inspector_page, state.help_scroll
@@ -1150,7 +1155,8 @@ def frame(state: ts.State, cols: int, rows: int, caps: Capabilities, now: dateti
     # overflowed selections.
     table_view = state.mode not in ("help", "palette", "bulk", "setup")
     lines = [title, *body, *([selections] if selections else []),
-             _status(state, width, caps, now, overflow, age_first=not table_view), _footer(state, width, caps)]
+             _status(state, width, caps, now, exact, age_first=not table_view, after=minor),
+             _footer(state, width, caps)]
     too_wide = [line.text for line in lines if display_width(line.text) > width]
     if too_wide and strict:
         raise ValueError(f"frame line exceeds {width} columns: {too_wide[0]!r}")
