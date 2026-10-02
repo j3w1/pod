@@ -1322,6 +1322,25 @@ class DeltaAuditRenderTests(unittest.TestCase):
                 with self.subTest(rows=rows, cols=cols):
                     self.assertRegex(frame, r"30/30 (enabled|on)")
                     self.assertIn("Data cache ", frame.splitlines()[-2])
+        # Below 20 rows the placeholder follows the age and the other status items wherever it fits.
+        plain = state(prefs(pinned=pin))
+        needed = len("Data cache 1h old · Native access unknown · Preferred none")
+        for rows in (12, 19):
+            for cols in range(40, 121):
+                lines = text(plain, cols, rows).splitlines()
+                status = lines[-2]
+                with self.subTest(rows=rows, cols=cols, case="placeholder-after-age"):
+                    if "Pin claude/" not in status:
+                        # Only an exact key that overflowed the title may hold the age off the line.
+                        self.assertIn("Data cache ", status)
+                    if "Preferred none" not in lines[0] and cols - 1 >= needed:
+                        # It overflowed the title, so it must follow the age on the status line.
+                        self.assertIn("Preferred none", status)
+                        self.assertLess(status.index("Data cache "), status.index("Preferred none"))
+        failed = ts.with_refresh(plain, "failed", "network")
+        for cols in range(50, 81):
+            with self.subTest(cols=cols, case="refresh-outranks-placeholder"):
+                self.assertIn("Refresh failed", text(failed, cols, 12).splitlines()[-2])
         only = ts.with_notice(state(prefs(pinned=pin)), "Saved: Disabled claude/claude-opus-5-5/max")
         for rows in (12, 19, 24):
             for cols in range(43, 60):

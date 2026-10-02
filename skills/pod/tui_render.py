@@ -1030,12 +1030,14 @@ def _status(state: ts.State, width: int, caps: Capabilities, now: datetime, extr
         role = "error" if ages["stale"] else "body"
     else:
         variants, role = ["Data unknown"], "advisory"
-    tail = list(later) + [(segment, False) for segment in after or []]
+    tail = list(later)
     if refresh:
         tail.append(([refresh], True))
     tail.append(([("Native access unknown", "body")], False))
     if state.saved_at:
         tail.append(([("Saved " + state.saved_at.astimezone().strftime("%H:%M:%S"), "body")], False))
+    # Placeholders and the count (or its READ-ONLY / SETUP REQUIRED substitute) are the last filler.
+    tail += [(segment, False) for segment in after or []]
     separator = glyph(caps, "dot")
     for text in variants:
         line, dropped = _pack(segments + [([(text, role)], False)] + tail, width, caps, separator)
