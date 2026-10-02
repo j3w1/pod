@@ -2323,7 +2323,8 @@
         "tests.test_workspace_pty.DeltaAuditPtyTests.test_data_age_outlasts_the_mixed_ages_note_and_a_notice",
         "tests.test_workspace_state.DeltaAuditRenderTests.test_data_age_and_stale_survive_mixed_ages_and_notices_at_every_width",
         "tests.test_workspace_state.DeltaAuditRenderTests.test_selections_never_hide_the_age_in_overlays_and_placeholders_never_displace_it",
-        "tests.test_workspace_state.DeltaAuditRenderTests.test_title_overflow_keeps_the_count_and_placeholders_without_displacing_the_age"
+        "tests.test_workspace_state.DeltaAuditRenderTests.test_title_overflow_keeps_the_count_and_placeholders_without_displacing_the_age",
+        "tests.test_workspace_state.DeltaAuditRenderTests.test_status_items_keep_their_documented_order_below_twenty_rows"
       ],
       "status": "NOT_RUN"
     },
@@ -2400,7 +2401,8 @@
         "tests.test_workspace_pty.RefreshPtyTests.test_coverage_collapse_is_named_refused_with_its_diagnostic",
         "tests.test_tui_render.FrameTests.test_stale_data_stays_marked_at_every_size_with_pin_and_preferred",
         "tests.test_workspace_pty.WorkspacePtyTests.test_stale_data_is_marked_at_40_by_12_with_pin_and_preferred",
-        "tests.test_workspace_state.DeltaAuditRenderTests.test_selections_never_hide_the_age_in_overlays_and_placeholders_never_displace_it"
+        "tests.test_workspace_state.DeltaAuditRenderTests.test_selections_never_hide_the_age_in_overlays_and_placeholders_never_displace_it",
+        "tests.test_workspace_state.DeltaAuditRenderTests.test_status_items_keep_their_documented_order_below_twenty_rows"
       ],
       "status": "NOT_RUN"
     }

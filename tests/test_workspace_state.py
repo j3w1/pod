@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import re
 import unittest
 from unittest.mock import patch
 
@@ -1353,6 +1354,35 @@ class DeltaAuditRenderTests(unittest.TestCase):
         for cols in range(80, 85):
             with self.subTest(cols=cols, case="both+stale+notice"):
                 self.assertIn("Data cache 8d old STALE", text(stale, cols, 12, now=T0 + timedelta(days=8)).splitlines()[-2])
+
+    def test_status_items_keep_their_documented_order_below_twenty_rows(self):
+        # Sixth delta review I1/I3: below 20 rows the status line orders the age, the refresh
+        # outcome, the native status and the save time ahead of a "none" placeholder or the count,
+        # and the placeholder branch is actually exercised.
+        pin, key = "claude/claude-opus-5-5/high", "claude/claude-opus-5-5/max"
+        saved = datetime(2026, 10, 1, 6, 30, tzinfo=timezone.utc)
+        order = ("Data cache ", "Refresh failed", "Native access unknown", "Saved ")
+        filler = re.compile(r"Preferred none|\b30/30 (enabled|on)\b")
+        reached = 0
+        for chosen in (prefs(pinned=pin), prefs(pinned=pin, preferred=key)):
+            base = state(chosen)
+            for variant in ("plain", "saved", "failed", "saved+failed"):
+                current = base
+                if "saved" in variant:
+                    current = replace(current, saved_at=saved)
+                if "failed" in variant:
+                    current = ts.with_refresh(current, "failed", "network")
+                for rows in (12, 19):
+                    for cols in range(40, 121):
+                        status = text(current, cols, rows).splitlines()[-2]
+                        positions = [status.index(item) for item in order if item in status]
+                        found = filler.search(status)
+                        with self.subTest(variant=variant, rows=rows, cols=cols, keys=len(chosen)):
+                            self.assertEqual(positions, sorted(positions))
+                            if found and "Data cache " in status:
+                                reached += 1
+                                self.assertTrue(all(found.start() > position for position in positions))
+        self.assertGreater(reached, 0, "the placeholder or count branch must be exercised")
 
     def test_changed_data_gives_no_context_delta_across_a_profile_change(self):
         plain = state(snapshot=fixture_snapshot(edit=lambda rows: [

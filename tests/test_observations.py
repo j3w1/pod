@@ -321,6 +321,9 @@ class RefreshTransactionTests(ObservationCase):
             if pair["previous"] is not None:
                 seen.append((int(pair["current"]["snapshot"]["generation"]),
                              int(pair["previous"]["generation"])))
+            # Readers in real use poll at most every 200 ms; a tight loop on a loaded host could hold
+            # the shared lock long enough to starve the writer past its 2 s wait.
+            time.sleep(.005)
         writer.join(10)
         pair = observations.load_pair(T0 + timedelta(days=20))
         self.assertEqual((pair["current"]["origin"], pair["current"]["snapshot"]["generation"],
