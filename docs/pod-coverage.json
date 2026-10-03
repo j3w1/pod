@@ -2150,7 +2150,9 @@
       ],
       "offline_test": [
         "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_pin_limits"
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_pin_limits",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_routing_decisions",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_keeps_the_rules_references_no_longer_repeat"
       ],
       "status": "NOT_RUN"
     },

@@ -1,4 +1,4 @@
-# 0.7.0 verification contract
+# 0.7.1 verification contract
 
  Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
@@ -76,7 +76,8 @@ unavailable delegation suppresses that flag.
 Live Codex and Claude trials additionally exercise A143, A150, A158 and A159
 in disposable objectives. A missing live case remains `NOT_RUN`. Stage-1
 review is the fresh final independent audit under the mechanism installed
-before the change; for 0.7.0 that is installed 0.6.7, and preference/pin
+before the change; for 0.7.0 that is installed 0.6.7, and for the 0.7.1 routing-guidance
+correction it is installed 0.7.0. For 0.7.0, preference/pin
 precedence, trust separation and the preference cutover are reviewed as
 governance changes. After merge and installation, a separate disposable
 objective on the new version records an assurance obligation, review attempt,
