@@ -303,12 +303,13 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                        "Valid Preferred overrides include insufficient margin,",
                        "Highest rank, lowest price, provider brand, file count, reviewer role, free capacity or "
                        "stale failure alone never decides.",
-                       "known hard tasks may start strong without exhausting cheaper routes; repeated failure needs "
-                       "diagnosis, not an effort ladder.",
+                       "Guide profiles are starting points, never requiring cheaper routes first; known hard tasks "
+                       "may start strong; repeated failure needs diagnosis, not a blind effort ladder.",
                        "After suitability, AA metrics (`pod models --json`) may compare routes without score or "
                        "winner; a route no better on any selected comparable dimension and worse on at least one "
                        "normally needs an assignment-specific reason.",
-                       "family diversity helps, is never mandatory, never defeats a pin and never adds reviews."):
+                       "family diversity, useful only among capable routes, is never mandatory, never defeats a "
+                       "pin or adds reviews."):
             self.assertIn(phrase, models)
         self.assertNotIn("Valid Preferred overrides:", models)
 
@@ -326,6 +327,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                        "Descendants require direct user permission.",
                        "Actual failures need settlement before an alternate route",
                        "closure requires all obligations terminal and a report.",
+                       "Name uncertainty, unresolved native references and the next safe action.",
                        "Final reporting distinguishes implementation, local checks, independent review, hosted CI, "
                        "live native proof, project acceptance and merge."):
             self.assertIn(phrase, skill)
