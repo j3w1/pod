@@ -32,7 +32,7 @@ or create one on `orca/<task-slug>`; preserve unrelated work. Read
 
 ## Select and admit
 
-Read `pod config --json` before each delegated assignment. With empty `errors`, a `pinned`
+Read `pod config --json` before each delegation. Without `errors`, a `pinned`
 route controls every Pod-routed role and correction at its exact model and effort, overriding
 repository model-selection rules, not user constraints or non-model authority; it excludes this
 coordinator, direct work and host-created helpers and never forces delegation. Otherwise choose a suitable `eligible` route with justified margin;
