@@ -58,7 +58,7 @@ Reactive failure records are attempt-local, preserving observed source, stage ev
 - <a id="a179"></a>**A179** — An unpinned assignment that overrides the Preferred route records the chosen and Preferred routes with a material task-specific reason; a stricter repository model restriction is recorded with `repository` provenance and its source, while the running coordinator is unchanged.
 - <a id="a182"></a>**A182** — Every supported Pod role and delegated correction obeys the pin at its exact model and effort, despite repository model mandates; any other effort is a pin mismatch, terminal reuse must match the pinned route exactly, and wrong or unknown effective evidence is not success. Direct user and non-model restrictions still hold. Selection/final admission bind current preferences, while submitted/pending replay retains its original route; the coordinator and outside helpers remain outside the pin.
 - <a id="a184"></a>**A184** — Temporary unavailable evidence holds immediate equivalent starts, honors meaningful native retry-after or a 60-second local fallback, and expires only for a subsequent coordinator decision. Relevant successful reuse clears suppression without erasing history or changing preferences. Earlier failures impose no permanent ban; uncertain requests require reconciliation, alternatives require settlement/no-start, pins never fallback, and real auth/capacity/permission/safety protections remain. Readiness alone leaves cause unknown.
-- <a id="a209"></a>**A209** — Installed guidance and human review cover trivial direct work, strongly testable work, high-risk judgment, blocking latency, recurring tasks, Preferred overrides and pin conflicts; no test claims that a deterministic benchmark winner proves semantic suitability.
+- <a id="a209"></a>**A209** — Installed guidance and human review cover trivial direct work, strongly testable work, high-risk judgment, blocking latency, recurring tasks, Preferred overrides and pin conflicts. The runtime summary also keeps the best-outcome rule, the valid override reasons as an open list, the negative routing signals, strong starts with diagnosis instead of an effort ladder, the post-suitability AA comparison rule, review diversity that never defeats a pin or adds reviews, and no delegation merely to apply a pin; no test claims that a deterministic benchmark winner proves semantic suitability.
 - <a id="a210"></a>**A210** — Selection and admission use no benchmark score, ratio or winner: AA data may only compare already-suitable routes, missing or stale data never blocks a supported route, and observation changes never alter an admitted route.
 
 ## Selection criteria
@@ -78,7 +78,7 @@ correction. Both are qualitative judgments, not invented success probabilities.
 | Latency | Is the assignment blocking or background? Consider the workflow, not first-response time alone or a guessed duration. |
 | Recurrence | Will equivalent work repeat? Once quality is protected, repetition strengthens the case for cost efficiency. |
 
-Valid reasons to override the Preferred route are insufficient margin, missing capability or
+Valid reasons to override the Preferred route include insufficient margin, missing capability or
 context, observed unavailability, disproportionate cost, materially unsuitable latency and
 useful independent-review diversity. The reason names the tradeoff, not merely that another
 model ranks higher. The registry's guide profiles are starting points, not role mandates; they

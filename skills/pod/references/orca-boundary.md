@@ -12,17 +12,16 @@ packet, placement, sources, version, eligibility, constraints, route and
 ceiling. A changed choice refuses
 `preference_changed` without a write. Later edits affect later starts.
 
-Exact native settlement frees the logical slot even with a retained terminal. Reserved and unresolved requests remain outstanding. Never count other objectives or infer physical occupancy.
+Exact native settlement frees the logical slot even with a retained terminal. Reserved and unresolved requests remain outstanding.
 
-Normal workers use native worker-start and Orca's new-agent-tab setting.
+Normal workers use native worker-start.
 Report Task/Dispatch, worktree, terminal/tab references and native placement
 warnings through status/readback. `surface: background` and discoverability
 warnings describe native placement; terminal presence/absence proves neither
 rendering nor focus. Diagnose missing tabs with the existing worker.
 `pod status` shows Orca attention per assignment; a missing "Needs you" proves
 nothing; ask owner questions plainly. Invent no visibility flag. Focus requires
-supported behavior and user request. Preserve reports; follow Delivery/release
-ordering. Reuse only for immediate follow-up; retain protected/uncertain resources.
+supported behavior and user request. Retain protected/uncertain resources.
 
 Orca's documented effect-free refusals `task_not_found`, `task_not_startable`
 and `inject_rejected` record `deferred` with no binding or blind retry.
@@ -31,7 +30,7 @@ stay unresolved until exact native request and worker readback settle them.
 Orca issues recovery UUIDs.
 Completed/absent diagnosis is read-only. Pending replay preserves
 its original request and checks authority, runtime, placement, issue body and
-checkpoint core. It does not re-check preferences or make a new model choice.
+checkpoint core.
 
 Terminal reuse requires a settled prior attempt with a known
 terminal, copies its effective route and rechecks eligibility and pin. Native
