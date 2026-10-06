@@ -91,6 +91,141 @@ class IntakeCorrectionTests(ProductionCase):
 
 
 class InvalidationCorrectionTests(ProductionCase):
+    def test_satisfied_invalidation_table_accounts_for_every_proof_state(self):
+        # Predicate: once evidence_invalidated is selected, each failing satisfied
+        # row occurs exactly once in invalidations[:8] or the remaining count.
+        cases = [("ordinary", state) for state in
+                 ("missing", "empty", "FAILED", "NOT_RUN", "UNAVAILABLE", "stale", "touched", "PASS")]
+        cases += [("assurance", state) for state in
+                  ("missing", "empty", "failed", "stale", "touched", "PASS")]
+        for kind, proof_state in cases:
+            with self.subTest(kind=kind, proof_state=proof_state), production() as case:
+                external = {"party": "user", "need": "fix", "unblocks_when": "fixed"}
+                extras = [f"E{i}" for i in range(9)]
+                selected = "S" if kind == "ordinary" else "B"
+                case.intake(assurance(case), assurance(case, id="B", scope={"paths": ["README.md"]}),
+                            case.sub("S", proof_scope=["src"]), case.sub("R"),
+                            *[case.sub(key) for key in extras])
+                attempts = {}
+                for key in ("A", "B"):
+                    frozen = case.packet([key], role="review")
+                    attempt = case.start("review-" + key, frozen)["admission"]
+                    case.settle(attempt)
+                    attempts[key] = attempt
+                    rows = case.stored()
+                    row = next(row for row in rows if row["id"] == key)
+                    row.pop("executor")
+                    failed = key == "B" and proof_state == "failed"
+                    if key == "A" or failed:
+                        row.update(state="blocked_external", external=external)
+                    else:
+                        row.update(state="satisfied", evidence=[{"attempt": attempt["admission_id"]}])
+                    triage = []
+                    if key == "A":
+                        rows.append({"id": "CA", "kind": "correction", "provenance": "coordinator",
+                                     "parent": "A", "check": "fix", "state": "blocked_external",
+                                     "external": external})
+                        triage = [{"finding": "F1", "severity": "major", "triage": "required_correction",
+                                   "summary": "violated invariant", "correction": "CA"}]
+                    case.report(attempt, frozen, outcome="failed" if failed else "succeeded",
+                                map={"obligations": rows}, triage=triage)
+                rows = case.stored()
+                for row in rows:
+                    if row["id"] in ("O1", "S"):
+                        row.pop("executor", None)
+                        row.pop("wait", None)
+                        row.update(state="satisfied", evidence=[case.proof(row["id"])])
+                    elif row["id"] == "R":
+                        row.pop("wait")
+                        row.update(state="active", executor="coordinator")
+                    elif row["id"] in extras:
+                        row.pop("wait")
+                        row.update(state="blocked_external", external=external)
+                case.write(rows)  # Valid ordinary proof and completed review are accepted.
+                original = deepcopy(next(row for row in case.stored() if row["id"] == selected).get("evidence"))
+                if proof_state in ("stale", "touched"):
+                    path = "README.md" if (kind == "ordinary") == (proof_state == "stale") else "src/old.py"
+                    case.move(path)
+                    rows = case.stored()
+                    for row in rows:
+                        if row["state"] == "satisfied":
+                            row.pop("evidence")
+                            row.update(state="blocked_external", external=external)
+                    case.write(rows)
+                frozen = case.packet(["R"], role="investigate", resolves="which proof failed?",
+                                     stop_condition="answer")
+                reporting = case.start("investigate", frozen)["admission"]
+                case.settle(reporting)
+                rows = case.stored()
+                rows_by_id = {row["id"]: row for row in rows}
+                rows_by_id["R"].pop("executor")
+                rows_by_id["R"].update(state="blocked_external", external=external)
+                case.write(rows)
+                base = {row["id"]: row for row in case.stored()}
+                for placement in ("before", "after"):
+                    for extra in (0, 9):
+                        for operation in ("checkpoint", "report"):
+                            with self.subTest(placement=placement, extra=extra, operation=operation):
+                                by_id = deepcopy(base)
+                                row = by_id[selected]
+                                row.pop("external", None)
+                                row["state"] = "satisfied"
+                                if proof_state == "missing":
+                                    row.pop("evidence", None)
+                                elif proof_state == "empty":
+                                    row["evidence"] = []
+                                elif kind == "ordinary" and proof_state in ("FAILED", "NOT_RUN", "UNAVAILABLE"):
+                                    row["evidence"] = [case.proof(selected, status=proof_state, reference="nonpassing")]
+                                else:
+                                    row["evidence"] = original or [{"attempt": attempts[selected]["admission_id"]}]
+                                by_id["A"].pop("external")
+                                by_id["A"].update(state="satisfied", evidence=[{"attempt": attempts["A"]["admission_id"]}])
+                                for index, key in enumerate(extras[:extra]):
+                                    row = by_id[key]
+                                    row.pop("external")
+                                    row["state"] = "satisfied"
+                                    sibling = ("missing", "empty", "FAILED", "NOT_RUN", "UNAVAILABLE")[index % 5]
+                                    if sibling == "empty":
+                                        row["evidence"] = []
+                                    elif sibling != "missing":
+                                        row["evidence"] = [case.proof(key, status=sibling)]
+                                order = ([selected, "A"] if placement == "before" else ["A", selected])
+                                order += [key for key in by_id if key not in order]
+                                proposed = [by_id[key] for key in order]
+                                before = records(case)
+                                with self.assertRaises(PodError) as caught:
+                                    if operation == "checkpoint":
+                                        case.write(proposed)
+                                    else:
+                                        case.report(reporting, frozen, map={"obligations": proposed})
+                                error = caught.exception
+                                self.assertEqual(error.code, "obligation_unaccounted")
+                                self.assertEqual(error.detail["operation"], operation)
+                                referent = error.detail["referent"]
+                                if placement == "before" and proof_state in ("missing", "empty"):
+                                    self.assertEqual(error.detail["detail"], "satisfied_without_evidence")
+                                    self.assertEqual(referent, {"obligation": selected,
+                                        "settled_attempts": "" if kind == "ordinary" else attempts["B"]["admission_id"]})
+                                else:
+                                    self.assertEqual(error.detail["detail"], "evidence_invalidated")
+                                    self.assertEqual((referent["obligation"], referent["correction"]), ("A", "CA"))
+                                    failing = {"A", *extras[:extra]}
+                                    if proof_state != "PASS":
+                                        failing.add(selected)
+                                    expected = [key for key in order if key in failing]
+                                    invalid = referent["invalidations"]
+                                    self.assertEqual([item["obligation"] for item in invalid], expected[:8])
+                                    self.assertEqual(referent["remaining"], max(0, len(expected) - 8))
+                                    self.assertEqual(len({item["obligation"] for item in invalid}), len(invalid))
+                                    self.assertTrue(all(item["classification"] and item["correction"] for item in invalid))
+                                    a = next(item for item in invalid if item["obligation"] == "A")
+                                    self.assertEqual((a["corrections"], a["eligibility"]), (["CA"], "ineligible"))
+                                    if proof_state in ("stale", "touched"):
+                                        sibling = next(item for item in invalid if item["obligation"] == selected)
+                                        self.assertEqual((sibling["classification"], sibling["eligibility"]),
+                                                         ("candidate-only", "eligible" if proof_state == "stale" else "touched"))
+                                self.assertEqual(records(case), before)
+
     def test_all_invalid_satisfied_rows_include_correction_siblings_and_overflow(self):
         # Predicate: every satisfied row with invalid proof or an open correction is listed.
         for correction_state in ("blocked_external", "satisfied", "withdrawn"):

@@ -2453,7 +2453,8 @@
         "tests.test_issue41.RemainingProofTests.test_ordinary_proof_scope_revision_invalidates_proof_and_restated_map_succeeds",
         "tests.test_issue41.RemainingProofTests.test_empty_process_scope_still_refuses_an_unreadable_delta",
         "tests.test_issue41_corrections.InvalidationCorrectionTests.test_all_invalid_satisfied_rows_include_correction_siblings_and_overflow",
-        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_report_collects_open_corrections_and_other_invalid_proof_atomically"
+        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_report_collects_open_corrections_and_other_invalid_proof_atomically",
+        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_satisfied_invalidation_table_accounts_for_every_proof_state"
       ],
       "status": "NOT_RUN"
     },

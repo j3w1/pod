@@ -1053,7 +1053,7 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                 break
     from .assurance import invalidation
     invalid = [invalidation(ob, ctx, gov, corrections=open_corrections.get(ob["id"], [])) for ob in rows.values()
-               if ob["state"] == "satisfied" and ob.get("evidence")
+               if ob["state"] == "satisfied"
                and (ob["id"] in open_corrections or ob["id"] in (reuse_failures or {}) or not evidence_valid(ob, ctx, gov))]
     if invalid:
         eligible = [item["id"] for item in rows.values() if item.get("receipts")
