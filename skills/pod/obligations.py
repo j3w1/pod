@@ -151,10 +151,12 @@ def boundary(value: Any, *, code: str = "obligation_invalid", obligation: str | 
     paths, surfaces = record.get("paths", []), record.get("surfaces", [])
     if (not isinstance(paths, list) or len(paths) > 64 or not isinstance(surfaces, list)
             or len(surfaces) > 32):
-        raise refuse(code, "malformed", "boundary is a bounded list of paths and surfaces", record='boundary')
+        raise refuse(code, "malformed", "boundary is a bounded list of paths and surfaces", record='boundary',
+                     **({"obligation": obligation} if obligation is not None else {}))
     for surface in surfaces:
         if not isinstance(surface, str) or not _SURFACE.fullmatch(surface):
-            raise refuse(code, "malformed", "boundary surfaces are bounded names", record='boundary')
+            raise refuse(code, "malformed", "boundary surfaces are bounded names", record='boundary',
+                         **({"obligation": obligation} if obligation is not None else {}))
     return {"paths": sorted({_path(item, code=code, obligation=obligation) for item in paths}),
             "surfaces": sorted(set(surfaces))}
 
@@ -239,33 +241,34 @@ def _cite(source: Any, observed: dict | None, sources: list[dict], *, obligation
     if record["path"] not in bound or bound[record["path"]]["revision"] is None:
         raise refuse("obligation_invalid", "governance_source_unrecognized",
                      "project policy cites only a declared governance source bound at intake",
-                     path=record["path"])
+                     record="policy citation", field="path", obligation=obligation)
     texts = (observed or {}).get("texts", {})
     text = texts.get(record["path"])
     if (text is None or "sha256:" + _sha(text.encode()) != bound[record["path"]]["revision"]
             or (observed or {}).get("commit") != bound[record["path"]]["base"]):
         raise refuse("obligation_invalid", "cite_not_base",
                      "the cited source is not read at the objective's bound base revision",
-                     path=record["path"])
+                     path=record["path"], obligation=obligation)
     match = _LINES.fullmatch(record["lines"]) if isinstance(record["lines"], str) else None
     lines = _lines(text)
     if match is None:
-        raise refuse("obligation_invalid", "cite_not_found", "cite a line range like 38-40", record='cite')
+        raise refuse("obligation_invalid", "cite_not_found", "cite a line range like 38-40", record='cite',
+                     obligation=obligation)
     first, last = int(match.group(1)), int(match.group(2) or match.group(1))
     if first > last or last > len(lines) or last - first >= MAX_CITED_LINES:
         raise refuse("obligation_invalid", "cite_not_found", "the cited lines are absent at the base",
-                     path=record["path"], lines=record["lines"])
+                     path=record["path"], field="lines", obligation=obligation)
     quote = "\n".join(lines[first - 1:last])
     if not quote.strip():
         raise refuse("obligation_invalid", "cite_not_found", "the cited lines are blank at the base",
-                     path=record["path"], lines=record["lines"])
+                     path=record["path"], field="lines", obligation=obligation)
     quote_sha = _sha(quote.encode())
     if record.get("revision") not in (None, bound[record["path"]]["revision"]):
         raise refuse("obligation_invalid", "cite_not_base", "the citation names another source revision",
-                     path=record["path"])
+                     path=record["path"], obligation=obligation)
     if record.get("quote_sha256") not in (None, quote_sha):
         raise refuse("obligation_invalid", "cite_not_base",
-                     "the cited text differs from the base revision's text", path=record["path"])
+                     "the cited text differs from the base revision's text", path=record["path"], obligation=obligation)
     return {"path": record["path"], "lines": record["lines"],
             "revision": bound[record["path"]]["revision"], "base": bound[record["path"]]["base"],
             "quote_sha256": quote_sha, "gone": False}
@@ -572,6 +575,11 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
         if ob["id"] in rows or ob["id"] in proposals:
             raise refuse("obligation_invalid", "malformed", "obligation ids are unique", obligation=ob["id"])
         rows[ob["id"]] = ob
+    if ctx.get("brief") and ctx.get("candidate") is None:
+        satisfied = [ob["id"] for ob in rows.values() if ob["state"] == "satisfied"]
+        if satisfied:
+            raise refuse("obligation_invalid", "malformed", "satisfied obligations need candidate for brief validation",
+                         field="candidate", obligations=",".join(satisfied[:8]), remaining=max(0, len(satisfied) - 8))
     for key in prior_rows:
         if key not in rows:
             raise refuse("obligation_unaccounted", "missing_state", "an obligation cannot be dropped; withdraw it",
@@ -983,6 +991,13 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                      "at most one obligation is coordinator-held active",
                      obligations=",".join(ob["id"] for ob in coordinator))
     pending = undispositioned(ctx)
+    open_corrections = {
+        ob["id"]: [child["id"] for child in rows.values()
+                   if child.get("parent") == ob["id"] and child["kind"] == "correction"
+                   and not (child["state"] == "satisfied"
+                            or child["state"] == "withdrawn" and child["withdrawal"]["by"] == "user_direct")]
+        for ob in rows.values() if ob["state"] == "satisfied" and ob["kind"] == "assurance"}
+    open_corrections = {key: children for key, children in open_corrections.items() if children}
     for ob in rows.values():
         state = ob["state"]
         if state == "unassigned" and ob["introduced_seq"] != seq:
@@ -1010,12 +1025,14 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                                      obligation=ob["id"], admission=key)
         if state == "blocked_external":
             external = _exact(ob["external"], {"party", "need", "unblocks_when"},
-                              {"party", "need", "unblocks_when"}, "external", code="obligation_unaccounted")
+                              {"party", "need", "unblocks_when"}, "external", code="obligation_unaccounted",
+                              obligation=ob["id"])
             if external["party"] not in PARTIES:
                 raise refuse("obligation_unaccounted", "external_invalid",
                              "an external block names owner, user, provider or third_party", obligation=ob["id"])
             for field in ("need", "unblocks_when"):
-                _text(external[field], field, code="obligation_unaccounted", detail="external_invalid")
+                _text(external[field], field, code="obligation_unaccounted", detail="external_invalid",
+                      obligation=ob["id"])
                 if external[field] in rows or external[field] in admissions:
                     raise refuse("obligation_unaccounted", "external_invalid",
                                  "an external block never names an internal referent", obligation=ob["id"])
@@ -1030,25 +1047,24 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                              "and reference", obligation=ob["id"],
                              next_action="use one settled attempt or add a short evidence receipt",
                              settled_attempts=",".join(_settled_serving(ctx, ob["id"])))
-            if ob["kind"] == "assurance":
-                for child in rows.values():
-                    if (child.get("parent") == ob["id"] and child["kind"] == "correction"
-                            and not (child["state"] == "satisfied"
-                                     or child["state"] == "withdrawn" and child["withdrawal"]["by"] == "user_direct")):
-                        raise refuse("obligation_unaccounted", "evidence_invalidated",
-                                     "an assurance is satisfied only when its corrections are",
-                                     obligation=ob["id"], correction=child["id"])
+            if ob["id"] in open_corrections:
+                # This guaranteed refusal keeps precedence over later state errors;
+                # its diagnostic still accounts for every invalid satisfied row below.
+                break
     from .assurance import invalidation
-    invalid = [invalidation(ob, ctx, gov) for ob in rows.values()
+    invalid = [invalidation(ob, ctx, gov, corrections=open_corrections.get(ob["id"], [])) for ob in rows.values()
                if ob["state"] == "satisfied" and ob.get("evidence")
-               and (ob["id"] in (reuse_failures or {}) or not evidence_valid(ob, ctx, gov))]
+               and (ob["id"] in open_corrections or ob["id"] in (reuse_failures or {}) or not evidence_valid(ob, ctx, gov))]
     if invalid:
         eligible = [item["id"] for item in rows.values() if item.get("receipts")
                     and not item.get("source", {}).get("gone")] if ctx.get("governance_refresh") else []
+        first = ({"obligation": next(iter(open_corrections)),
+                  "correction": next(iter(open_corrections.values()))[0]} if open_corrections
+                 else {"obligation": invalid[0]["obligation"]})
         raise refuse("obligation_unaccounted", "evidence_invalidated",
                      "; ".join(f"{item['obligation']}: {item['classification']}, {item['eligibility']}; {item['correction']}"
                                for item in invalid[:8]) + (f"; +{len(invalid)-8} more" if len(invalid) > 8 else ""),
-                     obligation=invalid[0]["obligation"], invalidations=invalid[:8], remaining=max(0, len(invalid)-8),
+                     **first, invalidations=invalid[:8], remaining=max(0, len(invalid)-8),
                      eligible_rebind=",".join(eligible[:8]), next_action="re-read with pod internal map; "
                      + ("rebind eligible ids; " if eligible else "")
                      + "name eligible ids in reuse {from, ids}; record fresh evidence or restate the other rows")
@@ -1398,7 +1414,7 @@ def brief_map(criteria: list[str], value: Any, ctx: dict) -> dict:
     if not isinstance(value, dict) or not isinstance(value.get("obligations"), list):
         raise refuse("obligation_unaccounted", "map_missing",
                      "an execution brief records its obligation map with every original criterion", record='brief map')
-    draft = accept_write(None, value, {**ctx, "criteria": list(criteria)})
+    draft = accept_write(None, value, {**ctx, "criteria": list(criteria), "brief": True})
     return {"draft": True, "persisted": False, "criteria_covered": list(criteria), **draft}
 
 

@@ -123,12 +123,6 @@ def _op_brief(request: dict) -> dict:
         facts = kernel_context(project, "brief", {"admissions": {}}, None,
                                candidate=request.get("candidate"), criteria=request["criteria"],
                                governance=observed, verification=verification)
-    satisfied = [row["id"] for row in (request.get("map") or {}).get("obligations", [])
-                 if row.get("state") == "satisfied"]
-    if satisfied and "candidate" not in request:
-        from .obligations import refuse
-        raise refuse("obligation_invalid", "malformed", "satisfied obligations need candidate for brief validation",
-                     field="candidate", obligations=",".join(satisfied[:8]), remaining=max(0, len(satisfied) - 8))
     brief["map"] = brief_map(request["criteria"], request.get("map"), facts)
     return brief
 

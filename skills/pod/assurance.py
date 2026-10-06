@@ -12,13 +12,15 @@ from .util import digest
 def _source_entries(value: Any, name: str, *, obligation: str | None = None) -> list[dict]:
     from .obligations import _exact, _path, refuse
     if not isinstance(value, list) or len(value) > 64:
-        raise refuse("obligation_invalid", "malformed", f"{name} sources are a bounded list", record='source entries')
+        raise refuse("obligation_invalid", "malformed", f"{name} sources are a bounded list", record='source entries',
+                     **({"obligation": obligation} if obligation is not None else {}))
     rows = []
     for item in value:
         entry = _exact(item, {"path", "state", "sha256"}, {"path", "state"}, "evidence source", obligation=obligation)
         _path(entry["path"], code="obligation_invalid", obligation=obligation)
         if entry["state"] not in ("present", "absent", "unavailable"):
-            raise refuse("obligation_invalid", "malformed", "evidence source state allowed: present, absent, unavailable", record='source entries')
+            raise refuse("obligation_invalid", "malformed", "evidence source state allowed: present, absent, unavailable", record='source entries',
+                         **({"obligation": obligation} if obligation is not None else {}))
         rows.append(dict(entry))
     return rows
 
@@ -26,7 +28,8 @@ def _source_entries(value: Any, name: str, *, obligation: str | None = None) -> 
 def _dependencies(value: Any, name: str, *, obligation: str | None = None) -> list[str]:
     from .obligations import _text, refuse
     if not isinstance(value, list) or len(value) > 64:
-        raise refuse("obligation_invalid", "malformed", f"{name} dependencies are a bounded list", record='dependencies')
+        raise refuse("obligation_invalid", "malformed", f"{name} dependencies are a bounded list", record='dependencies',
+                     **({"obligation": obligation} if obligation is not None else {}))
     return [_text(item, "dependency", limit=512, obligation=obligation) for item in value]
 
 
@@ -39,15 +42,13 @@ def _evidence_record(ob: dict, raw: Any, ctx: dict) -> dict:
     environment and the command and result that produced the status.
     """
     from datetime import datetime, timezone
-    from .obligations import _text, definition_id, refuse
+    from .obligations import _exact, _text, definition_id, refuse
     from .records import evidence_record
     if isinstance(raw, dict) and "schema" not in raw:
         fields = {"check", "command", "result", "reference", "status", "sources",
                   "dependencies", "environment", "timestamp"}
         required = {"check", "command", "result", "reference"}
-        if set(raw) - fields or required - set(raw):
-            raise refuse("obligation_invalid", "malformed", "short evidence needs check, command, result and reference",
-                         obligation=ob["id"])
+        _exact(raw, fields, required, "short evidence", obligation=ob["id"])
         verification = ctx.get("verification") or {}
         raw = {"schema": "pod-evidence/v1", "criterion": ob["id"],
                "candidate": ctx.get("candidate"), "policy_revision": ctx.get("policy_revision"),
@@ -58,11 +59,12 @@ def _evidence_record(ob: dict, raw: Any, ctx: dict) -> dict:
         row = evidence_record({k: v for k, v in raw.items() if k != "governance"}
                               if isinstance(raw, dict) else raw)
     except PodError as exc:
-        raise refuse("obligation_invalid", "malformed", str(exc), obligation=ob["id"]) from exc
+        raise refuse("obligation_invalid", "malformed", str(exc), obligation=ob["id"],
+                     **{"record": "evidence", **(exc.detail or {})}) from exc
     if row["criterion"] != ob["id"]:
         raise refuse("obligation_invalid", "evidence_unbound",
                      "an evidence record names the obligation it serves as its criterion",
-                     obligation=ob["id"], criterion=str(row["criterion"])[:64])
+                     obligation=ob["id"], field="criterion")
     for field in ("candidate", "policy_revision", "environment", "check", "command", "result", "timestamp",
                   "reference"):
         _text(row[field], field, obligation=ob["id"])
@@ -187,7 +189,7 @@ def reuse_eligibility(ob: dict, source: str, ctx: dict) -> tuple[str, list[str],
     delta = reader(source, current) if reader is not None and isinstance(current, str) else None
     if delta is None:
         return "delta unreadable", [], None
-    touched = overlap({"paths": [_path(path, code="obligation_unaccounted") for path in delta], "surfaces": []},
+    touched = overlap({"paths": [_path(path, code="obligation_unaccounted", obligation=ob["id"]) for path in delta], "surfaces": []},
                       {"paths": paths, "surfaces": []})["paths"]
     return ("touched" if touched else "eligible"), touched, delta
 
@@ -210,7 +212,7 @@ def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
     return {"from": source, "to": current, "delta": sorted(delta)[:256], "definition": definition_id(ob)}
 
 
-def invalidation(ob: dict, ctx: dict, gov: str) -> dict:
+def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None = None) -> dict:
     """Classify all invalid proof without changing a receipt or declaring REUSE."""
     from .obligations import definition_id
     rows = ob.get("evidence", [])
@@ -230,8 +232,13 @@ def invalidation(ob: dict, ctx: dict, gov: str) -> dict:
     label, touched, _ = reuse_eligibility(ob, source, ctx) if classification == "candidate-only" else ("ineligible", [], None)
     correction = (f"add reuse {{from: {source}}} to {ob['id']}" if label == "eligible"
                   else f"record fresh evidence for {ob['id']}" + (" after governance refresh/rebind" if classification == "governance change" else ""))
+    if corrections:
+        label = "ineligible"
+        correction = ("an assurance is satisfied only when its corrections are; resolve "
+                      + ",".join(corrections[:8]) + f"; record fresh evidence for {ob['id']}")
     return {"obligation": ob["id"], "classification": classification, "eligibility": label,
-            "paths": touched[:8], "correction": correction}
+            "paths": touched[:8], "correction": correction,
+            **({"corrections": corrections[:8], "remaining_corrections": max(0, len(corrections) - 8)} if corrections else {})}
 
 
 def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) -> bool:
@@ -300,12 +307,13 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     obligations = [dict(row) for row in base.get("obligations", state["obligations"])]
     listed = [dict(row) for row in base.get("proposals", state.get("proposals", []))]
     admission = _admissions(ctx).get(admission_id) or {}
+    assurance_id = (admission.get("serves") or [None])[0] if admission.get("role") == "review" else None
     if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
-        raise refuse("obligation_invalid", "malformed", "triage is a bounded list", record='review triage')
+        raise refuse("obligation_invalid", "malformed", "triage is a bounded list", record='review triage',
+                     obligation=assurance_id)
     if findings and admission.get("role") != "review":
         raise refuse("obligation_invalid", "malformed", "only a review attempt is triaged", admission=admission_id)
     rows = {row.get("id"): row for row in obligations}
-    assurance_id = (admission.get("serves") or [None])[0]
     if (admission.get("role") == "review" and admission.get("serves") == [assurance_id]
             and review_completed(admission)):
         served = rows.get(assurance_id)
@@ -319,44 +327,47 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     correction_findings = {}
     for raw in findings:
         record = _exact(raw, {"finding", "severity", "findings", "triage", "summary", "reason", "correction", "root_cause"},
-                        {"triage", "summary"} | ({"findings"} if isinstance(raw, dict) and "findings" in raw else {"finding", "severity"}), "finding")
+                        {"triage", "summary"} | ({"findings"} if isinstance(raw, dict) and "findings" in raw else {"finding", "severity"}),
+                        "finding", obligation=assurance_id)
         if "findings" in record:
             grouped = record["findings"]
             if "finding" in record or "severity" in record or not isinstance(grouped, list) or not 1 <= len(grouped) <= 8:
                 raise refuse("obligation_invalid", "malformed", "a group contains 1..8 finding/severity records",
-                             record="finding group")
+                             record="finding group", obligation=assurance_id)
             for item in grouped:
-                _exact(item, {"finding", "severity"}, {"finding", "severity"}, "group member")
-                _ident(item["finding"], "finding")
+                _exact(item, {"finding", "severity"}, {"finding", "severity"}, "group member", obligation=assurance_id)
+                _ident(item["finding"], "finding", obligation=assurance_id)
                 if item["severity"] not in SEVERITIES:
                     raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES),
-                                 record="group member")
+                                 record="group member", obligation=assurance_id)
             if record.get("triage") != "required_correction":
-                _text(record.get("root_cause"), "root_cause")
+                _text(record.get("root_cause"), "root_cause", obligation=assurance_id)
             ids = [item["finding"] for item in grouped]
             if len(set(ids)) != len(ids):
-                raise refuse("obligation_invalid", "malformed", "group ids are unique", record="finding group")
+                raise refuse("obligation_invalid", "malformed", "group ids are unique", record="finding group",
+                             obligation=assurance_id)
             record = {**record, "finding": ids[0], "severity": min((item["severity"] for item in grouped), key=SEVERITIES.index)}
         else:
             if "finding" not in record or "severity" not in record:
-                raise refuse("obligation_invalid", "malformed", "finding needs finding and severity", record="finding")
+                raise refuse("obligation_invalid", "malformed", "finding needs finding and severity", record="finding",
+                             obligation=assurance_id)
             ids = [record["finding"]]
-        _ident(record["finding"], "finding")
-        _text(record["summary"], "summary")
+        _ident(record["finding"], "finding", obligation=assurance_id)
+        _text(record["summary"], "summary", obligation=assurance_id)
         if record["severity"] not in SEVERITIES or record["triage"] not in TRIAGE:
             raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES) + "; triage allowed: " + ", ".join(TRIAGE),
-                         finding=record["finding"])
+                         finding=record["finding"], obligation=assurance_id)
         if record["severity"] in ("blocker", "major") and record["triage"] == "advisory":
             if "reason" not in record:
                 raise refuse("obligation_invalid", "downgrade_unreasoned",
                              "downgrading a reviewer's blocker or major finding needs a reason",
-                             finding=record["finding"])
-            _text(record["reason"], "reason", limit=1024)
+                             finding=record["finding"], obligation=assurance_id)
+            _text(record["reason"], "reason", limit=1024, obligation=assurance_id)
         entry = {"attempt": admission_id, "finding": record["finding"], "severity": record["severity"],
                  "triage": record["triage"], "summary": record["summary"],
                  "recorded_seq": state["seq"] + 1}
         if "root_cause" in record:
-            _text(record["root_cause"], "root_cause")
+            _text(record["root_cause"], "root_cause", obligation=assurance_id)
             entry["root_cause"] = record["root_cause"]
         if "findings" in record:
             entry["findings"] = ids
@@ -369,7 +380,7 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
             proposed["findings"] = ids if "findings" in record else None
             if replay != proposed:
                 raise refuse("obligation_invalid", "receipt_conflict", "stored finding ids cannot be regrouped or changed",
-                             finding=record["finding"], record="finding")
+                             finding=record["finding"], record="finding", obligation=assurance_id)
             continue
         if "reason" in record:
             entry["reason"] = record["reason"]
@@ -380,7 +391,7 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
                     or correction.get("parent") != assurance_id or correction.get("provenance") != "coordinator"):
                 raise refuse("obligation_invalid", "no_parent",
                              "several required findings of one review may share one new coordinator correction under the assurance obligation",
-                             finding=record["finding"])
+                             finding=record["finding"], obligation=assurance_id)
             previous = correction_findings.get(correction["id"], {})
             all_ids = list(dict.fromkeys([*previous.get("findings", []), *ids]))
             if len(all_ids) > 8:
@@ -395,7 +406,7 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         else:
             if "correction" in record:
                 raise refuse("obligation_invalid", "malformed", "an advisory finding becomes a proposal",
-                             finding=record["finding"])
+                             finding=record["finding"], obligation=assurance_id)
             key = "adv-" + digest({"attempt": admission_id, "finding": record["finding"]})[:12]
             if key not in known:
                 listed.append({"id": key, "source": "reviewer_advisory", "origin_ref": admission_id[:64],
@@ -405,7 +416,8 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     if records:
         assurance = rows.get(assurance_id)
         if assurance is None:
-            raise refuse("obligation_invalid", "malformed", "the reviewed assurance obligation is absent", record='review triage')
+            raise refuse("obligation_invalid", "malformed", "the reviewed assurance obligation is absent", record='review triage',
+                         obligation=assurance_id)
         if len(stored) + len(records) > MAX_FINDINGS:
             raise refuse("obligation_invalid", "finding_limit",
                          "the bounded finding history is full", obligation=assurance_id)
@@ -414,13 +426,15 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     if admission.get("role") == "review":
         written.add(("review_report", admission_id))
     if not isinstance(proposals, list) or len(proposals) > 16:
-        raise refuse("obligation_invalid", "malformed", "report proposals are a bounded list", record='review triage')
+        raise refuse("obligation_invalid", "malformed", "report proposals are a bounded list", record='review triage',
+                     obligation=assurance_id)
     for raw in proposals:
-        record = _exact(raw, {"summary", "source"}, {"summary"}, "report proposal")
-        _text(record["summary"], "summary")
+        record = _exact(raw, {"summary", "source"}, {"summary"}, "report proposal", obligation=assurance_id)
+        _text(record["summary"], "summary", obligation=assurance_id)
         source = record.get("source", "worker_report")
         if source not in PROPOSAL_SOURCES:
-            raise refuse("obligation_invalid", "malformed", "proposal source allowed: " + ", ".join(PROPOSAL_SOURCES), record='review triage')
+            raise refuse("obligation_invalid", "malformed", "proposal source allowed: " + ", ".join(PROPOSAL_SOURCES), record='review triage',
+                         obligation=assurance_id)
         key = "rep-" + digest({"attempt": admission_id, "summary": record["summary"]})[:12]
         if key not in {row.get("id") for row in listed}:
             listed.append({"id": key, "source": source, "origin_ref": admission_id[:64],

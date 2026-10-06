@@ -2419,7 +2419,8 @@
         "tests.test_issue41.GovernorBoundaryTests.test_decide_marks_only_executable_reservations_and_execute_attaches",
         "tests.test_issue41.RemainingGovernorTests.test_dispatch_and_rerun_decision_reservations_attach_and_cancel_then_execute",
         "tests.test_issue41.RemainingGovernorTests.test_cancel_validation_decision_reservation_is_marked_and_attached",
-        "tests.test_issue41.ReleasedWriterTests.test_071_validator_loads_new_marked_journal"
+        "tests.test_issue41.ReleasedWriterTests.test_071_validator_loads_new_marked_journal",
+        "tests.test_issue41_corrections.OfflineOmissionTests.test_every_executable_reservation_cancel_then_executes_exactly_once"
       ],
       "status": "NOT_RUN"
     },
@@ -2450,7 +2451,9 @@
         "tests.test_issue41.RemainingProofTests.test_one_refusal_classifies_candidate_definition_binding_and_governance_failures",
         "tests.test_issue41.RemainingProofTests.test_report_expands_explicit_reuse_list_without_a_new_receipt",
         "tests.test_issue41.RemainingProofTests.test_ordinary_proof_scope_revision_invalidates_proof_and_restated_map_succeeds",
-        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_still_refuses_an_unreadable_delta"
+        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_still_refuses_an_unreadable_delta",
+        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_all_invalid_satisfied_rows_include_correction_siblings_and_overflow",
+        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_report_collects_open_corrections_and_other_invalid_proof_atomically"
       ],
       "status": "NOT_RUN"
     },
@@ -2495,7 +2498,10 @@
         "tests.test_issue41.DiagnosticsBoundaryTests.test_admission_refusal_names_update_and_same_task_recovery",
         "tests.test_issue41.RemainingDiagnosticsTests.test_known_obligation_field_diagnostics_and_remaining_exact_record_shapes",
         "tests.test_issue41.FinalDiagnosticShapesTests.test_cycle_refusal_lists_every_affected_dependent",
-        "tests.test_issue41.FinalDiagnosticShapesTests.test_disposition_exact_fields_are_named_without_values"
+        "tests.test_issue41.FinalDiagnosticShapesTests.test_disposition_exact_fields_are_named_without_values",
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_nested_refusals_keep_known_obligation_and_hide_refused_values",
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_review_record_siblings_keep_known_assurance_and_hide_refused_values",
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_kernel_operation_tags_preserve_codes_details_and_first_referents"
       ],
       "status": "NOT_RUN"
     },
@@ -2506,7 +2512,10 @@
         "hosted_ci",
         "independent_review"
       ],
-      "offline_test": "tests.test_issue41.ProofBoundaryTests.test_brief_uses_same_candidate_and_verification_without_writes",
+      "offline_test": [
+        "tests.test_issue41.ProofBoundaryTests.test_brief_uses_same_candidate_and_verification_without_writes",
+        "tests.test_issue41_corrections.IntakeCorrectionTests.test_malformed_brief_inputs_keep_kernel_identity_before_candidate_scan"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -2534,7 +2543,8 @@
       "offline_test": [
         "tests.test_issue41.DiagnosticsBoundaryTests.test_status_projects_released_worker_and_start_time_warnings_from_exact_read",
         "tests.test_issue41.DiagnosticsBoundaryTests.test_status_blocked_branches_render_without_tracebacks",
-        "tests.test_issue41.DiagnosticsBoundaryTests.test_retained_and_live_owned_terminals_use_current_exact_resource_facts"
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_retained_and_live_owned_terminals_use_current_exact_resource_facts",
+        "tests.test_issue41_corrections.OfflineOmissionTests.test_status_state_read_error_and_released_superseded_entries_are_read_only"
       ],
       "status": "NOT_RUN"
     },
