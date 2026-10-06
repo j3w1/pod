@@ -295,6 +295,8 @@ class DiagnosticsBoundaryTests(ProductionCase):
             with self.subTest(fields=fields,rows=rows),redirect_stdout(output),redirect_stderr(errors):
                 self.assertEqual(internal.main(["checkpoint","--input",str(path)]),1)
             envelope=json.loads(output.getvalue());self.assertTrue(envelope["error"]["detail"].get("referent"))
+            self.assertEqual(envelope["error"]["detail"]["operation"],"checkpoint")
+            self.assertIn("internal checkpoint",envelope["error"]["message"])
             self.assertNotIn(sentinel,output.getvalue()+errors.getvalue())
 
     def test_wait_refusal_lists_all_dependents_and_retry_restates_them_once(self):

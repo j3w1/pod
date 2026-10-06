@@ -523,6 +523,9 @@ def run(operation: str, request: dict) -> dict:
         exc.detail = {**(exc.detail or {}), "operation": operation}
         raise
     except PodError as exc:
+        if isinstance(exc.detail, dict) and isinstance(exc.detail.get("referent"), dict):
+            exc.args = (f"internal {operation}: {exc}",)
+            exc.detail = {**exc.detail, "operation": operation}
         if operation == "admission" and isinstance(request, dict) and request.get("project") and request.get("objective") and request.get("task"):
             from .ledger import read
             state = read(Path(request["project"]), request["objective"])
