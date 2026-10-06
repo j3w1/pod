@@ -99,9 +99,11 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
         if pushed.get("status") != "pushed":
             return "FAILED", {"remote_head": pushed.get("remote_head")}, "branch_moved: the remote branch was not at the expected commit"
         provider = {"remote_head": commit, "branch": target}
-        provider["triggered"] = _triggered_runs(port, row, commit)
+        unread = []
+        provider["triggered"] = _triggered_runs(port, row, commit, unread=unread)
+        observation_detail = "push landed; triggered runs unreadable for: " + ", ".join(unread) if unread else None
         if kind == "push":
-            return "PASS", provider, None
+            return "PASS", provider, observation_detail
         try:
             found = port.pull_request(head=branch["branch"], base=branch["base"])
             if found is None:
@@ -115,11 +117,9 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
             else:
                 provider["pr_reused"] = True
         except PodError as exc:
-            if _uncertain(exc):
-                return "UNKNOWN", provider, "pull request state is unknown after the push"
-            raise
+            return "UNKNOWN", provider, "pull request lookup or submission unreadable after the push: " + exc.code
         provider.update({"pr": found.get("number"), "pr_url": found.get("url")})
-        return "PASS", provider, None
+        return "PASS", provider, observation_detail
     if kind in DISPATCH_KINDS:
         workflow = row["action"]["target"]
         if not _WORKFLOW.fullmatch(workflow):
@@ -190,7 +190,7 @@ def _bound_run_id(row: dict) -> str | None:
     return (row["receipt"].get("provider") or {}).get("run_id")
 
 
-def _triggered_runs(port: GitHubPort, row: dict, commit: str) -> dict:
+def _triggered_runs(port: GitHubPort, row: dict, commit: str, *, unread: list | None = None) -> dict:
     """The runs a landed publication started, by workflow, as far as a readback can see them."""
     triggered = {}
     for effect in row.get("effects") or []:
@@ -200,9 +200,9 @@ def _triggered_runs(port: GitHubPort, row: dict, commit: str) -> dict:
         try:
             run = _pick_run(port.runs(workflow=workflow, commit=commit), since=row["receipt"]["started_at"])
         except PodError as exc:
-            if _uncertain(exc):
-                continue
-            raise
+            if not _uncertain(exc) and unread is not None:
+                unread.append(workflow)
+            continue
         if run is not None:
             triggered[workflow] = run
     return triggered
@@ -290,7 +290,7 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
     if validate_action(action)["kind"] not in EXECUTABLE_KINDS:
         raise PodError("invalid_action", "Merge, release and deployment are decided here and performed by project governance")
     admitted = _admit(project, objective, owner=owner, action=action, exception=exception, now=moment,
-                      managed=True, native_projection=native_projection)
+                      managed=True, native_projection=native_projection, pull_request=pull_request)
     result = {key: value for key, value in admitted.items() if not key.startswith("_")}
     result["cancellations"] = []
     if admitted["decision"] != "ALLOW":

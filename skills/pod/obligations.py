@@ -23,7 +23,8 @@ from typing import Any, Callable
 
 from .errors import PodError
 from .gitio import OBJECT_ID
-from .util import digest, exact
+from .util import digest, exact, _field_names
+import unicodedata
 
 KINDS = ("criterion", "delivery", "assurance", "correction", "steer", "subgoal")
 PROVENANCES = ("objective", "user_direct", "project_policy", "coordinator")
@@ -69,7 +70,7 @@ NEXT_ACTIONS = {
 
 # Proposed map fields a caller may send; everything else in a stored map is stamped here.
 MAP_INPUT = {"seq", "obligations", "proposals", "governance", "governance_refresh",
-             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery", "update"}
+             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery", "update", "reuse"}
 MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "governance_sources",
               "coordinator_slot", "quiescence", "closure", "observations", "reopened",
               "governance_history", "delivery"}
@@ -78,56 +79,83 @@ MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "gove
 def refuse(code: str, detail: str, message: str, *, next_action: str | None = None,
            **referent: Any) -> PodError:
     """One boundary refusal naming its detail, referent and next safe action."""
-    action = next_action or NEXT_ACTIONS.get(code, "inspect the refused record")
+    actions = {
+        "receipt_conflict": "preserve the immutable receipt; use a fresh reference or review attempt for fresh evidence",
+        "finding_limit": "preserve every stored finding; consolidate only related new findings within the group/id bounds",
+        "receipt_limit": "preserve receipt history; no receipt can be evicted to admit new proof",
+        "malformed": "correct the named record or fields to the accepted shape and retry",
+    }
+    action = next_action or actions.get(detail) or NEXT_ACTIONS.get(code, "inspect the refused record")
+    def safe(value):
+        if isinstance(value, str):
+            return "".join(ch for ch in value if unicodedata.category(ch) not in ("Cc", "Cf", "Cs"))[:512]
+        if isinstance(value, dict):
+            return {safe(str(key))[:64]: safe(item) for key, item in list(value.items())[:8]}
+        if isinstance(value, (list, tuple)):
+            return [safe(item) for item in value[:8]]
+        return value
+    referent = safe(referent)
     named = ", ".join(f"{key}={value}" for key, value in sorted(referent.items()))
     text = f"{detail}: {message}" + (f" ({named})" if named else "") + f". Next: {action}"
     return PodError(code, text, {"detail": detail, "referent": referent, "next_action": action})
 
 
 def _text(value: Any, name: str, *, code: str = "obligation_invalid", detail: str = "malformed",
-          limit: int = 512) -> str:
+          limit: int = 512, obligation: str | None = None) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit or "\x00" in value:
-        raise refuse(code, detail, f"{name} must be bounded, nonempty text")
+        length = len(value) if isinstance(value, str) else None
+        raise refuse(code, detail, f"{name} must be bounded, nonempty text (limit {limit}, length {length})",
+                     field=name, limit=limit, length=length,
+                     **({"obligation": obligation} if obligation is not None else {}))
     return value
 
 
-def _ident(value: Any, name: str, *, code: str = "obligation_invalid") -> str:
+def _ident(value: Any, name: str, *, code: str = "obligation_invalid", obligation: str | None = None) -> str:
     if not isinstance(value, str) or not _ID.fullmatch(value):
-        raise refuse(code, "malformed", f"{name} must be a bounded identifier")
+        raise refuse(code, "malformed", f"{name} must be a bounded identifier", field=name,
+                     **({"obligation": obligation} if obligation is not None else {}))
     return value
 
 
 def _exact(value: Any, fields: set[str], required: set[str], name: str, *,
-           code: str = "obligation_invalid") -> dict:
-    return exact(value, fields, required, name=name,
-                 error=lambda label: refuse(code, "malformed", f"{label} has missing or unsupported fields"))
+           code: str = "obligation_invalid", obligation: str | None = None) -> dict:
+    if not isinstance(value, dict) or set(value) - fields or required - set(value):
+        if not isinstance(value, dict):
+            raise refuse(code, "malformed", f"{name} must be a JSON object", record=name, expected="object", **({"obligation": obligation} if obligation is not None else {}))
+        missing, m = _field_names(required - set(value))
+        unsupported, u = _field_names(set(value) - fields)
+        known = obligation or value.get("id")
+        referent = {"obligation": known} if isinstance(known, str) and _ID.fullmatch(known) else {}
+        raise refuse(code, "malformed", f"{name} has missing or unsupported fields: missing {missing}; unsupported {unsupported}",
+                     record=name, missing=missing, unsupported=unsupported, omitted=m+u, **referent)
+    return value
 
 
 # --------------------------------------------------------------------------- boundaries
 
-def _path(value: Any, *, code: str) -> str:
+def _path(value: Any, *, code: str, obligation: str | None = None) -> str:
     if (not isinstance(value, str) or not value or len(value) > 512 or "\x00" in value
             or value.startswith("/") or "\\" in value):
-        raise refuse(code, "malformed", "boundary paths are repo-relative")
+        raise refuse(code, "malformed", "boundary paths are repo-relative", record="boundary path", **({"obligation": obligation} if obligation is not None else {}))
     parts = [part for part in value.split("/") if part not in ("", ".")]
     if ".." in parts:
-        raise refuse(code, "malformed", "boundary paths stay inside the repository")
+        raise refuse(code, "malformed", "boundary paths stay inside the repository", record="boundary path", **({"obligation": obligation} if obligation is not None else {}))
     return "/".join(parts) or "."
 
 
-def boundary(value: Any, *, code: str = "obligation_invalid") -> dict:
+def boundary(value: Any, *, code: str = "obligation_invalid", obligation: str | None = None) -> dict:
     """Declared editing boundary: repo-relative path prefixes plus named surfaces."""
     if value is None:
         return {"paths": [], "surfaces": []}
-    record = _exact(value, {"paths", "surfaces"}, set(), "boundary", code=code)
+    record = _exact(value, {"paths", "surfaces"}, set(), "boundary", code=code, obligation=obligation)
     paths, surfaces = record.get("paths", []), record.get("surfaces", [])
     if (not isinstance(paths, list) or len(paths) > 64 or not isinstance(surfaces, list)
             or len(surfaces) > 32):
-        raise refuse(code, "malformed", "boundary is a bounded list of paths and surfaces")
+        raise refuse(code, "malformed", "boundary is a bounded list of paths and surfaces", record='boundary')
     for surface in surfaces:
         if not isinstance(surface, str) or not _SURFACE.fullmatch(surface):
-            raise refuse(code, "malformed", "boundary surfaces are bounded names")
-    return {"paths": sorted({_path(item, code=code) for item in paths}),
+            raise refuse(code, "malformed", "boundary surfaces are bounded names", record='boundary')
+    return {"paths": sorted({_path(item, code=code, obligation=obligation) for item in paths}),
             "surfaces": sorted(set(surfaces))}
 
 
@@ -183,7 +211,7 @@ def bind_governance(observed: Any, base_ref: str | None, exclude: list[str]) -> 
     if base_ref is None:
         if not isinstance(observed, dict) or observed.get("status") != "no_repository":
             raise refuse("governance_unavailable", "governance_unavailable",
-                         "a Git project binds governance at its selected target branch")
+                         "a Git project binds governance at its selected target branch", record='bind governance')
         return [], None
     if (not isinstance(observed, dict) or observed.get("status") != "observed"
             or not isinstance(observed.get("commit"), str) or not _COMMIT.fullmatch(observed["commit"])):
@@ -204,9 +232,9 @@ def governance_digest(sources: list[dict]) -> str:
     return digest(sources)
 
 
-def _cite(source: Any, observed: dict | None, sources: list[dict]) -> dict:
+def _cite(source: Any, observed: dict | None, sources: list[dict], *, obligation: str | None = None) -> dict:
     record = _exact(source, {"path", "lines", "revision", "quote_sha256", "base", "gone"},
-                    {"path", "lines"}, "policy citation")
+                    {"path", "lines"}, "policy citation", obligation=obligation)
     bound = {row["path"]: row for row in sources}
     if record["path"] not in bound or bound[record["path"]]["revision"] is None:
         raise refuse("obligation_invalid", "governance_source_unrecognized",
@@ -222,7 +250,7 @@ def _cite(source: Any, observed: dict | None, sources: list[dict]) -> dict:
     match = _LINES.fullmatch(record["lines"]) if isinstance(record["lines"], str) else None
     lines = _lines(text)
     if match is None:
-        raise refuse("obligation_invalid", "cite_not_found", "cite a line range like 38-40")
+        raise refuse("obligation_invalid", "cite_not_found", "cite a line range like 38-40", record='cite')
     first, last = int(match.group(1)), int(match.group(2) or match.group(1))
     if first > last or last > len(lines) or last - first >= MAX_CITED_LINES:
         raise refuse("obligation_invalid", "cite_not_found", "the cited lines are absent at the base",
@@ -267,9 +295,9 @@ _OBLIGATION_FIELDS = {"id", "kind", "provenance", "introduced_seq", "parent", "c
                       "stop_condition", "boundary", "source", "state", "executor", "wait", "external",
                       "evidence", "withdrawal", "adopts", "reuse", "scope", "question", "candidate",
                       "existing_evidence", "insufficiency", "uncovered_risk", "findings", "finding",
-                      "definition", "receipts"}
+                      "definition", "receipts", "proof_scope"}
 _DEFINITION = ("check", "resolves", "stop_condition", "scope", "question", "insufficiency",
-               "existing_evidence", "uncovered_risk")
+               "existing_evidence", "uncovered_risk", "proof_scope")
 _STATE_FIELDS = {"active": "executor", "waiting": "wait", "blocked_external": "external",
                  "withdrawn": "withdrawal"}
 
@@ -279,20 +307,29 @@ def _structure(raw: Any) -> dict:
     ob = dict(row)
     _ident(ob["id"], "obligation id")
     if ob["kind"] not in KINDS or ob["provenance"] not in PROVENANCES:
-        raise refuse("obligation_invalid", "malformed", "kind or provenance is unsupported", obligation=ob["id"])
+        raise refuse("obligation_invalid", "malformed", "kind allowed: " + ", ".join(KINDS) + "; provenance allowed: " + ", ".join(PROVENANCES), obligation=ob["id"])
     for key in ("check", "resolves", "stop_condition", "question", "insufficiency",
                 "existing_evidence", "uncovered_risk"):
         if key in ob:
-            _text(ob[key], key)
+            _text(ob[key], key, obligation=ob["id"])
     if not ob.get("check") and not ob.get("resolves"):
         raise refuse("obligation_invalid", "no_check", "every obligation needs a check or the decision it resolves",
                      obligation=ob["id"])
     if ob.get("resolves") and not ob.get("stop_condition"):
         raise refuse("obligation_invalid", "no_check", "an investigation's resolves needs a stop_condition",
                      obligation=ob["id"])
-    ob["boundary"] = boundary(ob.get("boundary"))
+    ob["boundary"] = boundary(ob.get("boundary"), obligation=ob["id"])
+    if "proof_scope" in ob:
+        scope = ob["proof_scope"]
+        if ob["kind"] == "assurance" or not isinstance(scope, list) or len(scope) > 64:
+            raise refuse("obligation_invalid", "malformed", "proof_scope is a bounded path list on non-assurance obligations",
+                         obligation=ob["id"], field="proof_scope")
+        if not scope and (ob["kind"] != "subgoal" or ob["provenance"] != "coordinator"):
+            raise refuse("obligation_invalid", "malformed", "empty proof_scope requires a coordinator subgoal",
+                         obligation=ob["id"], field="proof_scope")
+        ob["proof_scope"] = sorted({_path(path, code="obligation_invalid", obligation=ob["id"]) for path in scope})
     if "parent" in ob:
-        _ident(ob["parent"], "parent")
+        _ident(ob["parent"], "parent", obligation=ob["id"])
         if ob["parent"] == ob["id"]:
             raise refuse("obligation_invalid", "no_parent", "an obligation cannot parent itself", obligation=ob["id"])
     if ob["kind"] in ("subgoal", "correction") or (ob["kind"] == "assurance" and ob["provenance"] == "coordinator"):
@@ -305,8 +342,8 @@ def _structure(raw: Any) -> dict:
                 raise refuse("obligation_invalid", "assurance_incomplete",
                              "assurance records scope, question, candidate, existing evidence and insufficiency",
                              obligation=ob["id"])
-        ob["scope"] = boundary(ob["scope"])
-        _text(ob["candidate"], "candidate", limit=128)
+        ob["scope"] = boundary(ob["scope"], obligation=ob["id"])
+        _text(ob["candidate"], "candidate", limit=128, obligation=ob["id"])
     else:
         for key in ("scope", "question", "candidate", "existing_evidence", "insufficiency", "uncovered_risk",
                     "findings"):
@@ -315,14 +352,14 @@ def _structure(raw: Any) -> dict:
     if "finding" in ob and ob["kind"] != "correction":
         raise refuse("obligation_invalid", "malformed", "only a correction records its finding", obligation=ob["id"])
     if "adopts" in ob:
-        _ident(ob["adopts"], "adopted proposal")
+        _ident(ob["adopts"], "adopted proposal", obligation=ob["id"])
     state = ob.get("state")
     if state is None:
         raise refuse("obligation_unaccounted", "missing_state", "every obligation has exactly one state",
                      obligation=ob["id"])
     if not isinstance(state, str) or state not in STATES:
         raise refuse("obligation_unaccounted", "multiple_states" if isinstance(state, list) else "missing_state",
-                     "state must be exactly one supported state", obligation=ob["id"])
+                     "state allowed: " + ", ".join(STATES), obligation=ob["id"])
     for other, field in _STATE_FIELDS.items():
         if field in ob and other != state:
             raise refuse("obligation_unaccounted", "multiple_states",
@@ -344,7 +381,7 @@ def _proposal(raw: Any) -> dict:
                  {"id", "source", "origin_ref", "summary", "status"}, "proposal")
     _ident(row["id"], "proposal id")
     if row["source"] not in PROPOSAL_SOURCES or row["status"] not in ("open", "adopted"):
-        raise refuse("obligation_invalid", "malformed", "proposal source or status is unsupported", proposal=row["id"])
+        raise refuse("obligation_invalid", "malformed", "proposal source allowed: " + ", ".join(PROPOSAL_SOURCES) + "; status allowed: open, adopted", proposal=row["id"])
     _text(row["origin_ref"], "origin_ref", limit=256)
     _text(row["summary"], "summary")
     return dict(row)
@@ -356,7 +393,7 @@ def _authority(value: Any) -> dict | None:
     record = _exact(value, {"provenance", "instruction"}, {"provenance", "instruction"}, "revision authority")
     if record["provenance"] != "user_direct":
         raise refuse("obligation_invalid", "provenance_unauthorized",
-                     "a map revision is authorized only by a direct user instruction")
+                     "a map revision is authorized only by a direct user instruction", record='authority')
     _text(record["instruction"], "instruction", limit=1024)
     return dict(record)
 
@@ -455,10 +492,10 @@ def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
         if (not isinstance(exclude, list) or any(item not in GOVERNANCE_PATHS for item in exclude)
                 or len(set(exclude)) != len(exclude)):
             raise refuse("obligation_invalid", "governance_source_unrecognized",
-                         "only declared governance sources can be excluded")
+                         "governance exclusions allowed: " + ", ".join(GOVERNANCE_PATHS), record='governance')
         if exclude and not user:
             raise refuse("obligation_invalid", "provenance_unauthorized",
-                         "only a direct user constraint excludes a governance source")
+                         "only a direct user constraint excludes a governance source", record='governance')
         target_ref = observed.get("target_ref") if isinstance(observed, dict) else None
         sources, base = bind_governance(observed, target_ref or declared["base_ref"], sorted(exclude))
         governance = {"base_ref": target_ref, "selection": observed.get("selection") if target_ref else None,
@@ -469,13 +506,13 @@ def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
         if declared is not None:
             if not isinstance(declared, dict) or set(declared) - {"base_ref", "selection", "exclude", "base"}:
                 raise refuse("obligation_invalid", "governance_source_unrecognized",
-                             "governance sources are fixed at intake")
+                             "governance sources are fixed at intake", record='governance')
             if declared.get("exclude", governance["exclude"]) != governance["exclude"]:
                 raise refuse("obligation_invalid", "governance_source_unrecognized",
-                             "governance source paths are fixed at intake")
+                             "governance source paths are fixed at intake", record='governance')
             if declared.get("base_ref", governance["base_ref"]) != governance["base_ref"] and not (user and refresh):
                 raise refuse("obligation_invalid", "governance_source_unrecognized",
-                             "a target change needs a direct user revision and governance refresh")
+                             "a target change needs a direct user revision and governance refresh", record='governance')
         if refresh:
             target_ref = observed.get("target_ref") if isinstance(observed, dict) else None
             sources, base = bind_governance(observed, target_ref, governance["exclude"])
@@ -486,9 +523,9 @@ def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
     gov = governance_digest(sources)
     rebind = value.get("rebind", [])
     if not isinstance(rebind, list) or len(rebind) > MAX_OBLIGATIONS:
-        raise refuse("obligation_invalid", "malformed", "rebind is a bounded list of obligation ids")
+        raise refuse("obligation_invalid", "malformed", "rebind is a bounded list of obligation ids", record='governance')
     if rebind and not refresh:
-        raise refuse("obligation_invalid", "malformed", "evidence is rebound only by a governance refresh")
+        raise refuse("obligation_invalid", "malformed", "evidence is rebound only by a governance refresh", record='governance')
 
     return observed, governance, sources, gov, rebind
 
@@ -498,7 +535,7 @@ def _write_proposals(prior_map: dict | None, value: dict) -> dict:
     prior_proposals = {row["id"]: row for row in (prior_map or {}).get("proposals", [])}
     raw_proposals = _first(value, "proposals", list(prior_proposals.values()))
     if not isinstance(raw_proposals, list) or len(raw_proposals) > MAX_PROPOSALS:
-        raise refuse("obligation_invalid", "malformed", "proposals are a bounded list")
+        raise refuse("obligation_invalid", "malformed", "proposals are a bounded list", record='write proposals')
     proposals = {}
     for raw in raw_proposals:
         row = _proposal(raw)
@@ -527,7 +564,7 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
     # Obligations: structure, stable identity, authority.
     raw_obligations = value["obligations"]
     if not isinstance(raw_obligations, list) or len(raw_obligations) > MAX_OBLIGATIONS:
-        raise refuse("obligation_invalid", "malformed", "obligations are a bounded list")
+        raise refuse("obligation_invalid", "malformed", "obligations are a bounded list", record='write obligations')
     prior_rows = {row["id"]: row for row in (prior_map or {}).get("obligations", [])}
     rows: dict[str, dict] = {}
     for raw in raw_obligations:
@@ -542,13 +579,15 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
     criteria = ctx.get("criteria", [])
     for ob in rows.values():
         earlier = prior_rows.get(ob["id"])
+        if ob["kind"] == "assurance" and ctx.get("candidate_check") is not None:
+            ctx["candidate_check"](ob["candidate"])
         ob["definition"] = definition_id(ob)
         if earlier is not None:
             for key in ("kind", "provenance", "parent"):
                 if ob.get(key) != earlier.get(key):
                     raise refuse("obligation_invalid", "redefinition_unauthorized",
                                  f"an obligation's {key} is immutable", obligation=ob["id"])
-            if not user and any(ob.get(key) != earlier.get(key) for key in _DEFINITION if key != "scope") \
+            if not user and any(ob.get(key) != earlier.get(key) for key in _DEFINITION if key not in ("scope", "proof_scope")) \
                     or not user and ob["kind"] == "assurance" and ob["scope"] != earlier.get("scope"):
                 raise refuse("obligation_invalid", "redefinition_unauthorized",
                              "only a direct user revision redefines an obligation's check", obligation=ob["id"])
@@ -617,8 +656,9 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
 
 
 def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: frozenset,
-                    ctx: dict, gov: str, user: bool, authority: dict | None, seq: int) -> None:
+                    ctx: dict, gov: str, user: bool, authority: dict | None, seq: int) -> dict:
     # Withdrawals and evidence stamping.
+    reuse_failures = {}
     for ob in rows.values():
         earlier = prior_rows.get(ob["id"])
         if ob["kind"] == "assurance":
@@ -642,10 +682,16 @@ def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: fr
                     and _admissions(ctx)[item[1]].get("role") == "review"
                     and _admissions(ctx)[item[1]].get("serves") == [ob["id"]]]
         if len(reported) > 1:
-            raise refuse("obligation_invalid", "malformed", "one report consumes one review attempt")
+            raise refuse("obligation_invalid", "malformed", "one report consumes one review attempt", record='evidence')
         ob["evidence"] = _stamp_evidence(ob, earlier, ctx, gov, ob["id"] in rebind,
                                           reported_attempt=reported[0] if reported else None, seq=seq)
-        reuse = _bind_reuse(ob, earlier, ctx)
+        try:
+            reuse = _bind_reuse(ob, earlier, ctx)
+        except PodError as exc:
+            if (exc.detail or {}).get("detail") != "evidence_invalidated":
+                raise
+            reuse_failures[ob["id"]] = exc
+            reuse = None
         if reuse is not None:
             ob["reuse"] = reuse
         if not ob["evidence"]:
@@ -655,6 +701,7 @@ def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: fr
         raise refuse("obligation_invalid", "malformed", "rebind names unknown obligations",
                      obligation=missing_rebind[0])
 
+    return reuse_failures
 
 
 def expand_update(prior: dict | None, value: dict) -> dict:
@@ -662,7 +709,7 @@ def expand_update(prior: dict | None, value: dict) -> dict:
     if "update" not in value:
         return value
     if "obligations" in value:
-        raise refuse("obligation_invalid", "malformed", "update and obligations are mutually exclusive")
+        raise refuse("obligation_invalid", "malformed", "update and obligations are mutually exclusive", record='expand update')
     current_seq = prior.get("seq", 0) if isinstance(prior, dict) else 0
     revision = prior.get("revision", 0) if isinstance(prior, dict) else 0
     expected = current_seq + 1
@@ -671,7 +718,7 @@ def expand_update(prior: dict | None, value: dict) -> dict:
                      current_seq=current_seq, expected=expected, revision=revision)
     changes = value["update"]
     if not isinstance(changes, dict) or len(changes) > MAX_OBLIGATIONS:
-        raise refuse("obligation_invalid", "malformed", "update is a bounded mapping of obligation ids")
+        raise refuse("obligation_invalid", "malformed", "update is a bounded mapping of obligation ids", record='expand update')
     rows = {row["id"]: deepcopy(row) for row in (prior or {}).get("obligations", [])}
     for key, patch in changes.items():
         _ident(key, "updated obligation")
@@ -722,7 +769,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     # Dispositions change admission rows, so the ledger applies them before this write.
     unknown = set(value) - (MAP_INPUT - {"dispositions"})
     if unknown:
-        raise refuse("obligation_invalid", "malformed", "unsupported map fields: " + ", ".join(sorted(unknown)))
+        raise refuse("obligation_invalid", "malformed", "unsupported map fields: " + ", ".join(_field_names(unknown)[0]), record='obligation map')
     closed = bool(prior_map and prior_map.get("closure"))
     authority = _authority(value.get("revision_authority"))
     user = authority is not None
@@ -735,12 +782,12 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         value = {**value, "obligations": deepcopy(prior_map["obligations"])}
     if value.get("obligations") is None:
         if prior_map is not None:
-            raise refuse("obligation_unaccounted", "missing_state", "an obligation map cannot be removed")
+            raise refuse("obligation_unaccounted", "missing_state", "an obligation map cannot be removed", record='obligation map')
         if set(value) - {"seq"}:
-            raise refuse("obligation_invalid", "malformed", "map fields need an obligation list")
+            raise refuse("obligation_invalid", "malformed", "map fields need an obligation list", record='obligation map')
         return {}
     if "reopen" in value and (value["reopen"] is not True or not closed):
-        raise refuse("obligation_invalid", "malformed", "reopen applies only to a closed objective")
+        raise refuse("obligation_invalid", "malformed", "reopen applies only to a closed objective", record='obligation map')
     seq = prior_map["seq"] + 1 if prior_map else 1
     if "seq" in value and value["seq"] != seq:
         raise refuse("map_stale", "map_stale", "the proposed map is not the next write; "
@@ -748,9 +795,9 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
                      expected=seq, revision=(prior_map or {}).get("revision", 0))
     refresh = value.get("governance_refresh") is True
     if "governance_refresh" in value and not refresh:
-        raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present")
+        raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present", record='obligation map')
     if refresh and prior_map is None:
-        raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed")
+        raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed", record='obligation map')
     ctx = {**ctx, "governance_refresh": refresh}
     revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
 
@@ -758,6 +805,22 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
 
     proposals = _write_proposals(prior_map, value)
 
+    if "reuse" in value:
+        reuse = _exact(value["reuse"], {"from", "ids"}, {"from", "ids"}, "map reuse")
+        _text(reuse["from"], "reuse from", limit=128)
+        ids = reuse["ids"]
+        if not isinstance(ids, list) or not ids or len(ids) > MAX_OBLIGATIONS:
+            raise refuse("obligation_invalid", "malformed", "reuse ids must name a nonempty bounded list",
+                         field="reuse.ids")
+        for key in ids:
+            _ident(key, "reuse obligation")
+        if len(set(ids)) != len(ids):
+            raise refuse("obligation_invalid", "malformed", "reuse ids are unique", field="reuse.ids")
+        known = {row.get("id") for row in value["obligations"] if isinstance(row, dict)}
+        if set(ids) - known:
+            raise refuse("obligation_invalid", "malformed", "reuse names unknown obligations", field="reuse.ids")
+        value = {**value, "obligations": [dict(row, reuse={"from": reuse["from"]}) if row.get("id") in ids
+                                        else row for row in value["obligations"]]}
     raw_obligations, prior_rows, rows, criteria = _write_obligations(
         prior_map, value, ctx, seq, user, triaged, refresh, observed, sources, gov, proposals)
 
@@ -768,7 +831,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
             raise refuse("obligation_unaccounted", "criterion_uncovered",
                          "every original criterion needs an objective obligation", criterion=criterion)
 
-    _write_evidence(rows, prior_rows, rebind, triaged, ctx, gov, user, authority, seq)
+    reuse_failures = _write_evidence(rows, prior_rows, rebind, triaged, ctx, gov, user, authority, seq)
 
     state = {"seq": seq, "revision": revision, "governance": governance, "governance_sources": sources,
              "obligations": [rows[key] for key in [row["id"] for row in raw_obligations]],
@@ -814,12 +877,12 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
             raise refuse("obligation_unaccounted", "assurance_still_bound",
                          "a still-valid accepted assurance cannot be reopened by removing its evidence",
                          obligation=ob["id"])
-    _account(state, rows, seq, ctx, gov)
+    _account(state, rows, seq, ctx, gov, reuse_failures=reuse_failures)
     _waits(state, rows, ctx)
     violations = properties(state, ctx)
     for name, found in violations.items():
         if found:
-            raise refuse("obligation_unaccounted", "property_" + name, found[0])
+            raise refuse("obligation_unaccounted", "property_" + name, found[0], record='obligation map')
     slot = [ob["id"] for ob in rows.values() if ob["state"] == "active" and ob["executor"] == "coordinator"]
     state["coordinator_slot"] = slot[0] if slot else None
     state["quiescence"] = quiescence(state)
@@ -833,7 +896,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     if value.get("close") is True:
         state["closure"] = _close(state, ctx)
     elif "close" in value:
-        raise refuse("obligation_invalid", "malformed", "close is true when present")
+        raise refuse("obligation_invalid", "malformed", "close is true when present", record='obligation map')
     return state
 
 
@@ -854,17 +917,17 @@ def _introduce(ob: dict, intake: bool, user: bool, observed: dict | None, source
                criteria: list[str]) -> None:
     provenance, kind = ob["provenance"], ob["kind"]
     if provenance == "objective":
-        source = _exact(ob.get("source"), {"ref"}, {"ref"}, "objective source")
-        _text(source["ref"], "source ref", limit=256)
+        source = _exact(ob.get("source"), {"ref"}, {"ref"}, "objective source", obligation=ob["id"])
+        _text(source["ref"], "source ref", limit=256, obligation=ob["id"])
         if kind not in ("criterion", "delivery") or not intake:
             raise refuse("obligation_invalid", "provenance_unauthorized",
                          "objective provenance enters criteria and delivery obligations at intake",
                          obligation=ob["id"])
     elif provenance == "user_direct":
-        source = _exact(ob.get("source"), {"instruction", "ref"}, {"instruction"}, "user source")
-        _text(source["instruction"], "instruction", limit=1024)
+        source = _exact(ob.get("source"), {"instruction", "ref"}, {"instruction"}, "user source", obligation=ob["id"])
+        _text(source["instruction"], "instruction", limit=1024, obligation=ob["id"])
         if "ref" in source:
-            _text(source["ref"], "source ref", limit=256)
+            _text(source["ref"], "source ref", limit=256, obligation=ob["id"])
         if not user:
             raise refuse("obligation_invalid", "provenance_unauthorized",
                          "a user_direct obligation enters only by a direct user revision", obligation=ob["id"])
@@ -872,7 +935,7 @@ def _introduce(ob: dict, intake: bool, user: bool, observed: dict | None, source
         if not isinstance(ob.get("source"), dict):
             raise refuse("obligation_invalid", "cite_not_found", "project policy cites a governance source line range",
                          obligation=ob["id"])
-        ob["source"] = _cite(ob["source"], observed, sources)
+        ob["source"] = _cite(ob["source"], observed, sources, obligation=ob["id"])
     else:
         if kind not in ("subgoal", "assurance", "correction"):
             raise refuse("obligation_invalid", "provenance_unauthorized",
@@ -894,8 +957,8 @@ def _ancestry(rows: dict[str, dict]) -> None:
 
 
 def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
-    record = _exact(ob["withdrawal"], {"by", "reason", "instruction"}, {"by", "reason"}, "withdrawal")
-    _text(record["reason"], "reason", limit=1024)
+    record = _exact(ob["withdrawal"], {"by", "reason", "instruction"}, {"by", "reason"}, "withdrawal", obligation=ob["id"])
+    _text(record["reason"], "reason", limit=1024, obligation=ob["id"])
     by = record["by"]
     allowed = (by == "user_direct" and user
                or by == "project_policy" and ob["provenance"] == "project_policy"
@@ -903,14 +966,14 @@ def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
                or by == "coordinator" and ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance"))
     if not allowed:
         raise refuse("obligation_invalid", "withdrawal_unauthorized",
-                     f"{by} cannot withdraw this {ob['provenance']} {ob['kind']}", obligation=ob["id"])
+                     "withdrawal by allowed: user_direct, project_policy, coordinator; current authority does not permit withdrawal", obligation=ob["id"])
     result = {"by": by, "reason": record["reason"]}
     if by == "user_direct":
         result["instruction"] = authority["instruction"]
     return result
 
 
-def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str) -> None:
+def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, *, reuse_failures: dict | None = None) -> None:
     """R83: exactly one currently valid state for every obligation."""
     outstanding = set(_outstanding(ctx))
     admissions = _admissions(ctx)
@@ -967,16 +1030,6 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str) 
                              "and reference", obligation=ob["id"],
                              next_action="use one settled attempt or add a short evidence receipt",
                              settled_attempts=",".join(_settled_serving(ctx, ob["id"])))
-            if not evidence_valid(ob, ctx, gov):
-                eligible = ([item["id"] for item in rows.values() if item.get("receipts")
-                             and not (item["provenance"] == "project_policy"
-                                      and item.get("source", {}).get("gone"))]
-                            if ctx.get("governance_refresh") else [])
-                raise refuse("obligation_unaccounted", "evidence_invalidated",
-                             "its evidence is not passing and valid for the current candidate and governance",
-                             obligation=ob["id"], eligible_rebind=",".join(eligible),
-                             next_action=("re-read with pod internal map and rebind eligible ids"
-                                          if eligible else "record current passing evidence"))
             if ob["kind"] == "assurance":
                 for child in rows.values():
                     if (child.get("parent") == ob["id"] and child["kind"] == "correction"
@@ -985,6 +1038,20 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str) 
                         raise refuse("obligation_unaccounted", "evidence_invalidated",
                                      "an assurance is satisfied only when its corrections are",
                                      obligation=ob["id"], correction=child["id"])
+    from .assurance import invalidation
+    invalid = [invalidation(ob, ctx, gov) for ob in rows.values()
+               if ob["state"] == "satisfied" and ob.get("evidence")
+               and (ob["id"] in (reuse_failures or {}) or not evidence_valid(ob, ctx, gov))]
+    if invalid:
+        eligible = [item["id"] for item in rows.values() if item.get("receipts")
+                    and not item.get("source", {}).get("gone")] if ctx.get("governance_refresh") else []
+        raise refuse("obligation_unaccounted", "evidence_invalidated",
+                     "; ".join(f"{item['obligation']}: {item['classification']}, {item['eligibility']}; {item['correction']}"
+                               for item in invalid[:8]) + (f"; +{len(invalid)-8} more" if len(invalid) > 8 else ""),
+                     obligation=invalid[0]["obligation"], invalidations=invalid[:8], remaining=max(0, len(invalid)-8),
+                     eligible_rebind=",".join(eligible[:8]), next_action="re-read with pod internal map; "
+                     + ("rebind eligible ids; " if eligible else "")
+                     + "name eligible ids in reuse {from, ids}; record fresh evidence or restate the other rows")
     for key in outstanding:
         row = admissions.get(key)
         for served in (row or {}).get("serves") or []:
@@ -1007,12 +1074,12 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str) 
 def _wait_record(ob: dict) -> dict:
     wait = ob["wait"]
     if not isinstance(wait, dict) or wait.get("class") not in WAIT_CLASSES:
-        raise refuse("wait_invalid", "unclassified", "a wait has one controlling class", obligation=ob["id"])
+        raise refuse("wait_invalid", "unclassified", "wait class allowed: " + ", ".join(WAIT_CLASSES), obligation=ob["id"])
     record = _exact(wait, {"class", "referent", "rationale", "revisit_when", "inputs"}, {"class", "referent"},
-                    "wait", code="wait_invalid")
+                    "wait", code="wait_invalid", obligation=ob["id"])
     for key in ("rationale", "revisit_when"):
         if key in record:
-            _text(record[key], key, code="wait_invalid", detail="malformed")
+            _text(record[key], key, code="wait_invalid", detail="malformed", obligation=ob["id"])
     if ("rationale" in record or "revisit_when" in record or "inputs" in record) and record["class"] != "sequenced":
         raise refuse("wait_invalid", "malformed", "only a sequenced wait carries a serialization rationale",
                      obligation=ob["id"])
@@ -1091,7 +1158,7 @@ def _validate_wait(ob: dict, rows: dict[str, dict], ctx: dict, outstanding: set[
                          obligation=name, referent=referent)
     elif cls == "authority":
         record = _exact(referent, {"kind", "scope", "candidate", "need"}, {"kind"}, "authority referent",
-                        code="wait_invalid")
+                        code="wait_invalid", obligation=ob["id"])
         if record["kind"] == "authorization":
             if record.get("scope") not in AUTHORIZED_SCOPES or not isinstance(record.get("candidate"), str):
                 raise refuse("wait_invalid", "unknown_referent",
@@ -1101,7 +1168,7 @@ def _validate_wait(ob: dict, rows: dict[str, dict], ctx: dict, outstanding: set[
                 raise refuse("wait_invalid", "resolved_referent", "the authorization is recorded",
                              obligation=name)
         elif record["kind"] in ("native_authority", "permission"):
-            _text(record.get("need"), "need", code="wait_invalid", detail="unknown_referent")
+            _text(record.get("need"), "need", code="wait_invalid", detail="unknown_referent", obligation=ob["id"])
         else:
             raise refuse("wait_invalid", "unknown_referent", "authority names an authorization or blocked authority",
                          obligation=name)
@@ -1137,13 +1204,40 @@ def _waits(state: dict, rows: dict[str, dict], ctx: dict) -> None:
     held = [ob for ob in rows.values() if ob["state"] == "active" and ob["executor"] == "coordinator"]
     pending = undispositioned(ctx)
     edges: dict[str, str] = {}
+    violations = []
     for ob in rows.values():
         if ob["state"] != "waiting":
             continue
-        edge = _validate_wait(ob, rows, ctx, outstanding, admissions, held, pending)
+        try:
+            edge = _validate_wait(ob, rows, ctx, outstanding, admissions, held, pending)
+        except PodError as exc:
+            violations.append((ob["id"], exc))
+            continue
         if edge is not None:
             edges[ob["id"]] = edge
-    _check_wait_cycles(edges)
+    if violations:
+        first = violations[0][1]
+        first.detail["dependents"] = [key for key, _ in violations[:8]]
+        first.detail["remaining"] = max(0, len(violations) - 8)
+        first.args = (str(first) + "; affected dependents: " + ", ".join(key for key, _ in violations[:8])
+                      + (f"; +{len(violations)-8} more" if len(violations) > 8 else ""),)
+        raise first
+    try:
+        _check_wait_cycles(edges)
+    except PodError as exc:
+        affected = []
+        for name in edges:
+            cursor, seen = name, set()
+            while cursor in edges and cursor not in seen:
+                seen.add(cursor)
+                cursor = edges[cursor]
+            if cursor in seen:
+                affected.append(name)
+        exc.detail["dependents"] = affected[:8]
+        exc.detail["remaining"] = max(0, len(affected) - 8)
+        exc.args = (str(exc) + "; affected dependents: " + ", ".join(affected[:8])
+                    + (f"; +{len(affected)-8} more" if len(affected) > 8 else ""),)
+        raise
 
 
 # --------------------------------------------------------------------------- properties
@@ -1286,10 +1380,10 @@ def _close(state: dict, ctx: dict) -> dict:
                      obligation=open_rows[0])
     if _outstanding(ctx) or undispositioned(ctx):
         raise refuse("obligation_unaccounted", "closure_unfinished",
-                     "closure waits for settled admissions and dispositions")
+                     "closure waits for settled admissions and dispositions", record='closure')
     if ctx.get("governor_pending"):
         raise refuse("obligation_unaccounted", "closure_unfinished",
-                     "closure waits for pending governed effects to settle")
+                     "closure waits for pending governed effects to settle", record='closure')
     closure = {"seq": state["seq"], "revision": state["revision"]}
     return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
 
@@ -1303,7 +1397,7 @@ def brief_map(criteria: list[str], value: Any, ctx: dict) -> dict:
     """
     if not isinstance(value, dict) or not isinstance(value.get("obligations"), list):
         raise refuse("obligation_unaccounted", "map_missing",
-                     "an execution brief records its obligation map with every original criterion")
+                     "an execution brief records its obligation map with every original criterion", record='brief map')
     draft = accept_write(None, value, {**ctx, "criteria": list(criteria)})
     return {"draft": True, "persisted": False, "criteria_covered": list(criteria), **draft}
 
@@ -1320,13 +1414,13 @@ def packet_binding(body: dict) -> dict:
     serves = body.get("serves")
     if (not isinstance(serves, list) or not serves or len(serves) > MAX_SERVES
             or len(set(serves)) != len(serves)):
-        raise refuse("unbound_assignment", "missing", "a packet serves one or more obligations")
+        raise refuse("unbound_assignment", "missing", "a packet serves one or more obligations", record='packet binding')
     for item in serves:
         _ident(item, "served obligation", code="unbound_assignment")
     if body.get("role") not in ROLES:
-        raise refuse("unbound_assignment", "role_kind_mismatch", "role is implement, investigate or review")
+        raise refuse("unbound_assignment", "role_kind_mismatch", "role allowed: " + ", ".join(ROLES), record='packet binding')
     if type(body.get("map_revision")) is not int or body["map_revision"] < 1:
-        raise refuse("unbound_assignment", "out_of_revision", "a packet binds the map revision it serves")
+        raise refuse("unbound_assignment", "out_of_revision", "a packet binds the map revision it serves", record='packet binding')
     declared = boundary(body.get("boundary"), code="unbound_assignment")
     for key in ("resolves", "stop_condition", "delta_from"):
         if key in body:
@@ -1338,7 +1432,7 @@ def packet_binding(body: dict) -> dict:
 def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id: str) -> dict:
     """R85/R86/R89: refuse an assignment that serves nothing recorded, overlaps or is closed."""
     if not isinstance(state, dict) or state.get("obligations") is None:
-        raise refuse("unbound_assignment", "no_map", "delegation needs an obligation map first")
+        raise refuse("unbound_assignment", "no_map", "delegation needs an obligation map first", record='admission refusal')
     if state.get("closure"):
         raise refuse("objective_closed", "objective_closed", "the objective is closed",
                      closure_revision=state["closure"]["revision"])
@@ -1366,11 +1460,11 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
                          obligation=served, admission=busy[0])
     kinds = {rows[served]["kind"] for served in binding["serves"]}
     if binding["role"] == "review" and (kinds != {"assurance"} or len(binding["serves"]) != 1):
-        raise refuse("unbound_assignment", "role_kind_mismatch", "a review attempt serves exactly one assurance obligation")
+        raise refuse("unbound_assignment", "role_kind_mismatch", "a review attempt serves exactly one assurance obligation", record='admission refusal')
     if binding["role"] != "review" and "assurance" in kinds:
-        raise refuse("unbound_assignment", "role_kind_mismatch", "only a review attempt serves an assurance obligation")
+        raise refuse("unbound_assignment", "role_kind_mismatch", "only a review attempt serves an assurance obligation", record='admission refusal')
     if binding["role"] == "investigate" and not (body.get("resolves") and body.get("stop_condition")):
-        raise refuse("unbound_assignment", "missing_resolves", "an investigation names resolves and stop_condition")
+        raise refuse("unbound_assignment", "missing_resolves", "an investigation names resolves and stop_condition", record='admission refusal')
     if binding["role"] == "implement":
         admissions = _admissions(ctx)
         for key in _outstanding(ctx):
@@ -1428,7 +1522,8 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
     binding = admission_refusal(state, body, ctx, admission_id=admission_id)
     base = dict(accompanying) if accompanying is not None else {}
     if set(base) - {"seq", "obligations", "proposals"}:
-        raise refuse("obligation_invalid", "malformed", "an admission carries only obligations and proposals")
+        raise refuse("obligation_invalid", "malformed", "an admission carries only obligations and proposals; unsupported "
+                     + ", ".join(_field_names(set(base) - {"seq", "obligations", "proposals"})[0]), record="admission map")
     obligations = [dict(row) for row in base.get("obligations", state["obligations"])]
     for row in obligations:
         if row.get("id") in binding["serves"]:

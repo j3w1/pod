@@ -5,7 +5,7 @@ validation result, when a candidate is superseded, and during recovery. Every de
 is a function of durable objective records plus the proposed action. There is no
 background agent, no cost model, no scoring and no model call.
 
-Three outcomes: ALLOW executes the exactly bound action, REUSE returns existing valid
+Three outcomes: ALLOW reserves the exactly bound action for execution, REUSE returns existing valid
 evidence or attaches to an equivalent action already running, and DEFER names the
 reason and the next useful action. A warning is an annotation, never a fourth state.
 Authorization denial stays a separate class from "permitted but premature".
@@ -68,7 +68,7 @@ NEXT_ACTIONS = {
     "superseded_candidate": "re-issue the request against the unit's current candidate generation",
     "candidate_unfrozen": "commit or discard the working-tree changes, then prepare the candidate again",
     "candidate_unpublished": "push the candidate commit to the unit's branch first",
-    "effects_unknown": "declare the action's downstream effects, or map waste_governor.triggers in project policy",
+    "effects_unknown": "declare effects: [] for none, or workflow:ci.yml (a bare workflow file name); inspect governor-status trigger_proposal; proposals are never applied",
     "effect_unresolved": "reconcile the unresolved submission with the governor-reconcile helper before submitting again",
     "integration_unsettled": "settle the unit's native work and corrections first",
     "route_mismatch": "inspect the exact worker launch with Orca and resolve the route mismatch",
@@ -178,7 +178,7 @@ def _read_journal(path: Path) -> dict:
 
 def _write_journal(path: Path, journal: dict) -> None:
     journal["revision"] += 1
-    atomic_json(path, journal, limit=MAX_JOURNAL)
+    atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
 
 
 def _compact(journal: dict) -> None:
@@ -320,6 +320,28 @@ def _effects(action: dict, governor_policy: dict) -> tuple[list[str] | None, str
     if mapped is not None:
         return sorted(mapped), "mapped"
     return None, "unknown"
+
+
+def validate_execution_inputs(action: dict, policy: dict, pull_request: object = None) -> None:
+    """Use the executor's accepted forms before any journal or provider mutation."""
+    effects, _ = _effects(action, policy)
+    for effect in effects or []:
+        if effect.startswith("workflow:") and not _WORKFLOW.fullmatch(effect[len("workflow:"):]):
+            raise PodError("invalid_workflow", "Workflow effects use a bare file name, for example workflow:ci.yml")
+    if action["kind"] in (*DISPATCH_KINDS, "validation_rerun") and not _WORKFLOW.fullmatch(action["target"]):
+        raise PodError("invalid_workflow", "Workflow targets use a bare file name, for example ci.yml")
+    if pull_request is not None:
+        try:
+            exact(pull_request, {"title", "body"}, name="pull_request")
+        except PodError as exc:
+            exc.args = (str(exc) + "; pull_request supports only title and body",)
+            raise
+    if action["kind"] == "pr_update":
+        title = (pull_request or {}).get("title") or action["reason"]
+        body = (pull_request or {}).get("body") or ""
+        bounded_text(title, name="title", limit=256)
+        if not isinstance(body, str) or len(body) > 16 * 1024 or "\x00" in body:
+            raise PodError("invalid_pull_request", "Pull request body must be text of at most 16384 characters")
 
 
 def _logical_key(action: dict, candidate_id: str | None) -> str:
@@ -913,13 +935,15 @@ def _count(counter: dict, key: str) -> None:
 
 
 def _admit(project: Path, objective: str, *, owner: str, action: dict, exception: dict | None,
-           now: datetime, managed: bool = False, native_projection: dict | None = None) -> dict:
+           now: datetime, managed: bool = False, native_projection: dict | None = None,
+           pull_request: dict | None = None) -> dict:
     """Evaluate one request and journal the decision, with the objective lock held."""
     bounded_text(owner, name="owner")
     proposal = validate_action(action)
     supplied = _validate_exception(exception)
     policy = effective(project)
     governor_policy = policy["policy"]["waste_governor"]
+    validate_execution_inputs(proposal, governor_policy, pull_request)
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
     moment = now.isoformat()
@@ -987,6 +1011,8 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
             if proposal["kind"] == "merge" and merge_target(verdict["unit"]) is not None:
                 # The admitted target, not the unit's later state, is what a delivery record must match.
                 row["target_binding"] = merge_target(verdict["unit"])
+            if not managed and proposal["kind"] in EXECUTABLE_KINDS:
+                row["decision_reserved"] = True
             journal["actions"].append(row)
         elif decision == "REUSE":
             # Reuse is a decision about an existing row, not a new action; it is counted and
@@ -1010,7 +1036,17 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
                   "next_action": next_action, "exception": exception_result,
                   "record_id": record_id, "recorded": executes, "executes": executes,
                   "superseded_validation": verdict["stale_pending"]}
-        result["explanation"] = _explanation(decision, proposal, verdict, next_action)
+        if decision == "ALLOW" and not managed and proposal["kind"] in EXECUTABLE_KINDS:
+            result["executes"] = False
+            result["next_action"] = (f"Action reserved as {record_id} for the caller to perform; Pod performs nothing. "
+                                     "An identical governor-execute will attach. Perform it and record governor-outcome, "
+                                     "or record governor-outcome CANCELED then call governor-execute.")
+        elif managed and decision == "REUSE" and verdict["reuse"]["kind"] == "attach":
+            attached = _find_row(journal, record_id)
+            if attached.get("decision_reserved") is True:
+                result["next_action"] = (f"Attached to decision reservation {record_id}; perform the action and record "
+                                         "governor-outcome, or record governor-outcome CANCELED then call governor-execute.")
+        result["explanation"] = _explanation(decision, proposal, verdict, result["next_action"])
         result["_binding"] = verdict["binding"]
         result["_unit"] = unit
         result["_policy"] = governor_policy
@@ -1019,10 +1055,12 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
 
 
 def decide(project: Path, objective: str, *, owner: str, action: dict, exception: object = None,
-           now: datetime | None = None, native_projection: dict | None = None) -> dict:
+           now: datetime | None = None, native_projection: dict | None = None,
+           pull_request: dict | None = None) -> dict:
     """Return ALLOW, REUSE or DEFER for one proposed expensive effect, and record it."""
     result = _admit(project, objective, owner=owner, action=action, exception=exception,
-                    now=now or datetime.now(timezone.utc), native_projection=native_projection)
+                    now=now or datetime.now(timezone.utc), native_projection=native_projection,
+                    pull_request=pull_request)
     return {key: value for key, value in result.items() if not key.startswith("_")}
 
 

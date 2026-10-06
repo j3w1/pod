@@ -130,10 +130,21 @@ def bounded_stdin_json(*, limit: int = MAX_RECORD) -> Any:
         raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
 
 
-def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD) -> None:
-    data = json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False).encode() + b"\n"
+def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD, compact: bool = False) -> None:
+    options = {"separators": (",", ":")} if compact else {"indent": 2}
+    data = json.dumps(value, sort_keys=True, ensure_ascii=False, **options).encode() + b"\n"
     if len(data) > limit:
-        raise PodError("record_too_large", "Record exceeds its size limit")
+        sections = sorted(
+            ({"section": key, "bytes": len(json.dumps(item, sort_keys=True, ensure_ascii=False,
+                                                      **options).encode())}
+             for key, item in value.items()), key=lambda item: item["bytes"], reverse=True
+        )[:8] if isinstance(value, dict) else []
+        current = path.stat().st_size if path.exists() and path.is_file() else 0
+        raise PodError("record_too_large",
+                       f"Record size {current} -> {len(data)} bytes exceeds limit {limit}; "
+                       + "largest sections: " + ", ".join(f"{item['section']}={item['bytes']}" for item in sections),
+                       {"current_bytes": current, "proposed_bytes": len(data), "limit_bytes": limit,
+                        "largest_sections": sections})
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.parent.is_symlink():
         raise PodError("unsafe_record", "Record parent is a symlink")

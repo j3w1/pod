@@ -75,7 +75,19 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PodError("orca_unavailable", "Orca read failed") from exc
     if proc.returncode:
-        raise PodError("orca_read_failed", "Orca read did not succeed")
+        detail = {}
+        if len(proc.stdout) <= MAX_OUTPUT:
+            try:
+                envelope = json.loads(proc.stdout)
+                code = envelope.get("error", {}).get("code") if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict) else None
+                if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+                    detail["native_code"] = code
+            except (ValueError, TypeError, RecursionError):
+                pass
+        message = "Orca read did not succeed"
+        if detail.get("native_code") == "no_active_sender_terminal":
+            message += "; this process is not in a live Orca terminal and Pod records need one; use read-only pod status --objective ID"
+        raise PodError("orca_read_failed", message, detail or None)
     if len(proc.stdout) > MAX_OUTPUT:
         raise PodError("orca_contract", "Orca read exceeds bounded output")
     if argv == ["--version"]:

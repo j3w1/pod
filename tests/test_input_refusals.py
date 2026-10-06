@@ -117,9 +117,10 @@ class ExactRefusalTests(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, FieldRefusal)
         self.assertEqual(caught.exception.code, "obligation_invalid")
         self.assertTrue(str(caught.exception).startswith(
-            "malformed: obligation has missing or unsupported fields. Next:"))
+            "malformed: obligation has missing or unsupported fields:"))
         self.assertEqual(caught.exception.detail["detail"], "malformed")
-        self.assertNotIn("unsupported", caught.exception.detail)
+        self.assertEqual(caught.exception.detail["referent"]["unsupported"], ["unknown"])
+        self.assertEqual(caught.exception.detail["referent"]["missing"], ["id"])
 
     def test_other_invalid_refusals_do_not_gain_an_operation(self):
         with self.assertRaises(PodError) as caught:

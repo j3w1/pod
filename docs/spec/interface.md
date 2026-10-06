@@ -16,9 +16,9 @@ Maintain one canonical inline skill policy with generated host metadata and rele
 
 ### R48 — Read-only status and doctor report preferences
 
-Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175)
+Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175), [A230](#a230)
 
-Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
+Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status adds current exact release, terminal, ownership, retained reason and Dispatch stage facts, labels placement warnings start-time and renders every blocked result without a traceback. An unknown objective names its id, repository context and state root searched. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
 
 ### R49 — The one-shot installer places both agent
 
@@ -94,7 +94,7 @@ README is the practical install and session guide: one-shot command, open/auth/i
 
 ### R71 — Keep SKILL at most 750 words
 
-Type: B,H · Scenarios: [A114](#a114), [A115](#a115), [A180](#a180)
+Type: B,H · Scenarios: [A114](#a114), [A115](#a115), [A180](#a180), [A233](#a233)
 
 Keep SKILL at most 750 words, each conditional reference at most 700 words and all references together at most 2200 words. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle; repository docs provide the detailed contracts.
 
@@ -138,13 +138,13 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 
 Type: B · Scenarios: [A192](#a192), [A193](#a193), [A194](#a194)
 
-When status's exact native settlement read fails, every open admission is listed under `assignments.unverified`, not active, and the human summary counts it separately. Status names the failed read's code and the objective's bound and current runtime, or unknown, labels Orca's attention for those rows as Orca's and claims no wait for their delivery; the next action names the unverified settlement. This is presentation only: the kernel's outstanding set, settlement rules, logical slots and fail-closed mutation are unchanged, and a verified read's output is unchanged apart from new fields that are empty or absent.
+When status's exact native settlement read fails, every open admission is listed under `assignments.unverified`, not active, and the human summary counts it separately. Status names the failed read's code and the objective's bound and current runtime, or unknown, labels Orca's attention for those rows as Orca's and claims no wait for their delivery; the next action names the unverified settlement. This is presentation only: the kernel's outstanding set, settlement rules, logical slots and fail-closed mutation are unchanged, and existing verified fields retain their meanings. Current resource/stage facts are additive under R48; older missing facts stay empty or absent and preserve rendering.
 
 ### R99 — Input refusals name their fields
 
-Type: B · Scenarios: [A200](#a200), [A201](#a201)
+Type: B · Scenarios: [A200](#a200), [A201](#a201), [A227](#a227)
 
-An `exact()` refusal names its record and its missing and unsupported field names, never a value; a non-object names only the expected type. Echoed names are bounded in count and length and stripped of control characters, and a `pod internal` refusal also names the operation. The same inputs are accepted and refused with the same codes; a caller passing its own error, the obligation kernel, keeps its refusal. There are no prose examples or generated schemas.
+An `exact()` refusal names its record and its missing and unsupported field names, never a value; a non-object names only the expected type. Echoed names are bounded in count and length and stripped of control characters, and a `pod internal` refusal also names the operation. The same inputs are accepted and refused with the same codes; kernel refusals retain codes/details and name record or field plus a known obligation, exact missing/unsupported names, text limit/length or allowed vocabulary. No refused field value is echoed. Detail-specific next actions describe receipt conflicts, history bounds and malformed input; wait lists are complete within their bound and pre-row admission failures explain same-Task retry and Orca settlement. There are no prose examples or generated schemas.
 
 ## Acceptance scenarios
 
@@ -169,7 +169,7 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a111"></a>**A111** — Generic tracked-source/artifact hygiene detects representative private residue while permitting Pod identity, public links and sanitized fixtures.
 - <a id="a112"></a>**A112** — Public code and guidance require no external metadata service; AGENTS keeps only the short upstream ownership notice and introduces no competing writer.
 - <a id="a113"></a>**A113** — README covers the one-shot installer, normal session journey, TUI, limits, update and removal with linked detailed guidance.
-- <a id="a114"></a>**A114** — SKILL remains at most 750 words, each conditional reference at most 700 and their combined total at most 2200; Execution Spec loads only for issue/spec work.
+- <a id="a114"></a>**A114** — SKILL authoring stays at most 748 words, preserving the formal 750-word validator headroom for metadata guards, each conditional reference at most 700 and their combined total at most 2200; Execution Spec loads only for issue/spec work.
 - <a id="a115"></a>**A115** — Human status names selected objective/source, worktree, relevant native work, blocker, next action, assignments, retained terminals and remaining gates; JSON retains detailed derived evidence without side effects.
 - <a id="a117"></a>**A117** — Focus updates the inspector without a model call; Space, `p` and `P` save exact-route edits immediately; a kept `pod/v1` file opens route setup instead of allowing edits, and saves only after confirmation; a save conflict or an outside change re-reads the file and rebuilds the preview, keeping only choices that still apply and naming any it cleared.
 - <a id="a118"></a>**A118** — The root `VERSION` holds one MAJOR.MINOR.PATCH line and is the only authored version; the bundle's `VERSION` links to it, an installed copy carries it as a file, `doctor` reports it, and no other file declares a version.
@@ -182,16 +182,16 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a139"></a>**A139** — The route table and a full-width bottom dock with its four tabs remain readable at 160×45, 100×30, 80×24, 60×20 and 40×12, never as a right-hand panel; short heights page to every inspector line, essential roles stay legible in 16-colour light and dark palettes, strict frames sweep widths 40–200 without overflow, narrow labels keep the effort, a disclaimer accompanies any cost or time column, and `LANG=C` uses ASCII.
 - <a id="a140"></a>**A140** — Edits save immediately and survive restart and external edits, while browsing, sorting, filtering, grouping, paging and comparing never write; an invalid or missing preference file is announced as read-only after one held poll.
 - <a id="a142"></a>**A142** — A new install and explicit update leave ordinary agent sessions and running workers unchanged; coordinators reload before new starts.
-- <a id="a175"></a>**A175** — Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments with Orca's own attention for each active one (`unknown` when Orca gives none), gates, progress and next action without writes or invented telemetry.
+- <a id="a175"></a>**A175** — Current exact release/terminal/ownership/stage facts and retained reason are separate from start-time warnings, and every blocked text branch renders without a traceback. Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments with Orca's own attention for each active one (`unknown` when Orca gives none), gates, progress and next action without writes or invented telemetry.
 - <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
 
 
 - <a id="a183"></a>**A183** — In a real terminal, Pin and Preferred moves and clears use marks distinct from focus and route state, survive restart, sorting, filtering, resize, grouped and narrow views and ASCII/monochrome output, and stay visible as hidden summaries; invalidating edits, stale concurrent edits and persistence failures change no settings, and no action starts workers.
 - <a id="a192"></a>**A192** — With a changed runtime and N open admissions, status reports 0 active and N under `assignments.unverified`, its render counts the N as unverified, and no progress line or next action waits for their delivery.
 - <a id="a193"></a>**A193** — The same status names the failed read's code, the objective's bound and current runtime (unknown when unread) and Orca's attention for each unverified row, labelled as Orca's.
-- <a id="a194"></a>**A194** — A verified read serializes and renders exactly as 0.6.6 for the same fixture, apart from absent new fields, including an objective whose checkpoint recorded its consumer generation and has no rebind history; with a changed runtime the kernel's outstanding set is unchanged and status writes nothing. A sanitized R15-shaped incident (5 finished Dispatches, 4 consumed reports) shows 0 active and 5 unverified.
+- <a id="a194"></a>**A194** — A verified read preserves existing 0.6.6 fields and rendering for the same missing-fact fixture, with additive current resource/stage facts under R48 when observed, including an objective whose checkpoint recorded its consumer generation and has no rebind history; with a changed runtime the kernel's outstanding set is unchanged and status writes nothing. A sanitized R15-shaped incident (5 finished Dispatches, 4 consumed reports) shows 0 active and 5 unverified.
 - <a id="a200"></a>**A200** — For every `pod internal` operation, a request missing one required field and carrying one unknown field is refused naming the operation, the record and both fields; a sentinel value in the request appears on neither stdout nor stderr. A non-object names only the expected type.
-- <a id="a201"></a>**A201** — The same inputs are accepted and refused with the same codes, obligation-kernel refusals are unchanged, and numerous, long or control-character field names are bounded and cleaned.
+- <a id="a201"></a>**A201** — The same inputs are accepted and refused with the same codes/details, obligation-kernel referents and corrections are self-describing without values, and numerous, long or control-character field names are bounded and cleaned.
 - <a id="a202"></a>**A202** — Issue intake, including `internal issue-intake`, returns no binding and refuses `issue_is_evidence_ledger` for an `EEL:` title, or for the exact format line as the first non-empty unindented body line with or without `<br>` and with LF or CRLF endings; the refusal says the issue is evidence only and implementation needs a separate Pod Execution Spec citing it.
 - <a id="a203"></a>**A203** — A bound Pod Execution Spec issue that later gains either marker, including only a title change, is refused at the next recheck; continuation, affected admission, final verification and `internal issue-recheck` surface the EEL refusal, not `issue_reconciliation_required`.
 - <a id="a204"></a>**A204** — A Pod Execution Spec citing an EEL is accepted unchanged; an indented or later marker line, inside a code block or not, a lowercase or non-prefix title and an amendment do not mark an issue; direct objectives and EEL source references are unaffected; the convention appears once, in the Execution Spec reference.
@@ -201,6 +201,12 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a219"></a>**A219** — The palette runs the same commands as the shortcuts; bulk scopes preview exact routes and save once; reset enables only the listed shipped routes and keeps Pin and Preferred; a bulk change that disables the pinned route requires an explicit clear; an outside change while the bulk dialog is open saves nothing and re-previews; read-only and setup-required files refuse edits.
 - <a id="a220"></a>**A220** — Compare holds at most four routes with bounded point and percentage deltas, unknown or not-comparable values and no zero-baseline percentage; the frontier marks only shown rows within one like-for-like set of source, methodology and profile qualifiers and says it is not a recommendation; differing profiles carry a caveat; changed data and methodology or profile changes are reported against the one previous snapshot.
 - <a id="a221"></a>**A221** — Opening the workspace renders cached data and runs one automatic refresh only when due, writing the cache only; manual-only makes no network call until an explicit refresh; data at least seven days old is stale; a reopen after a failure is restrained; quitting cancels without promotion while keys stay responsive; refresh keeps focus, view and compare marks; each outcome is named as it is (updated, no changes, checked, refused with its diagnostic, superseded, cancelled, failed with its code); stale data stays marked at every supported size.
+
+- <a id="a227"></a>**A227** — Every kernel refusal has a record/field referent and known obligation context, exact-field names, text bounds or allowed vocabulary without values. Detail-specific next actions, complete bounded dependent-wait lists, named admission-map keys and unused Task recovery guidance retain existing codes and authority.
+
+- <a id="a230"></a>**A230** — Status reads exact current release, terminal, ownership, retention and Dispatch stage facts separately from start-time placement warnings, preserves live/older missing-field rendering, never presents a released worker as running, and renders all blocked branches with exit 1. Unknown objectives name the objective, repository context and searched state root; reads write nothing.
+
+- <a id="a233"></a>**A233** — The implemented Governor, proof_scope/REUSE, placement and recurring-delta correction guidance stays within SKILL 748 words, individual references 700 and combined references 2200; cuts preserve rules and inventory/guard tests retain real offline pointers.
 
 ## Public interfaces
 

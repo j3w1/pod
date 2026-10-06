@@ -36,7 +36,10 @@ class GovernanceHistoryTests(boundaries.KernelCase):
         self.intake()
         policy = self.commit("AGENTS.md", boundaries.AGENTS + "Candidate-only rule.\n", "policy")
         self.candidate = "main"
-        self.write(self.stored())  # The alias must be frozen to this commit now.
+        with self.assertRaises(PodError):
+            self.write(self.stored())  # Mutable names cannot bind candidate proof.
+        self.candidate = policy
+        self.write(self.stored())
         self.candidate = self.base
         boundaries.git(self.project, "reset", "-q", "--hard", self.base)
         for _ in range(3):

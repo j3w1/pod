@@ -48,7 +48,7 @@ def _check_worktree_binding(project: Path, binding: dict | None) -> None:
             or current["worktree"] != binding.get("path")
             or current["branch"] != binding.get("branch")):
         raise PodError("worktree_binding_changed",
-                       "Current Git repository, branch, or worktree differs from the objective binding")
+                       "Current Git repository, branch, or worktree differs from the objective binding; keep packet worktree on the objective and use placement for a separate assignment worktree")
 
 
 def _check_native_placement(native_port, selector: str, binding: dict | None) -> dict | None:
@@ -75,7 +75,7 @@ def _check_native_placement(native_port, selector: str, binding: dict | None) ->
             or observed.get("path") != binding.get("path")
             or observed.get("branch") != binding.get("branch")):
         raise PodError("worktree_binding_changed",
-                       "Resolved native worker placement differs from the frozen assignment workspace")
+                       "Resolved native worker placement differs from the frozen assignment workspace; set packet placement to the child-worktree binding and select that same worktree")
     if not isinstance(observed.get("runtime"), str) or not observed["runtime"]:
         raise PodError("worktree_resolution_ambiguous", "Native placement lacks runtime identity")
     return observed
@@ -127,6 +127,25 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
              "native_worker_state": worker.get("state"), "terminal": handle,
              "placement_readback": "observed", "surfaces": [], "warnings": [],
              "ui_visibility": "unverified", "ui_focus": "unverified"}
+    projection = result.get("projection")
+    projection = projection if isinstance(projection, dict) else {}
+    release = projection.get("resource")
+    release = release if isinstance(release, dict) else {}
+    ownership = resource if isinstance(resource, dict) else {}
+    observed_terminal = result.get("terminal")
+    observed_terminal = observed_terminal if isinstance(observed_terminal, dict) else {}
+    # Only presentation facts: terminal previews and unrelated archive/endpoint data are not status.
+    facts.update(
+        native_release={key: release[key] for key in ("state", "releaseState", "terminalState", "ownerDispatchId", "id")
+                        if key in release} or None,
+        native_stage=projection.get("stage") if isinstance(projection.get("stage"), dict) else None,
+        native_liveness=projection.get("liveness") if isinstance(projection.get("liveness"), dict) else None,
+        native_terminal_state=release.get("terminalState") or worker.get("terminalState"),
+        terminal_ownership={key: ownership[key] for key in ("ownerDispatchId", "originDispatchId", "ownershipState",
+                            "releaseState", "retainedReason", "terminalHandle", "worktreeId") if key in ownership} or None,
+        terminal_readback={key: observed_terminal[key] for key in ("handle", "tabId", "worktreeId", "connected",
+                           "writable", "orphaned") if key in observed_terminal} or None,
+        retained_reason=ownership.get("retainedReason") or worker.get("retainedReason") or worker.get("retainReason"))
     if worker.get("agentTerminalHandle") != handle:
         facts.update(tab=None, placement_readback="unavailable")
         return facts
@@ -499,7 +518,7 @@ def _observe_start(project: Path, objective: str, *, owner: str, admission_id: s
                 if bounded_json(path, limit=START_OBSERVATION_LIMIT) != value:
                     raise PodError("native_evidence_unavailable", "Native start evidence changed")
             else:
-                atomic_json(path, value, limit=START_OBSERVATION_LIMIT)
+                atomic_json(path, value, limit=START_OBSERVATION_LIMIT, compact=True)
         finally:
             # Even if the separate archive cannot be written, keep the observed UUID
             # and missing-evidence reference whenever the compact journal remains writable.
