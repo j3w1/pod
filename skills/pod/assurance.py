@@ -165,6 +165,12 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
                 raise refuse("obligation_invalid", "receipt_conflict", "receipt reuse retains its source proof identity and canonical delta", obligation=ob["id"])
         if ob["kind"] == "assurance" and "accepted_seq" in receipt:
             from .obligations import _admissions
+            if not _sha256(evidence["governance"]) or not _sha256(evidence["definition"]) or evidence["binding"] is None:
+                raise refuse("obligation_invalid", "receipt_conflict", "accepted review history retains complete proof bindings", obligation=ob["id"])
+            for field in ("policy_revision", "environment"):
+                _text(evidence["binding"][field], field, obligation=ob["id"])
+            if not _sha256(evidence["binding"]["governance"]):
+                raise refuse("obligation_invalid", "receipt_conflict", "accepted review binding retains its governance identity", obligation=ob["id"])
             admission = _admissions(ctx).get(evidence["attempt"]) or {}
             reported = receipt.get("reported_seq", receipt["accepted_seq"])
             admitted = admission.get("admitted_seq")

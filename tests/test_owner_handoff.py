@@ -260,6 +260,8 @@ class DetectionTableTests(HandoffCase):
                     "policy-revision", "policy-base", "policy-undeclared", "policy-forged-gone"])
         cases += ["genuine-reviewed-closed", "genuine-reviewed-withdrawn", "consumed-report-null", "consumed-report-digest",
                   "consumed-report-attempt", "consumed-report-observation", "consumed-report-result", "consumed-report-runtime",
+                  "accepted-review-null-governance", "accepted-review-null-binding", "accepted-review-null-definition",
+                  "accepted-review-null-candidate",
                   *["consumed-report-missing-" + field for field in ("schema", "assignment", "attempt", "candidate", "outcome",
                     "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions")]]
         for phase in ("fresh", "pending"):
@@ -315,8 +317,8 @@ class DetectionTableTests(HandoffCase):
                                 "existing_evidence":"tests", "insufficiency":"no review", "state":"withdrawn",
                                 "withdrawal":{"by":"user_direct", "reason":"Owner withdrew peer review"}})
                             extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw peer review"}
-                        reviewed = kind.startswith("consumed-report-") or kind in ("genuine-reviewed-closed", "genuine-reviewed-withdrawn")
-                        if reviewed: case.closed_review_peer(withdrawn=kind == "genuine-reviewed-withdrawn")
+                        reviewed = kind.startswith(("consumed-report-", "accepted-review-")) or kind in ("genuine-reviewed-closed", "genuine-reviewed-withdrawn")
+                        if reviewed: case.closed_review_peer(withdrawn=kind == "genuine-reviewed-withdrawn" or kind.startswith("accepted-review-"))
                         elif not released: checkpoint(rows, **extra)
                         case.current = current
                         peer = objective_root(case.project, "closure-peer") / "context.json"
@@ -364,6 +366,8 @@ class DetectionTableTests(HandoffCase):
                         elif kind == "checkpoint-missing-candidate": cp.pop("candidate")
                         elif kind == "checkpoint-invalid-verification": cp["verification"] = None
                         elif kind == "checkpoint-unknown-field": cp["unknown"] = True
+                        elif kind.startswith("accepted-review-null-"):
+                            cp["obligations"][1]["receipts"][0]["evidence"][kind.removeprefix("accepted-review-null-")] = None
                         elif kind.startswith("consumed-report-"):
                             admission = next(iter(raw["admissions"].values())); report = admission["report"]
                             if kind.startswith("consumed-report-missing-"):
