@@ -22,6 +22,9 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     from .operations import OrcaPort
 
     state = read(project, objective)
+    if mutating:
+        from .handoff import refuse_nonowner
+        refuse_nonowner(project, objective, state, owner)
     if mutating and (state is None or state.get("owner") != owner):
         raise PodError("native_authority_unverified",
                        "Caller is not the recorded owner; Governor mutation does not own this Pod objective context")
@@ -139,6 +142,8 @@ def _op_report(request: dict) -> dict:
         raise PodError("invalid_packet", "Report needs a frozen packet")
     from .ledger import read
     state = read(Path(request["project"]), request["objective"])
+    from .handoff import refuse_nonowner
+    refuse_nonowner(Path(request["project"]), request["objective"], state, (state or {}).get("owner"))
     admission = state.get("admissions", {}).get(request["admission_id"]) if state else None
     if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
             or admission.get("packet_id") != request["packet"].get("packet_id")):
@@ -284,7 +289,11 @@ def _op_integration_observe(request: dict) -> dict:
 def _op_checkpoint(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "value"},
           {"project", "objective", "owner", "value"}, name="request")
-    from .ledger import checkpoint
+    from .ledger import checkpoint, read
+    from .handoff import refuse_nonowner
+    state = read(Path(request["project"]), request["objective"])
+    refuse_nonowner(Path(request["project"]), request["objective"], state, request["owner"],
+                    code="coordinator_conflict" if state and state["owner"] != request["owner"] else "native_authority_unverified")
     from .orca import contract
     snapshot = contract()
     if snapshot.get("status") != "observed":
@@ -436,6 +445,11 @@ def _op_admission(request: dict) -> dict:
                     "plan_revision", "packet", "worktree", "reuse_of", "map"},
           {"project", "objective", "owner", "run", "task",
            "plan_revision", "packet"}, name="request")
+    from .ledger import read
+    from .handoff import refuse_nonowner
+    state = read(Path(request["project"]), request["objective"])
+    refuse_nonowner(Path(request["project"]), request["objective"], state, request["owner"],
+                    code="coordinator_conflict" if state and state["owner"] != request["owner"] else "native_authority_unverified")
     from .operations import guarded_start
     # The production port verifies installed controls itself; request JSON
     # can supply assessment snapshots but cannot assert native assurance.
@@ -453,8 +467,21 @@ def _op_runtime_continuity(request: dict) -> dict:
     from .ledger import owner_continuity
     from .operations import OrcaPort
     project = Path(request["project"])
+    from .ledger import read
+    from .handoff import refuse_nonowner
+    refuse_nonowner(project, request["objective"], read(project, request["objective"]), request["owner"])
     return owner_continuity(project, request["objective"], owner=request["owner"],
                             decision=request["decision"], port=OrcaPort(project))
+
+
+def _op_owner_handoff(request: dict) -> dict:
+    exact(request, {"project", "objective", "owner", "decision"},
+          {"project", "objective", "owner", "decision"}, name="request")
+    from .handoff import owner_handoff
+    from .operations import OrcaPort
+    project = Path(request["project"])
+    return owner_handoff(project, request["objective"], owner=request["owner"],
+                         decision=request["decision"], port=OrcaPort(project))
 
 
 def _op_cleanup_plan(request: dict) -> dict:
@@ -496,6 +523,7 @@ _OPERATIONS = {
     'governor-status': _op_governor_status,
     'admission': _op_admission,
     'runtime-continuity': _op_runtime_continuity,
+    'owner-handoff': _op_owner_handoff,
     'cleanup-plan': _op_cleanup_plan,
     'map': _op_map,
 }

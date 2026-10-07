@@ -387,7 +387,7 @@ class DiagnosticsBoundaryTests(ProductionCase):
         with patch.dict(os.environ,{"ORCA_TERMINAL_HANDLE":"other"}):
             for call in calls:
                 with self.assertRaises(PodError) as caught:call()
-                self.assertIn("not the recorded owner",str(caught.exception));self.assertNotIn("run-use",str(caught.exception))
+                self.assertIn("not the recorded owner",str(caught.exception));self.assertNotIn("run-use --id",str(caught.exception));self.assertIn("owner_handoff",caught.exception.detail)
         self.port.runtime="changed"
         with self.assertRaises(PodError) as caught:self.write()
         self.assertNotIn("run-use",str(caught.exception))

@@ -60,6 +60,9 @@ class ProductionCase(KernelCase):
             return {"version": "synthetic-control", "executable": "/synthetic/orca"}
         if argv == ["status", "--json"]:
             return {"runtime": self.port.runtime, "result": {"runtime": {"capabilities": [], "state": "running"}}}
+        if argv[:2] == ["terminal", "show"]:
+            return {"runtime": self.port.runtime, "result": {"terminal": {
+                "handle": argv[3], "connected": True, "writable": True, "orphaned": False}}}
         if argv[:2] == ["orchestration", "run-current"]:
             return {"runtime": self.port.runtime, "result": {"run": deepcopy(self.current)}}
         if argv[:2] == ["orchestration", "worker-list"]:

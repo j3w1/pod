@@ -48,6 +48,9 @@ def _read_allowed(argv: list[str]) -> bool:
     if argv in (["--version"], ["status", "--json"],
                 ["orchestration", "run-current", "--json"]):
         return True
+    if (len(argv) == 5 and argv[:3] == ["terminal", "show", "--terminal"]
+            and _argument(argv[3]) and argv[4] == "--json"):
+        return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
@@ -203,6 +206,9 @@ def _worker_list_tail(tail: list[str]) -> bool:
 
 
 def _mutate_allowed(argv: list[str]) -> bool:
+    if (len(argv) == 5 and argv[:3] == ["orchestration", "run-use", "--id"]
+            and _argument(argv[3]) and argv[4] == "--json"):
+        return True
     if argv[:2] == ["orchestration", "worker-start"]:
         return _worker_start_shape(argv[2:])
     return False
@@ -397,3 +403,20 @@ def current_run() -> dict:
 
 def worker_show(dispatch: str) -> dict:
     return read_command(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
+
+
+def terminal_identity(handle: str) -> dict:
+    """Read only handle liveness; presentation and pane fields never leave this port."""
+    try:
+        shown = read_command(["terminal", "show", "--terminal", handle, "--json"])
+    except PodError as exc:
+        code = (exc.detail or {}).get("native_code")
+        return {"handle": handle, "runtime": None, "state": "lost" if code in
+                ("terminal_handle_stale", "terminal_not_found", "terminal_handle_gone") else "unreadable",
+                "code": code or exc.code}
+    row = shown["result"].get("terminal")
+    live = (isinstance(row, dict) and row.get("handle") == handle
+            and row.get("connected") is True and row.get("writable") is True
+            and row.get("orphaned") is False)
+    return {"handle": handle, "runtime": shown["runtime"],
+            "state": "live" if live else "unreadable", "code": None}

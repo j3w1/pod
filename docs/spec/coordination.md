@@ -30,7 +30,7 @@ Choose tools, direct session work or delegation before a worker model. Assess ea
 
 Type: B,H · Scenarios: [A31](#a31), [A37](#a37), [A55](#a55)
 
-Keep the coordinator conversation, model, effort and host settings unchanged. Preserve useful integration, verification and reporting headroom; checkpoint before foreseeable interruption. Worker selection changes only workers.
+Keep the coordinator conversation, model, effort and host settings unchanged, except the objective coordinator replacement explicitly confirmed under R105. Preserve useful integration, verification and reporting headroom; checkpoint before foreseeable interruption. Worker selection changes only workers.
 
 ### R26 — workers.max_active bounds concurrently reserved logical assignments
 

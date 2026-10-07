@@ -1,4 +1,4 @@
-# 0.8.0 verification contract
+# 0.8.1 verification contract
 
  Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
@@ -336,3 +336,22 @@ validator headroom for the unchanged duplicate-VERSION guard. The production
 matrix checks that effective budget, each 700-word reference and their combined
 2,200-word bound. Independent 0.8.0 audit remains under installed 0.7.1; A2,
 A3, A4 and A8 receive admission/assurance scrutiny before acceptance.
+
+The 0.8.1 production offline matrix is `tests.test_owner_handoff` (A234–A250).
+Disposable Git objectives enter through real checkpoint/admission joins; Orca
+alone is replaced at its port. Related detection and transition rows share
+state invariants: only pending/history and authorized completion fields may
+change, and Governor/other-objective bytes remain identical. Genuine 0.8.0
+reader proof comes from the complete bundle archived from merged Git object
+`86d8b90db7c1d0f6a38c3c9167b950548ff79fad`, with its own unchanged status and
+context validator; no reconstructed older parser is used. Original R98 and R15
+incident controls and the full 0.8.0 offline suite stay separate regressions.
+No terminal-show pane or presentation fields enter handoff evidence.
+
+R105 is an authority/governance change: the fresh final independent audit uses
+installed 0.8.0, never candidate 0.8.1 evidence about itself. Corrections receive
+affected-scope delta review and explicit reuse under this contract. Real
+coordinator loss and restart proof requires an Owner-scheduled disposable trial;
+missing stale/gone and real restart evidence stays NOT_RUN. Local gate success,
+hosted Linux, independent review, self-hosting proof and Owner acceptance remain
+separate.

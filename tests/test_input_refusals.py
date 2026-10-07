@@ -46,6 +46,7 @@ REQUIRED = {
     "cleanup-plan": ("project", "objective"),
     "map": ("project", "objective"),
     "runtime-continuity": (*OWNED, "decision"),
+    "owner-handoff": (*OWNED, "decision"),
 }
 
 

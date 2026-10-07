@@ -15,7 +15,7 @@ BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agen
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md")
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py", "cli.py", "config.py", "context.py",
-                  "errors.py", "github.py", "gitio.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py",
+                  "errors.py", "github.py", "gitio.py", "handoff.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py",
                   "obligations.py", "observations.py", "operations.py", "orca.py", "placement.py", "records.py",
                   "routes.py", "selection.py", "sources.py",
                   "skill_validation.py", "status.py", "term.py", "tui.py", "tui_render.py",

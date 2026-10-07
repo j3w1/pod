@@ -282,6 +282,8 @@ def git(project: Path, *argv: str) -> str:
 
 class KernelCase(unittest.TestCase):
     def setUp(self):
+        terminal_env = patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"})
+        terminal_env.start(); self.addCleanup(terminal_env.stop)
         self.temp = fixture(); self.root = self.temp.__enter__()
         self.addCleanup(self.temp.__exit__, None, None, None)
         self.env = patch.dict(os.environ, {"XDG_STATE_HOME": str(self.root / "state"),
