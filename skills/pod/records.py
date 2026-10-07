@@ -152,12 +152,10 @@ def worktree_binding(value: Any) -> dict:
     return worktree
 
 
-def report(value: Any, frozen: dict, native_binding: dict) -> dict:
-    if not isinstance(frozen, dict) or not isinstance(frozen.get("body"), dict) or digest(frozen["body"]) != frozen.get("packet_id"):
-        raise PodError("report_binding_mismatch", "Frozen packet content identity changed")
-    packet(frozen["body"])
+def report_record(value: Any) -> dict:
+    """Complete report observation shape, shared by consumption and stored reads."""
     r = exact(value, REPORT_FIELDS, REPORT_FIELDS, name="report")
-    if r["schema"] != "pod-report/v1" or r["candidate"] != frozen["body"]["candidate"] or r["assignment"] != frozen["packet_id"]:
+    if r["schema"] != "pod-report/v1":
         raise PodError("report_binding_mismatch", "Report does not bind the frozen packet")
     for key in ("assignment", "attempt", "candidate"):
         bounded_text(r[key], name=key, limit=256)
@@ -165,6 +163,17 @@ def report(value: Any, frozen: dict, native_binding: dict) -> dict:
         raise PodError("invalid_report", "Report outcome is invalid")
     for key in ("scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"):
         _strings(r[key], key)
+    return r
+
+
+def report(value: Any, frozen: dict, native_binding: dict) -> dict:
+    if not isinstance(frozen, dict) or not isinstance(frozen.get("body"), dict) or digest(frozen["body"]) != frozen.get("packet_id"):
+        raise PodError("report_binding_mismatch", "Frozen packet content identity changed")
+    packet(frozen["body"])
+    r = exact(value, REPORT_FIELDS, REPORT_FIELDS, name="report")
+    if r["schema"] != "pod-report/v1" or r["candidate"] != frozen["body"]["candidate"] or r["assignment"] != frozen["packet_id"]:
+        raise PodError("report_binding_mismatch", "Report does not bind the frozen packet")
+    r = report_record(r)
     binding = exact(native_binding, {"runtime", "runId", "taskId", "dispatchId", "workerId"},
                     {"runtime", "runId", "taskId", "dispatchId", "workerId"}, name="native_binding")
     if any(not isinstance(value, str) or not value for value in binding.values()) or r["attempt"] != binding["dispatchId"]:

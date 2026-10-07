@@ -115,7 +115,34 @@ _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "r
                      "admitted_seq"}
 
 
-def _validate_admission(key: str, row: object) -> None:
+def _consumed_report(row: dict, runtimes: set[str]) -> dict | None:
+    """Validate the immutable observation that already joined a settled Dispatch."""
+    if row["report"] is None:
+        return None
+    from .records import report_record, _sha256
+    fields = {"outcome", "status", "attempt", "observation", "observation_digest", "result_commit", "consumed_at"}
+    value = exact(row["report"], fields, fields, name="consumed report")
+    observation = report_record(value["observation"])
+    bounded_text(value["consumed_at"], name="consumed_at")
+    if value["result_commit"] is not None:
+        bounded_text(value["result_commit"], name="result_commit")
+    if (not binding_valid(row["native_binding"]) or not _sha256(value["observation_digest"])
+            or value["status"] not in ("validated_observation", "reconciliation_required")
+            or value["outcome"] != observation["outcome"] or value["attempt"] != observation["attempt"]
+            or observation["attempt"] != row["native_binding"]["dispatchId"]
+            or observation["assignment"] != row["packet_id"] or observation["candidate"] != row["candidate"]):
+        raise PodError("state_unsupported", "Consumed report no longer joins its recorded assignment")
+    if value["status"] == "validated_observation":
+        binding = {key: row["native_binding"][key] for key in ("runId", "taskId", "dispatchId", "workerId")}
+        # Rebinds preserve the observation and its original runtime in history.
+        if not any(digest({"status": value["status"], "observation": observation,
+                           "native_binding": {"runtime": runtime, **binding}}) == value["observation_digest"]
+                   for runtime in runtimes | {row["runtime"]}):
+            raise PodError("state_unsupported", "Consumed report observation identity changed")
+    return value
+
+
+def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = None) -> None:
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
@@ -147,6 +174,7 @@ def _validate_admission(key: str, row: object) -> None:
         raise PodError("state_unsupported", "Bound admission lacks exact native identity")
     if value["native_binding"] is not None and not binding_valid(value["native_binding"]):
         raise PodError("state_unsupported", "Admission native identity is malformed")
+    _consumed_report(value, runtimes or set())
 
 
 def _validate_context(value: object) -> dict:
@@ -162,10 +190,15 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported", "Context owner is malformed")
     if not isinstance(state["admissions"], dict):
         raise PodError("state_unsupported", "Admissions are malformed")
+    checkpoint_value = state.get("checkpoint")
+    continuity = checkpoint_value.get("continuity") if isinstance(checkpoint_value, dict) else None
+    if continuity is not None:
+        _validate_continuity(continuity)
+    runtimes = {entry[field] for entry in (continuity or {}).get("history", []) for field in ("from_runtime", "to_runtime")}
     for key, row in state["admissions"].items():
         if not isinstance(key, str) or not key:
             raise PodError("state_unsupported", "Admission key is malformed")
-        _validate_admission(key, row)
+        _validate_admission(key, row, runtimes=runtimes)
     if (not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict)
             or not isinstance(state["constraints"], list) or len(state["constraints"]) > 64):
         raise PodError("state_unsupported", "Context evidence is malformed")
@@ -918,6 +951,21 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
                           if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
                           and isinstance(row.get("placement"), dict)}
     return view
+
+
+def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
+    """Replay closure using complete, immutable consumed settlement observations.
+
+    This reads past settlement only to validate an already recorded closure;
+    it does not settle an admission or authorize ordinary work without readback.
+    """
+    ctx = kernel_context(project, objective, state, None)
+    if (state.get("checkpoint") or {}).get("closure") is None:
+        return ctx
+    ctx["outstanding"] = [key for key in ctx["outstanding"]
+                          if state["admissions"][key]["state"] != "bound"
+                          or (state["admissions"][key].get("report") or {}).get("status") != "validated_observation"]
+    return ctx
 
 
 def map_read(project: Path, objective: str) -> dict:

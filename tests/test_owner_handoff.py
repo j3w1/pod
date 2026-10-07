@@ -22,6 +22,37 @@ BASELINE = "86d8b90db7c1d0f6a38c3c9167b950548ff79fad"
 
 
 class HandoffCase(ProductionCase):
+    def closed_review_peer(self, *, withdrawn=False, objective="closure-peer"):
+        def checkpoint(rows, **extra):
+            return run("checkpoint", {"project":str(self.project), "objective":objective,
+                "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":self.core(obligations=rows,
+                governance={"base_ref":"refs/remotes/origin/target"}, **extra)})
+        review = {"id":"A", "kind":"assurance", "provenance":"coordinator", "parent":"O1", "check":"review",
+            "scope":{"paths":["src"]}, "question":"correct?", "candidate":self.candidate,
+            "existing_evidence":"tests", "insufficiency":"no review", "state":"waiting",
+            "wait":{"class":"sequenced", "referent":"O1"}}
+        checkpoint([self.criterion(), review])
+        from pod.records import packet
+        body = deepcopy(self.packet(["A"], role="review")["body"])
+        body.update(objective=objective, map_revision=read(self.project, objective)["checkpoint"]["revision"])
+        frozen = packet(body)
+        admission = run("admission", {"project":str(self.project), "objective":objective,
+            "owner":os.environ["ORCA_TERMINAL_HANDLE"], "run":"run", "task":"peer-review", "plan_revision":"plan", "packet":frozen})["admission"]
+        self.settle(admission)
+        rows = deepcopy(read(self.project, objective)["checkpoint"]["obligations"])
+        for row in rows: row.pop("executor")
+        rows[0].update(state="satisfied", evidence=[{"check":"criterion", "command":"unit", "result":"passed", "reference":"peer-proof"}])
+        rows[1].update(state="satisfied", evidence=[{"attempt":admission["admission_id"]}])
+        report = {"schema":"pod-report/v1", "assignment":frozen["packet_id"], "attempt":admission["native_binding"]["dispatchId"],
+            "candidate":self.candidate, "outcome":"succeeded", "scope":frozen["body"]["scope"], "files":[], "checks":["unit"],
+            "failures":[], "evidence":[], "uncertainty":[], "questions":[]}
+        run("report", {"project":str(self.project), "objective":objective, "admission_id":admission["admission_id"],
+            "packet":frozen, "report":report, "map":{"obligations":rows}})
+        rows = deepcopy(read(self.project, objective)["checkpoint"]["obligations"])
+        if withdrawn:
+            rows[1].pop("evidence"); rows[1].update(state="withdrawn", withdrawal={"by":"coordinator", "reason":"review no longer required"})
+        checkpoint(rows, close=True)
+
     def released_peer(self, commit, version, objective="closure-peer"):
         """Emit untouched peer bytes with a complete immutable released bundle."""
         root = Path(__file__).resolve().parents[1]
@@ -227,6 +258,10 @@ class DetectionTableTests(HandoffCase):
                     "governance-header-base", "governance-header-selection", "governance-header-exclusion",
                     "genuine-policy", "policy-line-reversed", "policy-line-outside", "policy-quote",
                     "policy-revision", "policy-base", "policy-undeclared", "policy-forged-gone"])
+        cases += ["genuine-reviewed-closed", "genuine-reviewed-withdrawn", "consumed-report-null", "consumed-report-digest",
+                  "consumed-report-attempt", "consumed-report-observation", "consumed-report-result", "consumed-report-runtime",
+                  *["consumed-report-missing-" + field for field in ("schema", "assignment", "attempt", "candidate", "outcome",
+                    "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions")]]
         for phase in ("fresh", "pending"):
             for kind in cases:
                 case = HandoffCase(); case.setUp()
@@ -280,7 +315,9 @@ class DetectionTableTests(HandoffCase):
                                 "existing_evidence":"tests", "insufficiency":"no review", "state":"withdrawn",
                                 "withdrawal":{"by":"user_direct", "reason":"Owner withdrew peer review"}})
                             extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw peer review"}
-                        if not released: checkpoint(rows, **extra)
+                        reviewed = kind.startswith("consumed-report-") or kind in ("genuine-reviewed-closed", "genuine-reviewed-withdrawn")
+                        if reviewed: case.closed_review_peer(withdrawn=kind == "genuine-reviewed-withdrawn")
+                        elif not released: checkpoint(rows, **extra)
                         case.current = current
                         peer = objective_root(case.project, "closure-peer") / "context.json"
                         raw = json.loads(peer.read_text()); cp = raw["checkpoint"]; ob = (cp.get("obligations") or [{}])[0]
@@ -327,6 +364,16 @@ class DetectionTableTests(HandoffCase):
                         elif kind == "checkpoint-missing-candidate": cp.pop("candidate")
                         elif kind == "checkpoint-invalid-verification": cp["verification"] = None
                         elif kind == "checkpoint-unknown-field": cp["unknown"] = True
+                        elif kind.startswith("consumed-report-"):
+                            admission = next(iter(raw["admissions"].values())); report = admission["report"]
+                            if kind.startswith("consumed-report-missing-"):
+                                report["observation"].pop(kind.removeprefix("consumed-report-missing-"))
+                            elif kind == "consumed-report-null": admission["report"] = None
+                            elif kind == "consumed-report-digest": report["observation_digest"] = "0" * 64
+                            elif kind == "consumed-report-attempt": report["attempt"] = "unobserved"
+                            elif kind == "consumed-report-observation": report["observation"]["checks"] = ["changed observation"]
+                            elif kind == "consumed-report-result": report["outcome"] = "failed"
+                            elif kind == "consumed-report-runtime": admission["runtime"] = "unknown-runtime"
                         elif kind.startswith("worktree-"):
                             cp["worktree"] = {"worktree-list":[None], "worktree-string":"bad", "worktree-integer":1,
                                               "worktree-boolean":True, "worktree-null":None}[kind]
@@ -656,6 +703,22 @@ class DetectionTableTests(HandoffCase):
 
 
 class TransitionTableTests(HandoffCase):
+    def test_consumed_native_observation_survives_handoff_without_rewrite(self):
+        self.establish(); self.settle(self.admission)
+        rows = self.stored()
+        for row in rows:
+            row.pop("executor", None); row.pop("wait", None)
+            if row["id"] == "S1": row.update(state="active", executor="coordinator")
+            elif row["id"] == "O1": row.update(state="waiting", wait={"class":"dependency", "referent":"S1"})
+            else: row.update(state="blocked_external", external={"party":"user", "need":"input", "unblocks_when":"input received"})
+        self.report(self.admission, self.frozen, result_commit=self.candidate, map={"obligations":rows})
+        before = self.state(); observation = deepcopy(before["admissions"][self.admission["admission_id"]]["report"])
+        self.lose(); self.handoff()
+        after = self.state()
+        self.assertEqual(after["admissions"][self.admission["admission_id"]]["report"], observation)
+        self.assert_only_handoff_changes(before, after, completed=True)
+        self.assertEqual(len(self.mutations), 1)
+
     def test_transition_outcome_table_preserves_every_other_field_and_journal(self):
         # A fresh disposable objective for each sibling checks the same state invariant.
         for mode, expected, mutations in (("success", "done", 1), ("refused", "aborted", 1),

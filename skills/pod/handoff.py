@@ -53,7 +53,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
     Unknown membership holds; no record is converted, locked or rewritten.
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
-                         _run_references, objective_root, state_root, kernel_context)
+                         _run_references, objective_root, state_root, closed_snapshot_context)
     from .util import bounded_json
     root = state_root(project)
     if root.is_symlink():
@@ -112,8 +112,8 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
             if supported and closure is not None:
                 from .obligations import validate_closed_snapshot
                 try:
-                    # No peer settlement is inferred: absent native evidence leaves
-                    # bound/reserved/unresolved admissions outstanding in this context.
+                    # Only a complete immutable consumed observation proves past
+                    # settlement for closure; unreported work stays outstanding.
                     from .records import worktree_binding
                     workspace = worktree_binding(checkpoint["worktree"]) if "worktree" in checkpoint else None
                     peer_project = Path(workspace["path"]) if workspace is not None else (
@@ -123,7 +123,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                     if not peer_project.is_dir():
                         raise PodError("closure_unverified", "Peer worktree is unreadable")
                     validate_checkpoint_snapshot(peer_project, raw)
-                    ctx = kernel_context(peer_project, checkpoint["objective"], raw, None)
+                    ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
                     validate_closed_snapshot(checkpoint, ctx)
                 except (PodError, KeyError, TypeError, ValueError, OSError):
                     pass

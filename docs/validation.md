@@ -347,6 +347,11 @@ reader proof comes from the complete bundle archived from merged Git object
 context validator; no reconstructed older parser is used. Original R98 and R15
 incident controls and the full 0.8.0 offline suite stay separate regressions.
 No terminal-show pane or presentation fields enter handoff evidence.
+The closure table also emits completed review peers through real admission and
+report consumption, checks satisfied and withdrawn assurances, and corrupts
+each consumed-report field and its native observation digest. Durable settlement
+is used only for an already recorded closure; ordinary boundary readback and
+unreported bound, reserved and unresolved admissions remain unchanged.
 
 R105 is an authority/governance change: the fresh final independent audit uses
 installed 0.8.0, never candidate 0.8.1 evidence about itself. Corrections receive
