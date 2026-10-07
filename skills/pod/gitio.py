@@ -52,3 +52,21 @@ def name_status_paths(output: str) -> set[str]:
         changed.update(item for item in fields[index + 1:index + 1 + width] if item)
         index += 1 + width
     return changed
+
+
+def require_candidate(root: Path, candidate: object, *, assurance: bool = False) -> None:
+    """Refuse mutable Git names without rewriting the caller's proof identity."""
+    from .errors import PodError
+    from .util import bounded_text
+    bounded_text(candidate, name="candidate", limit=128 if assurance else 512)
+    repository = read(root, ["rev-parse", "--git-dir"])
+    if repository is None:
+        raise PodError("git_unavailable", "Git cannot determine the candidate's repository context")
+    if repository.returncode != 0:
+        return
+    resolved = resolve_commit(root, candidate)
+    if not OBJECT_ID.fullmatch(candidate) or (not assurance and resolved != candidate):
+        raise PodError("obligation_invalid" if assurance else "invalid_checkpoint",
+                       "candidate must be a full Git object id" + (f"; resolves to {resolved}" if resolved else ""),
+                       {"detail": "malformed" if assurance else "candidate_unresolved", "field": "candidate", "resolved": resolved,
+                        "next_action": "restate candidate as its full object id; proof bound to the old text must be reconciled"})

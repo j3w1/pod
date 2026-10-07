@@ -83,16 +83,28 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
         if key in outstanding:
             item["attention"] = _attention(native_rows.get(binding.get("dispatchId")))
         (active if key in outstanding else settled).append(item)
-        native = native_rows.get(binding.get("dispatchId")) if key not in outstanding else None
-        projection = native.get("projection") if isinstance(native, dict) else None
-        liveness = projection.get("liveness") if isinstance(projection, dict) else None
-        if (isinstance(liveness, dict) and liveness.get("verdict") == "live"
-                and native.get("agentTerminalHandle") == binding.get("terminalHandle")
+        facts = (view or {}).get("placements", {}).get(key, {}) if key not in outstanding else {}
+        liveness = facts.get("native_liveness") or {}
+        resource = facts.get("native_release") or {}
+        owned = facts.get("terminal_ownership") or {}
+        terminal_state = facts.get("native_terminal_state") or resource.get("state")
+        if (liveness.get("verdict") == "live" and terminal_state != "released"
+                and facts.get("terminal") == binding.get("terminalHandle")
                 and binding.get("terminalHandle") is not None
-                and native.get("terminalState") != "released"):
+                and (not owned or owned.get("ownerDispatchId") == binding["dispatchId"])):
             retained.append({"admission": key, "dispatch": binding["dispatchId"],
-                             "terminal": binding["terminalHandle"],
-                             "state": native.get("terminalState")})
+                             "terminal": binding["terminalHandle"], "state": terminal_state,
+                             "reason": facts.get("retained_reason")})
+        elif not any(facts.get(field) for field in ("native_liveness", "native_release", "native_terminal_state", "terminal_ownership")):
+            # Older exact receipts omit resource facts; preserve their verified list readback.
+            native = native_rows.get(binding.get("dispatchId")) if key not in outstanding else None
+            projection = native.get("projection") if isinstance(native, dict) else None
+            live = projection.get("liveness") if isinstance(projection, dict) else None
+            if (isinstance(live, dict) and live.get("verdict") == "live"
+                    and native.get("agentTerminalHandle") == binding.get("terminalHandle")
+                    and binding.get("terminalHandle") is not None and native.get("terminalState") != "released"):
+                retained.append({"admission": key, "dispatch": binding["dispatchId"],
+                                 "terminal": binding["terminalHandle"], "state": native.get("terminalState")})
     obligations = map_state.get("obligations", []) if isinstance(map_state, dict) else []
     external = [{"obligation": ob["id"], **ob["external"]} for ob in obligations
                 if ob["state"] == "blocked_external"]
@@ -169,6 +181,10 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             run = current.get("id") if isinstance(current, dict) else None
         except PodError as exc:
             result.update({"status": "unavailable", "blocker": exc.code})
+            if exc.detail:
+                result["detail"] = exc.detail
+            if (exc.detail or {}).get("native_code") == "no_active_sender_terminal":
+                result["next_safe_action"] = "This process is not in a live Orca terminal; Pod records need one. Observe read-only with pod status --objective ID"
             return result
         if run is None:
             return result
@@ -191,8 +207,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         else:
             state = read(project, objective)
             if state is None or not isinstance(state.get("checkpoint"), dict):
+                from .ledger import state_root
                 result.update({"status": "blocked", "blocker": "objective_unknown",
-                               "next_safe_action": "name a recorded objective in this project"})
+                               "next_safe_action": "name a recorded objective in this project",
+                               "objective": objective, "repository_context": str(project),
+                               "state_root_searched": str(state_root(project))})
                 return result
             refs = {row.get("runId") for row in state["checkpoint"].get("native_refs", [])
                     if isinstance(row, dict)}
@@ -205,8 +224,10 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 try:
                     current = current_run_fn().get("run")
                     current_id = current.get("id") if isinstance(current, dict) else None
-                except PodError:
+                except PodError as exc:
                     current_id = None
+                    if exc.detail:
+                        result["detail"] = exc.detail
                 run = current_id if current_id in refs else next(iter(refs)) if len(refs) == 1 else None
             superseded = []
     except PodError as exc:
@@ -220,6 +241,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             workers = worker_rows_fn(run)
         except PodError as exc:
             native_error = exc.code
+            if exc.detail:
+                result["detail"] = exc.detail
             workers = {"workers": [], "scope": None, "complete": False}
     else:
         native_error = "run_unavailable"
@@ -322,6 +345,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         result["next_action"] = result["next_safe_action"]
     elif native_error is not None and "native_settlement_failure" not in result:
         result["next_action"] = "inspect the native Run before deciding worker state"
+    if (result.get("detail") or {}).get("native_code") == "no_active_sender_terminal":
+        result["next_safe_action"] = "This process is not in a live Orca terminal; Pod records need one. Observe read-only with pod status --objective ID"
+        result["next_action"] = result["next_safe_action"]
     return result
 
 
@@ -337,7 +363,7 @@ def render(result: dict) -> None:
         for choice in result.get("choices", []):
             print(f"  Choose {choice['objective']} | {choice['worktree'] or 'unbound'} | "
                   f"seq {choice['seq']} | {choice['state']}")
-        identity = result["bundle_identity"]
+        identity = result.get("bundle_identity", {"checkpoint": None})
         if identity["checkpoint"] is not None:
             print(f"Checkpoint bundle: {identity_label(identity['checkpoint'])}; "
                   f"running: {identity_label(identity['running'])}")
@@ -346,10 +372,14 @@ def render(result: dict) -> None:
                   f"worker {ref['worker'] or 'unknown'} | terminal {ref['terminal'] or 'unavailable'} | "
                   f"tab {ref['tab'] or 'unavailable'} | worktree {ref['worktree'] or 'unverified'} | "
                   f"{ref['state']} | UI visibility/focus unverified")
+            if ref.get("native_release") or ref.get("native_terminal_state") or (ref.get("native_stage") or {}).get("dispatch") == "failed":
+                print(f"    Orca release: {ref.get('native_release')}; terminal state: {ref.get('native_terminal_state')}; Dispatch stage: {ref.get('native_stage')}; retained reason: {ref.get('retained_reason') or 'unknown'}")
             for surface in ref['surfaces']:
                 print(f"    Orca placement surface: {clean(surface)}")
             for warning in ref['warnings']:
-                print(f"    Orca placement warning: {clean(warning)}")
+                print(f"    Orca start-time placement warning: {clean(warning)}")
+        if result.get("state_root_searched"):
+            print(f"Searched objective {result['objective']} in repository context {result['repository_context']}; state root {result['state_root_searched']}")
         for line in result.get("obligation_lines", []):
             print(line)
         if result.get("assignments"):
@@ -367,7 +397,8 @@ def render(result: dict) -> None:
             print(f"Runtime rebind: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
                   f"{clean(entry['at'])} ({entry['provenance']})")
         for terminal in result.get("retained_terminals", []):
-            print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})")
+            print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})"
+                  + (f"; reason: {terminal.get('reason') or 'unknown'}" if "reason" in terminal else ""))
         for line in result.get("progress", []):
             print(f"Progress: {line}")
         if result.get("gates"):

@@ -2407,6 +2407,185 @@
         "tests.test_workspace_state.DeltaAuditRenderTests.test_status_items_keep_their_documented_order_below_twenty_rows"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A222",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.GovernorBoundaryTests.test_decide_marks_only_executable_reservations_and_execute_attaches",
+        "tests.test_issue41.RemainingGovernorTests.test_dispatch_and_rerun_decision_reservations_attach_and_cancel_then_execute",
+        "tests.test_issue41.RemainingGovernorTests.test_cancel_validation_decision_reservation_is_marked_and_attached",
+        "tests.test_issue41.ReleasedWriterTests.test_071_validator_loads_new_marked_journal",
+        "tests.test_issue41_corrections.OfflineOmissionTests.test_every_executable_reservation_cancel_then_executes_exactly_once"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A223",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.GovernorBoundaryTests.test_landed_push_read_failure_is_pass_and_pr_lookup_failure_unknown",
+        "tests.test_issue41.GovernorBoundaryTests.test_effect_and_pull_request_validation_precedes_journal_and_effect",
+        "tests.test_issue41.RemainingGovernorTests.test_mapped_path_effect_refuses_before_journal_and_unknown_effects_explain_syntax"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A224",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.ProofBoundaryTests.test_complete_invalidation_and_explicit_reuse_list_without_new_receipts",
+        "tests.test_issue41.ProofBoundaryTests.test_scope_shape_and_definition_binding",
+        "tests.test_issue41.RemainingProofTests.test_one_refusal_classifies_candidate_definition_binding_and_governance_failures",
+        "tests.test_issue41.RemainingProofTests.test_report_expands_explicit_reuse_list_without_a_new_receipt",
+        "tests.test_issue41.RemainingProofTests.test_ordinary_proof_scope_revision_invalidates_proof_and_restated_map_succeeds",
+        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_still_refuses_an_unreadable_delta",
+        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_all_invalid_satisfied_rows_include_correction_siblings_and_overflow",
+        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_report_collects_open_corrections_and_other_invalid_proof_atomically",
+        "tests.test_issue41_corrections.InvalidationCorrectionTests.test_satisfied_invalidation_table_accounts_for_every_proof_state"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A225",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.FindingBoundaryTests.test_shared_correction_preserves_ids_severity_and_resolution",
+        "tests.test_issue41.FindingBoundaryTests.test_grouped_findings_preserve_all_ids_and_replay_without_regrouping",
+        "tests.test_issue41.AdditionalFindingTests.test_findings_and_correction_id_bounds_refuse_without_eviction"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A226",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.StorageBoundaryTests.test_oversized_checkpoint_is_atomic_and_names_sizes_and_sections",
+        "tests.test_issue41.StorageBoundaryTests.test_objective_governor_and_native_start_records_are_compact_and_old_indent_reads"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A227",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_kernel_fields_and_vocabulary_never_echo_values",
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_every_bare_kernel_refusal_has_an_explicit_referent",
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_wait_refusal_lists_all_dependents_and_retry_restates_them_once",
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_admission_refusal_names_update_and_same_task_recovery",
+        "tests.test_issue41.RemainingDiagnosticsTests.test_known_obligation_field_diagnostics_and_remaining_exact_record_shapes",
+        "tests.test_issue41.FinalDiagnosticShapesTests.test_cycle_refusal_lists_every_affected_dependent",
+        "tests.test_issue41.FinalDiagnosticShapesTests.test_disposition_exact_fields_are_named_without_values",
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_nested_refusals_keep_known_obligation_and_hide_refused_values",
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_review_record_siblings_keep_known_assurance_and_hide_refused_values",
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_kernel_operation_tags_preserve_codes_details_and_first_referents"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A228",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.ProofBoundaryTests.test_brief_uses_same_candidate_and_verification_without_writes",
+        "tests.test_issue41_corrections.IntakeCorrectionTests.test_malformed_brief_inputs_keep_kernel_identity_before_candidate_scan"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A229",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.ReleasedWriterTests.test_genuine_full_id_071_proof_survives_checkpoint_and_report",
+        "tests.test_issue41.ReleasedWriterTests.test_genuine_abbreviated_071_proof_is_listed_on_full_id_restatement",
+        "tests.test_issue41.RemainingDiagnosticsTests.test_non_git_candidates_keep_bounded_text",
+        "tests.test_issue41.FinalDiagnosticShapesTests.test_assurance_proof_scope_and_nonfull_candidate_refuse"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A230",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_status_projects_released_worker_and_start_time_warnings_from_exact_read",
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_status_blocked_branches_render_without_tracebacks",
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_retained_and_live_owned_terminals_use_current_exact_resource_facts",
+        "tests.test_issue41_corrections.OfflineOmissionTests.test_status_state_read_error_and_released_superseded_entries_are_read_only"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A231",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_issue41.DiagnosticsBoundaryTests.test_placement_corrections_name_placement_and_isolated_assignment_admits",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A232",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_displaced_run_and_nonowner_diagnostics_preserve_authority",
+        "tests.test_issue41.DiagnosticsBoundaryTests.test_native_code_is_bounded_and_native_message_is_never_copied",
+        "tests.test_issue41.RemainingDiagnosticsTests.test_failed_outside_terminal_intake_has_native_cause_and_observation_remains_available",
+        "tests.test_issue41.RemainingDiagnosticsTests.test_ambiguous_continuity_nonowner_has_no_owner_route_and_no_write"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A233",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_inventory.InventoryIntegrityTests.test_repository_owned_validator_checks_the_actual_canonical_skill",
+        "tests.test_issue41.GuidanceBudgetTests.test_actual_guidance_has_effective_headroom_and_all_four_rules"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

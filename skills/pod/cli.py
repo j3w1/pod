@@ -343,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result.get("projection", result) if args.command == "models"
                          and getattr(args, "models_command", None) is None and result["status"] != "blocked"
                          else result, sort_keys=True, ensure_ascii=False))
-    elif result["status"] == "blocked":
+    elif result["status"] == "blocked" and "error" in result:
         print(f"pod: {result['error']['code']}: {result['error']['message']}")
     elif args.command in (None, "models"):
         action = getattr(args, "models_command", None)

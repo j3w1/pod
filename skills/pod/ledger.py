@@ -197,7 +197,7 @@ def read(project: Path, objective: str) -> dict | None:
 def _write(path: Path, value: dict) -> None:
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value, limit=CONTEXT_LIMIT)
+    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
 
 
 def _run_references(state: dict) -> dict[str, str]:
@@ -237,7 +237,7 @@ def require_authority(project: Path, objective: str, *, owner: str,
     locked = state is not None
     state = _read(_path(project, objective)) if state is None else state
     if state["owner"] not in (None, owner):
-        raise PodError("native_authority_unverified", "Objective belongs to another coordinator")
+        raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
     refs = _run_references(state)
     if len(set(refs.values())) > 1:
         raise PodError("native_authority_unverified", "Objective Run references span runtimes")
@@ -277,11 +277,25 @@ def require_authority(project: Path, objective: str, *, owner: str,
     if (native.get("authoritative") is not True or native.get("owner") != owner
             or native.get("scope") != "objective_assignments" or native.get("complete") is not True
             or native.get("runtime") not in set(refs.values())):
-        raise PodError("native_authority_unverified", "Current native Run does not own this objective")
+        raise PodError("native_authority_unverified", authority_message(state, native, owner))
     if any(refs[key] != native["runtime"] for key in selected):
         raise PodError("native_authority_unverified", "Objective Run runtime changed")
     return {"runtime": native["runtime"], "run_id": run_id or next(iter(refs)),
             "native": native, "references": refs, "continuity": continuity}
+
+
+def authority_message(state: dict, native: dict, owner: str) -> str:
+    """Diagnose the already observed authority; never grant a new route."""
+    recorded_owner = state.get("owner")
+    if native.get("caller") != recorded_owner or owner != recorded_owner:
+        return "Caller is not the recorded owner; return to that coordinator; no runtime-continuity route is available to this caller"
+    refs = _run_references(state)
+    if native.get("runtime") not in refs.values():
+        return "Objective runtime changed; reconcile the recorded runtime before authority can join"
+    binding = native.get("binding")
+    if isinstance(binding, dict) and binding.get("id") not in refs and len(refs) == 1:
+        return "Current native Run does not own this objective; select its Run with orca orchestration run-use --id " + next(iter(refs))
+    return "Current native Run does not own this objective; recorded coordinator binding is unavailable or differs"
 
 
 # --------------------------------------------------------------------------- runtime continuity (A2)
@@ -418,7 +432,8 @@ def classify_continuity(state: dict, *, owner: str, current: dict, port) -> dict
     return {"classification": "disproven" if differs else "ambiguous" if unreadable else "proven",
             "recorded_runtime": recorded_runtime, "current_runtime": runtime,
             "differs": differs, "ambiguity": unreadable, "verified": verified,
-            "binding": run if isinstance(run, dict) else None}
+            "binding": run if isinstance(run, dict) else None,
+            "caller_is_owner": current.get("caller") == state.get("owner") == owner}
 
 
 def _apply_continuity(state: dict, verdict: dict, *, provenance: str, decision: dict | None = None) -> dict:
@@ -450,6 +465,11 @@ def _apply_continuity(state: dict, verdict: dict, *, provenance: str, decision: 
 
 
 def _ambiguous(objective: str, verdict: dict) -> PodError:
+    if verdict.get("caller_is_owner") is False:
+        return PodError("runtime_continuity_ambiguous", "Caller is not the recorded owner; continuity is unproven and this caller cannot use internal runtime-continuity",
+                        {"objective": objective, "recorded_runtime": verdict["recorded_runtime"],
+                         "current_runtime": verdict["current_runtime"], "ambiguity": verdict["ambiguity"],
+                         "next_action": "return to the recorded coordinator"})
     named = "; ".join(verdict["ambiguity"][:3])
     more = len(verdict["ambiguity"]) - 3
     return PodError(
@@ -536,14 +556,14 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
     with _lock(path):
         state = _read(path)
         if state["owner"] != owner or state.get("checkpoint") is None:
-            raise PodError("native_authority_unverified", "Objective belongs to another coordinator")
+            raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
         _require_open(state)
         refs = _run_references(state)
         if len(set(refs.values())) != 1:
             raise PodError("native_authority_unverified", "Objective Run references span runtimes")
         current = port.read_native(owner, authority_runs=tuple(sorted(refs)))
         if current.get("caller") != owner or "binding" not in current:
-            raise PodError("native_authority_unverified", "The decision must come through the objective's coordinator")
+            raise PodError("native_authority_unverified", "Caller is not the recorded owner; the decision must come through the objective coordinator")
         if current.get("runtime") in refs.values():
             raise mismatch("the Orca runtime has not changed")
         verdict = classify_continuity(state, owner=owner, current=current, port=port)
@@ -794,6 +814,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
     from .records import source_identity
     from .selection import worker_ceiling
     from .governor import objective_delivery_reporting
+    from .gitio import require_candidate
     checkpoint_value = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
     snapshot = load(project)
     ceiling = worker_ceiling(snapshot, state.get("constraints", [])) if not snapshot["errors"] else 0
@@ -834,6 +855,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "governor_pending": _governor_pending(project, objective),
             "governor_delivery": objective_delivery_reporting(project, objective),
             "git_delta": lambda source, target: git_delta(project, source, target),
+            "candidate_check": lambda candidate: require_candidate(project, candidate, assurance=True),
             "is_ancestor": lambda commit, target: git_is_ancestor(project, commit, target)}
 
 
@@ -971,6 +993,14 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
             or any(not isinstance(item, str) or not item for item in value["criteria"])
             or not isinstance(value["candidate"], str) or not value["candidate"]):
         raise PodError("invalid_checkpoint", "Checkpoint criteria and candidate are bounded text")
+    from .gitio import require_candidate
+    try:
+        require_candidate(project, value["candidate"])
+    except PodError as exc:
+        if (previous and exc.code == "invalid_checkpoint" and isinstance(exc.detail, dict)
+                and exc.detail.get("resolved") is None):
+            exc.detail["detail"] = "candidate_identity_unavailable"
+        raise
     value = {**value, "policy_revision": effective(project)["revision"]}
     if "objective" in value and value["objective"] != objective:
         raise PodError("invalid_checkpoint", "Checkpoint objective differs from its state key")
@@ -986,7 +1016,7 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     core = {key: item for key, item in value.items() if key not in MAP_INPUT}
     dispositions = proposed.pop("dispositions", [])
     if not isinstance(dispositions, list) or len(dispositions) > 16:
-        raise refuse("obligation_unaccounted", "disposition_invalid", "dispositions are a bounded list")
+        raise refuse("obligation_unaccounted", "disposition_invalid", "dispositions are a bounded list", record='checkpoint')
     return core, proposed, dispositions
 
 
@@ -1063,7 +1093,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if dispositions:
             if prior_map is None:
                 raise refuse("obligation_unaccounted", "disposition_invalid",
-                             "dispositions follow admissions under a map")
+                             "dispositions follow admissions under a map", record='checkpoint map transition')
             if prior_map.get("closure"):
                 raise refuse("objective_closed", "objective_closed", "the objective is closed",
                              closure_revision=prior_map["closure"]["revision"])
@@ -1072,7 +1102,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                 row = state["admissions"].get(key) if isinstance(key, str) else None
                 if row is None:
                     raise refuse("obligation_unaccounted", "disposition_invalid",
-                                 "a disposition names a recorded admission")
+                                 "a disposition names a recorded admission", record='checkpoint map transition')
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
         map_state = accept_write(prior_map, proposed, ctx)
         if verified_delivery is not None:
@@ -1098,7 +1128,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             _map_refusal_context(exc, state)
             raise
         if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+            raise PodError("coordinator_conflict", "Caller is not the recorded owner; another coordinator owns this objective")
         recorded_refs = {(row["runId"], row["runtime"]) for row in previous.get("native_refs", [])
                          if isinstance(row, dict)}
         authority = require_authority(project, objective, owner=owner, state=state,
@@ -1336,7 +1366,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
     with _lock(path):
         state = _read(path)
         if state["owner"] not in (None, owner):
-            raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+            raise PodError("coordinator_conflict", "Caller is not the recorded owner; another coordinator owns this objective")
         refs = _run_references(state)
         if run_id not in refs:
             raise PodError("native_authority_unverified", "Admission Run is not an exact objective reference")
@@ -1354,7 +1384,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         map_state = map_of(state)
         if map_state is None:
             from .obligations import refuse
-            raise refuse("unbound_assignment", "no_map", "delegation needs an obligation map first")
+            raise refuse("unbound_assignment", "no_map", "delegation needs an obligation map first", record='reserve')
         from .bundle import require_current_identity
         require_current_identity(state.get("checkpoint"))
         # New worker admission reads through its own native reader; a changed runtime is
@@ -1377,7 +1407,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         if (native.get("authoritative") is not True or native.get("owner") != owner
                 or native.get("scope") != "objective_assignments" or native.get("complete") is not True
                 or not isinstance(native.get("runtime"), str)):
-            raise PodError("native_authority_unverified", "Admission lacks stable native Run authority")
+            raise PodError("native_authority_unverified", authority_message(state, native, owner))
         if native["runtime"] != expected_runtime:
             raise PodError("orca_runtime_changed", "Launch capability and native authority changed runtime")
         if native["runtime"] != refs[run_id]:
@@ -1519,7 +1549,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             raise PodError("native_authority_unverified", "Report identity was read at another runtime")
         map_state = map_of(state)
         if map_state is None:
-            raise refuse("unbound_assignment", "no_map", "a report joins an obligation map")
+            raise refuse("unbound_assignment", "no_map", "a report joins an obligation map", record='consume report')
         _require_open(state)
         ctx = kernel_context(project, objective, state, authority.get("native"))
         settled = admission_id not in ctx["outstanding"]
@@ -1556,6 +1586,11 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         try:
             value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
                                     admission_id=admission_id)
+            if (prior_report is not None and not accompanying and value.get("obligations") == map_state["obligations"]
+                    and value.get("proposals") == map_state["proposals"]):
+                return {"ingestion": _stored_ingestion(row), "settled": True,
+                        "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
+                        "report": report_projection(map_state, ctx)}
             new_map = accept_write(map_state, value, ctx, triaged=triaged)
         except PodError as exc:
             _map_refusal_context(exc, state)

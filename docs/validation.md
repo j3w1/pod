@@ -1,4 +1,4 @@
-# 0.7.1 verification contract
+# 0.8.0 verification contract
 
  Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
@@ -77,7 +77,7 @@ Live Codex and Claude trials additionally exercise A143, A150, A158 and A159
 in disposable objectives. A missing live case remains `NOT_RUN`. Stage-1
 review is the fresh final independent audit under the mechanism installed
 before the change; for 0.7.0 that is installed 0.6.7, and for the 0.7.1 routing-guidance
-correction it is installed 0.7.0. For 0.7.0, preference/pin
+correction it is installed 0.7.0; for 0.8.0 A2/A3/A4/A8 it is installed 0.7.1. For 0.7.0, preference/pin
 precedence, trust separation and the preference cutover are reviewed as
 governance changes. After merge and installation, a separate disposable
 objective on the new version records an assurance obligation, review attempt,
@@ -318,3 +318,21 @@ and exact effective-route/request evidence. Routine questions, preference
 changes before and after dispatch, Delivery order and continuation are observed.
 Rate limits, lost replies, safety refusals and provider prompts remain
 `NOT_RUN` unless genuinely observed; offline fixtures are labeled separately.
+
+
+The 0.8.0 production offline matrix is `tests.test_issue41`. It exercises A222–A233
+through internal, status and doctor entrypoints in disposable Git projects,
+replacing only Orca/GitHub ports. Genuine 0.7.1 records are emitted at test time
+by the archived Git-object writer described in
+`tests/fixtures/pod-0.7.1/provenance.md`; restored records are byte copies, not
+hand-edited approximations. The full-id proof fixture includes criterion,
+subgoal, correction with its old finding shape, and assurance. Its abbreviated
+counterpart invalidates proof on full-id restatement. The old journal validator
+also reads the new reservation marker. These are offline compatibility facts,
+not live native or self-hosting review evidence.
+
+Authoring keeps SKILL at most 748 words, leaving two words of formal 750-word
+validator headroom for the unchanged duplicate-VERSION guard. The production
+matrix checks that effective budget, each 700-word reference and their combined
+2,200-word bound. Independent 0.8.0 audit remains under installed 0.7.1; A2,
+A3, A4 and A8 receive admission/assurance scrutiny before acceptance.

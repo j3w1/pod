@@ -349,7 +349,7 @@ class RepositoryAndIssueTests(unittest.TestCase):
             self.assertEqual(effective(worktree)["policy"]["waste_governor"]["transient_retries"], 0)
 
             value = {"schema": "pod-checkpoint/v3", "criteria": ["works"],
-                     "plan_revision": "plan", "candidate": "candidate",
+                     "plan_revision": "plan", "candidate": subprocess.run(["git", "-C", str(main), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip(),
                      "policy_revision": effective(main)["revision"], "native_refs": [], "assignments": [],
                      "questions": [], "verification_gaps": ["works"],
                      "next_safe_action": "continue"}

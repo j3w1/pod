@@ -24,7 +24,7 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     state = read(project, objective)
     if mutating and (state is None or state.get("owner") != owner):
         raise PodError("native_authority_unverified",
-                       "Governor mutation does not own this Pod objective context")
+                       "Caller is not the recorded owner; Governor mutation does not own this Pod objective context")
     if mutating:
         from .ledger import _require_open
         _require_open(state)
@@ -59,8 +59,8 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
             or projection.get("authoritative") is not True
             or projection.get("owner") != owner
             or projection.get("runtime") != native.get("runtime")):
-        raise PodError("native_authority_unverified",
-                       "Governor mutation requires the current native objective owner")
+        from .ledger import authority_message
+        raise PodError("native_authority_unverified", authority_message(state, native, owner))
     if not authority_runs or any(runtime != native["runtime"] for runtime in runtimes):
         raise PodError("native_authority_unverified",
                        "Governor evidence belongs to another Orca Run or runtime")
@@ -94,7 +94,7 @@ def _governor_references(state: dict | None) -> tuple[set[str], set[object], tup
 
 
 def _op_brief(request: dict) -> dict:
-    exact(request, {"criteria", "coverage", "map", "project"}, {"criteria", "coverage"}, name="request")
+    exact(request, {"criteria", "coverage", "map", "project", "candidate", "verification"}, {"criteria", "coverage"}, name="request")
     brief = execution_brief(request["criteria"], request["coverage"])
     # An execution brief engages the kernel: it always carries a validated draft map.
     # Validation is read-only (Git reads at the declared base), so Plan Mode can use it.
@@ -110,9 +110,20 @@ def _op_brief(request: dict) -> dict:
             user_direct=user_direct_revision(authority))
     else:
         observed = {"status": "no_repository"} if base_ref is None else {"status": "unavailable"}
-    brief["map"] = brief_map(request["criteria"], request.get("map"),
-                             {"governance": observed, "admissions": {}, "outstanding": [],
-                              "ceiling": 0, "delegation": "unknown", "constraints": []})
+    facts = {"governance": observed, "admissions": {}, "outstanding": [],
+             "ceiling": 0, "delegation": "unknown", "constraints": [],
+             "candidate": request.get("candidate"), "verification": request.get("verification")}
+    if "project" in request:
+        from .ledger import kernel_context, validate_verification
+        from .gitio import require_candidate
+        project = Path(request["project"])
+        if "candidate" in request:
+            require_candidate(project, request["candidate"])
+        verification = validate_verification(request["verification"]) if "verification" in request else None
+        facts = kernel_context(project, "brief", {"admissions": {}}, None,
+                               candidate=request.get("candidate"), criteria=request["criteria"],
+                               governance=observed, verification=verification)
+    brief["map"] = brief_map(request["criteria"], request.get("map"), facts)
     return brief
 
 
@@ -307,7 +318,7 @@ def _op_route_failure(request: dict) -> dict:
 
 
 def _op_governor(request: dict) -> dict:
-    exact(request, {"project", "objective", "owner", "action", "exception"},
+    exact(request, {"project", "objective", "owner", "action", "exception", "pull_request"},
           {"project", "objective", "owner", "action"}, name="request")
     from .governor import decide
     project = Path(request["project"])
@@ -315,7 +326,7 @@ def _op_governor(request: dict) -> dict:
                                       mutating=True)
     return decide(project, request["objective"], owner=request["owner"],
                   action=request["action"], exception=request.get("exception"),
-                  native_projection=projection)
+                  native_projection=projection, pull_request=request.get("pull_request"))
 
 
 def _op_governor_outcome(request: dict) -> dict:
@@ -506,6 +517,14 @@ def run(operation: str, request: dict) -> dict:
         exc.detail = {**(exc.detail or {}), "operation": operation}
         raise
     except PodError as exc:
+        if isinstance(exc.detail, dict) and isinstance(exc.detail.get("referent"), dict):
+            exc.args = (f"internal {operation}: {exc}",)
+            exc.detail = {**exc.detail, "operation": operation}
+        if operation == "admission" and isinstance(request, dict) and request.get("project") and request.get("objective") and request.get("task"):
+            from .ledger import read
+            state = read(Path(request["project"]), request["objective"])
+            if not any(row.get("task_id") == request["task"] for row in (state or {}).get("admissions", {}).values()):
+                exc.args = (str(exc) + "; after fixing this refusal the same Task can be admitted again; settle unused Tasks through Orca",)
         # A rebind is recorded before the mutation's own checks; a later refusal still reports it.
         if events.get() and (exc.detail is None or isinstance(exc.detail, dict)):
             exc.detail = {**(exc.detail or {}), "runtime_continuity": events.get()}

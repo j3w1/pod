@@ -36,7 +36,7 @@ class ProofIntegrityBoundaryTests(KernelCase):
     def test_c06_checkpoint_cannot_erase_accepted_review_or_start_repeat(self):
         self.satisfied()
         before = read(self.project, "objective")
-        for metadata in ({}, {"candidate": "changed-metadata"}, {"receipts": []}):
+        for metadata in ({}, {"candidate": "f" * 40}, {"receipts": []}):
             rows = self.waiting()
             next(row for row in rows if row["id"] == "A").update(metadata)
             self.refused("obligation_unaccounted", "assurance_still_bound", self.write, rows)
@@ -158,7 +158,7 @@ class ProofIntegrityBoundaryTests(KernelCase):
         self.satisfied()
         rows = deepcopy(self.stored())
         original = next(row for row in rows if row["id"] == "A")
-        original["candidate"] = "metadata-cannot-hide-the-current-binding"
+        original["candidate"] = "f" * 40
         second = {**original, "id": "A2", "candidate": self.candidate, "question": "concurrent access?",
                   "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
         for key in ("evidence", "receipts", "introduced_seq"):

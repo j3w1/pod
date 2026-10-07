@@ -8,9 +8,9 @@ Governor mutation requires this terminal's stable native current Run, referenced
 
 Group corrections in one delivery unit. `internal governor-prepare` names its Tasks, branch, base, workflows and checks; it freezes commit, tree, base, workflow digests, toolchain, environment and policy. Changed inputs open a generation. `internal governor-preflight` records configured local checks. Project preflight names checks and triggers map effects. A CI-triggering push is validation. Tracked dirt leaves the candidate unfrozen.
 
-Before each push, PR update, workflow dispatch, rerun, diagnostic, merge, release, deployment or cancellation, ask Governor: `ALLOW` permits the exact action, `REUSE` attaches equivalent work/proof, `DEFER` names a hold. It checks authority, candidate/effects, equivalent work, supersedence, readiness and failures. Gates, validation and read-only review of one frozen candidate may overlap; review need not precede CI; merge/release/deploy waits for all valid results.
+Call `internal governor-execute` directly for executable kinds: push, PR update, workflow dispatch, rerun, diagnostic and cancellation. `internal governor` reserves an action you perform yourself; `ALLOW` permits it, `REUSE` attaches work/proof, `DEFER` names a hold. Gates, validation and read-only review of one frozen candidate may overlap; review need not precede CI; merge/release/deploy waits for all valid results.
 
-`internal governor-execute` performs supported push, PR, workflow, rerun and cancellation actions against the bound commit. A prior reservation must not be duplicated. Merge, release and deployment remain project-governed. A lost response stays `UNKNOWN`; `internal governor-reconcile` reads provider state without resubmission. Publication records triggered validation.
+Execution uses the bound commit. Merge, release and deployment remain decide-only and project-governed. A lost response stays `UNKNOWN`; `internal governor-reconcile` reads provider state without resubmission. Publication records triggered validation.
 
 ## One delivery decision
 

@@ -34,9 +34,9 @@ Serialize admission under the objective lock, recording one logical reservation 
 
 ### R29 — Establish one authoritative coordinator per objective
 
-Type: H · Scenarios: [A21](coordination.md#a21), [A31](coordination.md#a31), [A60](#a60), [A195](#a195), [A196](#a196), [A197](#a197)
+Type: H · Scenarios: [A21](coordination.md#a21), [A31](coordination.md#a31), [A60](#a60), [A195](#a195), [A196](#a196), [A197](#a197), [A232](#a232)
 
-Establish one authoritative coordinator per objective. Adoption reconciles pending effects/native authority before dispatch. Before Governor preparation, admission, execution or any journal mutation, join the caller's stable native current-Run binding (Run, coordinator handle and consumer generation) to that objective's exact native references, runtime and existing Pod owner; each authority-joining checkpoint records the generation it observed. Terminal self-identity alone is not authority; a missing, unrelated, changed, worker-only or takeover binding blocks. A changed runtime alone joins only through the runtime-continuity rebind of R98. Failed authority still permits read-only diagnosis/status and safe direct work. A local lock is not distributed fencing; never manufacture a replacement controller or silently create/adopt a Run.
+Establish one authoritative coordinator per objective. Adoption reconciles pending effects/native authority before dispatch. Before Governor preparation, admission, execution or any journal mutation, join the caller's stable native current-Run binding (Run, coordinator handle and consumer generation) to that objective's exact native references, runtime and existing Pod owner; each authority-joining checkpoint records the generation it observed. Terminal self-identity alone is not authority; a missing, unrelated, changed, worker-only or takeover binding blocks. A changed runtime alone joins only through the runtime-continuity rebind of R98. Failed authority still permits read-only diagnosis/status and safe direct work. Diagnose a displaced Run with its exact run-use command only for the recorded owner on the same runtime; other callers are told they are not that owner and receive no Owner continuity route. Failed native reads carry only a syntactically bounded native code; outside a live Orca terminal they name the cause and read-only objective status alternative. A local lock is not distributed fencing; never manufacture a replacement controller or silently create/adopt a Run.
 
 ### R35 — Use Orca-native messaging/events and blocking waits
 
@@ -58,9 +58,9 @@ Worker reuse, retention, release and terminal/resource disposition are explicit 
 
 ### R44 — Persist compact pod-context/v4 policy and evidence
 
-Type: I,H · Scenarios: [A31](coordination.md#a31), [A35](coordination.md#a35), [A39](../pod-spec.md#a39), [A69](#a69), [A96](#a96), [A132](#a132), [A161](#a161)
+Type: I,H · Scenarios: [A31](coordination.md#a31), [A35](coordination.md#a35), [A39](../pod-spec.md#a39), [A69](#a69), [A96](#a96), [A132](#a132), [A161](#a161), [A226](#a226)
 
-Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`, `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` contracts. Another schema is reported and blocks only its objective (R90); nothing converts it. Keep native ids as references, never copied lifecycle state, and keep private data out of Git.
+Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`, `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` contracts. Another schema is reported and blocks only its objective (R90); nothing converts it. Objective context, Governor and native-start observation files use compact canonical JSON at unchanged byte limits; cache formatting is unchanged. Indented older records read unchanged. Oversize refusals report current/proposed sizes, limit and largest sections before any write. Optional fields stay within existing schemas without conversion; genuine 0.7.1 proof at full-id candidates remains valid. Keep native ids as references, never copied lifecycle state, and keep private data out of Git.
 
 ### R45 — Recovery selects the objective and reads
 
@@ -76,9 +76,9 @@ Use installed Orca guidance and operation-specific capabilities. Native launch p
 
 ### R66 — Before implementation select or create the
 
-Type: B,H · Scenarios: [A105](#a105), [A106](#a106)
+Type: B,H · Scenarios: [A105](#a105), [A106](#a106), [A231](#a231)
 
-Before implementation select or create the exact Orca-managed objective worktree. A new objective worktree explicitly requests branch `orca/<task-slug>` from the host or native creation mechanism instead of accepting its default; a reused objective worktree keeps its branch, and assignment isolation follows Orca placement. Bind actual Git repository/common-dir, branch and path separately from display labels; reuse only the same objective; preserve dirty/colliding work. Resolve every native start/replay selector to the frozen objective or separately authorized assignment-isolation placement before effect. Resolve state across linked worktrees and apply canonical private project policy plus worktree restrictions restrictively without copying private files. Native/host mechanisms own creation/removal.
+Before implementation select or create the exact Orca-managed objective worktree. A new objective worktree explicitly requests branch `orca/<task-slug>` from the host or native creation mechanism instead of accepting its default; a reused objective worktree keeps its branch, and assignment isolation follows Orca placement. Concurrent writers use per-assignment `placement` worktrees and integrate by merge to preserve ancestry; placement refusals name this correction. Bind actual Git repository/common-dir, branch and path separately from display labels; reuse only the same objective; preserve dirty/colliding work. Resolve every native start/replay selector to the frozen objective or separately authorized assignment-isolation placement before effect. Resolve state across linked worktrees and apply canonical private project policy plus worktree restrictions restrictively without copying private files. Native/host mechanisms own creation/removal.
 
 ### R67 — Normal delegated workers use native worker-start
 
@@ -144,6 +144,12 @@ When an objective's recorded runtime differs from the current one, each mutating
 - <a id="a198"></a>**A198** — An unchanged runtime runs no continuity path and status never rebinds. A rebind issues no worker start, request replay, Run creation, adoption or owner change, and a rebind past the history bound refuses without a write. A bind whose worker read preceded a runtime change that destroyed its Dispatch refuses `native_authority_unverified`, leaving the row reserved and unbound, whether its own join or another call would rebind; a report whose identity read preceded another call's rebind refuses the same way without consuming; and a Governor reconcile writes its rebind under the objective lock. For a reserved admission whose lookup finds a Dispatch, the Owner's rebind leaves it reserved and unbound, and a separate recovery call binds the single matching Dispatch.
 - <a id="a199"></a>**A199** — Sanitized incidents: an R17-shaped objective whose post-update checkpoint recorded its generation rebinds as proven, and R15's changed coordinator fails closed.
 
+
+- <a id="a226"></a>**A226** — Checkpoint, Governor and native-start objective records write compact canonical JSON, while old indented records read and evidence digests remain unchanged. An oversized write reports current/proposed bytes, limit and largest sections and preserves the file and all other records; observation-cache formatting is unchanged.
+
+- <a id="a231"></a>**A231** — An off-objective packet worktree or a child selector without assignment placement refuses worktree_binding_changed with the placement correction; an explicitly isolated placement admits under unchanged ownership and attribution rules.
+
+- <a id="a232"></a>**A232** — Failed Orca reads retain only a bounded native code, never native message text. Missing terminal identity names live-terminal requirements and read-only alternatives. Only the recorded owner on the same runtime gets a displaced-Run run-use hint; other callers receive the real ownership cause and no Owner continuity route. Codes and authority outcomes are unchanged.
 
 ## Structured contracts
 
