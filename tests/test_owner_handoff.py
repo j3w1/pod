@@ -238,6 +238,93 @@ class DetectionTableTests(HandoffCase):
             self.handoff(decision)
         self.assertEqual(self.state()["admissions"][self.admission["admission_id"]]["state"], "bound")
 
+    def test_successful_nonlive_caller_shapes_keep_authority_codes_and_no_effects(self):
+        self.establish(); self.lose(); original = self.native_read
+        rows = [("connected", False), ("writable", False), ("orphaned", True),
+                ("handle", "different"), ("terminal", None), ("terminal", {})]
+        for field, value in rows:
+            def read_port(argv, **kwargs):
+                result = original(argv, **kwargs)
+                if argv[:2] == ["terminal", "show"] and argv[3] == "next":
+                    if field == "terminal": result["result"]["terminal"] = value
+                    else: result["result"]["terminal"][field] = value
+                return result
+            with self.subTest(field=field, value=value), patch("pod.orca.read_command", side_effect=read_port):
+                before = self.snapshot()
+                from pod.orca import terminal_identity
+                self.assertIsNone(terminal_identity("next")["code"])
+                self.assertEqual(self.status()["owner_handoff"]["condition"], "caller_not_live")
+                self.assertIn("did not prove liveness", self.status(text=True))
+                for supplied in ("owner", "next"):
+                    for boundary, call in self.boundary_calls(supplied).items():
+                        with self.subTest(boundary=boundary, supplied=supplied):
+                            error = self.refused(call)
+                            expected = "coordinator_conflict" if boundary in ("checkpoint", "admission") and supplied != "owner" else "native_authority_unverified"
+                            self.assertEqual(error.code, expected)
+                            self.assertEqual(error.detail["owner_handoff"]["condition"], "caller_not_live")
+                self.assertEqual(before, self.snapshot()); self.assertEqual(self.mutations, [])
+
+    def test_absent_caller_stays_absent_at_every_boundary(self):
+        self.establish(); self.lose(); os.environ.pop("ORCA_TERMINAL_HANDLE")
+        before = self.snapshot()
+        self.assertEqual(self.status()["owner_handoff"]["condition"], "caller_not_live")
+        self.assertIn("not in a live Orca terminal", self.status(text=True))
+        for call in self.boundary_calls("owner").values():
+            error = self.refused(call, code="native_authority_unverified")
+            self.assertEqual(error.detail["owner_handoff"]["condition"], "caller_not_live")
+        self.assertEqual(before, self.snapshot()); self.assertEqual(self.mutations, [])
+
+    def test_scope_barrier_accounts_for_record_shape_and_closure(self):
+        # Corrupt/opaque inputs are explicitly adversarial controls, not older-writer evidence.
+        cases = ("supported-open", "supported-closed", "corrupt-revision", "opaque-schema", "invalid-json", "foreign-run", "corrupt-closure", "unsupported-closed")
+        for kind in cases:
+            case = HandoffCase(); case.setUp()
+            try:
+                with self.subTest(kind=kind):
+                    case.establish()
+                    obligations = [case.criterion()]
+                    extra = {}
+                    if kind in ("supported-closed", "corrupt-closure", "unsupported-closed"):
+                        obligations = [case.criterion("satisfied", evidence=[case.proof("O1")])]; extra["close"] = True
+                    saved = deepcopy(case.current)
+                    if kind == "foreign-run": case.current.update(id="foreign-run")
+                    run("checkpoint", {"project":str(case.project), "objective":"scope-objective", "owner":"owner",
+                        "value":case.core(obligations=obligations, governance={"base_ref":"refs/remotes/origin/target"}, **extra)})
+                    case.current = saved
+                    other = objective_root(case.project, "scope-objective") / "context.json"
+                    if kind in ("corrupt-revision", "opaque-schema", "corrupt-closure", "unsupported-closed"):
+                        raw = json.loads(other.read_text())
+                        if kind == "corrupt-revision": raw["revision"] = "corrupted"
+                        elif kind == "corrupt-closure": raw["checkpoint"]["closure"]["report"]["status"] = "unverified"
+                        else: raw["schema"] = "unknown-future-context"
+                        other.write_text(json.dumps(raw))
+                    elif kind == "invalid-json": other.write_text("truncated{")
+                    case.lose(); before = case.snapshot(); detected = case.status()["owner_handoff"]
+                    if kind in ("supported-closed", "foreign-run"):
+                        self.assertEqual(detected["status"], "handoff_available")
+                        case.handoff()
+                    else:
+                        expected = "scope_unreadable" if kind == "invalid-json" else "run_shared"
+                        self.assertEqual(detected["condition"], expected)
+                        text = case.status(text=True)
+                        self.assertIn(expected, text)
+                        if expected == "run_shared": self.assertIn("scope-objective", text)
+                        case.refused(lambda:case.handoff())
+                        self.assertEqual(before, case.snapshot()); self.assertEqual(case.mutations, [])
+                    self.assertEqual(other.read_bytes(), before[str(other.relative_to(case.root / "state"))])
+            finally: case.doCleanups()
+
+    def test_text_status_names_binding_cause_and_available_ambiguity(self):
+        self.establish(); self.lose(); self.current = None
+        self.assertIn("no stable current Run binding", self.status(text=True))
+        self.current = {"id":"run", "coordinator_handle":"owner", "consumer_generation":1}
+        with patch.object(OrcaPort, "show_worker", side_effect=PodError("orca_unavailable", "read unavailable")):
+            text = self.status(text=True)
+            self.assertIn("Ambiguity:", text)
+            self.assertIn("worker read unavailable", text)
+            self.assertIn(self.admission["admission_id"], text)
+
+
 
 class TransitionTableTests(HandoffCase):
     def test_transition_outcome_table_preserves_every_other_field_and_journal(self):
@@ -335,6 +422,27 @@ class TransitionTableTests(HandoffCase):
                                      {key:value for key,value in after.items() if key != context_path})
                     self.assertEqual(len(case.mutations), mutation_count)
             finally: case.doCleanups()
+
+    def test_pending_unreadable_scope_and_nonlive_success_do_not_abort(self):
+        self.establish(); self.lose(); self.mode = "lost"
+        self.refused(lambda:self.handoff()); self.mode = "success"
+        unknown = objective_root(self.project, "unknown-record") / "context.json"
+        unknown.parent.mkdir(parents=True); unknown.write_text("incomplete{")
+        before = self.snapshot()
+        self.assertEqual(self.status()["owner_handoff"]["condition"], "scope_unreadable")
+        self.refused(lambda:self.handoff())
+        self.assertEqual(self.entry()["state"], "pending")
+        self.assertEqual(self.snapshot(), before); self.assertEqual(len(self.mutations), 1)
+        original = self.native_read
+        def nonlive(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[:2] == ["terminal", "show"] and argv[3] == "next":
+                result["result"]["terminal"]["connected"] = False
+            return result
+        with patch("pod.orca.read_command", side_effect=nonlive):
+            self.refused(lambda:self.handoff())
+        self.assertEqual(self.entry()["state"], "pending")
+        self.assertEqual(self.snapshot(), before); self.assertEqual(len(self.mutations), 1)
 
     def fill_history(self, n):
         for index in range(n):
@@ -461,6 +569,41 @@ print(json.dumps({'objective':status(Path.cwd(),None,objective='objective'), 'ru
             "run_selected_objective": observed["run"].get("objective"),
             "before": {key: hashlib.sha256(value).hexdigest() for key, value in before.items()},
             "after": {key: hashlib.sha256(value).hexdigest() for key, value in self.snapshot().items()}}
+
+    def test_genuine_050_shared_objective_blocks_without_conversion(self):
+        self.establish()
+        predecessor = "9c8639a5d7406b708b67b96a5ab26677efae1581"
+        root = Path(__file__).resolve().parents[1]
+        old = self.root / "writer-050"; old.mkdir(); archive = self.root / "writer-050.tar"
+        with archive.open("wb") as stream:
+            subprocess.run(["git", "-C", str(root), "archive", predecessor, "skills/pod", "VERSION"], stdout=stream, check=True)
+        with tarfile.open(archive) as bundle: bundle.extractall(old, filter="data")
+        original_source = subprocess.check_output(["git", "-C", str(root), "show", predecessor+":skills/pod/ledger.py"])
+        self.assertEqual((old / "skills/pod/ledger.py").read_bytes(), original_source)
+        script = """import json
+from pathlib import Path
+import pod
+from pod.internal import run
+from pod.ledger import objective_root
+from pod import orca
+assert pod.__version__ == '0.5.0'
+orca.contract=lambda:{'status':'observed','runtime':'runtime','capabilities':{}}
+value={'schema':'pod-checkpoint/v1','criteria':['shared work'],'plan_revision':'plan',
+'candidate':'candidate','policy_revision':'r','native_refs':[{'runId':'run','runtime':'runtime'}],
+'assignments':[],'questions':[],'verification_gaps':['shared work'],'next_safe_action':'continue shared work'}
+run('checkpoint',{'project':str(Path.cwd()),'objective':'genuine-050-shared','owner':'owner','value':value})
+print(json.dumps({'path':str(objective_root(Path.cwd(),'genuine-050-shared')/'context.json')}))
+"""
+        process = subprocess.run([os.sys.executable, "-c", script], cwd=self.project,
+            env={**os.environ, "PYTHONPATH":str(old / "skills")}, capture_output=True, text=True, check=True)
+        other = Path(json.loads(process.stdout)["path"]); original = other.read_bytes()
+        self.assertEqual(json.loads(original)["schema"], "pod-context/v3")
+        self.lose(); before = self.snapshot()
+        self.assertEqual(self.status()["owner_handoff"]["condition"], "run_shared")
+        self.assertIn("genuine-050-shared", self.status(text=True))
+        self.refused(lambda:self.handoff())
+        self.assertEqual(self.snapshot(), before); self.assertEqual(other.read_bytes(), original)
+        self.assertEqual(self.mutations, [])
 
     def test_genuine_066_writer_missing_generation_requires_named_confirmation(self):
         import shutil

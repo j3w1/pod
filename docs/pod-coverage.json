@@ -2664,7 +2664,11 @@
       ],
       "offline_test": [
         "tests.test_owner_handoff.DetectionTableTests.test_detection_table_through_status_and_every_authority_boundary",
-        "tests.incidents.test_owner_handoff_incidents.ReplacementHandleIncident.test_same_pane_replacement_requires_confirmation_and_pending_lineage"
+        "tests.incidents.test_owner_handoff_incidents.ReplacementHandleIncident.test_same_pane_replacement_requires_confirmation_and_pending_lineage",
+        "tests.test_owner_handoff.DetectionTableTests.test_successful_nonlive_caller_shapes_keep_authority_codes_and_no_effects",
+        "tests.test_owner_handoff.DetectionTableTests.test_absent_caller_stays_absent_at_every_boundary",
+        "tests.test_fixture_authority.FixtureAuthorityTests.test_default_and_explicit_callers_survive_stopall_without_home_escape",
+        "tests.test_fixture_authority.FixtureAuthorityTests.test_explicit_caller_changes_inside_default_fixture_remain_effective"
       ],
       "status": "NOT_RUN"
     },
@@ -2687,7 +2691,10 @@
       ],
       "offline_test": [
         "tests.test_owner_handoff.DetectionTableTests.test_shared_scope_and_every_bound_identity_disagreement",
-        "tests.test_owner_handoff.TransitionTableTests.test_pending_eligibility_loss_table_aborts_only_its_history_entry"
+        "tests.test_owner_handoff.TransitionTableTests.test_pending_eligibility_loss_table_aborts_only_its_history_entry",
+        "tests.test_owner_handoff.DetectionTableTests.test_scope_barrier_accounts_for_record_shape_and_closure",
+        "tests.test_owner_handoff.CompatibilityTests.test_genuine_050_shared_objective_blocks_without_conversion",
+        "tests.test_owner_handoff.DetectionTableTests.test_text_status_names_binding_cause_and_available_ambiguity"
       ],
       "status": "NOT_RUN"
     },
@@ -2712,7 +2719,8 @@
       "offline_test": [
         "tests.test_owner_handoff.TransitionTableTests.test_reserved_and_unresolved_ambiguity_table_stays_outstanding",
         "tests.test_owner_handoff.DetectionTableTests.test_exact_identity_table_and_unreadable_ambiguity",
-        "tests.test_owner_handoff.CompatibilityTests.test_genuine_066_writer_missing_generation_requires_named_confirmation"
+        "tests.test_owner_handoff.CompatibilityTests.test_genuine_066_writer_missing_generation_requires_named_confirmation",
+        "tests.test_owner_handoff.DetectionTableTests.test_text_status_names_binding_cause_and_available_ambiguity"
       ],
       "status": "NOT_RUN"
     },
@@ -2760,7 +2768,8 @@
       "offline_test": [
         "tests.test_owner_handoff.TransitionTableTests.test_transition_outcome_table_preserves_every_other_field_and_journal",
         "tests.test_owner_handoff.TransitionTableTests.test_pending_definitive_loss_aborts_and_unreadable_facts_do_not",
-        "tests.test_owner_handoff.TransitionTableTests.test_pending_eligibility_loss_table_aborts_only_its_history_entry"
+        "tests.test_owner_handoff.TransitionTableTests.test_pending_eligibility_loss_table_aborts_only_its_history_entry",
+        "tests.test_owner_handoff.TransitionTableTests.test_pending_unreadable_scope_and_nonlive_success_do_not_abort"
       ],
       "status": "NOT_RUN"
     },

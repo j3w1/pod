@@ -399,8 +399,12 @@ def render(result: dict) -> None:
             for item in assignments.get("unverified", []):
                 print(f"  Unverified {item['role']} (dispatch {item['dispatch'] or 'pending'}): "
                       + _orca_attention_label(item["orca_attention"]))
+        handoff = result.get("owner_handoff")
+        if isinstance(handoff, dict):
+            print(f"Owner handoff: {clean(handoff['condition'])}; {clean(handoff['message'])}")
         for entry in (result.get("runtime_continuity") or {}).get("history", []):
-            print(f"Runtime rebind: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
+            label = "Owner handoff" if entry["provenance"] == "owner_handoff" else "Runtime rebind"
+            print(f"{label}: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
                   f"{clean(entry['at'])} ({entry['provenance']})")
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})"

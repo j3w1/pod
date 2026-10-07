@@ -287,8 +287,6 @@ class KernelCase(unittest.TestCase):
         self.env = patch.dict(os.environ, {"XDG_STATE_HOME": str(self.root / "state"),
                                            "XDG_CONFIG_HOME": str(self.root / "config")})
         self.env.__enter__(); self.addCleanup(self.env.__exit__, None, None, None)
-        terminal_env = patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "owner"})
-        terminal_env.start(); self.addCleanup(terminal_env.stop)
         self.project = self.root / "project"
         self.project.mkdir()
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.project)], check=True)

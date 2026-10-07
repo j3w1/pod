@@ -46,9 +46,63 @@ def unfinished(state: dict) -> dict | None:
     return rows[0] if rows else None
 
 
+def run_scope(project: Path, objective: str, run_id: str) -> dict:
+    """Prove scope without the diagnostic reader's unsupported-record skip.
+
+    A positive raw reference blocks unless a supported record proves closure.
+    Unknown membership holds; no record is converted, locked or rewritten.
+    """
+    from .ledger import (CONTEXT_LIMIT, _validate_context,
+                         _run_references, objective_root, state_root)
+    from .util import bounded_json
+    root = state_root(project)
+    if root.is_symlink():
+        return {"objectives": [], "unreadable": 1}
+    own = objective_root(project, objective) / "context.json"
+    others, unknown = [], 0
+    for path in root.glob("*/context.json"):
+        if path == own:
+            continue
+        try:
+            raw = bounded_json(path, limit=CONTEXT_LIMIT)
+        except PodError:
+            unknown += 1
+            continue
+        if not isinstance(raw, dict):
+            unknown += 1
+            continue
+        checkpoint = raw.get("checkpoint")
+        admissions = raw.get("admissions")
+        refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else [] if checkpoint is None else None
+        readable = (isinstance(refs, list) and isinstance(admissions, dict)
+                    and all(isinstance(row, dict) and isinstance(row.get("runId"), str) and row["runId"] for row in refs)
+                    and all(isinstance(row, dict) and isinstance(row.get("run_id"), str) and row["run_id"] for row in admissions.values()))
+        referenced = (isinstance(refs, list) and any(isinstance(row, dict) and row.get("runId") == run_id for row in refs)
+                      or isinstance(admissions, dict) and any(isinstance(row, dict) and row.get("run_id") == run_id for row in admissions.values()))
+        supported = False
+        try:
+            _run_references(_validate_context(raw))
+            supported = True
+        except PodError:
+            pass
+        if referenced:
+            closure = checkpoint.get("closure") if isinstance(checkpoint, dict) else None
+            if (supported and isinstance(closure, dict) and
+                    type(closure.get("seq")) is int and closure["seq"] == checkpoint.get("seq") and
+                    type(closure.get("revision")) is int and closure["revision"] == checkpoint.get("revision") and
+                    isinstance(closure.get("report"), dict) and closure["report"].get("status") == "closed"):
+                continue
+            name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
+            others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
+        elif not readable or not (supported or raw.get("schema") == "pod-context/v3"):
+            # Only documented reference layouts can prove non-membership.
+            unknown += 1
+    return {"objectives": sorted(set(others)), "unreadable": unknown}
+
+
 def detect(project: Path, objective: str, state: dict, *, port, caller: str | None = None) -> dict:
     """Fresh native facts only. No writes, native mutations or presentation data."""
-    from .ledger import _run_references, contexts_for_run, continuity_work, objective_root
+    from .ledger import _run_references, continuity_work
     from .orca import current_run, terminal_identity, worker_rows
     caller = os.environ.get("ORCA_TERMINAL_HANDLE") if caller is None else caller
     owner = state.get("owner")
@@ -80,7 +134,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("caller_not_live", "This process is not in a live Orca terminal; observe with pod status --objective ID.")
     own = terminal_identity(caller)
     if own["state"] != "live":
-        return fail("caller_not_live", "Orca cannot prove this caller's handle live (" + own["code"] + ").",
+        return fail("caller_not_live", "Orca cannot prove this caller's handle live (" + (own["code"] or "successful terminal show did not prove liveness") + ").",
                     definitive=own["state"] == "lost")
     pending = unfinished(state)
     if pending and pending["state"] == "pending" and pending["decision"]["to_owner"] != caller:
@@ -132,13 +186,15 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
            for part in (row, row.get("worker"), row.get("projection")) if isinstance(part, dict)
            for key in ("terminalHandle", "agentTerminalHandle")):
         return fail("caller_is_worker", "The caller has a worker-only binding on this Run.", definitive=True)
-    others = sorted((other.get("checkpoint") or {}).get("objective", "unknown")
-                    for root, other in contexts_for_run(run_id)
-                    if root != objective_root(project, objective) and not (other.get("checkpoint") or {}).get("closure"))
-    if others:
-        result["other_objectives"] = others
-        return fail("run_shared", "Another open objective records this Run: " + ", ".join(others) + ".", definitive=True,
+    scope = run_scope(project, objective, run_id)
+    if scope["objectives"]:
+        result["other_objectives"] = scope["objectives"]
+        return fail("run_shared", "Another open or unverified-closed objective records this Run: " + ", ".join(scope["objectives"]) + ".", definitive=True,
                     action="Resolve the shared objective scope before handoff; do not run orca orchestration run-use by hand.")
+    if scope["unreadable"]:
+        result["unreadable_objectives"] = scope["unreadable"]
+        return fail("scope_unreadable", "Run scope is unverified: " + str(scope["unreadable"]) + " objective record(s) could not prove membership or closure.",
+                    action="Resolve the unreadable objective records before handoff; do not run orca orchestration run-use by hand.")
     work = continuity_work(state, runtime=first["runtime"], port=port)
     if work["differs"]:
         result["differs"] = work["differs"]
