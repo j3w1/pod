@@ -362,6 +362,10 @@ def _validate_continuity(value: object) -> None:
            and row.get("state") != "done" for row in history) > 1:
         raise PodError("state_unsupported", "More than one unfinished owner handoff")
     for row in history:
+        if not isinstance(row, dict) or not {"from_runtime", "to_runtime"} <= set(row):
+            raise PodError("state_unsupported", "Runtime continuity history row is malformed")
+        for field in ("from_runtime", "to_runtime"):
+            bounded_text(row[field], name=field)
         if isinstance(row, dict) and row.get("provenance") == "owner_handoff":
             from .handoff import validate_entry
             validate_entry(row)

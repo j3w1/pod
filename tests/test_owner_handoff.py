@@ -22,7 +22,51 @@ BASELINE = "86d8b90db7c1d0f6a38c3c9167b950548ff79fad"
 
 
 class HandoffCase(ProductionCase):
-    def closed_review_peer(self, *, withdrawn=False, objective="closure-peer"):
+    def reused_review_peer(self, objective="history-peer"):
+        self.closed_review_peer(objective=objective)
+        original = self.candidate
+        self.move("README.md")
+        def checkpoint(rows):
+            return run("checkpoint", {"project":str(self.project), "objective":objective,
+                "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":self.core(obligations=rows,
+                reopen=True, close=True, revision_authority={"provenance":"user_direct", "instruction":"Reopen the disposable peer"})})
+        rows = deepcopy(read(self.project, objective)["checkpoint"]["obligations"])
+        rows[0]["evidence"] = [{"check":"criterion", "command":"unit", "result":"passed", "reference":"fresh-peer-proof"}]
+        rows[1].update(candidate=self.candidate, reuse={"from":original})
+        checkpoint(rows)
+        rows = deepcopy(read(self.project, objective)["checkpoint"]["obligations"])
+        rows[1].pop("evidence"); rows[1].pop("reuse")
+        rows[1].update(state="withdrawn", withdrawal={"by":"coordinator", "reason":"review no longer required"})
+        checkpoint(rows)
+
+    def assert_peer_scope(self, peer, *, eligible, phase):
+        before = self.snapshot(); own = deepcopy(self.state()); calls = len(self.mutations)
+        starts, workers = deepcopy(self.port.starts), deepcopy(self.port.workers)
+        condition = ("fresh" if phase == "fresh" else "resume") if eligible else "run_shared"
+        verdict = self.status()["owner_handoff"]
+        self.assertEqual(verdict["condition"], condition)
+        self.assertIn(condition if not eligible else "handoff", self.status(text=True))
+        for supplied in ("owner", "next"):
+            for name, call in self.boundary_calls(supplied).items():
+                with self.subTest(boundary=name, supplied=supplied):
+                    error = self.refused(call)
+                    self.assertEqual(error.detail["owner_handoff"]["condition"], condition)
+        if eligible:
+            self.handoff(); self.assertEqual(self.entry()["state"], "done")
+            self.assertEqual(len(self.mutations) - calls, phase == "fresh")
+            self.assert_only_handoff_changes(own, self.state(), completed=True)
+        else:
+            self.refused(lambda:self.handoff()); self.assertEqual(len(self.mutations), calls)
+            if phase == "pending":
+                self.assertEqual(self.entry()["state"], "aborted")
+                self.assert_only_handoff_changes(own, self.state(), completed=False)
+            else: self.assertEqual(own, self.state())
+        ownkey = str((objective_root(self.project, "objective") / "context.json").relative_to(self.root / "state"))
+        self.assertEqual({k:v for k,v in before.items() if k != ownkey}, {k:v for k,v in self.snapshot().items() if k != ownkey})
+        self.assertEqual(peer.read_bytes(), before[str(peer.relative_to(self.root / "state"))])
+        self.assertEqual(self.port.starts, starts); self.assertEqual(self.port.workers, workers)
+
+    def closed_review_peer(self, *, withdrawn=False, objective="closure-peer", unknown=False):
         def checkpoint(rows, **extra):
             return run("checkpoint", {"project":str(self.project), "objective":objective,
                 "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":self.core(obligations=rows,
@@ -38,6 +82,10 @@ class HandoffCase(ProductionCase):
         frozen = packet(body)
         admission = run("admission", {"project":str(self.project), "objective":objective,
             "owner":os.environ["ORCA_TERMINAL_HANDLE"], "run":"run", "task":"peer-review", "plan_revision":"plan", "packet":frozen})["admission"]
+        if unknown:
+            rows = deepcopy(read(self.project, objective)["checkpoint"]["obligations"])
+            rows[1]["evidence"] = [{"attempt":"unobserved-review"}, {"attempt":admission["admission_id"]}]
+            checkpoint(rows)
         self.settle(admission)
         rows = deepcopy(read(self.project, objective)["checkpoint"]["obligations"])
         for row in rows: row.pop("executor")
@@ -171,9 +219,9 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
     def state(self):
         return read(self.project, "objective")
 
-    def status(self, *, text=False):
+    def status(self, *, text=False, objective="objective"):
         out, err = StringIO(), StringIO()
-        args = ["status", "--objective", "objective"] + ([] if text else ["--json"])
+        args = ["status", "--objective", objective] + ([] if text else ["--json"])
         old = Path.cwd()
         try:
             os.chdir(self.project)
@@ -229,6 +277,78 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
 
 
 class DetectionTableTests(HandoffCase):
+    def test_retained_review_history_keeps_assignment_and_git_facts(self):
+        marker_cases = [(markers, kind) for markers in ((), ("accepted_seq",), ("reported_seq",), ("accepted_seq", "reported_seq"))
+                        for kind in ("genuine", "null-governance", "role", "serves")]
+        cases = marker_cases + [((), kind) for kind in ("unknown-genuine", "duplicate", "reported-before-admitted", "reuse-genuine",
+                 "reuse-unknown-target", "reuse-false-delta", "reuse-source", "reuse-definition", "reuse-duplicate", "reuse-unreadable")]
+        for phase in ("fresh", "pending"):
+            for markers, kind in cases:
+                case = HandoffCase(); case.setUp()
+                try:
+                    with self.subTest(phase=phase, omitted=markers, kind=kind):
+                        case.establish()
+                        if phase == "pending":
+                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                        if kind.startswith("reuse-"): case.reused_review_peer()
+                        else: case.closed_review_peer(withdrawn=True, objective="history-peer", unknown=kind == "unknown-genuine")
+                        peer = objective_root(case.project, "history-peer") / "context.json"
+                        raw = json.loads(peer.read_text()); cp = raw["checkpoint"]
+                        ob = cp["obligations"][1]; receipt = ob["receipts"][0]; evidence = receipt["evidence"]
+                        admission = next(iter(raw["admissions"].values()))
+                        for marker in markers: receipt.pop(marker)
+                        if kind == "null-governance": evidence["governance"] = None
+                        elif kind == "role": admission["role"] = "investigate"
+                        elif kind == "serves": admission["serves"] = ["O1"]
+                        elif kind == "duplicate": ob["receipts"].append(deepcopy(receipt))
+                        elif kind == "reported-before-admitted": receipt["reported_seq"] = admission["admitted_seq"] - 1
+                        elif kind == "reuse-unknown-target": receipt["reuse"]["to"] = "nonexistent-target"
+                        elif kind == "reuse-false-delta": receipt["reuse"]["delta"] = []
+                        elif kind == "reuse-source": receipt["reuse"]["from"] = "unknown-source"
+                        elif kind == "reuse-definition": receipt["reuse"]["definition"] = "0" * 64
+                        elif kind == "reuse-duplicate": receipt["reuse"]["delta"] *= 2
+                        elif kind == "reuse-unreadable":
+                            receipt["reuse"]["to"] = "0" * 40
+                        if markers or kind not in ("genuine", "reuse-genuine", "unknown-genuine"):
+                            peer.write_text(json.dumps(raw))  # Defensive corrupt-record control, never writer/live proof.
+                        if phase == "fresh": case.lose()
+                        case.assert_peer_scope(peer, eligible=kind in ("genuine", "reuse-genuine", "unknown-genuine"), phase=phase)
+                finally: case.doCleanups()
+
+    def test_continuity_runtime_shapes_refuse_before_fingerprint_collection(self):
+        values = ([], {}, None, "", " ", "runtime\x00bad", "x" * 4097, 1, True)
+        cases = [(field, value) for field in ("from_runtime", "to_runtime") for value in values]
+        cases += [(field, "missing") for field in ("from_runtime", "to_runtime")]
+        cases += [("row", value) for value in (None, [], "bad", {}, {"provenance":"owner_handoff"})]
+        for phase in ("fresh", "pending"):
+            for field, value in cases:
+                case = HandoffCase(); case.setUp()
+                try:
+                    with self.subTest(phase=phase, field=field, shape=type(value).__name__):
+                        case.establish()
+                        if phase == "pending":
+                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                        case.closed_review_peer(withdrawn=True, objective="runtime-peer")
+                        peer = objective_root(case.project, "runtime-peer") / "context.json"
+                        raw = json.loads(peer.read_text()); entry = {"from_runtime":"runtime", "to_runtime":"runtime",
+                            "at":"offline control", "provenance":"automatic", "verified":{}}
+                        if field == "row": entry = value
+                        elif value == "missing": entry.pop(field)
+                        else: entry[field] = value
+                        raw["checkpoint"]["continuity"]["history"].append(entry)
+                        peer.write_text(json.dumps(raw))  # Defensive shape control, never writer/live proof.
+                        before = case.snapshot()
+                        error = case.refused(lambda:run("checkpoint", {"project":str(case.project), "objective":"runtime-peer",
+                            "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":case.core(reopen=True,
+                            revision_authority={"provenance":"user_direct", "instruction":"Reopen disposable peer"}, close=True)}))
+                        self.assertTrue(error.code.startswith(("invalid_", "state_")))
+                        self.assertIsInstance(case.status(objective="runtime-peer"), dict)
+                        case.status(text=True, objective="runtime-peer")
+                        self.assertEqual(before, case.snapshot())
+                        if phase == "fresh": case.lose()
+                        case.assert_peer_scope(peer, eligible=False, phase=phase)
+                finally: case.doCleanups()
+
     def test_complete_persisted_closure_contract_for_fresh_and_pending(self):
         # One scope invariant at real boundaries. Corruption controls begin with
         # real accepted records; none claims genuine-writer or live-loss proof.

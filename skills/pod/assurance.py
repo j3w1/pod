@@ -94,6 +94,11 @@ def _persisted_review_binding(value: Any, ob: dict) -> dict | None:
     return binding
 
 
+def _review_assignment(ob: dict, admission: Any) -> bool:
+    return (isinstance(admission, dict) and admission.get("role") == "review"
+            and admission.get("serves") == [ob["id"]])
+
+
 def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
     """Parse a stamped receipt, including retained unselected evidence."""
     from .obligations import _exact, _text, refuse
@@ -124,6 +129,8 @@ def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
     if ob["kind"] == "assurance":
         from .obligations import _admissions
         admission = _admissions(ctx).get(record["attempt"]) or {}
+        if admission and not _review_assignment(ob, admission):
+            raise refuse("obligation_invalid", "receipt_conflict", "review history joins the exact served review assignment", obligation=ob["id"])
         binding = _persisted_review_binding(admission.get("binding"), ob) or {}
         expected = {"candidate": admission.get("candidate"), "binding": admission.get("binding"),
                     "definition": binding.get("definitions", {}).get(ob["id"])}
@@ -163,20 +170,25 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
             if (reuse["from"] != evidence["candidate"] or reuse["definition"] != evidence["definition"]
                     or reuse["delta"] != sorted(set(reuse["delta"]))):
                 raise refuse("obligation_invalid", "receipt_conflict", "receipt reuse retains its source proof identity and canonical delta", obligation=ob["id"])
-        if ob["kind"] == "assurance" and "accepted_seq" in receipt:
+            delta = _reuse_delta(reuse["from"], reuse["to"], ctx, obligation=ob["id"])
+            if delta is None or reuse != _reuse_record(reuse["from"], reuse["to"], evidence["definition"], delta):
+                raise refuse("obligation_invalid", "receipt_conflict", "retained REUSE matches its readable source, target and recorded Git delta", obligation=ob["id"])
+        if ob["kind"] == "assurance":
             from .obligations import _admissions
-            if not _sha256(evidence["governance"]) or not _sha256(evidence["definition"]) or evidence["binding"] is None:
-                raise refuse("obligation_invalid", "receipt_conflict", "accepted review history retains complete proof bindings", obligation=ob["id"])
-            for field in ("policy_revision", "environment"):
-                _text(evidence["binding"][field], field, obligation=ob["id"])
-            if not _sha256(evidence["binding"]["governance"]):
-                raise refuse("obligation_invalid", "receipt_conflict", "accepted review binding retains its governance identity", obligation=ob["id"])
             admission = _admissions(ctx).get(evidence["attempt"]) or {}
-            reported = receipt.get("reported_seq", receipt["accepted_seq"])
+            completed = isinstance(admission.get("report"), dict)
+            if completed or "accepted_seq" in receipt or "reported_seq" in receipt:
+                if not _sha256(evidence["governance"]) or not _sha256(evidence["definition"]) or evidence["binding"] is None:
+                    raise refuse("obligation_invalid", "receipt_conflict", "recorded review history retains complete proof bindings", obligation=ob["id"])
+                for field in ("policy_revision", "environment"):
+                    _text(evidence["binding"][field], field, obligation=ob["id"])
+                if not _sha256(evidence["binding"]["governance"]):
+                    raise refuse("obligation_invalid", "receipt_conflict", "recorded review binding retains its governance identity", obligation=ob["id"])
+            reported = receipt.get("reported_seq", receipt.get("accepted_seq"))
             admitted = admission.get("admitted_seq")
-            if (reported > receipt["accepted_seq"]
-                    or admitted is not None and (type(admitted) is not int or not ob["introduced_seq"] <= admitted <= reported)
-                    or not review_completed(admission)):
+            if (reported is not None and "accepted_seq" in receipt and reported > receipt["accepted_seq"]
+                    or reported is not None and admitted is not None and (type(admitted) is not int or not ob["introduced_seq"] <= admitted <= reported)
+                    or "accepted_seq" in receipt and not review_completed(admission)):
                 raise refuse("obligation_invalid", "receipt_conflict", "accepted review receipt retains admission and report ordering", obligation=ob["id"])
     for raw in ob.get("evidence", []):
         evidence = _persisted_evidence(ob, raw, ctx)
@@ -334,15 +346,28 @@ def _reuse_valid(ob: dict, ctx: dict, candidate: str) -> bool:
             and reuse.get("definition") == definition_id(ob) and isinstance(reuse.get("delta"), list))
 
 
+def _reuse_delta(source: str, target: str, ctx: dict, *, obligation: str) -> list[str] | None:
+    from .obligations import _path
+    reader = ctx.get("git_delta")
+    delta = reader(source, target) if callable(reader) and isinstance(target, str) else None
+    if not isinstance(delta, list):
+        return None
+    return sorted({_path(path, code="obligation_unaccounted", obligation=obligation) for path in delta})
+
+
+def _reuse_record(source: str, target: str, definition: str, delta: list[str]) -> dict:
+    # Keep the writer's bounded representation; the complete Git pair is read.
+    return {"from": source, "to": target, "delta": delta[:256], "definition": definition}
+
+
 def reuse_eligibility(ob: dict, source: str, ctx: dict) -> tuple[str, list[str], list[str] | None]:
     """One read-only scope/delta check shared by binding and complete refusals."""
     from .obligations import _path, overlap
     paths = ob.get("proof_scope", ob["scope"]["paths"] if ob["kind"] == "assurance" else ob["boundary"]["paths"])
     if not paths and "proof_scope" not in ob:
         return "no declared scope", [], None
-    reader = ctx.get("git_delta")
     current = ctx.get("candidate")
-    delta = reader(source, current) if reader is not None and isinstance(current, str) else None
+    delta = _reuse_delta(source, current, ctx, obligation=ob["id"])
     if delta is None:
         return "delta unreadable", [], None
     touched = overlap({"paths": [_path(path, code="obligation_unaccounted", obligation=ob["id"]) for path in delta], "surfaces": []},
@@ -358,14 +383,15 @@ def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
     source = _text(raw["from"], "reuse from", limit=128, obligation=ob["id"])
     current = ctx.get("candidate")
     previous = (prior or {}).get("reuse")
-    if (isinstance(previous, dict) and previous.get("from") == source and previous.get("to") == current
-            and previous.get("definition") == definition_id(ob)):
-        return previous
     label, touched, delta = reuse_eligibility(ob, source, ctx)
     if label != "eligible":
         raise refuse("obligation_unaccounted", "evidence_invalidated", "REUSE is unproven: " + label,
                      obligation=ob["id"], paths=",".join(touched[:8]))
-    return {"from": source, "to": current, "delta": sorted(delta)[:256], "definition": definition_id(ob)}
+    record = _reuse_record(source, current, definition_id(ob), delta)
+    if (isinstance(previous, dict) and previous.get("from") == source and previous.get("to") == current
+            and previous.get("definition") == definition_id(ob) and previous != record):
+        raise refuse("obligation_invalid", "receipt_conflict", "recorded REUSE cannot change its immutable Git comparison", obligation=ob["id"])
+    return record
 
 
 def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None = None) -> dict:
@@ -429,8 +455,7 @@ def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) 
                      or proof_seq <= finding["resolved_seq"]
                      or admitted_seq <= finding["resolved_seq"])
                 for finding in ob.get("findings", []))
-            if (not isinstance(admission, dict) or admission.get("role") != "review"
-                    or admission.get("serves") != [ob["id"]] or row["attempt"] in _outstanding(ctx)
+            if (not _review_assignment(ob, admission) or row["attempt"] in _outstanding(ctx)
                     or not review_completed(admission) or admission.get("candidate") != row.get("candidate")
                     or (admission.get("binding") or {}).get("definitions", {}).get(ob["id"]) != row["definition"]
                     or row.get("binding") != admission.get("binding")

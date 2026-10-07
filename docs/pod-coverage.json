@@ -2696,7 +2696,9 @@
         "tests.test_owner_handoff.CompatibilityTests.test_genuine_050_shared_objective_blocks_without_conversion",
         "tests.test_owner_handoff.DetectionTableTests.test_text_status_names_binding_cause_and_available_ambiguity",
         "tests.test_owner_handoff.DetectionTableTests.test_scope_frontier_and_closure_invariant_for_fresh_and_pending",
-        "tests.test_owner_handoff.DetectionTableTests.test_complete_persisted_closure_contract_for_fresh_and_pending"
+        "tests.test_owner_handoff.DetectionTableTests.test_complete_persisted_closure_contract_for_fresh_and_pending",
+        "tests.test_owner_handoff.DetectionTableTests.test_retained_review_history_keeps_assignment_and_git_facts",
+        "tests.test_owner_handoff.DetectionTableTests.test_continuity_runtime_shapes_refuse_before_fingerprint_collection"
       ],
       "status": "NOT_RUN"
     },
