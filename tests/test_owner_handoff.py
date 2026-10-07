@@ -22,6 +22,52 @@ BASELINE = "86d8b90db7c1d0f6a38c3c9167b950548ff79fad"
 
 
 class HandoffCase(ProductionCase):
+    def released_peer(self, commit, version, objective="closure-peer"):
+        """Emit untouched peer bytes with a complete immutable released bundle."""
+        root = Path(__file__).resolve().parents[1]
+        old = self.root / ("writer-" + version); old.mkdir(); archive = old / "bundle.tar"
+        with archive.open("wb") as stream:
+            subprocess.run(["git", "-C", str(root), "archive", commit, "skills/pod", "VERSION"], stdout=stream, check=True)
+        with tarfile.open(archive) as bundle: bundle.extractall(old, filter="data")
+        for source in (old / "skills/pod").rglob("*"):
+            if source.is_file() and source.name != "VERSION":
+                self.assertEqual(source.read_bytes(), subprocess.check_output(["git", "-C", str(root), "show", commit + ":" + str(source.relative_to(old))]))
+        script = '''import json,os,sys
+from pathlib import Path
+import pod
+from pod import orca
+from pod.internal import run
+from pod.ledger import objective_root
+data=json.load(sys.stdin)
+assert pod.__version__ == data['version']
+def read(argv,**kwargs):
+ if argv[:2]==['orchestration','run-current']:return {'runtime':data['runtime'],'result':{'run':data['current']}}
+ if argv[:2]==['orchestration','worker-list']:return {'runtime':data['runtime'],'result':{'workers':[],'scope':{'run':data['current']['id'],'source':'flag'},'page':{'hasMore':False}}}
+ raise AssertionError('unexpected released-writer native read '+str(argv))
+orca.read_command=read
+orca.contract=lambda:{'status':'observed','runtime':data['runtime'],'capabilities':{}}
+if data['version']=='0.5.0':
+ value={'schema':'pod-checkpoint/v1','criteria':['shared work'],'plan_revision':'plan',
+ 'candidate':'candidate','policy_revision':'r','native_refs':[{'runId':'run','runtime':'runtime'}],
+ 'assignments':[],'questions':[],'verification_gaps':['shared work'],'next_safe_action':'continue shared work'}
+ run('checkpoint',{'project':str(Path.cwd()),'objective':data['objective'],'owner':'owner','value':value})
+else:
+ value=data['core']
+ value['obligations']=[{'id':'O1','kind':'criterion','provenance':'objective','source':{'ref':'PoD#1'},
+ 'check':'PoD#1 passes','state':'satisfied','evidence':[{'check':'unit','command':'unit command','result':'passed','reference':'released-history'}]}]
+ value['governance']={'base_ref':'refs/remotes/origin/target'}
+ run('checkpoint',{'project':str(Path.cwd()),'objective':data['objective'],'owner':os.environ['ORCA_TERMINAL_HANDLE'],'value':value})
+ value['obligations'][0]['evidence'][0]['reference']='released-selected';value['close']=True
+ run('checkpoint',{'project':str(Path.cwd()),'objective':data['objective'],'owner':os.environ['ORCA_TERMINAL_HANDLE'],'value':value})
+print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'context.json')}))
+'''
+        process = subprocess.run([os.sys.executable, "-c", script], cwd=self.project,
+            input=json.dumps({"version":version, "objective":objective, "runtime":self.port.runtime,
+                              "current":self.current, "core":self.core()}),
+            env={**os.environ, "PYTHONPATH":str(old / "skills")}, capture_output=True, text=True)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        return Path(json.loads(process.stdout)["path"])
+
     def setUp(self):
         super().setUp()
         self.terminals = {"owner": "live", "next": "live", "third": "live"}
@@ -152,6 +198,166 @@ class HandoffCase(ProductionCase):
 
 
 class DetectionTableTests(HandoffCase):
+    def test_complete_persisted_closure_contract_for_fresh_and_pending(self):
+        # One scope invariant at real boundaries. Corruption controls begin with
+        # real accepted records; none claims genuine-writer or live-loss proof.
+        fields = ("schema", "criterion", "candidate", "sources", "policy_revision", "dependencies",
+                  "environment", "check", "command", "result", "timestamp", "status", "reference", "definition", "governance")
+        cases = (["selected-missing-" + field for field in fields]
+                 + ["retained-missing-" + field for field in fields]
+                 + ["selected-null", "selected-string", "selected-empty", "selected-extra", "selected-criterion",
+                    "selected-sources", "selected-dependencies", "selected-reference", "retained-null",
+                    "missing-receipts", "null-receipts", "null-receipt", "duplicate-receipt", "contradictory-receipt",
+                    "receipt-negative", "receipt-zero", "receipt-boolean", "receipt-future", "receipt-unaccepted",
+                    "receipt-reuse", "retained-negative", "history-overflow", "withdrawal-coordinator",
+                    "withdrawal-nobody", "withdrawal-null", "withdrawal-no-by", "withdrawal-no-reason",
+                    "withdrawal-no-instruction", "withdrawal-empty-instruction", "withdrawal-extra",
+                    "criteria-missing", "criteria-extra", "criteria-null", "obligations-empty", "duplicate-id",
+                    "introduced-negative", "definition-invalid", "boundary-missing", "source-null", "governance-null",
+                    "checkpoint-missing-candidate", "checkpoint-invalid-verification", "checkpoint-unknown-field",
+                    "outer-nonobject", "outer-unsupported", "outer-unsupported-foreign",
+                    "outstanding-bound", "outstanding-reserved", "outstanding-unresolved",
+                    "genuine-closed", "genuine-history", "genuine-user-withdrawal", "genuine-coordinator-withdrawal",
+                    "genuine-steering", "genuine-assurance-withdrawal", "genuine-foreign", "genuine-071", "genuine-080", "released-050-shared",
+                    "governance-header-null", "proposals-null", "proposal-null", "observations-null", "observation-row-null",
+                    "reopened-null", "reopen-row-null", "quiescence-invalid", "slot-contradiction",
+                    "assurance-findings-null", "assurance-finding-null"])
+        for phase in ("fresh", "pending"):
+            for kind in cases:
+                case = HandoffCase(); case.setUp()
+                try:
+                    with self.subTest(phase=phase, kind=kind):
+                        case.establish()
+                        if phase == "pending":
+                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                        current = deepcopy(case.current)
+                        if kind in ("genuine-foreign", "outer-unsupported-foreign"):
+                            case.current.update(id="foreign-run")
+                        def checkpoint(rows, **extra):
+                            return run("checkpoint", {"project":str(case.project), "objective":"closure-peer",
+                                "owner":os.environ["ORCA_TERMINAL_HANDLE"],
+                                "value":case.core(obligations=rows, governance={"base_ref":"refs/remotes/origin/target"}, **extra)})
+                        # Two genuine writes establish immutable selected/retained receipts.
+                        released = kind in ("genuine-071", "genuine-080", "released-050-shared")
+                        if released:
+                            commit, version = {"genuine-071":("2f02be99f27e6a860c3115a9c62539b0812bc038", "0.7.1"),
+                                               "genuine-080":(BASELINE, "0.8.0"),
+                                               "released-050-shared":("9c8639a5d7406b708b67b96a5ab26677efae1581", "0.5.0")}[kind]
+                            case.released_peer(commit, version)
+                        else:
+                            checkpoint([case.criterion("active" if kind == "genuine-history" else "satisfied",
+                                evidence=[case.proof("O1", reference="history-proof", status="FAILED" if kind == "genuine-history" else "PASS")])])
+                        rows = [case.criterion("satisfied", evidence=[case.proof("O1", reference="selected-proof")])]
+                        extra = {"close":True}
+                        if kind.startswith("withdrawal-") or kind == "genuine-user-withdrawal":
+                            rows = [case.criterion("withdrawn", withdrawal={"by":"user_direct", "reason":"Owner withdrew this criterion"})]
+                            extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw the peer criterion"}
+                        elif kind == "genuine-coordinator-withdrawal":
+                            rows.append(case.sub("S", "withdrawn", withdrawal={"by":"coordinator", "reason":"Subgoal no longer needed"}))
+                        elif kind == "genuine-steering":
+                            rows.append({"id":"U", "kind":"steer", "provenance":"user_direct", "source":{"instruction":"Record steering", "ref":"owner-note"},
+                                "check":"steering recorded", "state":"withdrawn", "withdrawal":{"by":"user_direct", "reason":"Owner withdrew steering"}})
+                            extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Record then withdraw steering"}
+                        elif kind in ("genuine-assurance-withdrawal", "assurance-findings-null", "assurance-finding-null"):
+                            rows.append({"id":"A", "kind":"assurance", "provenance":"coordinator", "parent":"O1",
+                                "check":"independent review", "scope":{"paths":["src"]}, "question":"correct?", "candidate":case.candidate,
+                                "existing_evidence":"tests", "insufficiency":"no review", "state":"withdrawn",
+                                "withdrawal":{"by":"user_direct", "reason":"Owner withdrew peer review"}})
+                            extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw peer review"}
+                        if not released: checkpoint(rows, **extra)
+                        case.current = current
+                        peer = objective_root(case.project, "closure-peer") / "context.json"
+                        raw = json.loads(peer.read_text()); cp = raw["checkpoint"]; ob = (cp.get("obligations") or [{}])[0]
+                        selected = ob.get("evidence", [{}])[0] if ob.get("evidence") else {}
+                        retained = (ob.get("receipts") or [{"evidence":{}}])[0]["evidence"]
+                        if kind.startswith("selected-missing-"): selected.pop(kind.removeprefix("selected-missing-"))
+                        elif kind.startswith("retained-missing-"): retained.pop(kind.removeprefix("retained-missing-"))
+                        elif kind == "selected-null": ob["evidence"] = [None]
+                        elif kind == "selected-string": ob["evidence"] = ["not evidence"]
+                        elif kind == "selected-empty": ob["evidence"] = []
+                        elif kind == "selected-extra": selected["unknown"] = True
+                        elif kind == "selected-criterion": selected["criterion"] = "other"
+                        elif kind == "selected-sources": selected["sources"] = [None]
+                        elif kind == "selected-dependencies": selected["dependencies"] = None
+                        elif kind == "selected-reference": selected["reference"] = "unrecorded"
+                        elif kind == "retained-null": ob["receipts"][0]["evidence"] = None
+                        elif kind == "missing-receipts": ob.pop("receipts")
+                        elif kind == "null-receipts": ob["receipts"] = None
+                        elif kind == "null-receipt": ob["receipts"] = [None]
+                        elif kind == "duplicate-receipt": ob["receipts"].append(deepcopy(ob["receipts"][0]))
+                        elif kind == "contradictory-receipt": ob["receipts"][-1]["evidence"]["candidate"] = "0" * 40
+                        elif kind in ("receipt-negative", "receipt-zero", "receipt-boolean", "receipt-future"):
+                            ob["receipts"][-1]["accepted_seq"] = {"receipt-negative":-1, "receipt-zero":0, "receipt-boolean":True, "receipt-future":cp["seq"]+1}[kind]
+                        elif kind == "receipt-unaccepted": ob["receipts"][-1].pop("accepted_seq")
+                        elif kind == "receipt-reuse": ob["receipts"][-1]["reuse"] = {"from":"unrecorded"}
+                        elif kind == "retained-negative": ob["receipts"][0]["accepted_seq"] = -1
+                        elif kind == "history-overflow": ob["receipts"] *= 9
+                        elif kind == "withdrawal-coordinator": ob["withdrawal"] = {"by":"coordinator", "reason":"discard objective criterion"}
+                        elif kind == "withdrawal-nobody": ob["withdrawal"] = {"by":"nobody", "reason":""}
+                        elif kind == "withdrawal-null": ob["withdrawal"] = None
+                        elif kind.startswith("withdrawal-no-"): ob["withdrawal"].pop(kind.removeprefix("withdrawal-no-"))
+                        elif kind == "withdrawal-empty-instruction": ob["withdrawal"]["instruction"] = ""
+                        elif kind == "withdrawal-extra": ob["withdrawal"]["extra"] = True
+                        elif kind == "criteria-missing": cp["criteria"] = []
+                        elif kind == "criteria-extra": cp["criteria"].append("uncovered")
+                        elif kind == "criteria-null": cp["criteria"] = None
+                        elif kind == "obligations-empty": cp["obligations"] = []
+                        elif kind == "duplicate-id": cp["obligations"].append(deepcopy(ob))
+                        elif kind == "introduced-negative": ob["introduced_seq"] = -1
+                        elif kind == "definition-invalid": ob["definition"] = "0" * 64
+                        elif kind == "boundary-missing": ob.pop("boundary")
+                        elif kind == "source-null": ob["source"] = None
+                        elif kind == "governance-null": cp["governance_sources"] = [None]
+                        elif kind == "checkpoint-missing-candidate": cp.pop("candidate")
+                        elif kind == "checkpoint-invalid-verification": cp["verification"] = None
+                        elif kind == "checkpoint-unknown-field": cp["unknown"] = True
+                        elif kind == "governance-header-null": cp["governance"] = None
+                        elif kind == "proposals-null": cp["proposals"] = None
+                        elif kind == "proposal-null": cp["proposals"] = [None]
+                        elif kind == "observations-null": cp["observations"] = None
+                        elif kind == "observation-row-null": cp["observations"]["outstanding"] = [None]
+                        elif kind == "reopened-null": cp["reopened"] = None
+                        elif kind == "reopen-row-null": cp["reopened"] = [None]
+                        elif kind == "quiescence-invalid": cp["quiescence"] = {"state":"unknown"}
+                        elif kind == "slot-contradiction": cp["coordinator_slot"] = "O1"
+                        elif kind == "assurance-findings-null": cp["obligations"][1]["findings"] = None
+                        elif kind == "assurance-finding-null": cp["obligations"][1]["findings"] = [None]
+                        elif kind.startswith("outer-unsupported"): raw["schema"] = "unsupported-future-context"
+                        elif kind.startswith("outstanding-"):
+                            admission = deepcopy(case.admission); admission.update(objective="closure-peer", serves=["O1"], state=kind.removeprefix("outstanding-"))
+                            raw["admissions"][admission["admission_id"]] = admission
+                        if kind.startswith("withdrawal-") and isinstance(ob["withdrawal"], dict):
+                            cp["closure"]["report"]["withdrawn"] = [{"obligation":ob["id"], "provenance":ob["provenance"], **ob["withdrawal"]}]
+                        if not kind.startswith("genuine-") and not released:
+                            peer.write_text(json.dumps([] if kind == "outer-nonobject" else raw))
+                        if phase == "fresh": case.lose()
+                        before = case.snapshot(); own = deepcopy(case.state()); calls = len(case.mutations)
+                        starts, workers = deepcopy(case.port.starts), deepcopy(case.port.workers)
+                        verdict = case.status()["owner_handoff"]; text = case.status(text=True)
+                        if kind.startswith("genuine-"):
+                            self.assertEqual(verdict["status"], "handoff_available")
+                            case.handoff(); self.assertEqual(case.entry()["state"], "done")
+                            self.assertEqual(len(case.mutations), 1)
+                            case.assert_only_handoff_changes(own, case.state(), completed=True)
+                        else:
+                            expected = "scope_unreadable" if kind in ("outer-nonobject", "outer-unsupported-foreign") else "run_shared"
+                            self.assertEqual(verdict["condition"], expected); self.assertIn(expected, text)
+                            for supplied in ("owner", "next"):
+                                for boundary, call in case.boundary_calls(supplied).items():
+                                    error = case.refused(call)
+                                    self.assertEqual(error.detail["owner_handoff"]["condition"], expected)
+                            case.refused(lambda:case.handoff())
+                            self.assertEqual(len(case.mutations), calls)
+                            if phase == "pending" and expected == "run_shared":
+                                self.assertEqual(case.entry()["state"], "aborted")
+                                case.assert_only_handoff_changes(own, case.state(), completed=False)
+                            else: self.assertEqual(case.state(), own)
+                        own_key = str((objective_root(case.project, "objective") / "context.json").relative_to(case.root / "state"))
+                        self.assertEqual({key:value for key,value in case.snapshot().items() if key != own_key},
+                                         {key:value for key,value in before.items() if key != own_key})
+                        self.assertEqual(case.port.starts, starts); self.assertEqual(case.port.workers, workers)
+                finally: case.doCleanups()
+
     def test_detection_table_through_status_and_every_authority_boundary(self):
         self.establish()
         original_worker = deepcopy(self.port.workers)

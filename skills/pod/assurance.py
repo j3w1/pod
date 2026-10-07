@@ -77,6 +77,128 @@ def _evidence_record(ob: dict, raw: Any, ctx: dict) -> dict:
     return record
 
 
+def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
+    """Parse a stamped receipt, including retained unselected evidence."""
+    from .obligations import _exact, _text, refuse
+    from .records import _sha256
+    if ob["kind"] != "assurance":
+        if not isinstance(raw, dict) or raw.get("schema") != "pod-evidence/v1":
+            raise refuse("obligation_invalid", "malformed", "persisted evidence is a complete detailed record", obligation=ob["id"])
+        record = _evidence_record(ob, raw, ctx)
+        governance = _text(raw.get("governance"), "governance", obligation=ob["id"])
+        if not _sha256(governance):
+            raise refuse("obligation_invalid", "malformed", "receipt governance is a bound fingerprint", obligation=ob["id"])
+        record = {**record, "governance": governance}
+    else:
+        fields = {"attempt", "candidate", "binding", "governance", "definition"}
+        record = _exact(raw, fields, fields, "assurance evidence", obligation=ob["id"])
+        _text(record["attempt"], "attempt", limit=128, obligation=ob["id"])
+        # Unknown unconsumed attempts can be recorded, but never qualify as proof.
+        for field in ("candidate", "governance"):
+            if record[field] is not None:
+                _text(record[field], field, obligation=ob["id"])
+        if record["definition"] is not None and not _sha256(record["definition"]):
+            raise refuse("obligation_invalid", "malformed", "receipt definition is a SHA256 identity", obligation=ob["id"])
+        if record["governance"] is not None and not _sha256(record["governance"]):
+            raise refuse("obligation_invalid", "malformed", "receipt governance is a bound fingerprint", obligation=ob["id"])
+        if record["binding"] is not None:
+            binding = _exact(record["binding"], {"policy_revision", "environment", "dependencies", "sources", "governance", "definitions"},
+                             {"policy_revision", "environment", "dependencies", "sources", "governance", "definitions"}, "assurance binding", obligation=ob["id"])
+            for field in ("policy_revision", "environment", "governance"):
+                if binding[field] is not None:
+                    _text(binding[field], field, obligation=ob["id"])
+            _source_entries(binding["sources"], "binding", obligation=ob["id"])
+            _dependencies(binding["dependencies"], "binding", obligation=ob["id"])
+            if not isinstance(binding["definitions"], dict) or not all(isinstance(key, str) and _sha256(value) for key, value in binding["definitions"].items()):
+                raise refuse("obligation_invalid", "malformed", "receipt definitions are bound identities", obligation=ob["id"])
+    if record != raw:
+        raise refuse("obligation_invalid", "malformed", "persisted evidence retains its canonical record", obligation=ob["id"])
+    return record
+
+
+def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
+    """One persisted evidence/history contract for ordinary writes and closure reads."""
+    from .obligations import MAX_EVIDENCE, _exact, _text, _path, refuse
+    from .records import _sha256
+    history = ob.get("receipts")
+    if not isinstance(history, list) or len(history) > MAX_EVIDENCE:
+        raise refuse("obligation_invalid", "malformed", "receipt history is a bounded recorded list", obligation=ob["id"])
+    identity = "attempt" if ob["kind"] == "assurance" else "reference"
+    receipts = {}
+    for raw in history:
+        receipt = _exact(raw, {"evidence", "accepted_seq", "reported_seq", "reuse"}, {"evidence"}, "receipt", obligation=ob["id"])
+        evidence = _persisted_evidence(ob, receipt["evidence"], ctx)
+        key = evidence[identity]
+        if key in receipts:
+            raise refuse("obligation_invalid", "receipt_conflict", "receipt identities are unique", obligation=ob["id"])
+        receipts[key] = receipt
+        for field in ("accepted_seq", "reported_seq"):
+            if field in receipt and (type(receipt[field]) is not int or not ob["introduced_seq"] <= receipt[field] <= seq):
+                raise refuse("obligation_invalid", "malformed", "receipt sequence belongs to the recorded map history", obligation=ob["id"])
+        reuse = receipt.get("reuse")
+        if reuse is not None:
+            reuse = _exact(reuse, {"from", "to", "delta", "definition"}, {"from", "to", "delta", "definition"}, "receipt reuse", obligation=ob["id"])
+            for field in ("from", "to"):
+                _text(reuse[field], field, limit=128, obligation=ob["id"])
+            if not _sha256(reuse["definition"]) or not isinstance(reuse["delta"], list) or len(reuse["delta"]) > 256:
+                raise refuse("obligation_invalid", "malformed", "receipt reuse retains its definition and bounded delta", obligation=ob["id"])
+            for path in reuse["delta"]:
+                _path(path, code="obligation_invalid", obligation=ob["id"])
+    for raw in ob.get("evidence", []):
+        evidence = _persisted_evidence(ob, raw, ctx)
+        receipt = receipts.get(evidence[identity])
+        if receipt is None or receipt["evidence"] != evidence:
+            raise refuse("obligation_invalid", "receipt_conflict", "selected evidence matches its immutable receipt", obligation=ob["id"])
+        if ob["state"] == "satisfied" and ("accepted_seq" not in receipt or receipt.get("reuse") != ob.get("reuse")):
+            raise refuse("obligation_invalid", "receipt_conflict", "satisfied evidence retains its acceptance and reuse binding", obligation=ob["id"])
+
+
+def validate_findings(ob: dict, rows: dict, *, seq: int) -> None:
+    """Parse immutable triage records on ordinary writes and closure reads."""
+    from .obligations import MAX_FINDINGS, SEVERITIES, TRIAGE, _exact, _text, _ident, refuse
+    findings = ob.get("findings", [])
+    if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
+        raise refuse("obligation_invalid", "malformed", "finding history is a bounded list", obligation=ob["id"])
+    seen = set()
+    for raw in findings:
+        required = {"attempt", "finding", "severity", "triage", "summary", "recorded_seq"}
+        row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq"}, required, "persisted finding", obligation=ob["id"])
+        _text(row["attempt"], "attempt", limit=128, obligation=ob["id"])
+        _ident(row["finding"], "finding", obligation=ob["id"])
+        _text(row["summary"], "summary", obligation=ob["id"])
+        if row["severity"] not in SEVERITIES or row["triage"] not in TRIAGE:
+            raise refuse("obligation_invalid", "malformed", "finding retains severity and triage", obligation=ob["id"])
+        ids = row.get("findings", [row["finding"]])
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 8 or ids[0] != row["finding"]:
+            raise refuse("obligation_invalid", "malformed", "finding groups retain their identities", obligation=ob["id"])
+        for identity in ids:
+            _ident(identity, "finding", obligation=ob["id"])
+            key = (row["attempt"], identity)
+            if key in seen:
+                raise refuse("obligation_invalid", "receipt_conflict", "finding identities are immutable and unique", obligation=ob["id"])
+            seen.add(key)
+        for field in ("recorded_seq", "resolved_seq"):
+            if field in row and (type(row[field]) is not int or not 1 <= row[field] <= seq):
+                raise refuse("obligation_invalid", "malformed", "finding retains its map sequence", obligation=ob["id"])
+        for field in ("reason", "root_cause"):
+            if field in row: _text(row[field], field, limit=1024, obligation=ob["id"])
+        if row["triage"] == "required_correction":
+            correction = rows.get(row.get("correction")) if isinstance(row.get("correction"), str) else None
+            if correction is None or correction["kind"] != "correction" or correction.get("parent") != ob["id"] or "proposal" in row:
+                raise refuse("obligation_invalid", "no_parent", "required finding retains its correction", obligation=ob["id"])
+        elif "correction" in row or row["severity"] in ("blocker", "major") and not row.get("reason"):
+            raise refuse("obligation_invalid", "malformed", "advisory finding retains its reason and proposal", obligation=ob["id"])
+        else:
+            _ident(row.get("proposal"), "proposal", obligation=ob["id"])
+    if "finding" in ob:
+        raw = _exact(ob["finding"], {"attempt", "finding", "findings", "severity"}, {"attempt", "finding", "severity"}, "correction finding", obligation=ob["id"])
+        _text(raw["attempt"], "attempt", limit=128, obligation=ob["id"])
+        ids = raw.get("findings", [raw["finding"]])
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 8 or ids[0] != raw["finding"] or raw["severity"] not in SEVERITIES:
+            raise refuse("obligation_invalid", "malformed", "correction retains its finding group", obligation=ob["id"])
+        for identity in ids: _ident(identity, "finding", obligation=ob["id"])
+
+
 def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: bool,
                     *, reported_attempt: str | None = None, seq: int) -> list[dict]:
     """Keep immutable receipt identities even when a caller omits the selected evidence.

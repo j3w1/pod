@@ -1046,6 +1046,25 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     return core, proposed, dispositions
 
 
+def validate_checkpoint_snapshot(project: Path, state: dict) -> None:
+    """Parse stored checkpoint core through the ordinary checkpoint contract."""
+    value = state.get("checkpoint")
+    if not isinstance(value, dict):
+        raise PodError("state_unsupported", "Persisted checkpoint is not a record")
+    # These are the two bundle stamps added after the ordinary core/map writer.
+    stamps = exact({key: value[key] for key in ("pod_version", "bundle_digest") if key in value},
+                   {"pod_version", "bundle_digest"}, {"pod_version", "bundle_digest"}, name="checkpoint stamps")
+    bounded_text(stamps["pod_version"], name="pod_version", limit=64)
+    if not isinstance(stamps["bundle_digest"], str) or re.fullmatch(r"[0-9a-f]{64}", stamps["bundle_digest"]) is None:
+        raise PodError("state_unsupported", "Persisted checkpoint bundle identity is malformed")
+    refs = _run_references(state)
+    core = {key: item for key, item in value.items() if key not in stamps}
+    _checkpoint_input(project, value.get("objective"), state.get("owner"), core,
+                      {"runtime": next(iter(refs.values()), None)})
+    from .obligations import validate_map_record
+    validate_map_record(value)
+
+
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict) -> tuple[dict, dict | None]:

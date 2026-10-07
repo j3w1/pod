@@ -52,7 +52,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
     A positive raw reference blocks unless a supported record proves closure.
     Unknown membership holds; no record is converted, locked or rewritten.
     """
-    from .ledger import (CONTEXT_LIMIT, _validate_context,
+    from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, kernel_context)
     from .util import bounded_json
     root = state_root(project)
@@ -121,6 +121,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                         raise PodError("closure_unverified", "Peer repository binding is unavailable")
                     if not peer_project.is_dir():
                         raise PodError("closure_unverified", "Peer worktree is unreadable")
+                    validate_checkpoint_snapshot(peer_project, raw)
                     ctx = kernel_context(peer_project, checkpoint["objective"], raw, None)
                     validate_closed_snapshot(checkpoint, ctx)
                 except (PodError, KeyError, TypeError, ValueError, OSError):
