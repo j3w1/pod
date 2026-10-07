@@ -77,6 +77,23 @@ def _evidence_record(ob: dict, raw: Any, ctx: dict) -> dict:
     return record
 
 
+def _persisted_review_binding(value: Any, ob: dict) -> dict | None:
+    from .obligations import _exact, _text, refuse
+    from .records import _sha256
+    if value is None:
+        return None
+    fields = {"policy_revision", "environment", "dependencies", "sources", "governance", "definitions"}
+    binding = _exact(value, fields, fields, "assurance binding", obligation=ob["id"])
+    for field in ("policy_revision", "environment", "governance"):
+        if binding[field] is not None:
+            _text(binding[field], field, obligation=ob["id"])
+    _source_entries(binding["sources"], "binding", obligation=ob["id"])
+    _dependencies(binding["dependencies"], "binding", obligation=ob["id"])
+    if not isinstance(binding["definitions"], dict) or not all(isinstance(key, str) and _sha256(value) for key, value in binding["definitions"].items()):
+        raise refuse("obligation_invalid", "malformed", "receipt definitions are bound identities", obligation=ob["id"])
+    return binding
+
+
 def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
     """Parse a stamped receipt, including retained unselected evidence."""
     from .obligations import _exact, _text, refuse
@@ -101,18 +118,17 @@ def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
             raise refuse("obligation_invalid", "malformed", "receipt definition is a SHA256 identity", obligation=ob["id"])
         if record["governance"] is not None and not _sha256(record["governance"]):
             raise refuse("obligation_invalid", "malformed", "receipt governance is a bound fingerprint", obligation=ob["id"])
-        if record["binding"] is not None:
-            binding = _exact(record["binding"], {"policy_revision", "environment", "dependencies", "sources", "governance", "definitions"},
-                             {"policy_revision", "environment", "dependencies", "sources", "governance", "definitions"}, "assurance binding", obligation=ob["id"])
-            for field in ("policy_revision", "environment", "governance"):
-                if binding[field] is not None:
-                    _text(binding[field], field, obligation=ob["id"])
-            _source_entries(binding["sources"], "binding", obligation=ob["id"])
-            _dependencies(binding["dependencies"], "binding", obligation=ob["id"])
-            if not isinstance(binding["definitions"], dict) or not all(isinstance(key, str) and _sha256(value) for key, value in binding["definitions"].items()):
-                raise refuse("obligation_invalid", "malformed", "receipt definitions are bound identities", obligation=ob["id"])
+        _persisted_review_binding(record["binding"], ob)
     if record != raw:
         raise refuse("obligation_invalid", "malformed", "persisted evidence retains its canonical record", obligation=ob["id"])
+    if ob["kind"] == "assurance":
+        from .obligations import _admissions
+        admission = _admissions(ctx).get(record["attempt"]) or {}
+        binding = _persisted_review_binding(admission.get("binding"), ob) or {}
+        expected = {"candidate": admission.get("candidate"), "binding": admission.get("binding"),
+                    "definition": binding.get("definitions", {}).get(ob["id"])}
+        if any(record[field] != expected[field] for field in expected):
+            raise refuse("obligation_invalid", "receipt_conflict", "retained review evidence matches its immutable admission", obligation=ob["id"])
     return record
 
 
@@ -144,6 +160,18 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
                 raise refuse("obligation_invalid", "malformed", "receipt reuse retains its definition and bounded delta", obligation=ob["id"])
             for path in reuse["delta"]:
                 _path(path, code="obligation_invalid", obligation=ob["id"])
+            if (reuse["from"] != evidence["candidate"] or reuse["definition"] != evidence["definition"]
+                    or reuse["delta"] != sorted(set(reuse["delta"]))):
+                raise refuse("obligation_invalid", "receipt_conflict", "receipt reuse retains its source proof identity and canonical delta", obligation=ob["id"])
+        if ob["kind"] == "assurance" and "accepted_seq" in receipt:
+            from .obligations import _admissions
+            admission = _admissions(ctx).get(evidence["attempt"]) or {}
+            reported = receipt.get("reported_seq", receipt["accepted_seq"])
+            admitted = admission.get("admitted_seq")
+            if (reported > receipt["accepted_seq"]
+                    or admitted is not None and (type(admitted) is not int or not ob["introduced_seq"] <= admitted <= reported)
+                    or not review_completed(admission)):
+                raise refuse("obligation_invalid", "receipt_conflict", "accepted review receipt retains admission and report ordering", obligation=ob["id"])
     for raw in ob.get("evidence", []):
         evidence = _persisted_evidence(ob, raw, ctx)
         receipt = receipts.get(evidence[identity])

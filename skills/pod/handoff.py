@@ -114,8 +114,9 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                 try:
                     # No peer settlement is inferred: absent native evidence leaves
                     # bound/reserved/unresolved admissions outstanding in this context.
-                    workspace = checkpoint.get("worktree") or {}
-                    peer_project = Path(workspace["path"]) if workspace.get("path") else (
+                    from .records import worktree_binding
+                    workspace = worktree_binding(checkpoint["worktree"]) if "worktree" in checkpoint else None
+                    peer_project = Path(workspace["path"]) if workspace is not None else (
                         project if objective_root(project, checkpoint["objective"]) == path.parent else None)
                     if peer_project is None:
                         raise PodError("closure_unverified", "Peer repository binding is unavailable")

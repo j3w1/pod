@@ -221,12 +221,23 @@ class DetectionTableTests(HandoffCase):
                     "genuine-steering", "genuine-assurance-withdrawal", "genuine-foreign", "genuine-071", "genuine-080", "released-050-shared",
                     "governance-header-null", "proposals-null", "proposal-null", "observations-null", "observation-row-null",
                     "reopened-null", "reopen-row-null", "quiescence-invalid", "slot-contradiction",
-                    "assurance-findings-null", "assurance-finding-null"])
+                    "assurance-findings-null", "assurance-finding-null",
+                    "worktree-list", "worktree-string", "worktree-integer", "worktree-boolean", "worktree-null",
+                    "checkpoint-null-policy", "retained-reuse-conflict", "retained-reuse-definition",
+                    "governance-header-base", "governance-header-selection", "governance-header-exclusion",
+                    "genuine-policy", "policy-line-reversed", "policy-line-outside", "policy-quote",
+                    "policy-revision", "policy-base", "policy-undeclared", "policy-forged-gone"])
         for phase in ("fresh", "pending"):
             for kind in cases:
                 case = HandoffCase(); case.setUp()
                 try:
                     with self.subTest(phase=phase, kind=kind):
+                        if kind.startswith("policy-") or kind == "genuine-policy":
+                            from tests.kernel_support import git
+                            (case.project / "AGENTS.md").write_text("# Rules\n\nKeep project facts intact.\n")
+                            git(case.project, "add", "AGENTS.md"); git(case.project, "commit", "-qm", "policy")
+                            case.base = case.candidate = git(case.project, "rev-parse", "HEAD")
+                            git(case.project, "update-ref", "refs/remotes/origin/target", case.base)
                         case.establish()
                         if phase == "pending":
                             case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
@@ -249,6 +260,11 @@ class DetectionTableTests(HandoffCase):
                                 evidence=[case.proof("O1", reference="history-proof", status="FAILED" if kind == "genuine-history" else "PASS")])])
                         rows = [case.criterion("satisfied", evidence=[case.proof("O1", reference="selected-proof")])]
                         extra = {"close":True}
+                        if kind.startswith("policy-") or kind == "genuine-policy":
+                            rows.append({"id":"P", "kind":"criterion", "provenance":"project_policy",
+                                "source":{"path":"AGENTS.md", "lines":"3"}, "check":"policy satisfied",
+                                "state":"satisfied", "evidence":[{"check":"policy satisfied", "command":"policy check",
+                                    "result":"passed", "reference":"policy-proof"}]})
                         if kind.startswith("withdrawal-") or kind == "genuine-user-withdrawal":
                             rows = [case.criterion("withdrawn", withdrawal={"by":"user_direct", "reason":"Owner withdrew this criterion"})]
                             extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw the peer criterion"}
@@ -311,6 +327,28 @@ class DetectionTableTests(HandoffCase):
                         elif kind == "checkpoint-missing-candidate": cp.pop("candidate")
                         elif kind == "checkpoint-invalid-verification": cp["verification"] = None
                         elif kind == "checkpoint-unknown-field": cp["unknown"] = True
+                        elif kind.startswith("worktree-"):
+                            cp["worktree"] = {"worktree-list":[None], "worktree-string":"bad", "worktree-integer":1,
+                                              "worktree-boolean":True, "worktree-null":None}[kind]
+                        elif kind == "checkpoint-null-policy": cp["policy_revision"] = None
+                        elif kind in ("retained-reuse-conflict", "retained-reuse-definition"):
+                            ob["receipts"][0]["reuse"] = {"from":"unobserved" if kind.endswith("conflict") else retained["candidate"],
+                                "to":case.candidate, "delta":[], "definition":"0" * 64 if kind.endswith("definition") else retained["definition"]}
+                        elif kind == "governance-header-base": cp["governance"]["base"] = "0" * 40
+                        elif kind == "governance-header-selection": cp["governance"]["selection"] = "unsupported-selection"
+                        elif kind == "governance-header-exclusion": cp["governance"]["exclude"] = ["AGENTS.md"]
+                        elif kind.startswith("policy-"):
+                            policy = cp["obligations"][1]; source = policy["source"]
+                            changes = {"policy-line-reversed":("lines", "4-3"), "policy-line-outside":("lines", "9999"),
+                                "policy-quote":("quote_sha256", "0" * 64), "policy-revision":("revision", "sha256:" + "0" * 64),
+                                "policy-base":("base", "0" * 40), "policy-undeclared":("path", ".pod/config.yaml")}
+                            if kind in changes:
+                                field, value = changes[kind]; source[field] = value
+                            else:
+                                source["gone"] = True
+                                policy.update(state="withdrawn", withdrawal={"by":"project_policy", "reason":"policy supposedly gone"})
+                                cp["closure"]["report"]["satisfied"] = ["O1"]
+                                cp["closure"]["report"]["withdrawn"] = [{"obligation":"P", "provenance":"project_policy", **policy["withdrawal"]}]
                         elif kind == "governance-header-null": cp["governance"] = None
                         elif kind == "proposals-null": cp["proposals"] = None
                         elif kind == "proposal-null": cp["proposals"] = [None]

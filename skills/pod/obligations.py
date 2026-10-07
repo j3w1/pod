@@ -1417,6 +1417,14 @@ def validate_map_record(state: dict) -> None:
             or len(set(governance["exclude"])) != len(governance["exclude"])):
         raise refuse("obligation_invalid", "malformed", "persisted governance retains its target and source selection", record="persisted governance")
     governance_digest(value["governance_sources"])
+    sources = value["governance_sources"]
+    if (governance["selection"] not in (None, "default", "user_direct")
+            or governance["exclude"] != sorted(governance["exclude"])
+            or governance["base"] is None and (governance["base_ref"] is not None or governance["selection"] is not None or sources)
+            or governance["base"] is not None and (governance["base_ref"] is None or governance["selection"] is None
+                or [row["path"] for row in sources] != [path for path in GOVERNANCE_PATHS if path not in governance["exclude"]]
+                or any(row["base"] != governance["base"] for row in sources))):
+        raise refuse("obligation_invalid", "malformed", "governance header and declared sources retain one bound snapshot", record="persisted governance")
     proposals = value["proposals"]
     if not isinstance(proposals, list) or len(proposals) > MAX_PROPOSALS:
         raise refuse("obligation_invalid", "malformed", "persisted proposals are a bounded list", record="persisted map")
@@ -1432,7 +1440,11 @@ def validate_map_record(state: dict) -> None:
         if quiescent["state"] not in ("closable", "quiescent") or "blocked" in quiescent and not isinstance(quiescent["blocked"], list):
             raise refuse("obligation_invalid", "malformed", "persisted quiescence is a recorded projection", record="quiescence")
         if "interim_report" in quiescent:
-            _text(quiescent["interim_report"], "interim_report")
+            # This concatenates individually bounded inputs; the enclosing
+            # record bounds its size, rather than one input's text limit.
+            text = quiescent["interim_report"]
+            if not isinstance(text, str) or not text.strip() or "\x00" in text:
+                raise refuse("obligation_invalid", "malformed", "quiescence retains its derived report text", record="quiescence")
     if value["closure"] is not None:
         closed = _exact(value["closure"], {"seq", "revision", "report"}, {"seq", "revision", "report"}, "closure")
         if any(type(closed[field]) is not int or closed[field] != value[field] for field in ("seq", "revision")) or not isinstance(closed["report"], dict):
@@ -1484,6 +1496,13 @@ def _persisted_rows(state: dict, ctx: dict) -> dict:
     rows = {row["id"]: row for row in parsed}
     if len(rows) != len(parsed):
         raise refuse("obligation_invalid", "malformed", "persisted obligation ids are unique", record="obligation map")
+    observed = ctx.get("governance")
+    if observed is None and callable(ctx.get("bound_governance")):
+        observed = ctx["bound_governance"](state["governance"])
+    if observed is not None:
+        sources, base = bind_governance(observed, state["governance"]["base_ref"], state["governance"]["exclude"])
+        if sources != state["governance_sources"] or base != state["governance"]["base"]:
+            raise refuse("obligation_invalid", "cite_not_base", "persisted sources match their bound base snapshot", record="persisted governance")
     for ob in rows.values():
         if type(ob.get("introduced_seq")) is not int or not 1 <= ob["introduced_seq"] <= state["seq"] or ob.get("definition") != definition_id(ob):
             raise refuse("obligation_invalid", "malformed", "persisted obligations retain introduction and definition identities", obligation=ob["id"])
@@ -1498,6 +1517,16 @@ def _persisted_rows(state: dict, ctx: dict) -> dict:
                     or not isinstance(source["quote_sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", source["quote_sha256"]) is None
                     or source["revision"] is not None and (not isinstance(source["revision"], str) or re.fullmatch(r"sha256:[0-9a-f]{64}", source["revision"]) is None)):
                 raise refuse("obligation_invalid", "malformed", "persisted citation retains its bound source identity", obligation=ob["id"])
+            match = _LINES.fullmatch(source["lines"])
+            first, last = int(match.group(1)), int(match.group(2) or match.group(1))
+            if first > last or last - first >= MAX_CITED_LINES or source["path"] not in {row["path"] for row in state["governance_sources"]}:
+                raise refuse("obligation_invalid", "cite_not_found", "persisted citation names declared bounded lines", obligation=ob["id"])
+            if observed is None or observed.get("status") != "observed":
+                raise refuse("governance_unavailable", "governance_unavailable", "persisted policy citation needs its bound source snapshot", obligation=ob["id"])
+            cited = (_relocate(source, observed, state["governance_sources"]) if source["gone"]
+                     else _cite(source, observed, state["governance_sources"], obligation=ob["id"]))
+            if cited != source:
+                raise refuse("obligation_invalid", "cite_not_base", "persisted citation and withdrawal match their bound source text", obligation=ob["id"])
         else:
             _introduce(ob, ob["introduced_seq"] == 1, ob["provenance"] == "user_direct", None, [], list(ctx.get("criteria", [])))
         if ob["state"] == "withdrawn":

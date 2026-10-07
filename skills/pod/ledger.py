@@ -871,6 +871,9 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "criteria": list(criteria if criteria is not None else checkpoint_value.get("criteria", [])),
             "candidate": candidate if candidate is not None else checkpoint_value.get("candidate"),
             "governance": governance,
+            "bound_governance": lambda bound: governance_observation(
+                project, bound["base_ref"], at=bound["base"], bound_ref=bound["base_ref"],
+                selection=bound["selection"]),
             "governance_current": (governance or {}).get("current") if governance is not None
             else (_resolve_commit(project, base_ref) if base_ref else None),
             "source_state": source_state,
@@ -1051,6 +1054,7 @@ def validate_checkpoint_snapshot(project: Path, state: dict) -> None:
     value = state.get("checkpoint")
     if not isinstance(value, dict):
         raise PodError("state_unsupported", "Persisted checkpoint is not a record")
+    bounded_text(value.get("policy_revision"), name="policy_revision")
     # These are the two bundle stamps added after the ordinary core/map writer.
     stamps = exact({key: value[key] for key in ("pod_version", "bundle_digest") if key in value},
                    {"pod_version", "bundle_digest"}, {"pod_version", "bundle_digest"}, name="checkpoint stamps")
