@@ -397,13 +397,25 @@ class DetectionTableTests(HandoffCase):
                             checkpoint(None if path == "carry" else rows, **({"revision_authority":authority} if path == "user" else {}))
                             state = read(case.project, "observation-peer")
                             self.assertEqual(state["checkpoint"]["obligations"][1]["receipts"], original)
-                            # These are real records; an observation supplies no passing proof.
-                            from pod.ledger import kernel_context
+                            # Native settlement alone cannot promote an observation to proof.
+                            from pod.ledger import kernel_view
                             from pod.assurance import evidence_valid
                             from pod.obligations import governance_digest
+                            case.settle(admission)
+                            case.closed_review_peer(objective="qualification-positive", unknown=True)
+                            positive = read(case.project, "qualification-positive")
+                            accepted = positive["checkpoint"]["obligations"][1]
+                            positive_ctx = kernel_view(case.project, "qualification-positive", state=positive)["ctx"]
+                            positive_gov = governance_digest(positive["checkpoint"]["governance_sources"])
+                            self.assertFalse(positive_ctx["outstanding"])
+                            self.assertTrue(evidence_valid(accepted, positive_ctx, positive_gov))
+                            unknown = accepted["receipts"][0]["evidence"]
+                            self.assertEqual(unknown["attempt"], "unobserved-review")
+                            self.assertFalse(evidence_valid({**accepted, "evidence":[unknown]}, positive_ctx, positive_gov))
                             evidence = original[0]["evidence"]
                             ob = state["checkpoint"]["obligations"][1]
-                            ctx = kernel_context(case.project, "observation-peer", state, None)
+                            ctx = kernel_view(case.project, "observation-peer", state=state)["ctx"]
+                            self.assertNotIn(admission["admission_id"], ctx["outstanding"])
                             self.assertFalse(evidence_valid({**ob, "evidence":[evidence]}, ctx, governance_digest(state["checkpoint"]["governance_sources"])))
                             if kind.startswith("noverif"):
                                 rows = deepcopy(state["checkpoint"]["obligations"])
