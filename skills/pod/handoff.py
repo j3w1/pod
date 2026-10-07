@@ -94,7 +94,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                 continue
             name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
             others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
-        elif not readable or not (supported or raw.get("schema") == "pod-context/v3"):
+        elif not readable or not supported:
             # Only documented reference layouts can prove non-membership.
             unknown += 1
     return {"objectives": sorted(set(others)), "unreadable": unknown}

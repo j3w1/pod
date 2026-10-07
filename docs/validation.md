@@ -355,3 +355,17 @@ coordinator loss and restart proof requires an Owner-scheduled disposable trial;
 missing stale/gone and real restart evidence stays NOT_RUN. Local gate success,
 hosted Linux, independent review, self-hosting proof and Owner acceptance remain
 separate.
+
+The unseen referenced-Run subcase of A243 is the sole explicit exception to
+production/released-writer fixture origin: it is a labeled synthetic defensive
+restored-record control. Supported writers preserve singleton references; genuine
+pre-guard multi-reference records are superseded and are never converted. The
+control is not genuine-writer, live or acceptance evidence. All other B1 rows
+retain their production-boundary or genuine archived-writer requirements.
+
+The shared fixture defaults to its synthetic recorded owner, with explicit
+different/absent callers retained. Stopall tests prove caller and home restoration.
+Run broad local checks with fresh process-scoped POD_STATE_HOME, POD_CONFIG_HOME
+and POD_CACHE_HOME in disposable task storage as an outer containment layer;
+fixtures clear them locally and restore them afterward. Failed isolation runs
+and host-state recovery are separate evidence, never passing candidate proof.

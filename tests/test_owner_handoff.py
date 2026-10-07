@@ -597,13 +597,30 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),'genuine-050-shared')/'co
         process = subprocess.run([os.sys.executable, "-c", script], cwd=self.project,
             env={**os.environ, "PYTHONPATH":str(old / "skills")}, capture_output=True, text=True, check=True)
         other = Path(json.loads(process.stdout)["path"]); original = other.read_bytes()
-        self.assertEqual(json.loads(original)["schema"], "pod-context/v3")
+        self.assertNotEqual(json.loads(original)["schema"], self.state()["schema"])
         self.lose(); before = self.snapshot()
         self.assertEqual(self.status()["owner_handoff"]["condition"], "run_shared")
         self.assertIn("genuine-050-shared", self.status(text=True))
         self.refused(lambda:self.handoff())
         self.assertEqual(self.snapshot(), before); self.assertEqual(other.read_bytes(), original)
         self.assertEqual(self.mutations, [])
+
+    def test_unseen_run_is_an_explicit_synthetic_defensive_control(self):
+        # Ordinary supported writers cannot emit this multi-Run state. This sole
+        # Owner-approved proof exception is defensive, never genuine-writer/live evidence.
+        self.establish()
+        path = objective_root(self.project, "objective") / "context.json"
+        restored = json.loads(path.read_text())
+        restored["checkpoint"]["native_refs"].append({"runId":"unseen", "runtime":"runtime"})
+        path.write_text(json.dumps(restored))
+        self.lose(); before = self.snapshot(); detected = self.status()["owner_handoff"]
+        self.assertEqual(detected["status"], "handoff_available")
+        self.assertIn("run unseen: not shown by run-current", detected["facts"]["ambiguity"])
+        decision = self.decision()
+        self.refused(lambda:self.handoff({**decision, "ambiguity":[]}), code="handoff_decision_mismatch")
+        self.assertEqual(before, self.snapshot()); self.assertEqual(self.mutations, [])
+        self.handoff(decision)
+        self.assertEqual(self.entry()["state"], "done"); self.assertEqual(len(self.mutations), 1)
 
     def test_genuine_066_writer_missing_generation_requires_named_confirmation(self):
         import shutil
