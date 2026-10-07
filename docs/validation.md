@@ -355,7 +355,10 @@ unreported bound, reserved and unresolved admissions remain unchanged.
 Related retained-history siblings vary withdrawal, optional acceptance/report
 markers, review role and exact served assurance, duplicate/order contradictions,
 and readable immutable REUSE targets/deltas. Genuine unknown/unconsumed attempts
-and retained REUSE remain positive controls. A separate bounded continuity table
+and retained REUSE remain positive controls. Genuine no-verification succeeded/failed review observations
+and unconsumed cross-role/cross-assurance references additionally exercise ordinary
+carry-forward, restatement, coordinator/user withdrawal and fresh/pending peers;
+readability never promotes them to qualifying assurance proof. A separate bounded continuity table
 checks runtime strings and malformed lineage envelopes before fingerprint
 collection through JSON/text status and every authority boundary, fresh and pending.
 

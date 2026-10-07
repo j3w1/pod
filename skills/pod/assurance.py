@@ -129,8 +129,6 @@ def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
     if ob["kind"] == "assurance":
         from .obligations import _admissions
         admission = _admissions(ctx).get(record["attempt"]) or {}
-        if admission and not _review_assignment(ob, admission):
-            raise refuse("obligation_invalid", "receipt_conflict", "review history joins the exact served review assignment", obligation=ob["id"])
         binding = _persisted_review_binding(admission.get("binding"), ob) or {}
         expected = {"candidate": admission.get("candidate"), "binding": admission.get("binding"),
                     "definition": binding.get("definitions", {}).get(ob["id"])}
@@ -173,15 +171,27 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
             delta = _reuse_delta(reuse["from"], reuse["to"], ctx, obligation=ob["id"])
             if delta is None or reuse != _reuse_record(reuse["from"], reuse["to"], evidence["definition"], delta):
                 raise refuse("obligation_invalid", "receipt_conflict", "retained REUSE matches its readable source, target and recorded Git delta", obligation=ob["id"])
+            from .obligations import definition_id
+            if evidence["definition"] == definition_id(ob):
+                label, touched = _reuse_scope(ob, delta)
+                if label != "eligible":
+                    raise refuse("obligation_invalid", "receipt_conflict", "retained REUSE preserves its original verified scope", obligation=ob["id"], paths=",".join(touched[:8]))
         if ob["kind"] == "assurance":
             from .obligations import _admissions
             admission = _admissions(ctx).get(evidence["attempt"]) or {}
-            completed = isinstance(admission.get("report"), dict)
-            if completed or "accepted_seq" in receipt or "reported_seq" in receipt:
+            # A reference to another attempt remains an observation, even when
+            # that attempt later reports. The recorded definition identifies
+            # which assurance the completed review actually serves.
+            completed = isinstance(admission.get("report"), dict) and evidence["definition"] is not None
+            proof = "accepted_seq" in receipt or "reported_seq" in receipt or reuse is not None
+            if completed or proof:
+                if not _review_assignment(ob, admission):
+                    raise refuse("obligation_invalid", "receipt_conflict", "review proof joins the exact served review assignment", obligation=ob["id"])
                 if not _sha256(evidence["governance"]) or not _sha256(evidence["definition"]) or evidence["binding"] is None:
                     raise refuse("obligation_invalid", "receipt_conflict", "recorded review history retains complete proof bindings", obligation=ob["id"])
-                for field in ("policy_revision", "environment"):
-                    _text(evidence["binding"][field], field, obligation=ob["id"])
+                _text(evidence["binding"]["policy_revision"], "policy_revision", obligation=ob["id"])
+                if "accepted_seq" in receipt or reuse is not None:
+                    _text(evidence["binding"]["environment"], "environment", obligation=ob["id"])
                 if not _sha256(evidence["binding"]["governance"]):
                     raise refuse("obligation_invalid", "receipt_conflict", "recorded review binding retains its governance identity", obligation=ob["id"])
             reported = receipt.get("reported_seq", receipt.get("accepted_seq"))
@@ -360,9 +370,17 @@ def _reuse_record(source: str, target: str, definition: str, delta: list[str]) -
     return {"from": source, "to": target, "delta": delta[:256], "definition": definition}
 
 
+def _reuse_scope(ob: dict, delta: list[str]) -> tuple[str, list[str]]:
+    from .obligations import overlap
+    paths = ob.get("proof_scope", ob["scope"]["paths"] if ob["kind"] == "assurance" else ob["boundary"]["paths"])
+    if not paths and "proof_scope" not in ob:
+        return "no declared scope", []
+    touched = overlap({"paths": delta, "surfaces": []}, {"paths": paths, "surfaces": []})["paths"]
+    return ("touched" if touched else "eligible"), touched
+
+
 def reuse_eligibility(ob: dict, source: str, ctx: dict) -> tuple[str, list[str], list[str] | None]:
     """One read-only scope/delta check shared by binding and complete refusals."""
-    from .obligations import _path, overlap
     paths = ob.get("proof_scope", ob["scope"]["paths"] if ob["kind"] == "assurance" else ob["boundary"]["paths"])
     if not paths and "proof_scope" not in ob:
         return "no declared scope", [], None
@@ -370,9 +388,8 @@ def reuse_eligibility(ob: dict, source: str, ctx: dict) -> tuple[str, list[str],
     delta = _reuse_delta(source, current, ctx, obligation=ob["id"])
     if delta is None:
         return "delta unreadable", [], None
-    touched = overlap({"paths": [_path(path, code="obligation_unaccounted", obligation=ob["id"]) for path in delta], "surfaces": []},
-                      {"paths": paths, "surfaces": []})["paths"]
-    return ("touched" if touched else "eligible"), touched, delta
+    label, touched = _reuse_scope(ob, delta)
+    return label, touched, delta
 
 
 def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:

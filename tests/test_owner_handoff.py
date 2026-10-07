@@ -22,6 +22,43 @@ BASELINE = "86d8b90db7c1d0f6a38c3c9167b950548ff79fad"
 
 
 class HandoffCase(ProductionCase):
+    def observation_peer(self, kind, *, objective="observation-peer"):
+        def checkpoint(rows=None, **extra):
+            value = self.core(governance={"base_ref":"refs/remotes/origin/target"}, **extra)
+            if rows is not None: value["obligations"] = rows
+            if kind.startswith("noverif"): value.pop("verification")
+            return run("checkpoint", {"project":str(self.project), "objective":objective,
+                "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":value})
+        review = {"id":"A", "kind":"assurance", "provenance":"coordinator", "parent":"O1", "check":"review",
+            "scope":{"paths":["src"]}, "question":"correct?", "candidate":self.candidate,
+            "existing_evidence":"tests", "insufficiency":"no review", "state":"waiting",
+            "wait":{"class":"sequenced", "referent":"O1"}}
+        rows = [self.criterion(), review]
+        if kind == "implementation": rows.append(self.sub("S1", boundary={"paths":["area1"]}))
+        if kind == "other-assurance": rows.append({**review, "id":"B", "scope":{"paths":["docs"]}})
+        checkpoint(rows)
+        served = "S1" if kind == "implementation" else "B" if kind == "other-assurance" else "A"
+        from pod.records import packet
+        body = deepcopy(self.packet([served], role="implement" if kind == "implementation" else "review",
+            boundary={"paths":["area1"]} if kind == "implementation" else None)["body"])
+        body.update(objective=objective, map_revision=read(self.project, objective)["checkpoint"]["revision"])
+        frozen = packet(body)
+        admission = run("admission", {"project":str(self.project), "objective":objective,
+            "owner":os.environ["ORCA_TERMINAL_HANDLE"], "run":"run", "task":"observation-attempt", "plan_revision":"plan", "packet":frozen})["admission"]
+        rows = deepcopy(read(self.project, objective)["checkpoint"]["obligations"])
+        if kind in ("implementation", "other-assurance", "noverif-failed"):
+            rows[1]["evidence"] = [{"attempt":admission["admission_id"]}]
+            checkpoint(rows)
+        if kind.startswith("noverif"):
+            self.settle(admission)
+            rows[1].pop("executor"); rows[1].update(state="waiting", wait={"class":"sequenced", "referent":"O1"})
+            report = {"schema":"pod-report/v1", "assignment":frozen["packet_id"], "attempt":admission["native_binding"]["dispatchId"],
+                "candidate":self.candidate, "outcome":"failed" if kind.endswith("failed") else "succeeded", "scope":frozen["body"]["scope"],
+                "files":[], "checks":["observed"], "failures":[], "evidence":[], "uncertainty":[], "questions":[]}
+            run("report", {"project":str(self.project), "objective":objective, "admission_id":admission["admission_id"],
+                "packet":frozen, "report":report, "map":{"obligations":rows}})
+        return checkpoint, admission
+
     def reused_review_peer(self, objective="history-peer"):
         self.closed_review_peer(objective=objective)
         original = self.candidate
@@ -277,11 +314,51 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
 
 
 class DetectionTableTests(HandoffCase):
+    def test_faithful_observations_remain_readable_and_never_qualify(self):
+        for phase in ("fresh", "pending"):
+            for kind in ("noverif-succeeded", "noverif-failed", "implementation", "other-assurance"):
+                for path in ("carry", "restated", "coordinator", "user"):
+                    case = HandoffCase(); case.setUp()
+                    try:
+                        with self.subTest(phase=phase, kind=kind, path=path):
+                            case.establish()
+                            if phase == "pending":
+                                case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                            checkpoint, admission = case.observation_peer(kind)
+                            peer = objective_root(case.project, "observation-peer") / "context.json"
+                            original = deepcopy(read(case.project, "observation-peer")["checkpoint"]["obligations"][1]["receipts"])
+                            rows = deepcopy(read(case.project, "observation-peer")["checkpoint"]["obligations"])
+                            if path in ("coordinator", "user"):
+                                for field in ("wait", "executor", "evidence"): rows[1].pop(field, None)
+                                rows[1].update(state="withdrawn", withdrawal={"by":"coordinator" if path == "coordinator" else "user_direct", "reason":"observation retained"})
+                            authority = {"provenance":"user_direct", "instruction":"Withdraw the disposable assurance"}
+                            checkpoint(None if path == "carry" else rows, **({"revision_authority":authority} if path == "user" else {}))
+                            state = read(case.project, "observation-peer")
+                            self.assertEqual(state["checkpoint"]["obligations"][1]["receipts"], original)
+                            # These are real records; an observation supplies no passing proof.
+                            from pod.ledger import kernel_context
+                            from pod.assurance import evidence_valid
+                            from pod.obligations import governance_digest
+                            evidence = original[0]["evidence"]
+                            ob = state["checkpoint"]["obligations"][1]
+                            ctx = kernel_context(case.project, "observation-peer", state, None)
+                            self.assertFalse(evidence_valid({**ob, "evidence":[evidence]}, ctx, governance_digest(state["checkpoint"]["governance_sources"])))
+                            if kind.startswith("noverif"):
+                                rows = deepcopy(state["checkpoint"]["obligations"])
+                                for row in rows:
+                                    if row["state"] == "withdrawn": continue
+                                    for field in ("wait", "executor", "evidence", "withdrawal"): row.pop(field, None)
+                                    row.update(state="withdrawn", withdrawal={"by":"user_direct", "reason":"close observation-only peer"})
+                                checkpoint(rows, close=True, revision_authority=authority)
+                            if phase == "fresh": case.lose()
+                            case.assert_peer_scope(peer, eligible=kind.startswith("noverif"), phase=phase)
+                    finally: case.doCleanups()
+
     def test_retained_review_history_keeps_assignment_and_git_facts(self):
         marker_cases = [(markers, kind) for markers in ((), ("accepted_seq",), ("reported_seq",), ("accepted_seq", "reported_seq"))
                         for kind in ("genuine", "null-governance", "role", "serves")]
         cases = marker_cases + [((), kind) for kind in ("unknown-genuine", "duplicate", "reported-before-admitted", "reuse-genuine",
-                 "reuse-unknown-target", "reuse-false-delta", "reuse-source", "reuse-definition", "reuse-duplicate", "reuse-unreadable")]
+                 "reuse-unknown-target", "reuse-false-delta", "reuse-source", "reuse-definition", "reuse-duplicate", "reuse-unreadable", "reuse-touched-accurate")]
         for phase in ("fresh", "pending"):
             for markers, kind in cases:
                 case = HandoffCase(); case.setUp()
@@ -309,6 +386,12 @@ class DetectionTableTests(HandoffCase):
                         elif kind == "reuse-duplicate": receipt["reuse"]["delta"] *= 2
                         elif kind == "reuse-unreadable":
                             receipt["reuse"]["to"] = "0" * 40
+                        elif kind == "reuse-touched-accurate":
+                            from tests.kernel_support import git
+                            (case.project / "src/old.py").write_text("changed original reviewed scope\n")
+                            git(case.project, "add", "."); git(case.project, "commit", "-qm", "touch reviewed scope")
+                            target = git(case.project, "rev-parse", "HEAD")
+                            receipt["reuse"].update(to=target, delta=sorted(git(case.project, "diff", "--name-only", receipt["reuse"]["from"], target).split()))
                         if markers or kind not in ("genuine", "reuse-genuine", "unknown-genuine"):
                             peer.write_text(json.dumps(raw))  # Defensive corrupt-record control, never writer/live proof.
                         if phase == "fresh": case.lose()

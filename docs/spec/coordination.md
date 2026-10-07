@@ -245,9 +245,11 @@ assurance refuses reopening as `assurance_still_bound`; an incomplete review doe
 not acquire that protection. Restored bindings do not erase an already admitted
 native review or qualify its incomplete work. Authorized withdrawal retains history, and actual
 binding invalidation or an authorized changed definition permits fresh review.
-Retained review observations keep their exact review role and served assurance.
-Completed history retains full proof bindings even when an optional acceptance
-or report sequence is absent; unknown and unconsumed attempts remain observations.
+Retained observations keep the faithful candidate, binding and definition of
+their referenced attempt. A missing optional verification environment and an
+unconsumed cross-role or cross-assurance reference remain readable observations;
+neither qualifies the assurance. Completed review proof retains its exact role,
+served assurance and provenance even when an optional acceptance marker is absent.
 Retained REUSE rechecks its immutable source and target in Git and matches the
 ordinary writer's bounded delta representation, including after withdrawal.
 A failed, incomplete or scope-unreconciled review observation cannot satisfy assurance.
