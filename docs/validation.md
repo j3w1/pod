@@ -361,6 +361,13 @@ carry-forward, restatement, coordinator/user withdrawal and fresh/pending peers;
 readability never promotes them to qualifying assurance proof. A separate bounded continuity table
 checks runtime strings and malformed lineage envelopes before fingerprint
 collection through JSON/text status and every authority boundary, fresh and pending.
+The direct Owner hold decision additionally checks genuine wider report scopes,
+authorized scope/question changes and non-assurance proof_scope changes: ordinary
+reads/writes/closure stay valid, while Run-sharing peer exclusion holds with named
+unverifiable history in fresh and pending handoff. Confirmation cannot override
+the hold, pending stays pending, and all work/peer/Governor bytes remain unchanged.
+This changes the prior changed-definition handoff expectation only; its earlier
+passing evidence is retained separately, with no additional A243 exception.
 
 R105 is an authority/governance change: the fresh final independent audit uses
 installed 0.8.0, never candidate 0.8.1 evidence about itself. Corrections receive

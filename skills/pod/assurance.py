@@ -137,7 +137,7 @@ def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
     return record
 
 
-def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
+def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
     """One persisted evidence/history contract for ordinary writes and closure reads."""
     from .obligations import MAX_EVIDENCE, _exact, _text, _path, refuse
     from .records import _sha256
@@ -146,6 +146,7 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
         raise refuse("obligation_invalid", "malformed", "receipt history is a bounded recorded list", obligation=ob["id"])
     identity = "attempt" if ob["kind"] == "assurance" else "reference"
     receipts = {}
+    unverifiable = []
     for raw in history:
         receipt = _exact(raw, {"evidence", "accepted_seq", "reported_seq", "reuse"}, {"evidence"}, "receipt", obligation=ob["id"])
         evidence = _persisted_evidence(ob, receipt["evidence"], ctx)
@@ -176,6 +177,10 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
                 label, touched = _reuse_scope(ob, delta)
                 if label != "eligible":
                     raise refuse("obligation_invalid", "receipt_conflict", "retained REUSE preserves its original verified scope", obligation=ob["id"], paths=",".join(touched[:8]))
+            else:
+                # Recorded facts remain readable; an old scope is not recoverable
+                # from its fingerprint, a packet/report scope or a later scope.
+                unverifiable.append(key)
         if ob["kind"] == "assurance":
             from .obligations import _admissions
             admission = _admissions(ctx).get(evidence["attempt"]) or {}
@@ -207,6 +212,7 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> None:
             raise refuse("obligation_invalid", "receipt_conflict", "selected evidence matches its immutable receipt", obligation=ob["id"])
         if ob["state"] == "satisfied" and ("accepted_seq" not in receipt or receipt.get("reuse") != ob.get("reuse")):
             raise refuse("obligation_invalid", "receipt_conflict", "satisfied evidence retains its acceptance and reuse binding", obligation=ob["id"])
+    return tuple(unverifiable)
 
 
 def validate_findings(ob: dict, rows: dict, *, seq: int) -> None:

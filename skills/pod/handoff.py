@@ -60,6 +60,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
         return {"objectives": [], "unreadable": 1}
     own = objective_root(project, objective) / "context.json"
     others, unknown = [], 0
+    unverifiable = []
     # A complete frontier is part of the proof. scandir/stat propagate errors that
     # Path.glob suppresses; an unavailable directory is never apparent absence.
     paths = []
@@ -124,17 +125,20 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                         raise PodError("closure_unverified", "Peer worktree is unreadable")
                     validate_checkpoint_snapshot(peer_project, raw)
                     ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
-                    validate_closed_snapshot(checkpoint, ctx)
+                    unproven = validate_closed_snapshot(checkpoint, ctx)
                 except (PodError, KeyError, TypeError, ValueError, OSError):
                     pass
                 else:
+                    if unproven:
+                        name = checkpoint["objective"]
+                        unverifiable.append(name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective")
                     continue
             name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
             others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
         elif not readable or not supported:
             # Only documented reference layouts can prove non-membership.
             unknown += 1
-    return {"objectives": sorted(set(others)), "unreadable": unknown}
+    return {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
 
 
 def detect(project: Path, objective: str, state: dict, *, port, caller: str | None = None) -> dict:
@@ -232,6 +236,13 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         result["unreadable_objectives"] = scope["unreadable"]
         return fail("scope_unreadable", "Run scope is unverified: " + str(scope["unreadable"]) + " objective record(s) could not prove membership or closure.",
                     action="Resolve the unreadable objective records before handoff; do not run orca orchestration run-use by hand.")
+    if scope.get("unverifiable"):
+        names = scope["unverifiable"]
+        result["unverifiable_peers"] = names[:8]
+        result["remaining_peers"] = max(0, len(names) - 8)
+        return fail("peer_history_unverifiable", "Handoff holds: the original eligibility scope of retained REUSE cannot be verified for peer "
+                    + ", ".join(names[:8]) + ("; and " + str(len(names) - 8) + " more" if len(names) > 8 else "") + ".",
+                    action="Resolve the named peer history before handoff; ordinary writes remain available. No confirmation overrides this hold; do not run orca orchestration run-use by hand.")
     work = continuity_work(state, runtime=first["runtime"], port=port)
     if work["differs"]:
         result["differs"] = work["differs"]

@@ -76,10 +76,10 @@ class HandoffCase(ProductionCase):
         rows[1].update(state="withdrawn", withdrawal={"by":"coordinator", "reason":"review no longer required"})
         checkpoint(rows)
 
-    def assert_peer_scope(self, peer, *, eligible, phase):
+    def assert_peer_scope(self, peer, *, eligible, phase, unverifiable=False):
         before = self.snapshot(); own = deepcopy(self.state()); calls = len(self.mutations)
         starts, workers = deepcopy(self.port.starts), deepcopy(self.port.workers)
-        condition = ("fresh" if phase == "fresh" else "resume") if eligible else "run_shared"
+        condition = ("fresh" if phase == "fresh" else "resume") if eligible else "peer_history_unverifiable" if unverifiable else "run_shared"
         verdict = self.status()["owner_handoff"]
         self.assertEqual(verdict["condition"], condition)
         self.assertIn(condition if not eligible else "handoff", self.status(text=True))
@@ -94,7 +94,7 @@ class HandoffCase(ProductionCase):
             self.assert_only_handoff_changes(own, self.state(), completed=True)
         else:
             self.refused(lambda:self.handoff()); self.assertEqual(len(self.mutations), calls)
-            if phase == "pending":
+            if phase == "pending" and not unverifiable:
                 self.assertEqual(self.entry()["state"], "aborted")
                 self.assert_only_handoff_changes(own, self.state(), completed=False)
             else: self.assertEqual(own, self.state())
@@ -103,7 +103,7 @@ class HandoffCase(ProductionCase):
         self.assertEqual(peer.read_bytes(), before[str(peer.relative_to(self.root / "state"))])
         self.assertEqual(self.port.starts, starts); self.assertEqual(self.port.workers, workers)
 
-    def closed_review_peer(self, *, withdrawn=False, objective="closure-peer", unknown=False):
+    def closed_review_peer(self, *, withdrawn=False, objective="closure-peer", unknown=False, packet_scope=None):
         def checkpoint(rows, **extra):
             return run("checkpoint", {"project":str(self.project), "objective":objective,
                 "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":self.core(obligations=rows,
@@ -115,6 +115,7 @@ class HandoffCase(ProductionCase):
         checkpoint([self.criterion(), review])
         from pod.records import packet
         body = deepcopy(self.packet(["A"], role="review")["body"])
+        if packet_scope is not None: body["scope"] = list(packet_scope)
         body.update(objective=objective, map_revision=read(self.project, objective)["checkpoint"]["revision"])
         frozen = packet(body)
         admission = run("admission", {"project":str(self.project), "objective":objective,
@@ -314,6 +315,67 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
 
 
 class DetectionTableTests(HandoffCase):
+    def test_owner_hold_for_unverifiable_original_reuse_scope(self):
+        for phase in ("fresh", "pending"):
+            for kind in ("review-scope", "review-scope-and-question", "ordinary-proof-scope"):
+                case = HandoffCase(); case.setUp()
+                try:
+                    with self.subTest(phase=phase, kind=kind):
+                        case.establish()
+                        if phase == "pending":
+                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                        def checkpoint(rows=None, **extra):
+                            value = case.core(governance={"base_ref":"refs/remotes/origin/target"}, **extra)
+                            if rows is not None: value["obligations"] = rows
+                            return run("checkpoint", {"project":str(case.project), "objective":"hold-peer",
+                                "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":value})
+                        if kind.startswith("review-"):
+                            case.closed_review_peer(objective="hold-peer", packet_scope=("src", "docs"))
+                        else:
+                            checkpoint([case.criterion("satisfied", proof_scope=["src"], evidence=[
+                                {"check":"criterion", "command":"unit", "result":"passed", "reference":"original-proof"}])], close=True)
+                        original = case.candidate
+                        from tests.kernel_support import git
+                        (case.project / "docs").mkdir(); (case.project / "docs/extra.txt").write_text("outside original verified scope\n")
+                        git(case.project, "add", "."); git(case.project, "commit", "-qm", "unaffected original proof")
+                        case.candidate = git(case.project, "rev-parse", "HEAD")
+                        authority = {"provenance":"user_direct", "instruction":"Revise the disposable definition and preserve its history"}
+                        rows = deepcopy(read(case.project, "hold-peer")["checkpoint"]["obligations"])
+                        if kind.startswith("review-"):
+                            rows[0]["evidence"] = [{"check":"criterion", "command":"unit", "result":"passed", "reference":"new-proof"}]
+                            rows[1].update(candidate=case.candidate, reuse={"from":original})
+                        else: rows[0]["reuse"] = {"from":original}
+                        checkpoint(rows, reopen=True, close=True, revision_authority=authority)
+                        rows = deepcopy(read(case.project, "hold-peer")["checkpoint"]["obligations"])
+                        row = rows[1] if kind.startswith("review-") else rows[0]
+                        row.pop("evidence"); row.pop("reuse")
+                        row.update(state="withdrawn", withdrawal={"by":"coordinator" if kind.startswith("review-") else "user_direct", "reason":"authorized definition revision"})
+                        if kind.startswith("review-"): row["scope"] = {"paths":["elsewhere"]}
+                        else: row["proof_scope"] = ["elsewhere"]
+                        if kind.endswith("question"): row["question"] = "authorized changed question"
+                        checkpoint(rows, reopen=True, close=True, revision_authority=authority)
+                        checkpoint(reopen=True, close=True, revision_authority=authority)
+                        stored = read(case.project, "hold-peer")
+                        ob = stored["checkpoint"]["obligations"][1 if kind.startswith("review-") else 0]
+                        receipt = ob["receipts"][0]
+                        self.assertNotEqual(receipt["evidence"]["definition"], ob["definition"])
+                        self.assertEqual(receipt["reuse"]["delta"], ["docs/extra.txt"])
+                        if kind.startswith("review-"):
+                            self.assertEqual(next(iter(stored["admissions"].values()))["report"]["observation"]["scope"], ["src", "docs"])
+                        peer = objective_root(case.project, "hold-peer") / "context.json"
+                        if phase == "fresh": case.lose()
+                        before = case.snapshot(); calls = len(case.mutations)
+                        verdict = case.status()["owner_handoff"]
+                        self.assertEqual(verdict["unverifiable_peers"], ["hold-peer"])
+                        self.assertIn("hold-peer", case.status(text=True))
+                        self.assertNotIn("run-use --id", case.status(text=True))
+                        decision = case.decision()
+                        for confirmation in (decision, {**decision, "scope":"all"}, {**decision, "ambiguity":["override peer hold"]}):
+                            case.refused(lambda:case.handoff(confirmation))
+                        self.assertEqual(case.snapshot(), before); self.assertEqual(len(case.mutations), calls)
+                        case.assert_peer_scope(peer, eligible=False, phase=phase, unverifiable=True)
+                finally: case.doCleanups()
+
     def test_faithful_observations_remain_readable_and_never_qualify(self):
         for phase in ("fresh", "pending"):
             for kind in ("noverif-succeeded", "noverif-failed", "implementation", "other-assurance"):

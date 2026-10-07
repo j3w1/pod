@@ -252,6 +252,13 @@ neither qualifies the assurance. Completed review proof retains its exact role,
 served assurance and provenance even when an optional acceptance marker is absent.
 Retained REUSE rechecks its immutable source and target in Git and matches the
 ordinary writer's bounded delta representation, including after withdrawal.
+Under the direct Owner decision to hold handoff, a definition-changing receipt
+whose original eligibility scope is no longer recorded remains readable after
+its recorded facts verify, but is nonqualifying history. Ordinary writes and
+closure record production remain available. Owner-handoff cannot exclude a
+Run-sharing closed peer containing that history. Neither report/packet scope,
+editing ownership nor a later definition supplies the missing original scope;
+no repair, conversion or additional stored scope fact is implied.
 A failed, incomplete or scope-unreconciled review observation cannot satisfy assurance.
 Reservation stamps immutable `admitted_seq`; successful report consumption
 stamps immutable `reported_seq`; triage stamps `recorded_seq`. Correction

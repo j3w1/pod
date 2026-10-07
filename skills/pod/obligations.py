@@ -1483,7 +1483,7 @@ def validate_map_record(state: dict) -> None:
             raise refuse("obligation_invalid", "malformed", "serialization observation retains its sequence", record="observations")
 
 
-def _persisted_rows(state: dict, ctx: dict) -> dict:
+def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = None) -> dict:
     """Canonical persisted rows, shared by completed writes and closure reads."""
     from .assurance import validate_receipts, validate_findings
     validate_map_record(state)
@@ -1535,7 +1535,9 @@ def _persisted_rows(state: dict, ctx: dict) -> dict:
             authority = _authority({"provenance": "user_direct", "instruction": instruction}) if isinstance(withdrawal, dict) and withdrawal.get("by") == "user_direct" else None
             if _withdrawal(ob, authority is not None, authority) != withdrawal:
                 raise refuse("obligation_invalid", "withdrawal_unauthorized", "persisted withdrawal retains its complete authority record", obligation=ob["id"])
-        validate_receipts(ob, ctx, seq=state["seq"])
+        unknown = validate_receipts(ob, ctx, seq=state["seq"])
+        if unknown and unverifiable is not None:
+            unverifiable.append(ob["id"])
         validate_findings(ob, rows, seq=state["seq"])
     _ancestry(rows)
     return rows
@@ -1558,7 +1560,7 @@ def _close(state: dict, ctx: dict) -> dict:
     return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
 
 
-def validate_closed_snapshot(state: dict, ctx: dict) -> None:
+def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
     """Recheck recorded closure with the same row, closure and report contracts."""
     closure = _exact(state.get("closure"), {"seq", "revision", "report"},
                      {"seq", "revision", "report"}, "closure")
@@ -1568,7 +1570,8 @@ def validate_closed_snapshot(state: dict, ctx: dict) -> None:
     raw = state.get("obligations")
     if not isinstance(raw, list) or not raw:
         raise refuse("obligation_invalid", "malformed", "closure needs its complete obligation map", record="closure")
-    rows = _persisted_rows(state, ctx)
+    unverifiable = []
+    rows = _persisted_rows(state, ctx, unverifiable=unverifiable)
     criteria = set(ctx.get("criteria", []))
     original = {ob["source"]["ref"] for ob in rows.values() if ob["provenance"] == "objective"}
     if not original <= criteria or not criteria <= _covered(rows):
@@ -1582,6 +1585,7 @@ def validate_closed_snapshot(state: dict, ctx: dict) -> None:
     expected = _close(state, ctx)
     if closure != expected:
         raise refuse("obligation_invalid", "malformed", "closure report matches the validated map and evidence", record="closure")
+    return tuple(sorted(set(unverifiable)))
 
 
 def brief_map(criteria: list[str], value: Any, ctx: dict) -> dict:

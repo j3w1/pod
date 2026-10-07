@@ -2699,6 +2699,7 @@
         "tests.test_owner_handoff.DetectionTableTests.test_complete_persisted_closure_contract_for_fresh_and_pending",
         "tests.test_owner_handoff.DetectionTableTests.test_retained_review_history_keeps_assignment_and_git_facts",
         "tests.test_owner_handoff.DetectionTableTests.test_faithful_observations_remain_readable_and_never_qualify",
+        "tests.test_owner_handoff.DetectionTableTests.test_owner_hold_for_unverifiable_original_reuse_scope",
         "tests.test_owner_handoff.DetectionTableTests.test_continuity_runtime_shapes_refuse_before_fingerprint_collection"
       ],
       "status": "NOT_RUN"
