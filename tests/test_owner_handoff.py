@@ -314,6 +314,91 @@ class DetectionTableTests(HandoffCase):
                     self.assertEqual(other.read_bytes(), before[str(other.relative_to(case.root / "state"))])
             finally: case.doCleanups()
 
+    def test_scope_frontier_and_closure_invariant_for_fresh_and_pending(self):
+        # Scope must be completely readable and closure validated/noncontradictory.
+        cases = ("directory-denied", "root-denied", "empty-directory-denied", "active-obligation",
+                 "missing-obligations", "empty-report", "stale-sequence", "stale-revision",
+                 "boolean-sequence", "genuine-closed", "genuine-foreign")
+        for phase in ("fresh", "pending"):
+            for kind in cases:
+                case = HandoffCase(); case.setUp()
+                changed_permission = None
+                try:
+                    with self.subTest(phase=phase, kind=kind):
+                        case.establish()
+                        if phase == "pending":
+                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                        closed = kind not in ("directory-denied", "root-denied", "genuine-foreign")
+                        rows = [case.criterion("satisfied", evidence=[case.proof("O1")])] if closed else [case.criterion()]
+                        current = deepcopy(case.current)
+                        if kind == "genuine-foreign": case.current.update(id="foreign-run")
+                        run("checkpoint", {"project":str(case.project), "objective":"frontier-peer",
+                            "owner":os.environ["ORCA_TERMINAL_HANDLE"],
+                            "value":case.core(obligations=rows, governance={"base_ref":"refs/remotes/origin/target"}, **({"close":True} if closed else {}))})
+                        case.current = current
+                        other = objective_root(case.project, "frontier-peer") / "context.json"
+                        raw = json.loads(other.read_text())
+                        if kind == "active-obligation":
+                            ob = raw["checkpoint"]["obligations"][0]; ob.update(state="active", executor="coordinator")
+                            ob.pop("evidence", None); ob.pop("receipts", None)
+                        elif kind == "missing-obligations": raw["checkpoint"].pop("obligations")
+                        elif kind == "empty-report": raw["checkpoint"]["closure"]["report"] = {"status":"closed"}
+                        elif kind == "stale-sequence": raw["checkpoint"]["closure"]["seq"] -= 1
+                        elif kind == "stale-revision": raw["checkpoint"]["closure"]["revision"] -= 1
+                        elif kind == "boolean-sequence": raw["checkpoint"]["closure"]["seq"] = True
+                        if kind in ("active-obligation", "missing-obligations", "empty-report", "stale-sequence", "stale-revision", "boolean-sequence"):
+                            # These alone are adversarial corruption controls, never genuine writer proof.
+                            other.write_text(json.dumps(raw))
+                        peer_bytes = other.read_bytes()
+                        if phase == "fresh": case.lose()
+                        own_before = deepcopy(case.state()); calls = len(case.mutations)
+                        prepared_calls = case.boundary_calls("owner") if kind == "root-denied" else None
+                        prepared_decision = case.decision() if kind == "root-denied" else None
+                        if kind in ("directory-denied", "root-denied", "empty-directory-denied"):
+                            directory = case.root / "state/pod" if kind == "root-denied" else other.parent
+                            if kind == "empty-directory-denied":
+                                directory = case.root / "state/pod/unreadable-frontier"; directory.mkdir()
+                            changed_permission = (directory, directory.stat().st_mode & 0o777)
+                            directory.chmod(0)
+                        if kind == "root-denied":
+                            observed = case.status()
+                            self.assertEqual(observed["status"], "blocked")
+                            for call in prepared_calls.values(): case.refused(call)
+                            # The denied root also makes the objective lock unavailable;
+                            # either boundary refusal must precede any native mutation.
+                            with self.assertRaises((PodError, OSError)):
+                                case.handoff(prepared_decision)
+                            directory, mode = changed_permission; directory.chmod(mode); changed_permission = None
+                            self.assertEqual(case.state(), own_before)
+                            self.assertEqual(len(case.mutations), calls)
+                            self.assertEqual(other.read_bytes(), peer_bytes)
+                            continue
+                        detected = case.status()["owner_handoff"]
+                        if kind in ("genuine-closed", "genuine-foreign"):
+                            self.assertEqual(detected["status"], "handoff_available")
+                            case.handoff(); self.assertEqual(case.entry()["state"], "done")
+                            self.assertEqual(len(case.mutations), 1)
+                        else:
+                            self.assertEqual(detected["status"], "handoff_unavailable")
+                            self.assertEqual(detected["condition"], "scope_unreadable" if "denied" in kind else "run_shared")
+                            for supplied in ("owner", "next"):
+                                for boundary, call in case.boundary_calls(supplied).items():
+                                    error = case.refused(call)
+                                    self.assertEqual(error.detail["owner_handoff"]["condition"], detected["condition"])
+                            case.refused(lambda:case.handoff())
+                            if phase == "pending" and "denied" not in kind:
+                                self.assertEqual(case.entry()["state"], "aborted")
+                                case.assert_only_handoff_changes(own_before, case.state(), completed=False)
+                            else:
+                                self.assertEqual(case.state(), own_before)
+                            self.assertEqual(len(case.mutations), calls)
+                        if changed_permission:
+                            directory, mode = changed_permission; directory.chmod(mode); changed_permission = None
+                        self.assertEqual(other.read_bytes(), peer_bytes)
+                finally:
+                    if changed_permission: changed_permission[0].chmod(changed_permission[1])
+                    case.doCleanups()
+
     def test_text_status_names_binding_cause_and_available_ambiguity(self):
         self.establish(); self.lose(); self.current = None
         self.assertIn("no stable current Run binding", self.status(text=True))

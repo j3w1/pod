@@ -53,14 +53,36 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
     Unknown membership holds; no record is converted, locked or rewritten.
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context,
-                         _run_references, objective_root, state_root)
+                         _run_references, objective_root, state_root, kernel_context)
     from .util import bounded_json
     root = state_root(project)
     if root.is_symlink():
         return {"objectives": [], "unreadable": 1}
     own = objective_root(project, objective) / "context.json"
     others, unknown = [], 0
-    for path in root.glob("*/context.json"):
+    # A complete frontier is part of the proof. scandir/stat propagate errors that
+    # Path.glob suppresses; an unavailable directory is never apparent absence.
+    paths = []
+    try:
+        with os.scandir(root) as frontier:
+            directories = list(frontier)
+    except FileNotFoundError:
+        return {"objectives": [], "unreadable": 1}
+    except OSError:
+        return {"objectives": [], "unreadable": 1}
+    for directory in directories:
+        try:
+            if directory.is_symlink():
+                unknown += 1
+                continue
+            if not directory.is_dir(follow_symlinks=False):
+                continue
+            with os.scandir(directory.path) as contents:
+                entries = list(contents)
+            paths.extend(Path(entry.path) for entry in entries if entry.name == "context.json")
+        except OSError:
+            unknown += 1
+    for path in paths:
         if path == own:
             continue
         try:
@@ -87,11 +109,24 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
             pass
         if referenced:
             closure = checkpoint.get("closure") if isinstance(checkpoint, dict) else None
-            if (supported and isinstance(closure, dict) and
-                    type(closure.get("seq")) is int and closure["seq"] == checkpoint.get("seq") and
-                    type(closure.get("revision")) is int and closure["revision"] == checkpoint.get("revision") and
-                    isinstance(closure.get("report"), dict) and closure["report"].get("status") == "closed"):
-                continue
+            if supported and closure is not None:
+                from .obligations import validate_closed_snapshot
+                try:
+                    # No peer settlement is inferred: absent native evidence leaves
+                    # bound/reserved/unresolved admissions outstanding in this context.
+                    workspace = checkpoint.get("worktree") or {}
+                    peer_project = Path(workspace["path"]) if workspace.get("path") else (
+                        project if objective_root(project, checkpoint["objective"]) == path.parent else None)
+                    if peer_project is None:
+                        raise PodError("closure_unverified", "Peer repository binding is unavailable")
+                    if not peer_project.is_dir():
+                        raise PodError("closure_unverified", "Peer worktree is unreadable")
+                    ctx = kernel_context(peer_project, checkpoint["objective"], raw, None)
+                    validate_closed_snapshot(checkpoint, ctx)
+                except (PodError, KeyError, TypeError, ValueError, OSError):
+                    pass
+                else:
+                    continue
             name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
             others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
         elif not readable or not supported:

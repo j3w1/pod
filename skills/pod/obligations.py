@@ -1404,6 +1404,30 @@ def _close(state: dict, ctx: dict) -> dict:
     return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
 
 
+def validate_closed_snapshot(state: dict, ctx: dict) -> None:
+    """Recheck recorded closure with the same row, closure and report contracts."""
+    closure = _exact(state.get("closure"), {"seq", "revision", "report"},
+                     {"seq", "revision", "report"}, "closure")
+    for key in ("seq", "revision"):
+        if type(state.get(key)) is not int or state[key] < 1 or type(closure[key]) is not int or closure[key] != state[key]:
+            raise refuse("obligation_invalid", "malformed", "closure sequence and revision match the map", record="closure")
+    raw = state.get("obligations")
+    if not isinstance(raw, list) or not raw or len(raw) > MAX_OBLIGATIONS:
+        raise refuse("obligation_invalid", "malformed", "closure needs its complete obligation map", record="closure")
+    parsed = [_structure(row) for row in raw]
+    rows = {row["id"]: row for row in parsed}
+    if len(rows) != len(parsed):
+        raise refuse("obligation_invalid", "malformed", "closure obligation ids are unique", record="closure")
+    _ancestry(rows)
+    if _covered(rows) != set(ctx.get("criteria", [])):
+        raise refuse("obligation_invalid", "malformed", "closure covers its recorded criteria", record="closure")
+    _account(state, rows, state["seq"], ctx, governance_digest(state["governance_sources"]))
+    _waits(state, rows, ctx)
+    expected = _close(state, ctx)
+    if closure != expected:
+        raise refuse("obligation_invalid", "malformed", "closure report matches the validated map and evidence", record="closure")
+
+
 def brief_map(criteria: list[str], value: Any, ctx: dict) -> dict:
     """R39/A43 at the execution brief: the draft intake map, validated without persisting it.
 
