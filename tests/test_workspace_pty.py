@@ -222,6 +222,18 @@ class WorkspacePtyTests(PtyCase):
 class RefreshPtyTests(PtyCase):
     saved = WorkspacePtyTests.saved
 
+    def test_unfiltered_ascii_routes_keep_distinct_labels_with_observations(self):
+        for columns in (40, 41):
+            with self.subTest(columns=columns):
+                session = self.open(cols=columns, rows=80, LC_ALL="C", NO_COLOR="1")
+                session.send("s")
+                session.wait_for("$/task")
+                session.settle(quiet=.3, timeout=2)
+                self.assertIn("Opus 5.5 high", session.text())
+                self.assertIn("Sonnet", session.text())
+                self.assertNotIn("Cla...5.5", session.text())
+                session.close()
+
     def test_narrow_default_discoveries_keep_profile_labels_and_remain_read_only(self):
         for cols, rows in ((40, 12), (60, 20)):
             with self.subTest(size=(cols, rows)):

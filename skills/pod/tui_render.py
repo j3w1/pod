@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-import re
 
 from . import tui_state as ts
 from .observations import STALE_S
@@ -33,8 +32,6 @@ TAB_LABELS = {"details": ("Details", "Det"), "benchmarks": ("Benchmarks", "Bench
               "routing": ("Routing", "Route"), "sources": ("Sources", "Src"), "compare": ("Compare", "Cmp")}
 STATE_TEXT = {"enabled": "enabled", "disabled": "disabled", "not_set": "not set"}
 DISCOVERY_TEXT = {"new": "new", "unsupported": "unsup"}
-_OBSERVATION_PROFILE = re.compile(r"^(.*) \((" + "|".join(ts.EFFORTS)
-                                  + r"|non-reasoning)( with fallback)?\)$")
 UNITS = {"intelligence": "points on the AA Intelligence Index", "usd_per_task": "USD per AA benchmark task",
          "output_tps": "median output tokens per second", "first_response_s": "seconds to first response",
          "total_response_s": "seconds to total response", "context_tokens": "tokens"}
@@ -243,19 +240,17 @@ def _route_label(row: dict) -> str:
 
 def _observation_label(row: dict, caps: Capabilities) -> tuple[str, str]:
     """Split a source profile for display only; observation and routing identities stay intact."""
-    name = str(row.get("row") or "")
-    profile = _OBSERVATION_PROFILE.fullmatch(name)
-    if profile is None:
-        return name, ""
-    model, effort, fallback = profile.groups()
+    model, effort, fallback = ts.observation_profile(row)
     if fallback:
         model += glyph(caps, "fallback")
-    return model, "none" if effort == "non-reasoning" else effort
+    return model, effort
 
 
 def _shortened(name: str, room: int, strategy: str, caps: Capabilities) -> str:
     if strategy == "family" and " " in name:
         name = name.split(" ", 1)[1]   # "Claude Opus 5.5" -> "Opus 5.5": the family word goes first
+    if strategy == "identifier" and "-" in name:
+        name = name.split("-", 1)[1]
     if strategy == "middle":
         return elide_middle(name, room, ascii_only=caps.ascii_only)
     return clip(name, room, ellipsis=True, ascii_only=caps.ascii_only)
@@ -275,7 +270,7 @@ def narrow_labels(rows: list[dict], width: int, caps: Capabilities) -> dict[str,
         rooms[model] = min(rooms.get(model, width), room)
     chosen = names
     if any(display_width(name) > rooms[model] for model, name in names.items()):
-        for strategy in ("family", "full", "middle"):
+        for strategy in ("family", "full", "identifier", "middle"):
             chosen = {model: _shortened(name, rooms[model], strategy, caps) for model, name in names.items()}
             if len(set(chosen.values())) == len(chosen):
                 break
@@ -484,14 +479,14 @@ def _table(state: ts.State, width: int, height: int, caps: Capabilities,
     frontier = ts.frontier(state) if state.frontier else {}
     labels = None
     if columns[0].header == "Route":
+        labels = narrow_labels([item.route for item in rows if item.route], columns[0].width, caps)
         displayed = []
         for item in rows:
-            if item.kind == "group":
+            if item.kind != "observation":
                 continue
-            name, effort = ((item.route["name"], item.route["effort"]) if item.route
-                            else _observation_label(item.observation, caps))
+            name, effort = _observation_label(item.observation, caps)
             displayed.append({"key": item.key, "model": name, "name": name, "effort": effort})
-        labels = narrow_labels(displayed, columns[0].width - (2 if state.grouped else 0), caps)
+        labels.update(narrow_labels(displayed, columns[0].width - (2 if state.grouped else 0), caps))
     # A cost or time column is never shown without the disclaimer; a short index-only table may omit it.
     keep_disclaimer = height >= 8 or any(column.key in COST_AND_TIME for column in columns)
     count = max(1, height - 2 - (1 if keep_disclaimer else 0))

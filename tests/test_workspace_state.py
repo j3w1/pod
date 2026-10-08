@@ -100,6 +100,66 @@ def inspector(current: ts.State, tab: str, width: int = 400) -> str:
 
 
 class TableTests(unittest.TestCase):
+    def test_mixed_table_identity_invariant_across_snapshots_and_sibling_views(self):
+        # Predicate: editable route labels are distinct; each observation profile stays
+        # distinct within its group. Both retain full effort, independent of other row kinds.
+        snapshots = (fixture_snapshot(), observations.bundled(),
+                     fixture_snapshot(edit=lambda _rows: sources.parse_aa(growth_page())["rows"]))
+        for snapshot in snapshots:
+            current = state(snapshot=snapshot, discovery="all")
+            for grouped in (False, True):
+                for columns in (40, 41, 43, 60, 80, 100, 160):
+                    for ascii_only in (False, True):
+                        for sort in ts.SORTS:
+                            for descending in (False, True):
+                                view_ = replace(current, grouped=grouped, sort=sort, descending=descending)
+                                caps = Capabilities(ascii_only, False)
+                                items = ts.items(view_)
+                                lines = tr._table(view_, columns - 1, len(items) + 4, caps, T0)[0]
+                                specs = tr.table_columns(view_, columns - 1)
+                                start = len(lines[1].text) - len(lines[1].text.lstrip())
+                                labels = {"route": [], "observation": []}
+                                for item, line in zip(items, lines[2:]):
+                                    if item.kind == "group":
+                                        continue
+                                    name = line.text[start:start + specs[0].width].strip()
+                                    offset = start
+                                    effort = ""
+                                    for column in specs:
+                                        if column.key == "effort":
+                                            effort = line.text[offset:offset + column.width].strip()
+                                        offset += column.width + 1
+                                    label = (name, effort)
+                                    if item.route:
+                                        self.assertTrue(name.endswith(item.route["effort"]) or effort == item.route["effort"],
+                                                        (columns, ascii_only, grouped, sort, item.key, label))
+                                    if item.kind != "route" or not grouped:
+                                        labels[item.kind].append(label)
+                                for kind, values in labels.items():
+                                    self.assertEqual(len(values), len(set(values)),
+                                                     (kind, columns, ascii_only, grouped, sort, descending, values))
+
+    def test_observation_profile_effort_drives_only_view_sort_and_filter(self):
+        current = state(snapshot=fixture_snapshot(edit=lambda _rows: sources.parse_aa(growth_page())["rows"]),
+                        discovery="all")
+        original = json.dumps(current.projection, sort_keys=True)
+        for descending in (False, True):
+            shown = ts.items(replace(current, sort="effort", descending=descending))
+            efforts = [ts.view_effort(item.route or item.observation) for item in shown]
+            known = [effort for effort in efforts if effort is not None]
+            self.assertEqual([ts.effort_index(effort) for effort in known],
+                             sorted((ts.effort_index(effort) for effort in known), reverse=descending))
+            self.assertTrue(all(effort is None for effort in efforts[len(known):]))
+        for effort in ts.EFFORTS:
+            filtered = replace(current, effort=effort)
+            observed = ts.shown_observations(filtered)
+            if effort == "high":
+                self.assertTrue(any(row["row"] == "GPT-7 Nova (high)" for row in observed))
+            self.assertTrue(all(ts.view_effort(row) == effort for row in observed))
+        self.assertEqual(json.dumps(current.projection, sort_keys=True), original)
+        for observed in ts.shown_observations(current):
+            self.assertFalse(observed["routable"])
+
     def test_observation_labels_preserve_profile_identity_without_mapping_routes(self):
         from tests.test_routes import row
         names = ("GPT-7 Nova (medium)", "GPT-7 Nova (max)", "GPT-7 Nova (high with fallback)",
@@ -1287,7 +1347,7 @@ class AuditRenderTests(unittest.TestCase):
         ascii_text = text(replace(estimated, focus="codex/gpt-6-luna/high", sort="effort",
                                   projection={**estimated.projection, "preferences": {
                                       **estimated.projection["preferences"], "preferred": "codex/gpt-6-luna/high"}}),
-                          100, 45, ascii_only=True)
+                          100, 60, ascii_only=True)
         luna_row = next(line for line in ascii_text.splitlines() if "GPT-6 Luna" in line and " high " in line)
         self.assertIn("32~", luna_row)
         self.assertIn("58#", ascii_text)
