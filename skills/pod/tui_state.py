@@ -98,7 +98,7 @@ class State:
     model: str = "all"
     effort: str = "all"
     state_filter: str = "all"
-    discovery: str = "supported"
+    discovery: str = "all"
     query: str = ""
     mode: str = "browse"          # browse | search | palette | help | bulk | setup
     pane: str = "table"           # table | inspector
@@ -920,7 +920,7 @@ def run_command(state: State, command: str) -> tuple[State, Effect | None]:
     if command == "discovery":
         return _view(state, discovery=_cycle(DISCOVERY, state.discovery)), None
     if command == "clear_filters":
-        return _view(state, provider="all", model="all", effort="all", state_filter="all", discovery="supported",
+        return _view(state, provider="all", model="all", effort="all", state_filter="all", discovery="all",
                      query=""), None
     if command == "search":
         return replace(state, mode="search", query=""), None

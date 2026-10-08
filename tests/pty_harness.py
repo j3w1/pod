@@ -56,6 +56,11 @@ def fetch(url, *, policy=None, deadline=None, cancel=None, opener=None):
     if mode == "collapse" and url == sources.SOURCES[0].url:
         return sources.Page(url, COLLAPSED)
     source = next(source for source in sources.SOURCES if source.url == url)
+    if mode == "growth" and source.id == sources.AA:
+        fixtures = Path({fixtures!r})
+        text = (fixtures / "aa-leaderboard-haiku.html").read_text(encoding="utf-8")
+        extra = (fixtures / "aa-new-model-row.html").read_text(encoding="utf-8")
+        return sources.Page(url, text.replace("</tbody>", extra + "</tbody>", 1))
     return sources.Page(url, (Path({fixtures!r}) / PAGES[source.id]).read_text(encoding="utf-8"))
 COLLAPSED = ("<table><tr><th>Model</th><th>Context Window</th><th>Creator</th>"
              "<th>Artificial Analysis Intelligence Index</th><th>Cost per TaskUSD</th><th>MedianTokens/s</th>"

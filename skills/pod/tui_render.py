@@ -1104,7 +1104,7 @@ REFRESH_LABELS = {"running": ("Refreshing data...", "advisory"), "updated": ("Da
 
 
 def refresh_label(state: ts.State) -> tuple[str, str]:
-    """The refresh outcome by name, with its diagnostic or error code when there is one."""
+    """The refresh outcome with its row-change summary, diagnostic or error code."""
     text, role = REFRESH_LABELS.get(state.refresh_state, ("Refresh " + state.refresh_state, "advisory"))
     return text + (": " + state.refresh_detail if state.refresh_detail else ""), role
 

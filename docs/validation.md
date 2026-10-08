@@ -390,3 +390,12 @@ Run broad local checks with fresh process-scoped POD_STATE_HOME, POD_CONFIG_HOME
 and POD_CACHE_HOME in disposable task storage as an outer containment layer;
 fixtures clear them locally and restore them afterward. Failed isolation runs
 and host-state recovery are separate evidence, never passing candidate proof.
+
+Refresh discovery regressions exercise the default inclusive view and supported-only filter,
+clearing filters, metric sorting with observations, all five verified Haiku routes, and real
+workspace/PTY `R` refresh through sanitized public-source fixtures. A separately labelled
+synthetic future-model row proves discovery without registry support or authorization.
+Refresh and restart preserve existing preference bytes; Haiku remains not set until an
+explicit state edit, which persists across restart. Live public refresh, installed-host
+readback and native model access remain separate evidence. The fresh independent audit
+for this correction runs under installed 0.8.1.

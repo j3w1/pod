@@ -77,7 +77,7 @@ class RouteProjectionTests(unittest.TestCase):
                          load_catalog()['max_guide'])
         self.assertIsNone(sol['guide']['max'])
         self.assertTrue(sol['guide']['use'] and sol['guidance'].startswith('OpenAI'))
-        self.assertEqual(projection['summary'], {'routes': 30, 'enabled': 28, 'disabled': 1, 'not_set': 1,
+        self.assertEqual(projection['summary'], {'routes': 35, 'enabled': 33, 'disabled': 1, 'not_set': 1,
                                                  'preferred': 'claude/claude-opus-5-5/high',
                                                  'pinned': SOL_HIGH, 'unmapped': 4})
         self.assertEqual(projection['native'], {'access': 'unknown'})
@@ -119,7 +119,7 @@ class RouteProjectionTests(unittest.TestCase):
                           'GPT-7 Nova (high)': ('new', None, None, False),
                           'gpt-6-sol': ('unsupported', 'gpt-6-sol', None, False)})
         # A discovery never enters the route list or the saved pool.
-        self.assertEqual(len(projection['routes']), 30)
+        self.assertEqual(len(projection['routes']), 35)
         self.assertNotIn('Gemini 9 (high)', json.dumps(projection))
 
     def test_observation_changes_never_widen_the_pool_or_write_preferences(self):
@@ -159,7 +159,7 @@ class RouteProjectionTests(unittest.TestCase):
         self.assertEqual(missing['status'], 'unavailable')
         projection = self.projected(missing)
         self.assertEqual((projection['observations']['status'], len(projection['routes']), projection['unmapped']),
-                         ('unavailable', 30, []))
+                         ('unavailable', 35, []))
         with patch('pod.observations.load', return_value={'origin': 'unknown', 'snapshot': None, 'diagnostics': ['x']}):
             unknown = observed(now=NOW)
         self.assertEqual((unknown['status'], unknown['origin'], unknown['diagnostics']), ('unknown', 'unknown', ['x']))

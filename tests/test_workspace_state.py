@@ -34,6 +34,12 @@ def page(source_id: str) -> str:
     return (FIXTURES / PAGES[source_id]).read_text(encoding="utf-8")
 
 
+def growth_page() -> str:
+    captured = (FIXTURES / "aa-leaderboard-haiku.html").read_text(encoding="utf-8")
+    synthetic = (FIXTURES / "aa-new-model-row.html").read_text(encoding="utf-8")
+    return captured.replace("</tbody>", synthetic + "</tbody>", 1)
+
+
 def fixture_snapshot(methodology: str | None = "Artificial Analysis Intelligence Index v4.3", *,
                      edit=None) -> dict:
     """A snapshot built from the sanitized fixture pages, independent of the bundled data."""
@@ -69,7 +75,9 @@ def prefs(**changes) -> dict:
 def state(preferences: dict | None = None, snapshot: dict | None = None, **changes) -> ts.State:
     projection = project(Path("/nonexistent"), preferences=preferences or prefs(),
                          observations=view(snapshot or fixture_snapshot()), now=T0)
-    return replace(ts.initial(projection), **changes)
+    # Route-management cases deliberately use the supported-only filter. Default-view cases
+    # exercise initial() directly or request discovery="all".
+    return replace(ts.initial(projection), **{"discovery": "supported", **changes})
 
 
 def press(current: ts.State, *keys: str) -> tuple[ts.State, list]:
@@ -92,11 +100,46 @@ def inspector(current: ts.State, tab: str, width: int = 400) -> str:
 
 
 class TableTests(unittest.TestCase):
+    def test_default_view_and_clear_filters_include_discoveries(self):
+        current = ts.initial(state().projection)
+        self.assertEqual(current.discovery, "all")
+        self.assertEqual(len(ts.shown_routes(current)), 35)
+        observed = ts.shown_observations(current)
+        self.assertTrue(observed)
+        self.assertTrue(any(row["discovery"] == "new" for row in observed))
+        self.assertTrue(any(row["discovery"] == "unsupported" for row in observed))
+        supported, _ = press(current, "o")
+        self.assertEqual(supported.discovery, "supported")
+        self.assertEqual(ts.shown_observations(supported), [])
+        reset, _ = press(replace(supported, provider="Anthropic", query="missing"), "F")
+        self.assertEqual((reset.discovery, reset.provider, reset.query), ("all", "all", ""))
+        self.assertEqual(ts.visible_keys(reset), ts.visible_keys(current))
+        for item in ts.items(current):
+            if item.kind != "observation":
+                continue
+            focused = replace(current, focus=item.key)
+            for key in (" ", "p", "P"):
+                with self.subTest(observation=item.key, key=key):
+                    refused, effects = press(focused, key)
+                    self.assertEqual(effects, [])
+                    self.assertIn("not routable", refused.notice)
+
+    def test_default_mixed_table_sorts_metrics_and_keeps_unknown_last(self):
+        current = ts.initial(state().projection)
+        for name in ts.METRICS:
+            for descending in (False, True):
+                with self.subTest(metric=name, descending=descending):
+                    items = ts.items(replace(current, sort=name, descending=descending))
+                    values = [ts.value(item.route or item.observation, name) for item in items]
+                    known = [value for value in values if value is not None]
+                    self.assertEqual(known, sorted(known, reverse=descending))
+                    self.assertTrue(all(value is None for value in values[len(known):]))
+
     def test_rows_are_exact_routes_sorted_by_index_with_stable_ties(self):
         current = state()
         keys = ts.visible_keys(current)
-        self.assertEqual(len(keys), 30)
-        self.assertEqual(len(set(keys)), 30)
+        self.assertEqual(len(keys), 35)
+        self.assertEqual(len(set(keys)), 35)
         scores = [ts.value(ts.route(current, key), "intelligence") for key in keys]
         known = [score for score in scores if score is not None]
         self.assertEqual(known, sorted(known, reverse=True))
@@ -145,7 +188,7 @@ class TableTests(unittest.TestCase):
         current, _ = press(current, "RIGHT")
         self.assertEqual(current.collapsed, frozenset())
         current, _ = press(current, "ENTER")
-        self.assertEqual(len(ts.items(current)), 30 + 6 - 5)
+        self.assertEqual(len(ts.items(current)), 35 + 7 - 5)
         self.assertIn("[+] Claude Opus 5.5 (5/5 enabled)", text(current))
 
     def test_filters_compose_and_search_matches_display_and_native_identity(self):
@@ -156,7 +199,7 @@ class TableTests(unittest.TestCase):
         self.assertEqual(current.effort, "medium")
         rows = [ts.route(current, key) for key in ts.visible_keys(current)]
         self.assertEqual({(row["provider"], row["effort"]) for row in rows}, {("Anthropic", "medium")})
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         for query, expected in (("gpt-6.1-sol", 5), ("GPT-6 Luna", 5), ("codex/gpt-6-astra/max", 1)):
             searched, _ = press(state(), "/", *query)
             self.assertEqual(len(ts.visible_keys(searched)), expected, query)
@@ -249,7 +292,7 @@ class EditTests(unittest.TestCase):
         self.assertEqual(set(ts.bulk_changes(ranged, ranged.bulk)),
                          {row["key"] for row in ts.routes(current) if row["effort"] in ("xhigh", "max")})
         unset = replace(dialog, bulk=ts.Bulk(scope="not_set", action="disabled"))
-        self.assertEqual(len(ts.bulk_changes(unset, unset.bulk)), 29)
+        self.assertEqual(len(ts.bulk_changes(unset, unset.bulk)), 34)
         cancelled, effects = press(dialog, "ESC")
         self.assertEqual((cancelled.mode, effects), ("browse", []))
 
@@ -262,7 +305,7 @@ class EditTests(unittest.TestCase):
         _, effects = press(dialog, "ENTER")
         payload = effects[0].payload
         self.assertEqual(set(payload), {"routes"}, "reset never clears the pin or preference")
-        self.assertEqual(len(payload["routes"]), 29)
+        self.assertEqual(len(payload["routes"]), 34)
         self.assertTrue(all(target == "enabled" for target in payload["routes"].values()))
 
     def test_bulk_disable_of_pin_requires_clearing_it_in_the_same_save(self):
@@ -560,6 +603,83 @@ class WorkspaceSessionTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 3, "the Refresh action uses the same refresh")
         self.assertEqual(workspace.state.refresh_state, "updated")
 
+    def test_manual_refresh_reveals_new_rows_and_updates_metrics_without_restart(self):
+        self.set_refresh("manual")
+        self.refresher()  # Seed an earlier snapshot through the real refresh boundary.
+        before = self.config.read_bytes()
+        workspace = self.open()
+        self.assertEqual(workspace.state.discovery, "all")
+        self.assertNotIn("GPT-7 Nova (high)", {row["row"] for row in ts.shown_observations(workspace.state)})
+        old_score = ts.route(workspace.state, "codex/gpt-6.1-sol/xhigh")["metrics"]["output_tps"]["value"]
+        previous_focus = workspace.state.focus
+        original_fetch = self.fetch
+
+        def growing(url, *, deadline, cancel):
+            if url == sources.BY_ID[sources.AA].url:
+                self.calls.append(url)
+                return sources.Page(url, growth_page())
+            return original_fetch(url, deadline=deadline, cancel=cancel)
+
+        self.fetch = growing
+        workspace.handle("R")
+        self.settle(workspace)
+        self.assertEqual(workspace.state.refresh_state, "updated")
+        self.assertEqual((workspace.state.discovery, workspace.state.focus), ("all", previous_focus))
+        shown = {row["row"]: row for row in ts.shown_observations(workspace.state)}
+        self.assertEqual((shown["GPT-7 Nova (high)"]["discovery"], shown["GPT-7 Nova (high)"]["routable"]),
+                         ("new", False))
+        score = ts.route(workspace.state, "codex/gpt-6.1-sol/xhigh")["metrics"]["output_tps"]["value"]
+        self.assertNotEqual(score, old_score)
+        self.assertRegex(workspace.state.refresh_detail, r"AA rows [1-9]\d* added, [1-9]\d* changed, \d+ removed")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.calls.clear()
+        reopened = self.open()
+        self.assertIn("GPT-7 Nova (high)", {row["row"] for row in ts.shown_observations(reopened.state)})
+        self.assertEqual(self.calls, [], "a manual-only reopen reads the refreshed cache without fetching")
+
+    def test_haiku_refresh_preserves_existing_choices_and_requires_explicit_enable(self):
+        document = config.defaults()
+        document["refresh"] = "manual"
+        document["routes"] = {key: value for key, value in document["routes"].items()
+                              if not key.startswith("claude/claude-haiku-5-5/")}
+        document["routes"]["codex/gpt-6-luna/low"] = "disabled"
+        document["pinned"] = "codex/gpt-6.1-sol/high"
+        document["preferred"] = "claude/claude-opus-5-5/high"
+        self.config.write_text(yaml.safe_dump(document, sort_keys=False))
+        before = self.config.read_bytes()
+        original_fetch = self.fetch
+
+        def current(url, *, deadline, cancel):
+            if url == sources.BY_ID[sources.AA].url:
+                self.calls.append(url)
+                return sources.Page(url, growth_page())
+            return original_fetch(url, deadline=deadline, cancel=cancel)
+
+        self.fetch = current
+        workspace = self.open()
+        key = "claude/claude-haiku-5-5/high"
+        self.assertIsNone(ts.route(workspace.state, key)["metrics"]["intelligence"]["value"])
+        workspace.handle("R")
+        self.settle(workspace)
+        self.assertEqual(self.config.read_bytes(), before)
+        haiku = [row for row in ts.shown_routes(workspace.state) if row["model"] == "claude-haiku-5-5"]
+        self.assertEqual(len(haiku), 5)
+        for row in haiku:
+            self.assertEqual((row["state"], row["native"]["access"]), ("not_set", "unknown"))
+            self.assertEqual(row["metrics"]["intelligence"]["row"], f"Claude Haiku 5.5 ({row['effort']})")
+            self.assertNotIn(row["key"], workspace.prefs["eligible"])
+        self.assertEqual(ts.route(workspace.state, key)["metrics"]["intelligence"]["value"], 38)
+        workspace.state = replace(workspace.state, focus=key)
+        workspace.handle(" ")
+        reopened = self.open()
+        self.assertEqual(ts.route(reopened.state, key)["state"], "enabled")
+        self.assertEqual((reopened.prefs["pinned"], reopened.prefs["preferred"]),
+                         (document["pinned"], document["preferred"]))
+        self.assertEqual(reopened.prefs["routes"]["codex/gpt-6-luna/low"], "disabled")
+        reopened.state = replace(reopened.state, focus=key)
+        reopened.handle(" ")
+        self.assertEqual(ts.route(self.open().state, key)["state"], "disabled")
+
     def test_seven_day_data_is_stale_and_reopen_restraint_holds_after_a_failure(self):
         self.settle(self.open())
         self.now = T0 + timedelta(days=8)
@@ -701,10 +821,11 @@ class WorkspaceSessionTests(unittest.TestCase):
         workspace = self.open()
         diff = {sources.AA: {"counts": {"added": 0, "removed": 0, "changed": 2}}}
         cases = [
-            (("done", {"outcome": "promoted", "diff": diff}), "updated", "Data updated"),
+            (("done", {"outcome": "promoted", "diff": diff}), "updated",
+             "Data updated: AA rows 0 added, 2 changed, 0 removed"),
             (("done", {"outcome": "promoted", "diff": {sources.AA: {"counts": {"added": 0, "removed": 0,
                                                                               "changed": 0}}}}),
-             "unchanged", "Data refreshed; no changes"),
+             "unchanged", "Data refreshed; no changes: AA rows 0 added, 0 changed, 0 removed"),
             (("done", {"outcome": "refused", "diagnostics": ["artificial_analysis: Coverage collapsed from 53 rows"]}),
              "refused", "Refresh refused: artificial_analysis: Coverage collapsed from 53 rows"),
             (("done", {"outcome": "superseded"}), "superseded", "A newer refresh won; data reloaded"),
@@ -1321,7 +1442,7 @@ class DeltaAuditRenderTests(unittest.TestCase):
             for cols in range(80, 93):
                 frame = text(both, cols, rows)
                 with self.subTest(rows=rows, cols=cols):
-                    self.assertRegex(frame, r"30/30 (enabled|on)")
+                    self.assertRegex(frame, r"35/35 (enabled|on)")
                     self.assertIn("Data cache ", frame.splitlines()[-2])
         # Below 20 rows the placeholder follows the age and the other status items wherever it fits.
         plain = state(prefs(pinned=pin))
@@ -1362,7 +1483,7 @@ class DeltaAuditRenderTests(unittest.TestCase):
         pin, key = "claude/claude-opus-5-5/high", "claude/claude-opus-5-5/max"
         saved = datetime(2026, 10, 1, 6, 30, tzinfo=timezone.utc)
         order = ("Data cache ", "Refresh failed", "Native access unknown", "Saved ")
-        filler = re.compile(r"Preferred none|\b30/30 (enabled|on)\b")
+        filler = re.compile(r"Preferred none|\b35/35 (enabled|on)\b")
         reached = 0
         for chosen in (prefs(pinned=pin), prefs(pinned=pin, preferred=key)):
             base = state(chosen)

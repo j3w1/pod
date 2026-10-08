@@ -69,7 +69,7 @@ class PreferencesTests(unittest.TestCase):
         set_route(self.path, LUNA, 'disabled', displayed=current)
         set_route(self.path, SOL, None, displayed=load(personal=self.path))
         changed = load(personal=self.path)
-        self.assertEqual(len(changed['eligible']), 28)
+        self.assertEqual(len(changed['eligible']), 33)
         self.assertEqual(changed['routes'][LUNA], 'disabled')
         self.assertNotIn(SOL, changed['routes'])
         set_route(self.path, SOL, 'enabled', displayed=changed)
@@ -251,7 +251,7 @@ class PreferencesTests(unittest.TestCase):
         self.assertEqual(changed, [[key] for key in keys])
         final = load(personal=self.path)
         self.assertTrue(all(final['routes'][key] == 'disabled' for key in keys))
-        self.assertEqual(len(final['eligible']), 25)
+        self.assertEqual(len(final['eligible']), 30)
         # The same targeted route from a stale display is refused, not overwritten.
         with self.assertRaises(PodError) as caught:
             set_route(self.path, keys[0], 'enabled', displayed=shown)
@@ -280,7 +280,7 @@ class PreferencesTests(unittest.TestCase):
             set_refresh(self.path, 'hourly', displayed=load(personal=self.path))
         edit(self.path, displayed=load(personal=self.path), max_active=0)
         view = load(personal=self.path)
-        self.assertEqual((view['max_active'], len(view['eligible'])), (0, 30))
+        self.assertEqual((view['max_active'], len(view['eligible'])), (0, 35))
         for bad in (9, -1, True, '2'):
             with self.subTest(bad=bad), self.assertRaises(PodError):
                 edit(self.path, displayed=view, max_active=bad)

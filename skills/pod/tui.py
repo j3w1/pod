@@ -18,7 +18,7 @@ import signal
 import threading
 from typing import Callable
 
-from . import config, observations
+from . import config, observations, sources
 from . import tui_state as ts
 from .errors import PodError
 from .routes import METRICS, observed as observed_routes, project as project_routes
@@ -206,7 +206,10 @@ class Workspace:
             note = self.reload()
             counts = [row.get("counts") or {} for row in (result.get("diff") or {}).values()]
             empty = bool(counts) and not any(sum(row.values()) for row in counts)
-            self.state = ts.with_refresh(self.state, "unchanged" if empty else "updated")
+            aa = (result.get("diff") or {}).get(sources.AA, {}).get("counts")
+            summary = (f"AA rows {aa['added']} added, {aa['changed']} changed, {aa['removed']} removed"
+                       if aa is not None and {"added", "changed", "removed"} <= aa.keys() else "")
+            self.state = ts.with_refresh(self.state, "unchanged" if empty else "updated", summary)
             self._announce(note)
         elif outcome == "superseded":
             note = self.reload()

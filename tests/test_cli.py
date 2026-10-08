@@ -51,13 +51,13 @@ class CliTests(unittest.TestCase):
         valid=execute(args,self.project)
         self.assertEqual((valid['status'],valid['schema'],valid['preference_schema']),('valid','pod-cli/v4','pod/v2'))
         self.assertEqual(valid['path'],str(path.resolve()))
-        self.assertEqual(len(valid['eligible']),30)
-        self.assertEqual(len(valid['routes']),30)
+        self.assertEqual(len(valid['eligible']),35)
+        self.assertEqual(len(valid['routes']),35)
         self.assertEqual(set(valid['routes'][0]),{'key','agent','model','effort','state','preferred','pinned'})
         self.assertEqual([row['id'] for row in valid['models']],
-                         ['claude-opus-5-5','claude-fable-5-1','claude-sonnet-5-5','gpt-6-astra','gpt-6.1-sol','gpt-6-luna'])
+                         ['claude-opus-5-5','claude-fable-5-1','claude-sonnet-5-5','claude-haiku-5-5','gpt-6-astra','gpt-6.1-sol','gpt-6-luna'])
         self.assertTrue(all(row['guide']['efforts'] and row['guide']['use'] for row in valid['models']))
-        self.assertEqual(valid['summary']['enabled'],30)
+        self.assertEqual(valid['summary']['enabled'],35)
         self.assertEqual(valid['observations'],{'status':'not_read','command':'pod models --json'})
         for removed in ('catalog','mode','saved','not_set','pinned_model','ranks_of_six'):
             self.assertNotIn(removed,valid)
@@ -84,7 +84,7 @@ class CliTests(unittest.TestCase):
             with self.subTest(argv=argv), patch('pathlib.Path.cwd',return_value=self.project), redirect_stdout(output):
                 self.assertEqual(main(argv),0)
             text=output.getvalue()
-            self.assertIn('30 supported, 30 enabled',text)
+            self.assertIn('35 supported, 35 enabled',text)
             self.assertIn('codex/gpt-6.1-sol/xhigh',text)
             self.assertIn('bundled snapshot',text)
             self.assertIn('AA metrics are informational',text)
@@ -149,7 +149,7 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(report['preferred'], 'claude/claude-opus-5-5/high' if valid else None)
                 self.assertEqual(status['routes']['pinned'], pin if valid else None)
                 # An invalid file has no trusted saved map, so the view shows no enabled route.
-                self.assertEqual(doctor['routes']['enabled'], 30 if valid else 0)
+                self.assertEqual(doctor['routes']['enabled'], 35 if valid else 0)
                 native.assert_not_called()
                 self.assertEqual(path.read_bytes(), original)
 
@@ -318,16 +318,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual(states['claude/claude-opus-5-5/high'],'not_set')
         self.assertEqual(states['codex/gpt-6-luna/low'],'disabled')
         self.assertEqual(config['not_set_meaning'],'not set (not eligible)')
-        self.assertEqual(config['summary']['not_set'],28)
+        self.assertEqual(config['summary']['not_set'],33)
         with patch('pod.cli.contract',return_value={'status':'unavailable'}):
             doctor=execute(parser().parse_args(['doctor','--json']),self.project)
-        self.assertEqual((doctor['routes']['enabled'],doctor['routes']['not_set']),(1,28))
+        self.assertEqual((doctor['routes']['enabled'],doctor['routes']['not_set']),(1,33))
         with patch('pod.cli.worker_rows',return_value={'workers':[],'scope':{'source':'flag','run':'run'},
                                                       'complete':True}), \
              patch('pod.cli.context_root_for_run',return_value=None):
             status=execute(parser().parse_args(['status','--run','run','--json']),self.project)
         self.assertEqual(status['preferences']['eligible'],['codex/gpt-6.1-sol/high'])
-        self.assertEqual(status['routes']['not_set'],28)
+        self.assertEqual(status['routes']['not_set'],33)
 
     def test_placement_reports_canonical_and_missing_claude_link_precisely(self):
         canonical=self.root/'.agents'/'skills'/'pod'; canonical.mkdir(parents=True)

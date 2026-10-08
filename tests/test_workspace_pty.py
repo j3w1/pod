@@ -110,8 +110,8 @@ class WorkspacePtyTests(PtyCase):
 
     def test_new_and_unsupported_observations_are_reachable_not_routable(self):
         session = self.open(cols=100, rows=30)
-        self.assertNotIn("GPT-6 Sol (", session.text())
-        session.send("oo")
+        session.wait_for("Showing all")
+        session.send("ooo")
         session.wait_for("Showing unsupported")
         session.wait_for("GPT-6 Sol (")
         before = self.config.read_bytes()
@@ -220,6 +220,53 @@ class WorkspacePtyTests(PtyCase):
 
 
 class RefreshPtyTests(PtyCase):
+    saved = WorkspacePtyTests.saved
+
+    def test_R_adds_new_rows_to_default_view_and_reopen_keeps_them(self):
+        session = self.open(cols=160, rows=45, fetch="growth")
+        session.wait_for("Showing all")
+        before = self.config.read_bytes()
+        session.send("R")
+        session.wait_for("Data updated: AA rows", timeout=4)
+        self.assertEqual(self.fetches(), 3)
+        session.send("/GPT-7 Nova\r")
+        session.wait_for("GPT-7 Nova (high)")
+        self.assertIn("new", session.text())
+        session.send(" pP")
+        session.wait_for("not routable")
+        self.assertEqual(self.config.read_bytes(), before)
+        session.close()
+        again = self.open(cols=160, rows=45, fetch="growth")
+        again.send("/GPT-7 Nova\r")
+        again.wait_for("GPT-7 Nova (high)")
+        self.assertEqual(self.fetches(), 3, "manual-only reopen uses the promoted cache")
+
+    def test_R_loads_haiku_metrics_without_enabling_new_routes(self):
+        document = self.saved()
+        document["routes"] = {key: value for key, value in document["routes"].items()
+                              if not key.startswith("claude/claude-haiku-5-5/")}
+        fixture_config(self.config, routes=document["routes"])
+        before = self.config.read_bytes()
+        session = self.open(cols=160, rows=45, fetch="growth")
+        session.send("/Haiku 5.5\r")
+        session.wait_for("Claude Haiku 5.5")
+        session.send("R")
+        session.wait_for("Data updated: AA rows", timeout=4)
+        session.wait_for("43")
+        self.assertEqual(self.config.read_bytes(), before)
+        snapshot = json.loads((self.cache / "current.json").read_text())
+        names = {row["name"] for row in snapshot["sources"]["artificial_analysis"]["rows"]}
+        self.assertTrue(all(f"Claude Haiku 5.5 ({effort})" in names
+                            for effort in ("low", "medium", "high", "xhigh", "max")))
+        self.assertFalse(any("haiku" in key for key in self.saved()["eligible"]))
+        session.send(" ")
+        session.wait_for("Saved:")
+        selected = [key for key in self.saved()["eligible"] if "haiku" in key]
+        self.assertEqual(len(selected), 1)
+        session.close()
+        self.open(cols=100, rows=30)
+        self.assertEqual([key for key in self.saved()["eligible"] if "haiku" in key], selected)
+
     def test_automatic_refresh_renders_cache_first_then_updates_once(self):
         fixture_config(self.config, refresh="automatic")
         session = self.open(fetch="ok")
@@ -425,7 +472,7 @@ class AuditCorrectionPtyTests(PtyCase):
     def test_bulk_scroll_hint_names_the_key_that_scrolls(self):
         session = self.open(cols=80, rows=24)
         session.send("b" + RIGHT + DOWN + RIGHT)
-        session.wait_for("CHANGES (30)")
+        session.wait_for("CHANGES (35)")
         session.wait_for(lambda s: "more (" in s.text() and "lines): Page Down" in s.text())
         self.assertNotIn("Tab, then", session.text())
 
