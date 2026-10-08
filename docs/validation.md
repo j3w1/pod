@@ -1,4 +1,4 @@
-# 0.8.0 verification contract
+# 0.8.1 verification contract
 
  Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
@@ -336,3 +336,57 @@ validator headroom for the unchanged duplicate-VERSION guard. The production
 matrix checks that effective budget, each 700-word reference and their combined
 2,200-word bound. Independent 0.8.0 audit remains under installed 0.7.1; A2,
 A3, A4 and A8 receive admission/assurance scrutiny before acceptance.
+
+The 0.8.1 production offline matrix is `tests.test_owner_handoff` (A234–A250).
+Disposable Git objectives enter through real checkpoint/admission joins; Orca
+alone is replaced at its port. Related detection and transition rows share
+state invariants: only pending/history and authorized completion fields may
+change, and Governor/other-objective bytes remain identical. Genuine 0.8.0
+reader proof comes from the complete bundle archived from merged Git object
+`86d8b90db7c1d0f6a38c3c9167b950548ff79fad`, with its own unchanged status and
+context validator; no reconstructed older parser is used. Original R98 and R15
+incident controls and the full 0.8.0 offline suite stay separate regressions.
+No terminal-show pane or presentation fields enter handoff evidence.
+The closure table also emits completed review peers through real admission and
+report consumption, checks satisfied and withdrawn assurances, and corrupts
+each consumed-report field and its native observation digest. Durable settlement
+is used only for an already recorded closure; ordinary boundary readback and
+unreported bound, reserved and unresolved admissions remain unchanged.
+Related retained-history siblings vary withdrawal, optional acceptance/report
+markers, review role and exact served assurance, duplicate/order contradictions,
+and readable immutable REUSE targets/deltas. Genuine unknown/unconsumed attempts
+and retained REUSE remain positive controls. Genuine no-verification succeeded/failed review observations
+and unconsumed cross-role/cross-assurance references additionally exercise ordinary
+carry-forward, restatement, coordinator/user withdrawal and fresh/pending peers;
+readability never promotes them to qualifying assurance proof. A separate bounded continuity table
+checks runtime strings and malformed lineage envelopes before fingerprint
+collection through JSON/text status and every authority boundary, fresh and pending.
+The direct Owner hold decision additionally checks genuine wider report scopes,
+authorized scope/question changes and non-assurance proof_scope changes: ordinary
+reads/writes/closure stay valid, while Run-sharing peer exclusion holds with named
+unverifiable history in fresh and pending handoff. Confirmation cannot override
+the hold, pending stays pending, and all work/peer/Governor bytes remain unchanged.
+This changes the prior changed-definition handoff expectation only; its earlier
+passing evidence is retained separately, with no additional A243 exception.
+
+R105 is an authority/governance change: the fresh final independent audit uses
+installed 0.8.0, never candidate 0.8.1 evidence about itself. Corrections receive
+affected-scope delta review and explicit reuse under this contract. Real
+coordinator loss and restart proof requires an Owner-scheduled disposable trial;
+missing stale/gone and real restart evidence stays NOT_RUN. Local gate success,
+hosted Linux, independent review, self-hosting proof and Owner acceptance remain
+separate.
+
+The unseen referenced-Run subcase of A243 is the sole explicit exception to
+production/released-writer fixture origin: it is a labeled synthetic defensive
+restored-record control. Supported writers preserve singleton references; genuine
+pre-guard multi-reference records are superseded and are never converted. The
+control is not genuine-writer, live or acceptance evidence. All other B1 rows
+retain their production-boundary or genuine archived-writer requirements.
+
+The shared fixture defaults to its synthetic recorded owner, with explicit
+different/absent callers retained. Stopall tests prove caller and home restoration.
+Run broad local checks with fresh process-scoped POD_STATE_HOME, POD_CONFIG_HOME
+and POD_CACHE_HOME in disposable task storage as an outer containment layer;
+fixtures clear them locally and restore them afterward. Failed isolation runs
+and host-state recovery are separate evidence, never passing candidate proof.

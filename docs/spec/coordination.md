@@ -30,7 +30,7 @@ Choose tools, direct session work or delegation before a worker model. Assess ea
 
 Type: B,H · Scenarios: [A31](#a31), [A37](#a37), [A55](#a55)
 
-Keep the coordinator conversation, model, effort and host settings unchanged. Preserve useful integration, verification and reporting headroom; checkpoint before foreseeable interruption. Worker selection changes only workers.
+Keep the coordinator conversation, model, effort and host settings unchanged, except the objective coordinator replacement explicitly confirmed under R105. Preserve useful integration, verification and reporting headroom; checkpoint before foreseeable interruption. Worker selection changes only workers.
 
 ### R26 — workers.max_active bounds concurrently reserved logical assignments
 
@@ -245,6 +245,20 @@ assurance refuses reopening as `assurance_still_bound`; an incomplete review doe
 not acquire that protection. Restored bindings do not erase an already admitted
 native review or qualify its incomplete work. Authorized withdrawal retains history, and actual
 binding invalidation or an authorized changed definition permits fresh review.
+Retained observations keep the faithful candidate, binding and definition of
+their referenced attempt. A missing optional verification environment and an
+unconsumed cross-role or cross-assurance reference remain readable observations;
+neither qualifies the assurance. Completed review proof retains its exact role,
+served assurance and provenance even when an optional acceptance marker is absent.
+Retained REUSE rechecks its immutable source and target in Git and matches the
+ordinary writer's bounded delta representation, including after withdrawal.
+Under the direct Owner decision to hold handoff, a definition-changing receipt
+whose original eligibility scope is no longer recorded remains readable after
+its recorded facts verify, but is nonqualifying history. Ordinary writes and
+closure record production remain available. Owner-handoff cannot exclude a
+Run-sharing closed peer containing that history. Neither report/packet scope,
+editing ownership nor a later definition supplies the missing original scope;
+no repair, conversion or additional stored scope fact is implied.
 A failed, incomplete or scope-unreconciled review observation cannot satisfy assurance.
 Reservation stamps immutable `admitted_seq`; successful report consumption
 stamps immutable `reported_seq`; triage stamps `recorded_seq`. Correction

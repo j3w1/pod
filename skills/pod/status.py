@@ -348,6 +348,12 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     if (result.get("detail") or {}).get("native_code") == "no_active_sender_terminal":
         result["next_safe_action"] = "This process is not in a live Orca terminal; Pod records need one. Observe read-only with pod status --objective ID"
         result["next_action"] = result["next_safe_action"]
+    if state is not None and checkpoint is not None:
+        from .handoff import nonowner_detection
+        handoff = nonowner_detection(project, objective, state, state["owner"])
+        if handoff is not None:
+            result.update(owner_handoff=handoff, blocker=handoff["status"],
+                          next_safe_action=handoff["next_action"], next_action=handoff["next_action"])
     return result
 
 
@@ -393,8 +399,12 @@ def render(result: dict) -> None:
             for item in assignments.get("unverified", []):
                 print(f"  Unverified {item['role']} (dispatch {item['dispatch'] or 'pending'}): "
                       + _orca_attention_label(item["orca_attention"]))
+        handoff = result.get("owner_handoff")
+        if isinstance(handoff, dict):
+            print(f"Owner handoff: {clean(handoff['condition'])}; {clean(handoff['message'])}")
         for entry in (result.get("runtime_continuity") or {}).get("history", []):
-            print(f"Runtime rebind: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
+            label = "Owner handoff" if entry["provenance"] == "owner_handoff" else "Runtime rebind"
+            print(f"{label}: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
                   f"{clean(entry['at'])} ({entry['provenance']})")
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})"

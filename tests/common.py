@@ -40,7 +40,7 @@ def envelope(name: str) -> dict:
 
 
 @contextmanager
-def fixture():
+def fixture(*, caller: str | None = "owner"):
     root = os.environ.get("POD_TEST_ROOT")
     if root:
         Path(root).mkdir(parents=True, exist_ok=True)
@@ -56,10 +56,14 @@ def fixture():
                  "CODEX_HOME": str(base / "codex-home"),
                  "CLAUDE_CONFIG_DIR": str(base / "claude-home"),
                  "PATH": disposable_path(base / "home")}
+        if caller is not None:
+            homes["ORCA_TERMINAL_HANDLE"] = caller
         if (Path(homes["XDG_DATA_HOME"]).resolve(strict=False) / "pod").is_relative_to(HOST_POD_DATA):
             raise AssertionError("Disposable fixture resolved into the host Pod data directory")
         (base / "home").mkdir()
         with patch.dict(os.environ, homes, clear=False):
+            if caller is None:
+                os.environ.pop("ORCA_TERMINAL_HANDLE", None)
             os.environ.pop("POD_CONFIG_HOME", None)
             os.environ.pop("POD_STATE_HOME", None)
             os.environ.pop("POD_CACHE_HOME", None)

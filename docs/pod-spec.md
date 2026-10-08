@@ -25,13 +25,13 @@ Maintain this requirement/scenario inventory as product authority. Explicitly re
 
 ### R02 — Keep the current conversation as coordinator
 
-Type: B · Scenarios: [A01](#a01), [A39](#a39), [A94](#a94)
+Type: B · Scenarios: [A01](#a01), [A39](#a39), [A94](#a94), [A250](spec/orca.md#a250)
 
-Keep the current conversation as coordinator. Orca is the sole runtime authority for Runs, Tasks, Dispatches, requests, placement, messaging, terminals/resources and lifecycle; projects own governance. Pod is selection, admission and evidence only. Helpers must not become a scheduler, competing native task/lifecycle database, autonomous controller or restart daemon.
+Keep the current conversation as coordinator, except the explicit Owner-authorized loss handoff in R105. Orca is the sole runtime authority for Runs, Tasks, Dispatches, requests, placement, messaging, terminals/resources and lifecycle; projects own governance. Pod is selection, admission and evidence only. The handoff alone may read exact terminal liveness and mutate the existing Run binding through run-use; helpers must not become a scheduler, competing native task/lifecycle database, autonomous controller or restart daemon.
 
 ## Acceptance scenarios
 
 - <a id="a01"></a>**A01** — Invoke Pod in either host: the same conversation remains coordinator with context and coordinator configuration preserved.
 - <a id="a38"></a>**A38** — Requirement/scenario references have no duplicate/orphan IDs, unclassified requirement or contradiction.
 - <a id="a39"></a>**A39** — No competing native task database, scheduler, autonomous reasoning/restart loop, dashboard or marketplace.
-- <a id="a94"></a>**A94** — Pod exposes no private Delivery, cleanup, release, terminal or lifecycle mutation operation; Orca owns those states, while reports and Governor decisions use exact objective assignment evidence when needed.
+- <a id="a94"></a>**A94** — Pod exposes no private Delivery, cleanup, release or work-lifecycle mutation operation; the sole owner-handoff exception reads terminal show and mutates the existing Run through the exact run-use shape; Orca owns those states, while reports and Governor decisions use exact objective assignment evidence when needed.

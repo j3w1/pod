@@ -115,7 +115,34 @@ _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "r
                      "admitted_seq"}
 
 
-def _validate_admission(key: str, row: object) -> None:
+def _consumed_report(row: dict, runtimes: set[str]) -> dict | None:
+    """Validate the immutable observation that already joined a settled Dispatch."""
+    if row["report"] is None:
+        return None
+    from .records import report_record, _sha256
+    fields = {"outcome", "status", "attempt", "observation", "observation_digest", "result_commit", "consumed_at"}
+    value = exact(row["report"], fields, fields, name="consumed report")
+    observation = report_record(value["observation"])
+    bounded_text(value["consumed_at"], name="consumed_at")
+    if value["result_commit"] is not None:
+        bounded_text(value["result_commit"], name="result_commit")
+    if (not binding_valid(row["native_binding"]) or not _sha256(value["observation_digest"])
+            or value["status"] not in ("validated_observation", "reconciliation_required")
+            or value["outcome"] != observation["outcome"] or value["attempt"] != observation["attempt"]
+            or observation["attempt"] != row["native_binding"]["dispatchId"]
+            or observation["assignment"] != row["packet_id"] or observation["candidate"] != row["candidate"]):
+        raise PodError("state_unsupported", "Consumed report no longer joins its recorded assignment")
+    if value["status"] == "validated_observation":
+        binding = {key: row["native_binding"][key] for key in ("runId", "taskId", "dispatchId", "workerId")}
+        # Rebinds preserve the observation and its original runtime in history.
+        if not any(digest({"status": value["status"], "observation": observation,
+                           "native_binding": {"runtime": runtime, **binding}}) == value["observation_digest"]
+                   for runtime in runtimes | {row["runtime"]}):
+            raise PodError("state_unsupported", "Consumed report observation identity changed")
+    return value
+
+
+def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = None) -> None:
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
@@ -147,6 +174,7 @@ def _validate_admission(key: str, row: object) -> None:
         raise PodError("state_unsupported", "Bound admission lacks exact native identity")
     if value["native_binding"] is not None and not binding_valid(value["native_binding"]):
         raise PodError("state_unsupported", "Admission native identity is malformed")
+    _consumed_report(value, runtimes or set())
 
 
 def _validate_context(value: object) -> dict:
@@ -162,10 +190,15 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported", "Context owner is malformed")
     if not isinstance(state["admissions"], dict):
         raise PodError("state_unsupported", "Admissions are malformed")
+    checkpoint_value = state.get("checkpoint")
+    continuity = checkpoint_value.get("continuity") if isinstance(checkpoint_value, dict) else None
+    if continuity is not None:
+        _validate_continuity(continuity)
+    runtimes = {entry[field] for entry in (continuity or {}).get("history", []) for field in ("from_runtime", "to_runtime")}
     for key, row in state["admissions"].items():
         if not isinstance(key, str) or not key:
             raise PodError("state_unsupported", "Admission key is malformed")
-        _validate_admission(key, row)
+        _validate_admission(key, row, runtimes=runtimes)
     if (not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict)
             or not isinstance(state["constraints"], list) or len(state["constraints"]) > 64):
         raise PodError("state_unsupported", "Context evidence is malformed")
@@ -236,6 +269,8 @@ def require_authority(project: Path, objective: str, *, owner: str,
     from .orca import current_run
     locked = state is not None
     state = _read(_path(project, objective)) if state is None else state
+    from .handoff import refuse_nonowner
+    refuse_nonowner(project, objective, state, owner, port=native_port)
     if state["owner"] not in (None, owner):
         raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
     refs = _run_references(state)
@@ -323,7 +358,18 @@ def _validate_continuity(value: object) -> None:
     history = value["history"]
     if not isinstance(history, list) or len(history) > CONTINUITY_HISTORY:
         raise PodError("state_unsupported", "Runtime continuity history is malformed or over its bound")
+    if sum(isinstance(row, dict) and row.get("provenance") == "owner_handoff"
+           and row.get("state") != "done" for row in history) > 1:
+        raise PodError("state_unsupported", "More than one unfinished owner handoff")
     for row in history:
+        if not isinstance(row, dict) or not {"from_runtime", "to_runtime"} <= set(row):
+            raise PodError("state_unsupported", "Runtime continuity history row is malformed")
+        for field in ("from_runtime", "to_runtime"):
+            bounded_text(row[field], name=field)
+        if isinstance(row, dict) and row.get("provenance") == "owner_handoff":
+            from .handoff import validate_entry
+            validate_entry(row)
+            continue
         if (not isinstance(row, dict)
                 or not {"from_runtime", "to_runtime", "at", "provenance", "verified"} <= set(row)
                 or set(row) - {"from_runtime", "to_runtime", "at", "provenance", "verified", "decision"}
@@ -374,6 +420,33 @@ def classify_continuity(state: dict, *, owner: str, current: dict, port) -> dict
             differs.append("consumer generation")
         else:
             verified["generation"] = recorded["generation"]
+    work = continuity_work(state, runtime=runtime, port=port)
+    differs.extend(work["differs"])
+    unreadable.extend(work["ambiguity"])
+    verified.update(work["verified"])
+    reads = work["reads"]
+    if reads and not differs:
+        # Bracket the identity reads: the current Run binding and runtime must not move meanwhile.
+        try:
+            after = port.read_native(owner, authority_runs=tuple(sorted(refs)))
+        except PodError as exc:
+            after = {"runtime": None, "error": exc.code}
+        if after.get("runtime") != runtime or after.get("binding") != run:
+            unreadable.append("current Run binding changed during the continuity check")
+    if len(unreadable) > CONTINUITY_AMBIGUITY:
+        unreadable = [*unreadable[:CONTINUITY_AMBIGUITY - 1],
+                      f"{len(unreadable) - CONTINUITY_AMBIGUITY + 1} more unreadable identities"]
+    return {"classification": "disproven" if differs else "ambiguous" if unreadable else "proven",
+            "recorded_runtime": recorded_runtime, "current_runtime": runtime,
+            "differs": differs, "ambiguity": unreadable, "verified": verified,
+            "binding": run if isinstance(run, dict) else None,
+            "caller_is_owner": current.get("caller") == state.get("owner") == owner}
+
+
+def continuity_work(state: dict, *, runtime: str, port) -> dict:
+    """R98 exact admission comparisons, shared with the owner handoff."""
+    differs, unreadable = [], []
+    verified = {"admissions": [], "absent": []}
     reads = 0
     for key in sorted(state.get("admissions", {})):
         row = state["admissions"][key]
@@ -418,22 +491,7 @@ def classify_continuity(state: dict, *, owner: str, current: dict, port) -> dict
             differs.append(f"admission {key}")
         else:
             verified["admissions"].append(key)
-    if reads and not differs:
-        # Bracket the identity reads: the current Run binding and runtime must not move meanwhile.
-        try:
-            after = port.read_native(owner, authority_runs=tuple(sorted(refs)))
-        except PodError as exc:
-            after = {"runtime": None, "error": exc.code}
-        if after.get("runtime") != runtime or after.get("binding") != run:
-            unreadable.append("current Run binding changed during the continuity check")
-    if len(unreadable) > CONTINUITY_AMBIGUITY:
-        unreadable = [*unreadable[:CONTINUITY_AMBIGUITY - 1],
-                      f"{len(unreadable) - CONTINUITY_AMBIGUITY + 1} more unreadable identities"]
-    return {"classification": "disproven" if differs else "ambiguous" if unreadable else "proven",
-            "recorded_runtime": recorded_runtime, "current_runtime": runtime,
-            "differs": differs, "ambiguity": unreadable, "verified": verified,
-            "binding": run if isinstance(run, dict) else None,
-            "caller_is_owner": current.get("caller") == state.get("owner") == owner}
+    return {"differs": differs, "ambiguity": unreadable, "verified": verified, "reads": reads}
 
 
 def _apply_continuity(state: dict, verdict: dict, *, provenance: str, decision: dict | None = None) -> dict:
@@ -509,6 +567,9 @@ def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, 
             or (expected_runtime is not None and runtime != expected_runtime)):
         # No observed change, or a port that cannot show the current Run binding.
         return None
+    if current.get("caller") is not None and current["caller"] != state.get("owner"):
+        from .handoff import refuse_nonowner
+        refuse_nonowner(project, objective, state, owner, port=port, current=current)
     verdict = classify_continuity(state, owner=owner, current=current, port=port)
     if verdict["classification"] == "ambiguous":
         raise _ambiguous(objective, verdict)
@@ -626,6 +687,8 @@ def check_bound_sources(project: Path, objective: str, *, owner: str,
     with _lock(path):
         state = _read(path)
         if state["owner"] != owner:
+            from .handoff import refuse_nonowner
+            refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
             raise PodError("coordinator_conflict", "Source check belongs to another coordinator")
         require_authority(project, objective, owner=owner, state=state)
         return _check_bound_sources_locked(project, path, state, assignment, sources)
@@ -845,6 +908,9 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "criteria": list(criteria if criteria is not None else checkpoint_value.get("criteria", [])),
             "candidate": candidate if candidate is not None else checkpoint_value.get("candidate"),
             "governance": governance,
+            "bound_governance": lambda bound: governance_observation(
+                project, bound["base_ref"], at=bound["base"], bound_ref=bound["base_ref"],
+                selection=bound["selection"]),
             "governance_current": (governance or {}).get("current") if governance is not None
             else (_resolve_commit(project, base_ref) if base_ref else None),
             "source_state": source_state,
@@ -889,6 +955,21 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
                           if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
                           and isinstance(row.get("placement"), dict)}
     return view
+
+
+def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
+    """Replay closure using complete, immutable consumed settlement observations.
+
+    This reads past settlement only to validate an already recorded closure;
+    it does not settle an admission or authorize ordinary work without readback.
+    """
+    ctx = kernel_context(project, objective, state, None)
+    if (state.get("checkpoint") or {}).get("closure") is None:
+        return ctx
+    ctx["outstanding"] = [key for key in ctx["outstanding"]
+                          if state["admissions"][key]["state"] != "bound"
+                          or (state["admissions"][key].get("report") or {}).get("status") != "validated_observation"]
+    return ctx
 
 
 def map_read(project: Path, objective: str) -> dict:
@@ -1020,6 +1101,26 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     return core, proposed, dispositions
 
 
+def validate_checkpoint_snapshot(project: Path, state: dict) -> None:
+    """Parse stored checkpoint core through the ordinary checkpoint contract."""
+    value = state.get("checkpoint")
+    if not isinstance(value, dict):
+        raise PodError("state_unsupported", "Persisted checkpoint is not a record")
+    bounded_text(value.get("policy_revision"), name="policy_revision")
+    # These are the two bundle stamps added after the ordinary core/map writer.
+    stamps = exact({key: value[key] for key in ("pod_version", "bundle_digest") if key in value},
+                   {"pod_version", "bundle_digest"}, {"pod_version", "bundle_digest"}, name="checkpoint stamps")
+    bounded_text(stamps["pod_version"], name="pod_version", limit=64)
+    if not isinstance(stamps["bundle_digest"], str) or re.fullmatch(r"[0-9a-f]{64}", stamps["bundle_digest"]) is None:
+        raise PodError("state_unsupported", "Persisted checkpoint bundle identity is malformed")
+    refs = _run_references(state)
+    core = {key: item for key, item in value.items() if key not in stamps}
+    _checkpoint_input(project, value.get("objective"), state.get("owner"), core,
+                      {"runtime": next(iter(refs.values()), None)})
+    from .obligations import validate_map_record
+    validate_map_record(value)
+
+
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict) -> tuple[dict, dict | None]:
@@ -1128,6 +1229,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             _map_refusal_context(exc, state)
             raise
         if state["owner"] not in (None, owner):
+            from .handoff import refuse_nonowner
+            refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
             raise PodError("coordinator_conflict", "Caller is not the recorded owner; another coordinator owns this objective")
         recorded_refs = {(row["runId"], row["runtime"]) for row in previous.get("native_refs", [])
                          if isinstance(row, dict)}
@@ -1366,6 +1469,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
     with _lock(path):
         state = _read(path)
         if state["owner"] not in (None, owner):
+            from .handoff import refuse_nonowner
+            refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
             raise PodError("coordinator_conflict", "Caller is not the recorded owner; another coordinator owns this objective")
         refs = _run_references(state)
         if run_id not in refs:
@@ -1480,6 +1585,8 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
     with _lock(path):
         state = _read(path)
         if state["owner"] != owner or admission_id not in state["admissions"]:
+            from .handoff import refuse_nonowner
+            refuse_nonowner(project, objective, state, owner, code="unknown_admission")
             raise PodError("unknown_admission", "No owned admission identity")
         if open_required:
             _require_open(state)
@@ -1660,6 +1767,8 @@ def intervention(project: Path, objective: str, *, owner: str, correction: dict,
     with _lock(path):
         state = _read(path)
         if state["owner"] != owner:
+            from .handoff import refuse_nonowner
+            refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
             raise PodError("coordinator_conflict", "Correction belongs to another coordinator")
         _require_open(state)
         require_authority(project, objective, owner=owner, state=state)
@@ -1735,6 +1844,8 @@ def constraints_update(project: Path, objective: str, *, owner: str,
     with _lock(path):
         state = _read(path)
         if state["owner"] != owner:
+            from .handoff import refuse_nonowner
+            refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
             raise PodError("coordinator_conflict", "Constraint belongs to another coordinator")
         _require_open(state)
         require_authority(project, objective, owner=owner, state=state)

@@ -231,6 +231,16 @@ def bind_governance(observed: Any, base_ref: str | None, exclude: list[str]) -> 
 
 
 def governance_digest(sources: list[dict]) -> str:
+    if not isinstance(sources, list) or len(sources) > len(GOVERNANCE_PATHS):
+        raise refuse("obligation_invalid", "malformed", "governance sources are the bounded bound-source records", record="governance sources")
+    paths = set()
+    for raw in sources:
+        row = _exact(raw, {"path", "revision", "base"}, {"path", "revision", "base"}, "governance source")
+        if (not isinstance(row["path"], str) or row["path"] not in GOVERNANCE_PATHS or row["path"] in paths
+                or not isinstance(row["base"], str) or _COMMIT.fullmatch(row["base"]) is None
+                or row["revision"] is not None and (not isinstance(row["revision"], str) or re.fullmatch(r"sha256:[0-9a-f]{64}", row["revision"]) is None)):
+            raise refuse("obligation_invalid", "malformed", "governance source retains its unique path and bound revisions", record="governance source")
+        paths.add(row["path"])
     return digest(sources)
 
 
@@ -901,6 +911,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
                                                    "instruction": authority["instruction"],
                                                    "closed_revision": prior_map["closure"]["revision"]}])[-8:]
     state["observations"] = observations(prior_map, state, ctx)
+    _persisted_rows(state, ctx)
     if value.get("close") is True:
         state["closure"] = _close(state, ctx)
     elif "close" in value:
@@ -1388,7 +1399,152 @@ def quiescence(state: dict) -> dict | None:
             "interim_report": "incomplete — blocked on " + "; ".join(parts)}
 
 
+def validate_map_record(state: dict) -> None:
+    """The persisted map envelope used by ordinary writes and checkpoint reads."""
+    value = _exact({key: value for key, value in state.items() if key in MAP_STORED},
+                   MAP_STORED, MAP_STORED - {"governance_history", "delivery"}, "persisted map")
+    for field in ("seq", "revision"):
+        if type(value[field]) is not int or value[field] < 1:
+            raise refuse("obligation_invalid", "malformed", "persisted map sequence and revision are positive integers", record="persisted map")
+    governance = _exact(value["governance"], {"base_ref", "selection", "exclude", "base"},
+                        {"base_ref", "selection", "exclude", "base"}, "persisted governance")
+    if governance["base_ref"] is not None:
+        _text(governance["base_ref"], "base_ref", limit=256)
+    if (governance["base"] is not None and (not isinstance(governance["base"], str) or _COMMIT.fullmatch(governance["base"]) is None)
+            or governance["selection"] is not None and not isinstance(governance["selection"], str)
+            or not isinstance(governance["exclude"], list) or len(governance["exclude"]) > len(GOVERNANCE_PATHS)
+            or any(not isinstance(path, str) or path not in GOVERNANCE_PATHS for path in governance["exclude"])
+            or len(set(governance["exclude"])) != len(governance["exclude"])):
+        raise refuse("obligation_invalid", "malformed", "persisted governance retains its target and source selection", record="persisted governance")
+    governance_digest(value["governance_sources"])
+    sources = value["governance_sources"]
+    if (governance["selection"] not in (None, "default", "user_direct")
+            or governance["exclude"] != sorted(governance["exclude"])
+            or governance["base"] is None and (governance["base_ref"] is not None or governance["selection"] is not None or sources)
+            or governance["base"] is not None and (governance["base_ref"] is None or governance["selection"] is None
+                or [row["path"] for row in sources] != [path for path in GOVERNANCE_PATHS if path not in governance["exclude"]]
+                or any(row["base"] != governance["base"] for row in sources))):
+        raise refuse("obligation_invalid", "malformed", "governance header and declared sources retain one bound snapshot", record="persisted governance")
+    proposals = value["proposals"]
+    if not isinstance(proposals, list) or len(proposals) > MAX_PROPOSALS:
+        raise refuse("obligation_invalid", "malformed", "persisted proposals are a bounded list", record="persisted map")
+    parsed = [_proposal(row) for row in proposals]
+    if len({row["id"] for row in parsed}) != len(parsed):
+        raise refuse("obligation_invalid", "malformed", "persisted proposal ids are unique", record="persisted map")
+    if value["coordinator_slot"] is not None:
+        _ident(value["coordinator_slot"], "coordinator slot")
+    quiescent = value["quiescence"]
+    if quiescent is not None:
+        fields = {"state"} if isinstance(quiescent, dict) and quiescent.get("state") == "closable" else {"state", "blocked", "interim_report"}
+        _exact(quiescent, fields, fields, "quiescence")
+        if quiescent["state"] not in ("closable", "quiescent") or "blocked" in quiescent and not isinstance(quiescent["blocked"], list):
+            raise refuse("obligation_invalid", "malformed", "persisted quiescence is a recorded projection", record="quiescence")
+        if "interim_report" in quiescent:
+            # This concatenates individually bounded inputs; the enclosing
+            # record bounds its size, rather than one input's text limit.
+            text = quiescent["interim_report"]
+            if not isinstance(text, str) or not text.strip() or "\x00" in text:
+                raise refuse("obligation_invalid", "malformed", "quiescence retains its derived report text", record="quiescence")
+    if value["closure"] is not None:
+        closed = _exact(value["closure"], {"seq", "revision", "report"}, {"seq", "revision", "report"}, "closure")
+        if any(type(closed[field]) is not int or closed[field] != value[field] for field in ("seq", "revision")) or not isinstance(closed["report"], dict):
+            raise refuse("obligation_invalid", "malformed", "closure retains its map sequence and report", record="closure")
+    reopened = value["reopened"]
+    if not isinstance(reopened, list) or len(reopened) > 8:
+        raise refuse("obligation_invalid", "malformed", "reopen history is a bounded list", record="persisted map")
+    for raw in reopened:
+        row = _exact(raw, {"seq", "revision", "instruction", "closed_revision"}, {"seq", "revision", "instruction", "closed_revision"}, "reopen")
+        _text(row["instruction"], "instruction", limit=1024)
+        if (type(row["seq"]) is not int or not 1 <= row["seq"] <= value["seq"]
+                or any(type(row[field]) is not int or not 1 <= row[field] <= value["revision"] for field in ("revision", "closed_revision"))):
+            raise refuse("obligation_invalid", "malformed", "reopen history retains its recorded sequence", record="reopen")
+    observation = _exact(value["observations"], {"ceiling", "outstanding", "delegation", "inputs", "governance_current", "governance_stale", "policy_gone", "serialization", "churn"},
+                         {"ceiling", "outstanding", "delegation", "inputs", "governance_current", "governance_stale", "policy_gone", "serialization", "churn"}, "observations")
+    if (type(observation["ceiling"]) is not int or observation["ceiling"] < 0
+            or observation["delegation"] not in ("available", "unavailable", "unknown")
+            or type(observation["governance_stale"]) is not bool):
+        raise refuse("obligation_invalid", "malformed", "observations retain their measured input types", record="observations")
+    _text(observation["inputs"], "inputs")
+    if observation["governance_current"] is not None:
+        _text(observation["governance_current"], "governance_current")
+    for field in ("outstanding", "policy_gone", "serialization", "churn"):
+        if not isinstance(observation[field], list):
+            raise refuse("obligation_invalid", "malformed", "observation rows are recorded lists", record="observations")
+    for field in ("policy_gone", "churn"):
+        for identity in observation[field]: _ident(identity, field)
+    for raw in observation["outstanding"]:
+        row = _exact(raw, {"admission", "boundary"}, {"admission", "boundary"}, "outstanding observation")
+        _text(row["admission"], "admission")
+        boundary(row["boundary"])
+    for raw in observation["serialization"]:
+        row = _exact(raw, {"obligation", "since_seq", "holder"}, {"obligation", "since_seq", "holder"}, "serialization observation")
+        for field in ("obligation", "holder"): _ident(row[field], field)
+        if type(row["since_seq"]) is not int or not 1 <= row["since_seq"] <= value["seq"]:
+            raise refuse("obligation_invalid", "malformed", "serialization observation retains its sequence", record="observations")
+
+
+def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = None) -> dict:
+    """Canonical persisted rows, shared by completed writes and closure reads."""
+    from .assurance import validate_receipts, validate_findings
+    validate_map_record(state)
+    raw = state.get("obligations")
+    if not isinstance(raw, list) or len(raw) > MAX_OBLIGATIONS:
+        raise refuse("obligation_invalid", "malformed", "persisted obligations are a bounded list", record="obligation map")
+    parsed = [_structure(row) for row in raw]
+    if parsed != raw:
+        raise refuse("obligation_invalid", "malformed", "persisted rows retain their canonical structure", record="obligation map")
+    rows = {row["id"]: row for row in parsed}
+    if len(rows) != len(parsed):
+        raise refuse("obligation_invalid", "malformed", "persisted obligation ids are unique", record="obligation map")
+    observed = ctx.get("governance")
+    if observed is None and callable(ctx.get("bound_governance")):
+        observed = ctx["bound_governance"](state["governance"])
+    if observed is not None:
+        sources, base = bind_governance(observed, state["governance"]["base_ref"], state["governance"]["exclude"])
+        if sources != state["governance_sources"] or base != state["governance"]["base"]:
+            raise refuse("obligation_invalid", "cite_not_base", "persisted sources match their bound base snapshot", record="persisted governance")
+    for ob in rows.values():
+        if type(ob.get("introduced_seq")) is not int or not 1 <= ob["introduced_seq"] <= state["seq"] or ob.get("definition") != definition_id(ob):
+            raise refuse("obligation_invalid", "malformed", "persisted obligations retain introduction and definition identities", obligation=ob["id"])
+        if "parent" in ob and (ob["parent"] not in rows or ob["kind"] == "correction" and rows[ob["parent"]]["kind"] != "assurance"):
+            raise refuse("obligation_invalid", "no_parent", "persisted parent names its recorded obligation", obligation=ob["id"])
+        if ob["provenance"] == "project_policy":
+            source = _exact(ob.get("source"), {"path", "lines", "revision", "base", "quote_sha256", "gone"},
+                            {"path", "lines", "revision", "base", "quote_sha256", "gone"}, "persisted citation", obligation=ob["id"])
+            if (source["path"] not in GOVERNANCE_PATHS or not isinstance(source["lines"], str)
+                    or _LINES.fullmatch(source["lines"]) is None or type(source["gone"]) is not bool
+                    or not isinstance(source["base"], str) or _COMMIT.fullmatch(source["base"]) is None
+                    or not isinstance(source["quote_sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", source["quote_sha256"]) is None
+                    or source["revision"] is not None and (not isinstance(source["revision"], str) or re.fullmatch(r"sha256:[0-9a-f]{64}", source["revision"]) is None)):
+                raise refuse("obligation_invalid", "malformed", "persisted citation retains its bound source identity", obligation=ob["id"])
+            match = _LINES.fullmatch(source["lines"])
+            first, last = int(match.group(1)), int(match.group(2) or match.group(1))
+            if first > last or last - first >= MAX_CITED_LINES or source["path"] not in {row["path"] for row in state["governance_sources"]}:
+                raise refuse("obligation_invalid", "cite_not_found", "persisted citation names declared bounded lines", obligation=ob["id"])
+            if observed is None or observed.get("status") != "observed":
+                raise refuse("governance_unavailable", "governance_unavailable", "persisted policy citation needs its bound source snapshot", obligation=ob["id"])
+            cited = (_relocate(source, observed, state["governance_sources"]) if source["gone"]
+                     else _cite(source, observed, state["governance_sources"], obligation=ob["id"]))
+            if cited != source:
+                raise refuse("obligation_invalid", "cite_not_base", "persisted citation and withdrawal match their bound source text", obligation=ob["id"])
+        else:
+            _introduce(ob, ob["introduced_seq"] == 1, ob["provenance"] == "user_direct", None, [], list(ctx.get("criteria", [])))
+        if ob["state"] == "withdrawn":
+            withdrawal = ob["withdrawal"]
+            instruction = withdrawal.get("instruction") if isinstance(withdrawal, dict) else None
+            authority = _authority({"provenance": "user_direct", "instruction": instruction}) if isinstance(withdrawal, dict) and withdrawal.get("by") == "user_direct" else None
+            if _withdrawal(ob, authority is not None, authority) != withdrawal:
+                raise refuse("obligation_invalid", "withdrawal_unauthorized", "persisted withdrawal retains its complete authority record", obligation=ob["id"])
+        unknown = validate_receipts(ob, ctx, seq=state["seq"])
+        if unknown and unverifiable is not None:
+            unverifiable.append(ob["id"])
+        validate_findings(ob, rows, seq=state["seq"])
+    _ancestry(rows)
+    return rows
+
+
 def _close(state: dict, ctx: dict) -> dict:
+    _persisted_rows(state, ctx)
     open_rows = [ob["id"] for ob in state["obligations"] if ob["state"] not in TERMINAL]
     if open_rows:
         raise refuse("obligation_unaccounted", "closure_unfinished",
@@ -1402,6 +1558,34 @@ def _close(state: dict, ctx: dict) -> dict:
                      "closure waits for pending governed effects to settle", record='closure')
     closure = {"seq": state["seq"], "revision": state["revision"]}
     return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
+
+
+def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
+    """Recheck recorded closure with the same row, closure and report contracts."""
+    closure = _exact(state.get("closure"), {"seq", "revision", "report"},
+                     {"seq", "revision", "report"}, "closure")
+    for key in ("seq", "revision"):
+        if type(state.get(key)) is not int or state[key] < 1 or type(closure[key]) is not int or closure[key] != state[key]:
+            raise refuse("obligation_invalid", "malformed", "closure sequence and revision match the map", record="closure")
+    raw = state.get("obligations")
+    if not isinstance(raw, list) or not raw:
+        raise refuse("obligation_invalid", "malformed", "closure needs its complete obligation map", record="closure")
+    unverifiable = []
+    rows = _persisted_rows(state, ctx, unverifiable=unverifiable)
+    criteria = set(ctx.get("criteria", []))
+    original = {ob["source"]["ref"] for ob in rows.values() if ob["provenance"] == "objective"}
+    if not original <= criteria or not criteria <= _covered(rows):
+        raise refuse("obligation_invalid", "malformed", "closure retains every original criterion and covers its recorded criteria", record="closure")
+    _account(state, rows, state["seq"], ctx, governance_digest(state["governance_sources"]))
+    _waits(state, rows, ctx)
+    if state["coordinator_slot"] is not None or state["quiescence"] != quiescence(state):
+        raise refuse("obligation_invalid", "malformed", "closure retains its derived slot and quiescence", record="closure")
+    if any(properties(state, ctx).values()):
+        raise refuse("obligation_invalid", "malformed", "closure retains all map invariants", record="closure")
+    expected = _close(state, ctx)
+    if closure != expected:
+        raise refuse("obligation_invalid", "malformed", "closure report matches the validated map and evidence", record="closure")
+    return tuple(sorted(set(unverifiable)))
 
 
 def brief_map(criteria: list[str], value: Any, ctx: dict) -> dict:
