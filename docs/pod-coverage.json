@@ -1298,7 +1298,8 @@
         "tests.test_workspace_state.AuditRenderTests.test_cost_or_time_column_never_appears_without_a_disclaimer",
         "tests.test_workspace_pty.AuditCorrectionPtyTests.test_narrow_labels_keep_the_effort_under_every_sort",
         "tests.test_workspace_state.AuditRenderTests.test_narrow_labels_shorten_the_model_never_the_effort",
-        "tests.test_workspace_state.AuditRenderTests.test_scroll_hints_name_the_keys_that_scroll"
+        "tests.test_workspace_state.AuditRenderTests.test_scroll_hints_name_the_keys_that_scroll",
+        "tests.test_workspace_state.TableTests.test_observation_labels_preserve_profile_identity_without_mapping_routes"
       ],
       "status": "NOT_RUN"
     },
@@ -2312,7 +2313,8 @@
         "tests.test_tui_pty.TuiPtyTests.test_keyboard_moves_table_and_inspector_independently",
         "tests.test_workspace_state.AuditRenderTests.test_focus_always_rests_on_a_shown_row_and_edits_only_that_row",
         "tests.test_workspace_pty.AuditCorrectionPtyTests.test_focus_stays_on_a_shown_row_and_edits_only_that_row",
-        "tests.test_workspace_state.TableTests.test_default_mixed_table_sorts_metrics_and_keeps_unknown_last"
+        "tests.test_workspace_state.TableTests.test_default_mixed_table_sorts_metrics_and_keeps_unknown_last",
+        "tests.test_workspace_state.TableTests.test_discovery_labels_and_help_are_clear_at_every_supported_width"
       ],
       "status": "NOT_RUN"
     },
@@ -2421,7 +2423,8 @@
         "tests.test_workspace_state.DeltaAuditRenderTests.test_status_items_keep_their_documented_order_below_twenty_rows",
         "tests.test_workspace_state.WorkspaceSessionTests.test_manual_refresh_reveals_new_rows_and_updates_metrics_without_restart",
         "tests.test_workspace_pty.RefreshPtyTests.test_R_adds_new_rows_to_default_view_and_reopen_keeps_them",
-        "tests.test_workspace_pty.RefreshPtyTests.test_R_loads_haiku_metrics_without_enabling_new_routes"
+        "tests.test_workspace_pty.RefreshPtyTests.test_R_loads_haiku_metrics_without_enabling_new_routes",
+        "tests.test_workspace_pty.RefreshPtyTests.test_narrow_default_discoveries_keep_profile_labels_and_remain_read_only"
       ],
       "status": "NOT_RUN"
     },

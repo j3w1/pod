@@ -100,6 +100,47 @@ def inspector(current: ts.State, tab: str, width: int = 400) -> str:
 
 
 class TableTests(unittest.TestCase):
+    def test_observation_labels_preserve_profile_identity_without_mapping_routes(self):
+        from tests.test_routes import row
+        names = ("GPT-7 Nova (medium)", "GPT-7 Nova (max)", "GPT-7 Nova (high with fallback)",
+                 "GPT-7 Nova (non-reasoning)")
+        snapshot = fixture_snapshot(edit=lambda rows: rows + [
+            row(name, intelligence=61, usd_per_task=1, first_response_s=1, total_response_s=2)
+            for name in names])
+        current = state(snapshot=snapshot, discovery="all", query="GPT-7 Nova")
+        original = json.dumps(current.projection, sort_keys=True)
+        for grouped in (False, True):
+            for columns in (40, 41, 60, 79, 80, 100, 160):
+                for ascii_only in (False, True):
+                    for sort in ts.SORTS:
+                        with self.subTest(grouped=grouped, columns=columns, ascii=ascii_only, sort=sort):
+                            picture = text(replace(current, grouped=grouped, sort=sort), columns, 30, ascii_only)
+                            shown = [line for line in picture.splitlines() if line[1:7].strip() == "new"]
+                            self.assertEqual(len(shown), len(names))
+                            self.assertEqual(len(set(shown)), len(names))
+                            for effort in ("medium", "max", "high", "none"):
+                                self.assertTrue(any(re.search(r"\b" + effort + r"\b", line) for line in shown),
+                                                (effort, shown))
+        self.assertEqual(json.dumps(current.projection, sort_keys=True), original)
+        for observed in ts.shown_observations(current):
+            self.assertIsNone(observed["model"])
+            self.assertIsNone(observed["effort"])
+            self.assertFalse(observed["routable"])
+
+    def test_discovery_labels_and_help_are_clear_at_every_supported_width(self):
+        for discovery, label in (("new", "new"), ("unsupported", "unsup")):
+            current = state(discovery=discovery)
+            self.assertTrue(ts.shown_observations(current))
+            for columns in (40, 60, 79, 80, 100, 160):
+                for ascii_only in (False, True):
+                    with self.subTest(discovery=discovery, columns=columns, ascii=ascii_only):
+                        shown = text(current, columns, 30, ascii_only)
+                        self.assertTrue(any(line[1:7].strip() == label for line in shown.splitlines()))
+        help_text = "\n".join(line.text for line in tr._help(current, 400, Capabilities(False, False)))
+        self.assertIn("new / unsup mark new / unsupported public observations", help_text)
+        self.assertIn("none labels an AA non-reasoning profile", help_text)
+        self.assertIn("? unknown frontier", help_text)
+
     def test_default_view_and_clear_filters_include_discoveries(self):
         current = ts.initial(state().projection)
         self.assertEqual(current.discovery, "all")

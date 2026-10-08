@@ -222,6 +222,20 @@ class WorkspacePtyTests(PtyCase):
 class RefreshPtyTests(PtyCase):
     saved = WorkspacePtyTests.saved
 
+    def test_narrow_default_discoveries_keep_profile_labels_and_remain_read_only(self):
+        for cols, rows in ((40, 12), (60, 20)):
+            with self.subTest(size=(cols, rows)):
+                session = self.open(cols=cols, rows=rows, fetch="growth", LC_ALL="C", NO_COLOR="1")
+                before = self.config.read_bytes()
+                session.send("R")
+                session.wait_for(lambda s: "Data updated" in s.text() or "Data refreshed" in s.text(), timeout=4)
+                session.send("/GPT-7 Nova\r")
+                session.wait_for(lambda s: any("new" in line and "Nova high" in line for line in s.lines()))
+                session.send(" pP")
+                session.settle(quiet=.3, timeout=1)
+                self.assertEqual(self.config.read_bytes(), before)
+                session.close()
+
     def test_R_adds_new_rows_to_default_view_and_reopen_keeps_them(self):
         session = self.open(cols=160, rows=45, fetch="growth")
         session.wait_for("Showing all")
@@ -252,7 +266,8 @@ class RefreshPtyTests(PtyCase):
         session.wait_for("Claude Haiku 5.5")
         session.send("R")
         session.wait_for("Data updated: AA rows", timeout=4)
-        session.wait_for("43")
+        session.wait_for(lambda s: any("Claude Haiku 5.5" in line and " max " in line and " 43 " in line
+                                      for line in s.lines()))
         self.assertEqual(self.config.read_bytes(), before)
         snapshot = json.loads((self.cache / "current.json").read_text())
         names = {row["name"] for row in snapshot["sources"]["artificial_analysis"]["rows"]}
@@ -260,11 +275,15 @@ class RefreshPtyTests(PtyCase):
                             for effort in ("low", "medium", "high", "xhigh", "max")))
         self.assertFalse(any("haiku" in key for key in self.saved()["eligible"]))
         session.send(" ")
-        session.wait_for("Saved:")
+        session.wait_for(lambda _s: any("haiku" in key for key in self.saved()["eligible"]))
         selected = [key for key in self.saved()["eligible"] if "haiku" in key]
         self.assertEqual(len(selected), 1)
         session.close()
-        self.open(cols=100, rows=30)
+        again = self.open(cols=100, rows=30)
+        again.send("/Haiku 5.5\r")
+        effort = selected[0].rsplit("/", 1)[1]
+        again.wait_for(lambda s: any("Claude Haiku 5.5" in line and f" {effort} " in line and "enabled" in line
+                                    for line in s.lines()))
         self.assertEqual([key for key in self.saved()["eligible"] if "haiku" in key], selected)
 
     def test_automatic_refresh_renders_cache_first_then_updates_once(self):
@@ -417,7 +436,9 @@ class AuditCorrectionPtyTests(PtyCase):
         plain = self.open(cols=80, rows=24, LC_ALL="C", NO_COLOR="1")
         self.assertRegex(plain.text(), r"58#\s+\$5\.98#")
         plain.send("?")
-        plain.wait_for("# AA ran this")
+        plain.wait_for("HELP: MODEL ROUTES")
+        plain.send("\x1b[6~")
+        plain.wait_for(lambda s: "# AA ran this" in " ".join(s.text().split()))
 
     def test_compare_names_a_profile_difference_instead_of_a_delta(self):
         session = self.open(cols=100, rows=30)

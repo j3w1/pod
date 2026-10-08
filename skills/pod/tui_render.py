@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
 
 from . import tui_state as ts
 from .observations import STALE_S
@@ -31,6 +32,9 @@ MIN_COLUMNS, MIN_ROWS = 40, 12
 TAB_LABELS = {"details": ("Details", "Det"), "benchmarks": ("Benchmarks", "Bench"),
               "routing": ("Routing", "Route"), "sources": ("Sources", "Src"), "compare": ("Compare", "Cmp")}
 STATE_TEXT = {"enabled": "enabled", "disabled": "disabled", "not_set": "not set"}
+DISCOVERY_TEXT = {"new": "new", "unsupported": "unsup"}
+_OBSERVATION_PROFILE = re.compile(r"^(.*) \((" + "|".join(ts.EFFORTS)
+                                  + r"|non-reasoning)( with fallback)?\)$")
 UNITS = {"intelligence": "points on the AA Intelligence Index", "usd_per_task": "USD per AA benchmark task",
          "output_tps": "median output tokens per second", "first_response_s": "seconds to first response",
          "total_response_s": "seconds to total response", "context_tokens": "tokens"}
@@ -237,6 +241,18 @@ def _route_label(row: dict) -> str:
     return f"{row['name']} {row['effort']}"
 
 
+def _observation_label(row: dict, caps: Capabilities) -> tuple[str, str]:
+    """Split a source profile for display only; observation and routing identities stay intact."""
+    name = str(row.get("row") or "")
+    profile = _OBSERVATION_PROFILE.fullmatch(name)
+    if profile is None:
+        return name, ""
+    model, effort, fallback = profile.groups()
+    if fallback:
+        model += glyph(caps, "fallback")
+    return model, "none" if effort == "non-reasoning" else effort
+
+
 def _shortened(name: str, room: int, strategy: str, caps: Capabilities) -> str:
     if strategy == "family" and " " in name:
         name = name.split(" ", 1)[1]   # "Claude Opus 5.5" -> "Opus 5.5": the family word goes first
@@ -251,15 +267,19 @@ def narrow_labels(rows: list[dict], width: int, caps: Capabilities) -> dict[str,
     Full names are kept when they all fit; otherwise the first shortening that keeps every model
     distinct is used, so each label stays one exact route identity.
     """
-    room = max(1, width - 1 - max((display_width(row["effort"]) for row in rows), default=0))
-    names = {row["model"]: safe_text(row["name"], caps) for row in rows}
+    names, rooms = {}, {}
+    for row in rows:
+        model, effort = row["model"], row["effort"]
+        names[model] = safe_text(row["name"], caps)
+        room = max(1, width - display_width(effort) - (1 if effort else 0))
+        rooms[model] = min(rooms.get(model, width), room)
     chosen = names
-    if any(display_width(name) > room for name in names.values()):
+    if any(display_width(name) > rooms[model] for model, name in names.items()):
         for strategy in ("family", "full", "middle"):
-            chosen = {model: _shortened(name, room, strategy, caps) for model, name in names.items()}
+            chosen = {model: _shortened(name, rooms[model], strategy, caps) for model, name in names.items()}
             if len(set(chosen.values())) == len(chosen):
                 break
-    return {row["key"]: f"{chosen[row['model']]} {row['effort']}" for row in rows}
+    return {row["key"]: chosen[row["model"]] + (" " + row["effort"] if row["effort"] else "") for row in rows}
 
 
 # --------------------------------------------------------------------------- table
@@ -270,7 +290,7 @@ def preset(columns: int) -> str:
 
 def table_columns(state: ts.State, width: int) -> tuple[Column, ...]:
     """Fixed presets; the column used for sorting always stays visible."""
-    marks = 6 if state.frontier else 5
+    marks = 7 if state.frontier else 6
     sort = state.sort
     metric = {"intelligence": Column("intelligence", "Index", 6, True),
               "usd_per_task": Column("usd_per_task", "$/task", 8, True),
@@ -307,9 +327,9 @@ def table_columns(state: ts.State, width: int) -> tuple[Column, ...]:
 
 def _marks(state: ts.State, item: ts.Item, caps: Capabilities, frontier: dict) -> str:
     if item.kind == "group":
-        return " " * (6 if state.frontier else 5)
+        return " " * (7 if state.frontier else 6)
     if item.kind == "observation":
-        text = glyph(caps, "unknown") + "   " + " "
+        text = DISCOVERY_TEXT[item.observation["discovery"]].ljust(5) + " "
         return text + (" " if state.frontier else "")
     row = item.route
     state_mark = glyph(caps, row["state"])
@@ -320,7 +340,7 @@ def _marks(state: ts.State, item: ts.Item, caps: Capabilities, frontier: dict) -
     if state.frontier:
         mark = frontier.get(row["key"], "unknown")
         text += glyph(caps, "frontier") if mark == "frontier" else "?" if mark == "unknown" else " "
-    return text + " "
+    return text + "  "
 
 
 def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, grouped: bool,
@@ -337,7 +357,10 @@ def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, gr
             enabled = sum(member["state"] == "enabled" for member in members)
             return f"{marker} {ts.model_name(state, item.model)} ({enabled}/{len(members)} enabled)", "heading"
         if item.kind == "observation":
-            return ("  " if grouped else "") + str(row.get("row")), "body"
+            name, _effort = _observation_label(row, caps)
+            if column.header == "Route":
+                name = (labels or {}).get(item.key, name)
+            return ("  " if grouped else "") + name, "body"
         name = ("  " + row["effort"]) if grouped else row["name"]
         if column.header == "Route" and not grouped:
             name = (labels or {}).get(row["key"]) or _route_label(row)
@@ -345,10 +368,11 @@ def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, gr
     if item.kind == "group":
         return "", "body"
     if column.key == "effort":
-        return str(row.get("effort") or glyph(caps, "dash")), "value"
+        effort = _observation_label(row, caps)[1] if item.kind == "observation" else row.get("effort")
+        return str(effort or glyph(caps, "dash")), "value"
     if column.key == "state":
         if item.kind == "observation":
-            return str(row.get("discovery")), "advisory"
+            return DISCOVERY_TEXT[row["discovery"]], "advisory"
         return STATE_TEXT[row["state"]], "badge_" + row["state"]
     if column.key == "key":
         return str(row.get("key") if item.kind == "route" else row.get("source") or ""), "label"
@@ -361,7 +385,7 @@ def _cell(state: ts.State, item: ts.Item, column: Column, caps: Capabilities, gr
 
 def _header(state: ts.State, columns: tuple[Column, ...], caps: Capabilities) -> Line:
     arrow = glyph(caps, "down" if state.descending else "up")
-    parts = [(" " * ((6 if state.frontier else 5) + 1), "label")]
+    parts = [(" " * ((7 if state.frontier else 6) + 1), "label")]
     for index, column in enumerate(columns):
         text = column.header + (arrow if column.key == state.sort or (column.key == "name" and state.sort == "model")
                                 else "")
@@ -458,8 +482,16 @@ def _table(state: ts.State, width: int, height: int, caps: Capabilities,
     rows = ts.items(state)
     columns = table_columns(state, width)
     frontier = ts.frontier(state) if state.frontier else {}
-    labels = narrow_labels([item.route for item in rows if item.kind == "route"], columns[0].width, caps) \
-        if columns[0].header == "Route" else None
+    labels = None
+    if columns[0].header == "Route":
+        displayed = []
+        for item in rows:
+            if item.kind == "group":
+                continue
+            name, effort = ((item.route["name"], item.route["effort"]) if item.route
+                            else _observation_label(item.observation, caps))
+            displayed.append({"key": item.key, "model": name, "name": name, "effort": effort})
+        labels = narrow_labels(displayed, columns[0].width - (2 if state.grouped else 0), caps)
     # A cost or time column is never shown without the disclaimer; a short index-only table may omit it.
     keep_disclaimer = height >= 8 or any(column.key in COST_AND_TIME for column in columns)
     count = max(1, height - 2 - (1 if keep_disclaimer else 0))
@@ -836,7 +868,9 @@ def _help(state: ts.State, width: int, caps: Capabilities) -> list[Line]:
     lines += _wrapped(f"{glyph(caps, 'enabled')} enabled, {glyph(caps, 'disabled')} disabled, "
                       f"{glyph(caps, 'not_set')} not set; {glyph(caps, 'pin')} Pin; {glyph(caps, 'preferred')} "
                       f"Preferred; 1-4 compare order; {glyph(caps, 'frontier')} AA frontier; "
-                      f"{glyph(caps, 'focus')} focus. After an AA value: {glyph(caps, 'fallback')} AA ran this "
+                      f"? unknown frontier; {glyph(caps, 'focus')} focus. new / unsup mark new / unsupported "
+                      "public observations; neither is routable. none labels an AA non-reasoning profile, "
+                      f"not a supported native effort. On observation labels and AA values: {glyph(caps, 'fallback')} AA ran this "
                       f"profile with fallback (AA's harness, never Pod fallback); {glyph(caps, 'estimated')} AA "
                       "estimated index.", width, caps)
     lines.append(_heading("UNITS AND SCOPE", width, caps))
