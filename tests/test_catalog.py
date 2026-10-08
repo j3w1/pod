@@ -10,19 +10,19 @@ from pod.catalog import (EFFORTS, by_id, format_latency, format_usd, known, load
 from pod.errors import PodError
 from tests.common import fixture
 
-BASES = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5",
+BASES = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5",
          "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna")
 
 
 class CatalogTests(unittest.TestCase):
-    def test_six_current_bases_have_verified_exact_efforts(self):
+    def test_seven_current_bases_have_verified_exact_efforts(self):
         document = load()
         self.assertEqual(document['schema'], 'pod-catalog/v3')
         self.assertEqual(tuple(by_id(document)), BASES)
         for model in document['models']:
             self.assertEqual(model['efforts'], list(EFFORTS))
             self.assertEqual(model['agent'], 'claude' if model['id'].startswith('claude-') else 'codex')
-        self.assertEqual(len(routes(document)), 30)
+        self.assertEqual(len(routes(document)), 35)
         self.assertEqual(route_keys(document)[0], 'claude/claude-opus-5-5/low')
         self.assertIn('codex/gpt-6.1-sol/xhigh', route_keys(document))
         # No benchmark measurements live in the registry.
@@ -67,7 +67,7 @@ class CatalogTests(unittest.TestCase):
                              ('openai_models', 'GPT-6.1 Sol (xhigh)'), (aa, None), (None, 'gpt-6-luna')):
             with self.subTest(name=name):
                 self.assertIsNone(match(source, name))
-        # Every route of the six bases has an explicit AA alias.
+        # Every route of the seven bases has an explicit AA alias.
         mapped = {match(aa, name)['route'] for model in load()['models']
                   for name in model['aliases'][aa]} - {None}
         self.assertEqual(mapped, set(route_keys()))
@@ -145,7 +145,19 @@ class CatalogTests(unittest.TestCase):
             self.assertIsNone(supported_route('codex/gpt-6-nova/low'))
         with redirect_stdout(StringIO()) as output:
             self.assertEqual(main(['--check']), 0)
-        self.assertIn('6 supported models, 30 routes', output.getvalue())
+        self.assertIn('7 supported models, 35 routes', output.getvalue())
+
+    def test_haiku_profiles_map_only_to_their_verified_exact_routes(self):
+        model = by_id()['claude-haiku-5-5']
+        self.assertEqual(model['documented_context_tokens'], 1_000_000)
+        for effort in EFFORTS:
+            with self.subTest(effort=effort):
+                key = f'claude/claude-haiku-5-5/{effort}'
+                self.assertEqual(match('artificial_analysis', f'Claude Haiku 5.5 ({effort})')['route'], key)
+                self.assertEqual(supported_route(key)['model'], model['id'])
+        self.assertEqual(match('anthropic_models', model['id'])['model'], model['id'])
+        for effort in ('none', 'ultra', 'native_default'):
+            self.assertIsNone(supported_route(f'claude/claude-haiku-5-5/{effort}'))
 
 
 if __name__ == '__main__':

@@ -1027,8 +1027,9 @@
         "live_native"
       ],
       "offline_test": [
-        "tests.test_catalog.CatalogTests.test_six_current_bases_have_verified_exact_efforts",
-        "tests.test_catalog.CatalogTests.test_ultra_none_and_replaced_generations_are_not_routes"
+        "tests.test_catalog.CatalogTests.test_seven_current_bases_have_verified_exact_efforts",
+        "tests.test_catalog.CatalogTests.test_ultra_none_and_replaced_generations_are_not_routes",
+        "tests.test_catalog.CatalogTests.test_haiku_profiles_map_only_to_their_verified_exact_routes"
       ],
       "status": "NOT_RUN"
     },
@@ -1297,7 +1298,9 @@
         "tests.test_workspace_state.AuditRenderTests.test_cost_or_time_column_never_appears_without_a_disclaimer",
         "tests.test_workspace_pty.AuditCorrectionPtyTests.test_narrow_labels_keep_the_effort_under_every_sort",
         "tests.test_workspace_state.AuditRenderTests.test_narrow_labels_shorten_the_model_never_the_effort",
-        "tests.test_workspace_state.AuditRenderTests.test_scroll_hints_name_the_keys_that_scroll"
+        "tests.test_workspace_state.AuditRenderTests.test_scroll_hints_name_the_keys_that_scroll",
+        "tests.test_workspace_state.TableTests.test_observation_labels_preserve_profile_identity_without_mapping_routes",
+        "tests.test_workspace_state.TableTests.test_mixed_table_identity_invariant_across_snapshots_and_sibling_views"
       ],
       "status": "NOT_RUN"
     },
@@ -2274,7 +2277,9 @@
       "offline_test": [
         "tests.test_routes.RouteProjectionTests.test_unmapped_rows_are_new_or_unsupported_and_never_routable",
         "tests.test_routes.RouteProjectionTests.test_observation_changes_never_widen_the_pool_or_write_preferences",
-        "tests.test_routes.RouteProjectionTests.test_route_rows_carry_identity_state_guide_and_unknown_native_access"
+        "tests.test_routes.RouteProjectionTests.test_route_rows_carry_identity_state_guide_and_unknown_native_access",
+        "tests.test_workspace_state.TableTests.test_default_view_and_clear_filters_include_discoveries",
+        "tests.test_workspace_state.WorkspaceSessionTests.test_haiku_refresh_preserves_existing_choices_and_requires_explicit_enable"
       ],
       "status": "NOT_RUN"
     },
@@ -2308,7 +2313,10 @@
         "tests.test_workspace_pty.WorkspacePtyTests.test_new_and_unsupported_observations_are_reachable_not_routable",
         "tests.test_tui_pty.TuiPtyTests.test_keyboard_moves_table_and_inspector_independently",
         "tests.test_workspace_state.AuditRenderTests.test_focus_always_rests_on_a_shown_row_and_edits_only_that_row",
-        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_focus_stays_on_a_shown_row_and_edits_only_that_row"
+        "tests.test_workspace_pty.AuditCorrectionPtyTests.test_focus_stays_on_a_shown_row_and_edits_only_that_row",
+        "tests.test_workspace_state.TableTests.test_default_mixed_table_sorts_metrics_and_keeps_unknown_last",
+        "tests.test_workspace_state.TableTests.test_discovery_labels_and_help_are_clear_at_every_supported_width",
+        "tests.test_workspace_state.TableTests.test_observation_profile_effort_drives_only_view_sort_and_filter"
       ],
       "status": "NOT_RUN"
     },
@@ -2414,7 +2422,12 @@
         "tests.test_tui_render.FrameTests.test_stale_data_stays_marked_at_every_size_with_pin_and_preferred",
         "tests.test_workspace_pty.WorkspacePtyTests.test_stale_data_is_marked_at_40_by_12_with_pin_and_preferred",
         "tests.test_workspace_state.DeltaAuditRenderTests.test_selections_never_hide_the_age_in_overlays_and_placeholders_never_displace_it",
-        "tests.test_workspace_state.DeltaAuditRenderTests.test_status_items_keep_their_documented_order_below_twenty_rows"
+        "tests.test_workspace_state.DeltaAuditRenderTests.test_status_items_keep_their_documented_order_below_twenty_rows",
+        "tests.test_workspace_state.WorkspaceSessionTests.test_manual_refresh_reveals_new_rows_and_updates_metrics_without_restart",
+        "tests.test_workspace_pty.RefreshPtyTests.test_R_adds_new_rows_to_default_view_and_reopen_keeps_them",
+        "tests.test_workspace_pty.RefreshPtyTests.test_R_loads_haiku_metrics_without_enabling_new_routes",
+        "tests.test_workspace_pty.RefreshPtyTests.test_narrow_default_discoveries_keep_profile_labels_and_remain_read_only",
+        "tests.test_workspace_pty.RefreshPtyTests.test_unfiltered_ascii_routes_keep_distinct_labels_with_observations"
       ],
       "status": "NOT_RUN"
     },

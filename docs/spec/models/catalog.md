@@ -26,11 +26,11 @@ Type: B · Scenarios: [A34](../interface.md#a34), [A50](#a50), [A125](#a125), [A
 
 Expose one dispatch-free joined route projection (registry, personal preferences, cached observations and native observation) for the CLI, the workspace, doctor and status, and validate coordinator-proposed routes deterministically. Display order, sorting, comparisons, frontier marks and benchmark data never become routing inputs or trigger model calls; the projection computes no rank, score or recommendation.
 
-### R72 — The normal pool is six bases at exact efforts
+### R72 — The normal pool is seven bases at exact efforts
 
 Type: B,H · Scenarios: [A116](#a116), [A122](#a122), [A129](../orca.md#a129)
 
-The normal supported bases are Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 (agent `claude`) and GPT-6 Astra, GPT-6.1 Sol and GPT-6 Luna (agent `codex`) at their exact native ids, each with the efforts `low`, `medium`, `high`, `xhigh` and `max`. New decisions name one of those exact efforts; `native_default` effort remains readable only in older records and recovery. `ultra` is not supported, and a non-reasoning (`none`) variant stays informational until an adapter documents that exact value. Context is `native_default` while Orca lacks a per-worker context flag; documented ceilings are not effective proof.
+The normal supported bases are Claude Opus 5.5, Fable 5.1, Sonnet 5.5 and Haiku 5.5 (agent `claude`) and GPT-6 Astra, GPT-6.1 Sol and GPT-6 Luna (agent `codex`) at their exact native ids, each with the efforts `low`, `medium`, `high`, `xhigh` and `max`. New decisions name one of those exact efforts; `native_default` effort remains readable only in older records and recovery. `ultra` is not supported, and a non-reasoning (`none`) variant stays informational until an adapter documents that exact value. Context is `native_default` while Orca lacks a per-worker context flag; documented ceilings are not effective proof.
 
 ### R102 — Public observations refresh as one validated snapshot
 
@@ -49,7 +49,7 @@ New Anthropic and OpenAI observations appear automatically but stay new, unmappe
 - <a id="a10"></a>**A10** — Discovery, a refresh or a registry update alone cannot enable a route, transfer a pin or prove installed capability.
 - <a id="a48"></a>**A48** — Registry identities, verified efforts and runtime capability remain separate; an unsupported or replaced model, an unsupported effort (`ultra`, `none`) or `native_default` effort for a new decision is refused.
 - <a id="a50"></a>**A50** — Captured choices validate against a supplied preference snapshot without a ranking formula, model call or observation read.
-- <a id="a116"></a>**A116** — The six current bases are routable only at their verified exact efforts; replaced, specialized and unmapped ids cannot launch; context uses native default without invented flags, and effective values are separately observed.
+- <a id="a116"></a>**A116** — The seven current bases, including Haiku 5.5, are routable only at their verified exact efforts; replaced, specialized and unmapped ids cannot launch; context uses native default without invented flags, and effective values are separately observed.
 - <a id="a122"></a>**A122** — The registry validates exact identities, verified efforts, provider sources and check dates, attributed guidance and unambiguous explicit source aliases, and holds no benchmark measurements; adding an ordinary model is a registry edit.
 - <a id="a125"></a>**A125** — Workspace sorting, filtering, comparison, frontier marks and AA metrics cannot influence the selected route or start a worker.
 - <a id="a178"></a>**A178** — Config JSON supplies every supported route's state and the guide profiles; the joined projection pairs each route's AA metrics with their source row, qualifiers and dates, and the workspace renders them without a model call or dispatch.
@@ -57,7 +57,7 @@ New Anthropic and OpenAI observations appear automatically but stay new, unmappe
 - <a id="a212"></a>**A212** — Fetches stay on the HTTPS allowlist and within one total time bound covering connection, headers, body and parsing, and within size, redirect and decompression limits; invalid numbers, duplicates, hostile text and control sequences are refused or cleaned, access denial and challenges are reported, and Retry-After is honored.
 - <a id="a213"></a>**A213** — Exact profile association, aliases, units, source and methodology labels, unknown fields and the fallback and estimated-index qualifiers survive parsing and projection; token prices never appear as cost per task.
 - <a id="a214"></a>**A214** — Automatic refresh starts only for an absent cache or data at least 24 hours old with `refresh: automatic`, respects Retry-After, a six-hour restraint after a failed or refused attempt and a ten-minute restraint after a cancelled or abandoned one, shows data at least seven days old as stale, and is cancellable; config, status, doctor and admission make no network call.
-- <a id="a215"></a>**A215** — New, unsupported and missing rows, provider disagreement and unknown native access remain honest observations, and a refresh or software update leaves the enabled pool, Preferred, Pin and Disabled routes unchanged.
+- <a id="a215"></a>**A215** — New and unsupported observations are visible in the default workspace, while missing rows, provider disagreement and unknown native access remain honest observations. A refresh or software update leaves the enabled pool, Preferred, Pin and Disabled routes unchanged; newly supported Haiku routes in an existing file remain not set until explicitly enabled.
 
 ## Registry
 
@@ -82,6 +82,7 @@ they are not role mandates:
 
 | Base | Starting use |
 | --- | --- |
+| Claude Haiku 5.5 | Medium for scoped coding and tool work; low for short tasks and high for longer work. |
 | GPT-6 Luna | Low/medium; high/xhigh for bounded reasoning. Mechanical and focused work with cheap, strong verification. |
 | GPT-6.1 Sol | Medium; high/xhigh for harder work. Ordinary implementation reference point. |
 | Claude Sonnet 5.5 | Medium/high; xhigh where justified. Responsive, well-scoped agentic and tool work. |

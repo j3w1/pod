@@ -1,4 +1,4 @@
-# 0.8.1 verification contract
+# 0.8.2 verification contract
 
  Every result names the exact commit,
 host, UTC date, command, outcome and sanitized evidence reference. Unit proof,
@@ -27,7 +27,7 @@ is `NOT_RUN`; a passing fixture never promotes live or project acceptance.
 | Live core matrix | Codex and Claude Code, each on Linux with disposable objective | Separate native install/discovery, in-session coordination, authorized worker start/effective route, supervision, request recovery, verification and interruption/adoption. |
 | Orca delegation | Real worker through each advertised adapter | Request construction, launch identity/effective values, messaging, settlement, Delivery and release. |
 | Public-source reads | One bounded real `pod models refresh` into a disposable `POD_CACHE_HOME`, with a manual check of representative exact rows, units and profile labels against each page | Source-by-source availability, unavailable fields and access or parser limits. Labelled separately from fixtures; a cached fetch is never fresh proof. |
-| Live exact routes | In authorized disposable objectives, normal Pod/Orca launch on both adapters with effective model and effort readback, report and release, including the new Sonnet 5.5 and GPT-6.1 Sol identities where advertised | Effective exact-route evidence. Every route is not tested; refresh starts no probe workers. |
+| Live exact routes | In authorized disposable objectives, normal Pod/Orca launch on both adapters with effective model and effort readback, report and release, including Sonnet 5.5, GPT-6.1 Sol and the new Haiku 5.5 identity where advertised | Effective exact-route evidence. Every route is not tested; refresh starts no probe workers. |
 | Project acceptance | Owner decision, merge and `main` checks | External acceptance and merged truth. |
 | Post-merge public command | Literally run `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh \| sh` in a clean disposable home and on the intended host | `main` distribution, installed version and receipt match the merged commit. |
 
@@ -390,3 +390,12 @@ Run broad local checks with fresh process-scoped POD_STATE_HOME, POD_CONFIG_HOME
 and POD_CACHE_HOME in disposable task storage as an outer containment layer;
 fixtures clear them locally and restore them afterward. Failed isolation runs
 and host-state recovery are separate evidence, never passing candidate proof.
+
+Refresh discovery regressions exercise the default inclusive view and supported-only filter,
+clearing filters, metric sorting with observations, all five verified Haiku routes, and real
+workspace/PTY `R` refresh through sanitized public-source fixtures. A separately labelled
+synthetic future-model row proves discovery without registry support or authorization.
+Refresh and restart preserve existing preference bytes; Haiku remains not set until an
+explicit state edit, which persists across restart. Live public refresh, installed-host
+readback and native model access remain separate evidence. The fresh independent audit
+for this correction runs under installed 0.8.1.

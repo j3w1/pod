@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as data_field, replace
 from datetime import datetime
+import re
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_OBSERVATION_PROFILE = re.compile(r"^(.*) \((" + "|".join(EFFORTS)
+                                  + r"|non-reasoning)( with fallback)?\)$")
 METRICS = ("intelligence", "usd_per_task", "output_tps", "first_response_s", "total_response_s",
            "context_tokens")
 SORTS = ("intelligence", "usd_per_task", "output_tps", "first_response_s", "total_response_s",
@@ -98,7 +101,7 @@ class State:
     model: str = "all"
     effort: str = "all"
     state_filter: str = "all"
-    discovery: str = "supported"
+    discovery: str = "all"
     query: str = ""
     mode: str = "browse"          # browse | search | palette | help | bulk | setup
     pane: str = "table"           # table | inspector
@@ -169,10 +172,24 @@ def effort_index(effort: object) -> int:
     return EFFORTS.index(effort) if effort in EFFORTS else len(EFFORTS)
 
 
+def observation_profile(row: dict) -> tuple[str, str, bool]:
+    """Source profile labels for presentation, never native identity or route authorization."""
+    name = str(row.get("row") or "")
+    profile = _OBSERVATION_PROFILE.fullmatch(name)
+    if profile is None:
+        return name, "", False
+    model, effort, fallback = profile.groups()
+    return model, "none" if effort == "non-reasoning" else effort, bool(fallback)
+
+
+def view_effort(row: dict) -> str | None:
+    return (observation_profile(row)[1] or None) if row.get("routable") is False else row.get("effort")
+
+
 def _effort_rank(state: State, row: dict) -> tuple:
     order = model_order(state)
     model = row.get("model")
-    return (order.index(model) if model in order else len(order), effort_index(row.get("effort")),
+    return (order.index(model) if model in order else len(order), effort_index(view_effort(row)),
             str(row.get("key") or row.get("row") or ""))
 
 
@@ -184,16 +201,19 @@ def _sort_key(state: State, row: dict) -> tuple:
             return (1, 0, tie)
         return (0, -number if state.descending else number, tie)
     if state.sort == "model":
-        name = str(row.get("name") or row.get("row") or "").casefold()
-        return (0, name, effort_index(row.get("effort")), tie)
+        name = (observation_profile(row)[0] if row.get("routable") is False
+                else str(row.get("name") or "")).casefold()
+        return (0, name, effort_index(view_effort(row)), tie)
     if state.sort == "effort":
-        return (0, effort_index(row.get("effort")), tie)
+        effort = view_effort(row)
+        index = effort_index(effort)
+        return (effort is None, -index if state.descending else index, tie)
     return (0, STATE_ORDER.get(row.get("state"), 3), tie)
 
 
 def _ordered(state: State, rows: list[dict]) -> list[dict]:
     rows = sorted(rows, key=lambda row: _sort_key(state, row))
-    if state.sort not in METRICS and state.descending:
+    if state.sort not in (*METRICS, "effort") and state.descending:
         # Text orderings reverse as a whole; a metric keeps unknown values last either way.
         rows.reverse()
     return rows
@@ -205,7 +225,7 @@ def _matches(state: State, row: dict, *, observation: bool) -> bool:
         return False
     if state.model != "all" and row.get("model") != state.model:
         return False
-    if state.effort != "all" and row.get("effort") != state.effort:
+    if state.effort != "all" and view_effort(row) != state.effort:
         return False
     if state.state_filter != "all" and (observation or row.get("state") != state.state_filter):
         return False
@@ -920,7 +940,7 @@ def run_command(state: State, command: str) -> tuple[State, Effect | None]:
     if command == "discovery":
         return _view(state, discovery=_cycle(DISCOVERY, state.discovery)), None
     if command == "clear_filters":
-        return _view(state, provider="all", model="all", effort="all", state_filter="all", discovery="supported",
+        return _view(state, provider="all", model="all", effort="all", state_filter="all", discovery="all",
                      query=""), None
     if command == "search":
         return replace(state, mode="search", query=""), None

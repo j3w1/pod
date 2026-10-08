@@ -118,7 +118,7 @@ class FrameTests(unittest.TestCase):
     def test_status_line_reports_counts_selections_age_refresh_native_and_path(self):
         current = state(prefs(pinned="codex/gpt-6.1-sol/high", preferred="claude/claude-opus-5-5/medium"))
         lines = picture(ts.with_refresh(current, "failed", "HTTP 403 bot challenge"), (160, 45)).plain.splitlines()
-        self.assertIn("30/30 enabled", lines[0])
+        self.assertIn("35/35 enabled", lines[0])
         self.assertIn("Pin codex/gpt-6.1-sol/high", lines[0])
         self.assertIn("Preferred claude/claude-opus-5-5/medium", lines[0])
         for phrase in ("Refresh failed: HTTP 403 bot challenge", "Data cache 1h old", "Native access unknown",

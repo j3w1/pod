@@ -110,8 +110,8 @@ class WorkspacePtyTests(PtyCase):
 
     def test_new_and_unsupported_observations_are_reachable_not_routable(self):
         session = self.open(cols=100, rows=30)
-        self.assertNotIn("GPT-6 Sol (", session.text())
-        session.send("oo")
+        session.wait_for("Showing all")
+        session.send("ooo")
         session.wait_for("Showing unsupported")
         session.wait_for("GPT-6 Sol (")
         before = self.config.read_bytes()
@@ -220,6 +220,84 @@ class WorkspacePtyTests(PtyCase):
 
 
 class RefreshPtyTests(PtyCase):
+    saved = WorkspacePtyTests.saved
+
+    def test_unfiltered_ascii_routes_keep_distinct_labels_with_observations(self):
+        for columns in (40, 41):
+            with self.subTest(columns=columns):
+                session = self.open(cols=columns, rows=80, LC_ALL="C", NO_COLOR="1")
+                session.send("s")
+                session.wait_for("$/task")
+                session.settle(quiet=.3, timeout=2)
+                self.assertIn("Opus 5.5 high", session.text())
+                self.assertIn("Sonnet", session.text())
+                self.assertNotIn("Cla...5.5", session.text())
+                session.close()
+
+    def test_narrow_default_discoveries_keep_profile_labels_and_remain_read_only(self):
+        for cols, rows in ((40, 12), (60, 20)):
+            with self.subTest(size=(cols, rows)):
+                session = self.open(cols=cols, rows=rows, fetch="growth", LC_ALL="C", NO_COLOR="1")
+                before = self.config.read_bytes()
+                session.send("R")
+                session.wait_for(lambda s: "Data updated" in s.text() or "Data refreshed" in s.text(), timeout=4)
+                session.send("/GPT-7 Nova\r")
+                session.wait_for(lambda s: any("new" in line and "Nova high" in line for line in s.lines()))
+                session.send(" pP")
+                session.settle(quiet=.3, timeout=1)
+                self.assertEqual(self.config.read_bytes(), before)
+                session.close()
+
+    def test_R_adds_new_rows_to_default_view_and_reopen_keeps_them(self):
+        session = self.open(cols=160, rows=45, fetch="growth")
+        session.wait_for("Showing all")
+        before = self.config.read_bytes()
+        session.send("R")
+        session.wait_for("Data updated: AA rows", timeout=4)
+        self.assertEqual(self.fetches(), 3)
+        session.send("/GPT-7 Nova\r")
+        session.wait_for("GPT-7 Nova (high)")
+        self.assertIn("new", session.text())
+        session.send(" pP")
+        session.wait_for("not routable")
+        self.assertEqual(self.config.read_bytes(), before)
+        session.close()
+        again = self.open(cols=160, rows=45, fetch="growth")
+        again.send("/GPT-7 Nova\r")
+        again.wait_for("GPT-7 Nova (high)")
+        self.assertEqual(self.fetches(), 3, "manual-only reopen uses the promoted cache")
+
+    def test_R_loads_haiku_metrics_without_enabling_new_routes(self):
+        document = self.saved()
+        document["routes"] = {key: value for key, value in document["routes"].items()
+                              if not key.startswith("claude/claude-haiku-5-5/")}
+        fixture_config(self.config, routes=document["routes"])
+        before = self.config.read_bytes()
+        session = self.open(cols=160, rows=45, fetch="growth")
+        session.send("/Haiku 5.5\r")
+        session.wait_for("Claude Haiku 5.5")
+        session.send("R")
+        session.wait_for("Data updated: AA rows", timeout=4)
+        session.wait_for(lambda s: any("Claude Haiku 5.5" in line and " max " in line and " 43 " in line
+                                      for line in s.lines()))
+        self.assertEqual(self.config.read_bytes(), before)
+        snapshot = json.loads((self.cache / "current.json").read_text())
+        names = {row["name"] for row in snapshot["sources"]["artificial_analysis"]["rows"]}
+        self.assertTrue(all(f"Claude Haiku 5.5 ({effort})" in names
+                            for effort in ("low", "medium", "high", "xhigh", "max")))
+        self.assertFalse(any("haiku" in key for key in self.saved()["eligible"]))
+        session.send(" ")
+        session.wait_for(lambda _s: any("haiku" in key for key in self.saved()["eligible"]))
+        selected = [key for key in self.saved()["eligible"] if "haiku" in key]
+        self.assertEqual(len(selected), 1)
+        session.close()
+        again = self.open(cols=100, rows=30)
+        again.send("/Haiku 5.5\r")
+        effort = selected[0].rsplit("/", 1)[1]
+        again.wait_for(lambda s: any("Claude Haiku 5.5" in line and f" {effort} " in line and "enabled" in line
+                                    for line in s.lines()))
+        self.assertEqual([key for key in self.saved()["eligible"] if "haiku" in key], selected)
+
     def test_automatic_refresh_renders_cache_first_then_updates_once(self):
         fixture_config(self.config, refresh="automatic")
         session = self.open(fetch="ok")
@@ -370,7 +448,9 @@ class AuditCorrectionPtyTests(PtyCase):
         plain = self.open(cols=80, rows=24, LC_ALL="C", NO_COLOR="1")
         self.assertRegex(plain.text(), r"58#\s+\$5\.98#")
         plain.send("?")
-        plain.wait_for("# AA ran this")
+        plain.wait_for("HELP: MODEL ROUTES")
+        plain.send("\x1b[6~")
+        plain.wait_for(lambda s: "# AA ran this" in " ".join(s.text().split()))
 
     def test_compare_names_a_profile_difference_instead_of_a_delta(self):
         session = self.open(cols=100, rows=30)
@@ -425,7 +505,7 @@ class AuditCorrectionPtyTests(PtyCase):
     def test_bulk_scroll_hint_names_the_key_that_scrolls(self):
         session = self.open(cols=80, rows=24)
         session.send("b" + RIGHT + DOWN + RIGHT)
-        session.wait_for("CHANGES (30)")
+        session.wait_for("CHANGES (35)")
         session.wait_for(lambda s: "more (" in s.text() and "lines): Page Down" in s.text())
         self.assertNotIn("Tab, then", session.text())
 

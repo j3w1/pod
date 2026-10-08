@@ -410,6 +410,18 @@ class ArtificialAnalysisParserTests(unittest.TestCase):
         self.result = sources.parse_aa(fixture("aa-leaderboard.html"))
         self.rows = {row["name"]: row for row in self.result["rows"]}
 
+    def test_current_haiku_fixture_retains_all_five_profiles(self):
+        parsed = sources.parse_aa(fixture("aa-leaderboard-haiku.html"))
+        rows = {row["name"]: row for row in parsed["rows"]}
+        expected = {"low": 29, "medium": 34, "high": 38, "xhigh": 41, "max": 43}
+        for effort, score in expected.items():
+            with self.subTest(effort=effort):
+                row = rows[f"Claude Haiku 5.5 ({effort})"]
+                self.assertEqual(row["creator"], "Anthropic")
+                self.assertEqual(row["metrics"]["intelligence"], score)
+                self.assertEqual(row["metrics"]["context_tokens"], 1_000_000)
+                self.assertEqual(row["qualifiers"], [])
+
     def test_fixture_rows_keep_exact_names_profiles_and_units(self):
         self.assertEqual(len(self.result["rows"]), 36)
         self.assertEqual(self.rows["Claude Opus 5.5 (xhigh with fallback)"], {
