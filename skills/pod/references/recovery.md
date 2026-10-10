@@ -1,6 +1,6 @@
 # Failure, recovery and continuation
 
-On resume read native state first, retaining uncertainty and next safe action. Continue accepted work within scope/authority; restore relevant lost guidance. Unsupported objective records block only that objective; follow status/doctor diagnosis, never convert it.
+On resume read native state first, retaining uncertainty and next safe action. Continue accepted work within scope/authority; restore relevant lost guidance.
 
 For `preference_changed` and `preference_revision_stale`: on preference races, rechoose at most twice, then report the conflict. Once a native start is submitted, retain its route and recover that exact request. No retry counter is added.
 

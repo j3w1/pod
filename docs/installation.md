@@ -47,7 +47,7 @@ The installer may append one guarded PATH block to `.zshrc`, `.bashrc` and a Bas
 
 `pod update` downloads `main`, runs the same staged checks, and returns “Already current” when the receipt, launcher and copy match. A change to the canonical skill is preserved under `preserved/` before the skills CLI replaces it. Running native workers remain untouched; reload active coordinator conversations before new starts.
 
-Status and doctor diagnose unsupported objective schemas without conversion; existing native workers remain Orca-owned, and new objectives use the current schema.
+Status and doctor list objective state in an older schema, block only that objective and never convert it; existing native workers remain Orca-owned.
 
 If a download, dependency install, or copy is interrupted, rerun the one-shot installer or `pod update`. A receipt still marked `installing` records the previous and target digests. A bundle with neither digest yields `install_incomplete` instead of false readiness. `pod doctor --json` reports the receipt, canonical digest, venv, launcher ownership, placements, duplicates, and relevant next action.
 

@@ -35,7 +35,7 @@ Do not run source-checkout helpers or create another configuration source.
 Use the refusal's rule and next action; read further when insufficient.
 Read config at intake, new-session continuation, preference-change notice and after `preference_changed`, `preference_revision_stale`, `policy_revision_mismatch`, `setup_required`, `installed_version_changed`.
 Every map-bearing write, including full checkpoint/report and admission maps, carries next `seq`; read map on resume/`map_stale`.
-`internal brief` is an optional read-only uncertain-input dry run.
+`internal brief` is an optional read-only uncertain-input dry run for checkpoints.
 
 ## Read when needed
 

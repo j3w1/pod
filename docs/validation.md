@@ -108,8 +108,7 @@ Run broad gates with fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` an
 `POD_CACHE_HOME` in disposable task storage. Test fixtures clear these locally and
 restore them. Installer trials use a scrubbed fresh temporary HOME with every
 base-directory variable contained or unset: XDG config/data/state/cache homes,
-CODEX_HOME, CLAUDE_CONFIG_DIR and Pod overrides. PATH excludes real launchers.
-Test support may place owned sibling directories inside its disposable root.
+CODEX_HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and Pod overrides. PATH excludes real launchers.
 No real launcher, skill, rc, data, config or state may change. Failed isolation and
 host-state recovery are separate evidence, never passing candidate proof.
 Ordinary host/project trials are read-only; no production/provider mutation.

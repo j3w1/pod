@@ -96,7 +96,7 @@ README is the practical install and session guide: one-shot command, open/auth/i
 
 Type: B,H · Scenarios: [A114](#a114), [A115](#a115), [A180](#a180), [A233](#a233)
 
-SKILL has exactly Roles, Done when, Boundaries, Helpers and Read when needed, at most 400 whitespace-delimited words including frontmatter. Its nine references each have at most 450 words and at most 2000 combined. Each has one unique triggered link from SKILL and no reference-to-reference links. The delivery path (SKILL plus execution-spec, planning, orca-boundary, models, verification and governor) is at most 2000 words. Validate frontmatter before word budgets and print every count. Installed guidance preserves authority, completion, judgment and recovery; repository documents provide contributor checks and detailed contracts.
+SKILL has exactly Roles, Done when, Boundaries, Helpers and Read when needed, at most 400 whitespace-delimited words including frontmatter. Its nine references each have at most 450 words and at most 2000 combined. Each has one unique triggered link from SKILL and no reference-to-reference links. The delivery path (SKILL plus execution-spec, planning, orca-boundary, models, verification and governor) is at most 2000 words. Validate frontmatter before word budgets and print every count. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle, preserving authority, completion, judgment and recovery; repository docs provide contributor checks and detailed contracts.
 
 ### R73 — The model workspace is one table of exact routes
 

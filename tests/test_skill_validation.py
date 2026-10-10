@@ -53,17 +53,6 @@ class SkillValidationTests(unittest.TestCase):
         for name, count in counts.items():
             self.assertIn(f"{name}: {count} words", output.getvalue())
 
-    def test_full_budget_duplicate_version_reports_version_restriction(self):
-        with fixture() as root:
-            skill = copied(root)
-            path = skill / "SKILL.md"
-            text = path.read_text()
-            text += " filler" * (MAX_SKILL_WORDS - len(text.split()))
-            self.assertEqual(len(text.split()), 400)
-            path.write_text(text.replace("metadata:\n", 'metadata:\n  version: "0.9.0"\n'))
-            with self.assertRaisesRegex(PodError, "version lives only in VERSION"):
-                validate_skill(skill)
-
     def test_descriptors_and_router_structure_are_enforced(self):
         cases = (
             ("description-length", "description: ", "description: Use when " + "x" * 251 + " # ", "250 characters"),
@@ -144,6 +133,8 @@ class SkillValidationTests(unittest.TestCase):
             for name, change in (("skill-meta", lambda s: s.replace("metadata:\n", 'metadata:\n  version: "0.4.0"\n')),):
                 skill = copied(root / name)
                 text = (skill / "SKILL.md").read_text(encoding="utf-8")
+                text += " filler" * (MAX_SKILL_WORDS - len(text.split()))
+                self.assertEqual(len(text.split()), 400)
                 (skill / "SKILL.md").write_text(change(text), encoding="utf-8")
                 with self.assertRaises(PodError) as duplicated:
                     validate_skill(skill)

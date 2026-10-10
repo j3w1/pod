@@ -1,14 +1,15 @@
 # Pod contributor instructions
 
-Read the specification index before implementation; load the relevant contracts at their
-trigger. Inspect Git state and preserve unrelated work.
+Apply every matching read-when row before implementation; a small diff is no
+exemption. Inspect Git state and preserve unrelated work.
 
-| Read when | Document |
+| Read when | Document or check |
 | --- | --- |
-| Starting implementation | `docs/pod-spec.md` and its domain linked for the change |
-| Choosing checks, recording proof or preparing a milestone | `docs/validation.md` |
-| Editing installation or upgrade behavior | `docs/installation.md` |
-| Editing the instruction router or references | `skills/pod/SKILL.md` and affected references |
+| Changing behavior or a requirement | `docs/pod-spec.md` and the linked affected domain |
+| Editing skill text | The trigger list in `skills/pod/SKILL.md` and `python -m pod.skill_validation` |
+| Changing gates or CI | `docs/validation.md` |
+| Changing the installer | `docs/installation.md` and `docs/validation.md` |
+| Fixing outside these areas | Nothing extra |
 
 Pod is a skill plus bounded Python helpers over Orca; Orca owns
 native Runs, Tasks, Dispatches, environments and worker lifecycle, and project governance
@@ -50,9 +51,9 @@ A change to Pod's own admission, assurance or closure rules is reviewed and merg
 the mechanism installed before the change. Evidence the new mechanism produces about
 itself is recorded separately as self-hosting evidence and never substitutes for that review.
 
-Complete the requested behavior, affected requirement/scenario/coverage updates, focused
-checks and applicable milestone gates, and record a candidate-bound final audit and report
-before claiming completion; `docs/validation.md` defines these checks. Missing live Orca, model or provider evidence must remain unavailable or
+Complete requested behavior with requirement/scenario/coverage agreement, passing change-class
+and applicable milestone gates from `docs/validation.md`, a fresh independent final audit
+with no open required correction, and a candidate-bound report before claiming completion. Missing live Orca, model or provider evidence must remain unavailable or
 NOT_RUN. Do not weaken a check or fabricate compatibility. Removing a requirement removes
 its scenario and coverage row in the same change.
 
@@ -64,9 +65,8 @@ Local gates may use fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` and
 `POD_CACHE_HOME` in disposable task storage. Installer trials may use a truly scrubbed
 fresh temporary home: every installer base-directory variable (`HOME`, `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
-`POD_CONFIG_HOME`, `POD_STATE_HOME`, `POD_CACHE_HOME`) is contained there or unset, and PATH
-cannot select the real Pod launcher. Test support may use fresh owned sibling directories
-within its disposable root. These permissions cover only that process; never affect real
+`POD_CONFIG_HOME`, `POD_STATE_HOME`, `POD_CACHE_HOME`, `ZDOTDIR`) is contained there or unset, and PATH
+cannot select the real Pod launcher. These permissions cover only that process; never affect real
 launchers, skills, rc files, data, config or state.
 
 Fixture execution uses disposable projects; existing host and ordinary project trials are

@@ -21,11 +21,11 @@ EXAMPLE_SPEC = """> **Outcome:** Search results include archived documents.\n\n\
 ## Completion\n+Report the commit, checks, review and open delivery gates.\n"""
 
 
-def execution_spec_source(root: Path) -> Path:
+def execution_spec_source(root: Path, basename: str = "execution-spec.md") -> Path:
     """Return the sole tracked or ordinary untracked authoring source."""
     completed = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
-         "--exclude-standard", "--", "*execution-spec*"],
+         "--exclude-standard", "--", "*" + basename.removesuffix(".md") + "*"],
         capture_output=True, check=True)
     matches = sorted(root / Path(value.decode()) for value in completed.stdout.split(b"\0") if value)
     if len(matches) != 1:
@@ -238,6 +238,10 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         self.assertEqual(execution_spec_source(self.root), canonical)
         self.assertIn("references/execution-spec.md",
                       (self.root / "skills" / "pod" / "bundle.py").read_text())
+        template = self.root / "skills" / "pod" / "references" / "pes-template.md"
+        self.assertEqual(execution_spec_source(self.root, "pes-template.md"), template)
+        self.assertIn("references/pes-template.md",
+                      (self.root / "skills" / "pod" / "bundle.py").read_text())
 
     def test_execution_spec_inventory_ignores_build_output_but_rejects_an_extra_source(self):
         with fixture() as root:
@@ -343,7 +347,6 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             ),
             "references/recovery.md": (
                 "on resume read native state first", "continue accepted work within scope/authority",
-                "unsupported objective records block only that objective",
                 "on preference races, rechoose at most twice, then report the conflict",
                 "for `preference_changed` and `preference_revision_stale`", "recover that exact request",
                 "no retry counter is added", "orca request/readback before replacement",
@@ -432,6 +435,8 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             self.assertIn(phrase, text)
         self.assertLess(text.index("curl -fsSL"), text.index("## Contents"))
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
+                      text)
+        self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md",
                       text)
 
     def test_ci_validates_the_skill_and_publishes_nothing(self):

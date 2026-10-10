@@ -1021,7 +1021,7 @@
         "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
-        "tests.test_skill_validation.SkillValidationTests.test_full_budget_duplicate_version_reports_version_restriction"
+        "tests.test_skill_validation.SkillValidationTests.test_the_version_lives_only_in_a_well_formed_version_file"
       ],
       "status": "NOT_RUN"
     },
@@ -1793,7 +1793,7 @@
         "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
-        "tests.test_skill_validation.SkillValidationTests.test_full_budget_duplicate_version_reports_version_restriction"
+        "tests.test_skill_validation.SkillValidationTests.test_the_version_lives_only_in_a_well_formed_version_file"
       ],
       "status": "NOT_RUN"
     },
@@ -2624,7 +2624,7 @@
         "tests.test_inventory.InventoryIntegrityTests.test_repository_owned_validator_checks_the_actual_canonical_skill",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
-        "tests.test_skill_validation.SkillValidationTests.test_full_budget_duplicate_version_reports_version_restriction"
+        "tests.test_skill_validation.SkillValidationTests.test_the_version_lives_only_in_a_well_formed_version_file"
       ],
       "status": "NOT_RUN"
     },
