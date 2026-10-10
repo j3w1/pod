@@ -1,6 +1,7 @@
 import json
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import shutil
@@ -18,6 +19,48 @@ from tests.common import HOST_HOME, HOST_POD_DATA, disposable_path, fixture, mod
 
 
 class CliTests(unittest.TestCase):
+    def test_eligible_json_preserves_exact_route_rows_and_offline_behavior(self):
+        import yaml
+        path = self.root/'config'/'pod'/'config.yaml'
+        write_defaults(path)
+        document = yaml.safe_load(path.read_text())
+        keys = list(document['routes'])
+        document['routes'][keys[0]] = 'disabled'
+        document['routes'].pop(keys[1])
+        path.write_text(yaml.safe_dump(document))
+        before = path.read_bytes()
+        for state in ('valid', 'invalid', 'setup', 'empty'):
+            if state == 'invalid': path.write_text('bad: [\n')
+            if state == 'setup': path.write_text('schema: pod/v1\nselection: all\nmodels: {gpt-6-sol: available}\nworkers: {max_active: 3}\n')
+            if state == 'empty':
+                document['routes'] = {key: 'disabled' for key in keys}
+                path.write_text(yaml.safe_dump(document))
+            current = path.read_bytes()
+            moment = datetime.now(timezone.utc)
+            with self.subTest(state=state), patch('pod.observations.refresh') as fetch, \
+                    patch('pod.routes.datetime', wraps=datetime) as clock:
+                clock.now.return_value = moment
+                full = execute(parser().parse_args(['models', '--json']), self.project)['projection']
+                lean = execute(parser().parse_args(['models', '--json', '--eligible-only']), self.project)['projection']
+                expected = [row for row in full['routes'] if row['key'] in full['preferences']['eligible']]
+                self.assertEqual(lean, {**full, 'filter': 'eligible', 'routes': expected, 'unmapped': []})
+                self.assertEqual(path.read_bytes(), current)
+                fetch.assert_not_called()
+                output = StringIO()
+                with patch('pathlib.Path.cwd', return_value=self.project), redirect_stdout(output):
+                    exit_code = main(['models', '--json', '--eligible-only'])
+                self.assertEqual(exit_code, int(full['preferences']['status'] != 'valid'))
+                self.assertEqual([row['key'] for row in json.loads(output.getvalue())['routes']],
+                                 [row['key'] for row in expected])
+                if state == 'valid':
+                    self.assertLess(len(json.dumps(lean)), len(json.dumps(full)))
+                    self.assertEqual(current, before)
+        for argv in (['models', '--eligible-only'], ['models', '--eligible-only', 'refresh', '--json'],
+                     ['models', '--eligible-only', 'status', '--json']):
+            with self.subTest(argv=argv), redirect_stderr(StringIO()), self.assertRaises(SystemExit) as refused:
+                main(argv)
+            self.assertEqual(refused.exception.code, 2)
+
     def setUp(self):
         self.temp=fixture(); self.root=self.temp.__enter__(); self.addCleanup(self.temp.__exit__,None,None,None)
         self.env=patch.dict(os.environ,{'HOME':str(self.root),'XDG_CONFIG_HOME':str(self.root/'config'),
@@ -49,7 +92,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(missing['eligible'],[])
         path=self.root/'config'/'pod'/'config.yaml'; write_defaults(path)
         valid=execute(args,self.project)
-        self.assertEqual((valid['status'],valid['schema'],valid['preference_schema']),('valid','pod-cli/v4','pod/v2'))
+        self.assertEqual((valid['status'],valid['schema'],valid['preference_schema']),('valid','pod-cli/v5','pod/v2'))
         self.assertEqual(valid['path'],str(path.resolve()))
         self.assertEqual(len(valid['eligible']),35)
         self.assertEqual(len(valid['routes']),35)
@@ -209,7 +252,7 @@ class CliTests(unittest.TestCase):
              patch('pathlib.Path.cwd', return_value=self.project), redirect_stdout(output):
             self.assertEqual(main(['models', 'refresh', '--json']), 1)
         self.assertEqual(json.loads(output.getvalue()),
-                         {'schema': 'pod-cli/v4', 'status': 'blocked',
+                         {'schema': 'pod-cli/v5', 'status': 'blocked',
                           'error': {'code': 'observations_busy', 'message': 'busy'}})
         from pod.config import load as load_config, set_refresh
         set_refresh(Path(load_config(self.project)['path']), 'manual', displayed=load_config(self.project))

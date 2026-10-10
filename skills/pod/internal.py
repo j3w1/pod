@@ -563,6 +563,118 @@ def run(operation: str, request: dict) -> dict:
     return {**result, "runtime_continuity": rebinds} if rebinds and isinstance(result, dict) else result
 
 
+_CHECKPOINT_ACK_FIELDS = ("schema", "criteria", "candidate", "plan_revision", "policy_revision",
+                          "objective_source", "worktree", "verification", "pod_version",
+                          "bundle_digest", "native_refs", "next_safe_action", "delivery")
+
+
+def acknowledge(operation: str, request: dict, result: dict) -> dict:
+    """Project successful CLI writes; handlers and their stored values stay unchanged.
+
+    All other results, including the three Governor decision/recovery exceptions,
+    are already bounded projections or explicitly preserved payloads. This is no
+    admission or recovery policy: it neither validates inputs nor performs effects.
+    """
+    if operation == "constraint" and request["action"] == "list":
+        return result
+    if operation not in {"checkpoint", "report", "constraint", "admission", "route-failure",
+                         "governor-prepare", "governor-outcome", "governor-classify",
+                         "runtime-continuity", "owner-handoff"}:
+        return result
+    acknowledgement = dict(result)
+    if operation == "checkpoint":
+        checkpoint = result["checkpoint"]
+        acknowledgement = {"status": "recorded", "objective": request["objective"],
+                           "context_revision": result["revision"],
+                           "checkpoint": {key: checkpoint[key] for key in _CHECKPOINT_ACK_FIELDS if key in checkpoint},
+                           "written": {key: [row["id"] for row in checkpoint.get(key, [])]
+                                       for key in ("obligations", "proposals")}}
+        if checkpoint.get("continuity"):
+            acknowledgement["checkpoint"]["continuity"] = {"binding": checkpoint["continuity"]["binding"]}
+        if checkpoint.get("closure"):
+            acknowledgement["checkpoint"]["closure"] = {key: checkpoint["closure"][key] for key in ("seq", "revision")}
+        if checkpoint.get("observations"):
+            acknowledgement["checkpoint"]["observations"] = {
+                key: checkpoint["observations"][key]
+                for key in ("inputs", "governance_stale", "policy_gone", "serialization", "churn")
+                if key in checkpoint["observations"]}
+        if "report" in result:
+            acknowledgement["report"] = result["report"]
+    elif operation == "report":
+        observation = result["observation"]
+        acknowledgement.pop("observation")
+        acknowledgement["written"] = {**result["written"],
+                                      **{key: observation[key] for key in
+                                         ("assignment", "attempt", "candidate", "outcome")},
+                                      "admission_id": request["admission_id"]}
+        acknowledgement.update({key: observation[key] for key in ("failures", "uncertainty", "questions")})
+    elif operation in {"admission", "route-failure"}:
+        row = result["admission"] if operation == "admission" else result
+        admission = {key: value for key, value in row.items()
+                     if key not in {"schema", "owner", "request", "route_decision", "effective_evidence",
+                                    "created_at", "updated_at", "report"}}
+        if row.get("effective_evidence", {}).get("inherited") is not None:
+            admission["effective_evidence"] = {"inherited": row["effective_evidence"]["inherited"]}
+        acknowledgement = ({**result, "admission": admission} if operation == "admission"
+                           else {"status": "recorded", "admission": admission})
+        acknowledgement["decision"] = row["route_decision"]
+    elif operation == "constraint":
+        identity = request["value"]["id"] if request["action"] == "add" else request["id"]
+        acknowledgement = {"status": "recorded", "constraint": next(
+            {"id": row["id"], "active": row.get("active", True)}
+            for row in result["constraints"] if row["id"] == identity)}
+    elif operation == "governor-prepare":
+        acknowledgement["candidate"] = {key: value for key, value in result["candidate"].items()
+                                        if key not in {"schema", "prepared_at"}}
+    elif operation == "governor-outcome":
+        acknowledgement["receipt"] = {key: value for key, value in result["receipt"].items()
+                                      if key not in {"started_at", "finished_at", "observed_elapsed_s",
+                                                     "evidence"}}
+    elif operation == "governor-classify":
+        acknowledgement["classification"] = {key: result["classification"][key]
+                                             for key in ("class", "correction_identity")}
+    elif operation in {"runtime-continuity", "owner-handoff"}:
+        key = "runtime_continuity" if operation == "runtime-continuity" else "owner_handoff"
+        acknowledgement[key] = {field: value for field, value in result[key].items() if field != "decision"}
+        if key == "owner_handoff":
+            acknowledgement[key]["owners"] = {field: result[key]["decision"][field]
+                                               for field in ("from_owner", "to_owner")}
+    if operation.startswith("governor-"):
+        # These journal writes do not advance the obligation map; their candidate
+        # and receipt bindings, rather than context echoes, drive the next request.
+        return {**acknowledgement, "objective": request["objective"]}
+    # Sequence metadata is already returned by map writes. Other stored-row writes
+    # read only local metadata, never native state or a second policy projection.
+    checkpoint = result.get("checkpoint") or result.get("map")
+    if operation != "checkpoint":
+        from .ledger import read
+        try:
+            state = read(Path(request["project"]), request["objective"])
+        except Exception:
+            # A successful effect must never become a refusal because readback failed.
+            state = None
+        if state is None:
+            acknowledgement["acknowledgement_warning"] = "local metadata unavailable; read internal map before the next map write"
+        if state:
+            current_checkpoint = state.get("checkpoint") or {}
+            checkpoint = checkpoint or current_checkpoint
+            acknowledgement["context_revision"] = state["revision"]
+            if "next_safe_action" in current_checkpoint:
+                acknowledgement["next_safe_action"] = current_checkpoint["next_safe_action"]
+    if checkpoint and "seq" in checkpoint:
+        acknowledgement.update(seq=checkpoint["seq"], next_seq=checkpoint["seq"] + 1,
+                               revision=checkpoint["revision"])
+        if "next_safe_action" in checkpoint:
+            acknowledgement["next_safe_action"] = checkpoint["next_safe_action"]
+    acknowledgement["objective"] = request["objective"]
+    if "runtime_continuity" in result and operation != "runtime-continuity":
+        acknowledgement["runtime_continuity"] = result["runtime_continuity"]
+    for key in ("warnings", "invalidations", "source_rejections"):
+        if key in result:
+            acknowledgement[key] = result[key]
+    return acknowledgement
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
     parser.add_argument("operation", choices=tuple(_OPERATIONS))
@@ -570,21 +682,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         value = bounded_stdin_json() if args.input == Path("-") else bounded_json(args.input)
-        result = run(args.operation, value)
-        print(json.dumps({"schema": "pod-cli/v4", "status": "ok", "result": result}, sort_keys=True))
+        result = acknowledge(args.operation, value, run(args.operation, value))
+        print(json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True))
         return 0
     except PodError as exc:
         error = {"code": exc.code, "message": str(exc)}
         if getattr(exc, "detail", None):
             error["detail"] = exc.detail
-        print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": error},
+        print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": error},
                          sort_keys=True, default=str))
         return 1
     except Exception as exc:
         traceback.print_exc(file=sys.stderr)
         error = {"code": "internal_error",
                  "message": f"Internal helper failed ({type(exc).__name__})"}
-        print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": error},
+        print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": error},
                          sort_keys=True))
         return 1
 

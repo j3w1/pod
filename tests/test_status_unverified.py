@@ -125,7 +125,7 @@ class UnverifiedStatusTests(UnverifiedStatusCase):
         self.assertEqual(unknown["native_settlement_failure"]["current_runtime"], "unknown")
         self.assertIn("native settlement is unverified", unknown["next_action"])
 
-    def test_verified_read_matches_066_output_and_kernel_outstanding_is_unchanged(self):
+    def test_verified_read_preserves_066_projection_with_v5_envelope_and_kernel_outstanding(self):
         admissions = self.finished(3, 1)
         dispatch = admissions[2]["native_binding"]["dispatchId"]
         self.port.workers[dispatch]["outcome"] = "in_progress"
@@ -136,9 +136,12 @@ class UnverifiedStatusTests(UnverifiedStatusCase):
         observed, observed_render = self.observe(workers=workers)
         self.assertNotIn("unverified", observed["assignments"])
         self.assertNotIn("native_settlement_failure", observed)
+        self.assertEqual(expected["schema"], "pod-cli/v4")
+        self.assertEqual(observed["schema"], "pod-cli/v5")
         preference_view = ("preferences", "routes")
         self.assertEqual({key: value for key, value in observed.items() if key not in preference_view},
-                         {key: value for key, value in expected.items() if key not in preference_view})
+                         {**{key: value for key, value in expected.items() if key not in preference_view},
+                          "schema": "pod-cli/v5"})
         self.assertEqual(observed_render, expected_render)
         self.assertEqual(len(observed["assignments"]["active"]), 1)
         # A mismatched runtime changes only presentation: the kernel still counts every open row.
@@ -155,7 +158,7 @@ class UnverifiedStatusTests(UnverifiedStatusCase):
 class RecordedGenerationStatusTests(continuity.ContinuityCase):
     """A production-shaped checkpoint: the real authority join records the consumer generation."""
 
-    def test_verified_read_with_a_recorded_generation_matches_066_without_a_continuity_field(self):
+    def test_recorded_generation_preserves_066_projection_with_v5_envelope(self):
         self.started()
         self.assertEqual(read(self.project, "objective")["checkpoint"]["continuity"],
                          {"binding": {"run": "run", "coordinator": "owner", "generation": 1}, "history": []})
@@ -174,9 +177,12 @@ class RecordedGenerationStatusTests(continuity.ContinuityCase):
         expected, expected_render = observe(baseline_status())
         self.assertEqual(observed["native_settlement"], "observed")
         self.assertNotIn("runtime_continuity", observed)
+        self.assertEqual(expected["schema"], "pod-cli/v4")
+        self.assertEqual(observed["schema"], "pod-cli/v5")
         preference_view = ("preferences", "routes")
         self.assertEqual({key: value for key, value in observed.items() if key not in preference_view},
-                         {key: value for key, value in expected.items() if key not in preference_view})
+                         {**{key: value for key, value in expected.items() if key not in preference_view},
+                          "schema": "pod-cli/v5"})
         self.assertEqual(observed_render, expected_render)
 
 

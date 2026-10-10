@@ -141,7 +141,7 @@ def main(argv=None):
     integrity = _integrity_failure(root)
     if integrity is not None:
         if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": integrity}, sort_keys=True))
+            print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": integrity}, sort_keys=True))
         else:
             print("pod: " + integrity["message"], file=sys.stderr)
         return 2
@@ -157,7 +157,7 @@ def main(argv=None):
     failure = preflight(bundle=root)
     if failure is not None:
         if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": failure},
+            print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": failure},
                              indent=2, sort_keys=True))
         else:
             print("pod: " + failure["message"], file=sys.stderr)
@@ -180,7 +180,7 @@ def main(argv=None):
                    "message": ("Pod bundle at %s is incomplete (%s). Reinstall it: %s"
                                % (root, exc, REINSTALL))}
         if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v4", "status": "blocked", "error": failure},
+            print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": failure},
                              indent=2, sort_keys=True))
         else:
             print("pod: " + failure["message"], file=sys.stderr)
