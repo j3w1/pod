@@ -1,8 +1,16 @@
 # Pod contributor instructions
 
-Read `docs/pod-spec.md`, the linked domain file for your change, and
-`docs/validation.md` before implementation. Inspect Git state
-and preserve unrelated work. Pod is a skill plus bounded Python helpers over Orca; Orca owns
+Read the specification index before implementation; load the relevant contracts at their
+trigger. Inspect Git state and preserve unrelated work.
+
+| Read when | Document |
+| --- | --- |
+| Starting implementation | `docs/pod-spec.md` and its domain linked for the change |
+| Choosing checks, recording proof or preparing a milestone | `docs/validation.md` |
+| Editing installation or upgrade behavior | `docs/installation.md` |
+| Editing the instruction router or references | `skills/pod/SKILL.md` and affected references |
+
+Pod is a skill plus bounded Python helpers over Orca; Orca owns
 native Runs, Tasks, Dispatches, environments and worker lifecycle, and project governance
 owns authority and acceptance.
 
@@ -42,14 +50,24 @@ A change to Pod's own admission, assurance or closure rules is reviewed and merg
 the mechanism installed before the change. Evidence the new mechanism produces about
 itself is recorded separately as self-hosting evidence and never substitutes for that review.
 
-Run focused tests during development and the gates in `docs/validation.md` at milestone
-boundaries. Missing live Orca, model or provider evidence must remain unavailable or
+Complete the requested behavior, affected requirement/scenario/coverage updates, focused
+checks and applicable milestone gates, and record a candidate-bound final audit and report
+before claiming completion; `docs/validation.md` defines these checks. Missing live Orca, model or provider evidence must remain unavailable or
 NOT_RUN. Do not weaken a check or fabricate compatibility. Removing a requirement removes
 its scenario and coverage row in the same change.
 
 Keep README.md approachable and follow the editorial structure of
 https://github.com/obra/superpowers/blob/main/README.md with original Pod wording. Document
 only implemented behaviour. Keep detailed contracts in the linked documents.
+
+Local gates may use fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` and
+`POD_CACHE_HOME` in disposable task storage. Installer trials may use a truly scrubbed
+fresh temporary home: every installer base-directory variable (`HOME`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+`POD_CONFIG_HOME`, `POD_STATE_HOME`, `POD_CACHE_HOME`) is contained there or unset, and PATH
+cannot select the real Pod launcher. Test support may use fresh owned sibling directories
+within its disposable root. These permissions cover only that process; never affect real
+launchers, skills, rc files, data, config or state.
 
 Fixture execution uses disposable projects; existing host and ordinary project trials are
 read-only. No production or provider mutation, and no package or release publication.

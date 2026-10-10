@@ -30,11 +30,11 @@ Type: H · Scenarios: [A09](#a09), [A12](#a12), [A46](#a46), [A121](#a121)
 
 Project, issue, repository and worker material cannot widen the personal route pool or grant worker delegation. Direct user constraints may narrow it; an explicit direct exception for one exact Disabled route stays scoped and visible. Project Governor policy only narrows personal authority.
 
-### R16 — Read current preferences at selection and final admission
+### R16 — Read config contextually and preferences at the final boundary
 
-Type: H · Scenarios: [A11](#a11), [A12](#a12), [A49](#a49), [A124](#a124)
+Type: H · Scenarios: [A11](#a11), [A12](#a12), [A49](#a49), [A52](#a52), [A124](#a124)
 
-Read current preferences before selection and at the serialized final admission boundary, and bind their byte revision to the decision. The personal file is the authority, so any byte change between selection and final admission, including an unrelated route edit or a refresh-setting change, refuses the stale start; a changed, invalid or missing preference file never silently widens the pool. Observation refresh or cache eviction is not an authority change and never invalidates a start. Once a row is written, later edits do not alter that submitted attempt; pending same-request replay never rechecks preferences.
+The coordinator reads `pod config --json` at intake, new-session continuation, user preference-change notice and after `preference_changed`, `preference_revision_stale`, `policy_revision_mismatch`, `setup_required` or `installed_version_changed`, not every delegation. Deterministic selection/final admission still read current preferences and bind their byte revision; any intervening byte change, including another route or refresh setting, refuses the stale start. Invalid/missing files never widen the pool. On either preference race, rechoose at most twice then report the conflict; no retry counter. Observation refresh/cache eviction never invalidates authority. Later edits do not alter submitted attempts; pending same-request replay never rechecks preferences.
 
 ### R20 — A preference edit changes route eligibility only
 
@@ -71,7 +71,7 @@ Installation never rewrites an existing preference file. A kept `pod/v1` file is
 - <a id="a46"></a>**A46** — One personal `pod/v2` YAML stores route states, Preferred, Pin, worker ceiling and refresh setting; project `pod/v1` YAML can only narrow Governor policy, while objective constraints stay local.
 - <a id="a47"></a>**A47** — Duplicate/type/unknown-field/executable-tag/include and oversized/recursive YAML fails safely without execution.
 - <a id="a49"></a>**A49** — A valid sparse or empty route map makes only explicitly enabled routes eligible and labels omissions “not set (not eligible)”; invalid structure, a missing file or a kept `pod/v1` file disables new delegation while preserving read-only diagnosis and native recovery.
-- <a id="a52"></a>**A52** — Current preferences are read at selection and final admission without a daemon or effect on productive workers.
+- <a id="a52"></a>**A52** — Coordinator config reads follow intake/continuation/notice/refusal triggers, not every delegation; helpers still bind current preference bytes at selection/final admission without a daemon or effect on productive workers. Both preference_changed and preference_revision_stale have bounded coordinator rechoice guidance, never a helper retry counter.
 - <a id="a53"></a>**A53** — A route-state change cannot enable paid provider settings or make an unavailable native model launchable.
 - <a id="a54"></a>**A54** — Concurrent edits preserve unrelated keys, refuse a stale targeted key and never overwrite invalid YAML.
 - <a id="a76"></a>**A76** — `pod config edit` targets the personal file and preserves invalid user edits while blocking delegation.

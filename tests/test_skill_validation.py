@@ -1,11 +1,14 @@
 import os
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import shutil
 import unittest
 
 from pod.bundle import BUNDLE_FILES, bundle_root, canonical
 from pod.errors import PodError
-from pod.skill_validation import validate_installed, validate_skill
+from pod.skill_validation import (DELIVERY_FILES, MAX_DELIVERY_WORDS, MAX_SKILL_WORDS,
+                                  main, validate_installed, validate_skill)
 from tests.common import fixture
 
 BUNDLE = bundle_root()
@@ -28,14 +31,100 @@ class SkillValidationTests(unittest.TestCase):
         skill_words = len((BUNDLE / "SKILL.md").read_text().split())
         references = sorted((BUNDLE / "references").glob("*.md"))
         counts = {path.name: len(path.read_text().split()) for path in references}
-        self.assertLessEqual(skill_words, 750)
-        self.assertTrue(all(count <= 700 for count in counts.values()), counts)
-        self.assertLessEqual(sum(counts.values()), 2200)
+        self.assertLessEqual(skill_words, 400)
+        self.assertTrue(all(count <= 450 for count in counts.values()), counts)
+        self.assertLessEqual(sum(counts.values()), 2000)
+        self.assertLessEqual(sum(len((BUNDLE / name).read_text().split())
+                                 for name in DELIVERY_FILES), MAX_DELIVERY_WORDS)
         self.assertIn("execution-spec.md", counts)
     def test_repository_bundle_is_valid(self):
         result = validate_skill(BUNDLE)
         self.assertEqual(result["status"], "valid")
         self.assertEqual(set(result["files"]), set(BUNDLE_FILES))
+
+    def test_validator_reports_all_word_counts(self):
+        result = validate_skill(BUNDLE)
+        counts = result["word_counts"]
+        self.assertEqual(counts["SKILL.md"], len((BUNDLE / "SKILL.md").read_text().split()))
+        self.assertEqual(counts["delivery_path"], sum(counts[name] for name in DELIVERY_FILES))
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main([str(BUNDLE)]), 0)
+        for name, count in counts.items():
+            self.assertIn(f"{name}: {count} words", output.getvalue())
+
+    def test_full_budget_duplicate_version_reports_version_restriction(self):
+        with fixture() as root:
+            skill = copied(root)
+            path = skill / "SKILL.md"
+            text = path.read_text()
+            text += " filler" * (MAX_SKILL_WORDS - len(text.split()))
+            self.assertEqual(len(text.split()), 400)
+            path.write_text(text.replace("metadata:\n", 'metadata:\n  version: "0.9.0"\n'))
+            with self.assertRaisesRegex(PodError, "version lives only in VERSION"):
+                validate_skill(skill)
+
+    def test_descriptors_and_router_structure_are_enforced(self):
+        cases = (
+            ("description-length", "description: ", "description: Use when " + "x" * 251 + " # ", "250 characters"),
+            ("description-trigger", "Use when", "Invoke if", "Use when"),
+            ("compatibility", "compatibility: Linux,", "compatibility: |\n  Linux,", "one plain line"),
+            ("sections", "## Roles", "## Other roles", "five router sections"),
+            ("duplicate-link", "- PES authoring:", "- Duplicate: [intake](references/execution-spec.md).\n- PES authoring:", "exactly once"),
+            ("missing-trigger", "- PES authoring:", "-", "read-when trigger"),
+            ("duplicate-trigger", "- PES authoring:", "- Issue intake:", "read-when trigger"),
+        )
+        with fixture() as root:
+            for name, old, new, message in cases:
+                with self.subTest(name=name):
+                    skill = copied(root / name)
+                    path = skill / "SKILL.md"
+                    path.write_text(path.read_text().replace(old, new))
+                    with self.assertRaisesRegex(PodError, message):
+                        validate_skill(skill)
+            for index, target in enumerate(("verification.md", "../references/verification.md",
+                                           "https://example.invalid/references/verification.md")):
+                skill = copied(root / f"reference-link-{index}")
+                path = skill / "references" / "governor.md"
+                path.write_text(path.read_text() + f"\nSee [verification]({target}).\n")
+                with self.assertRaisesRegex(PodError, "must not link another reference"):
+                    validate_skill(skill)
+            skill = copied(root / "interface-length")
+            path = skill / "agents" / "openai.yaml"
+            path.write_text('interface:\n  display_name: Pod\n  short_description: ' + 'x' * 101)
+            with self.assertRaisesRegex(PodError, "short_description is invalid"):
+                validate_skill(skill)
+
+    def test_each_word_budget_has_a_refusal(self):
+        with fixture() as root:
+            for name, limit, message in (("SKILL.md", 400, "SKILL.md exceeds"),
+                                         ("references/cleanup.md", 450, "cleanup.md exceeds")):
+                skill = copied(root / name.replace("/", "-"))
+                path = skill / name
+                text = path.read_text()
+                path.write_text(text + " filler" * (limit + 1 - len(text.split())))
+                with self.assertRaisesRegex(PodError, message):
+                    validate_skill(skill)
+            for kind in ("combined", "delivery"):
+                skill = copied(root / kind)
+                counts = validate_skill(skill)["word_counts"]
+                total = counts["references_combined" if kind == "combined" else "delivery_path"]
+                remaining = 2001 - total
+                names = (["references/cleanup.md", "references/pes-template.md"] if kind == "combined"
+                         else list(DELIVERY_FILES[1:]))
+                for name in names:
+                    path = skill / name
+                    text = path.read_text()
+                    added = min(remaining, 450 - len(text.split()))
+                    path.write_text(text + " filler" * added)
+                    remaining -= added
+                self.assertEqual(remaining, 0)
+                # The delivery-only control leaves the combined reference total in budget.
+                if kind == "delivery":
+                    for name in ("references/cleanup.md", "references/pes-template.md", "references/recovery.md"):
+                        (skill / name).write_text("# Optional\n")
+                with self.assertRaisesRegex(PodError, f"{'Skill references' if kind == 'combined' else 'Skill delivery path'} exceed"):
+                    validate_skill(skill)
 
     def test_frontmatter_allowlist_rejects_coordinator_overrides(self):
         with fixture() as root:

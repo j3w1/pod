@@ -8,11 +8,11 @@ Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119), [A216](#a216)
 
 Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status`, `pod doctor`, `pod update`, `pod config`/`config edit`, and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
 
-### R04 — Maintain one canonical inline skill policy
+### R04 — Maintain one canonical trigger-led skill router
 
 Type: B · Scenarios: [A01](../pod-spec.md#a01), [A32](#a32), [A41](#a41)
 
-Maintain one canonical inline skill policy with generated host metadata and relevant-on-demand references. Invocation preserves the conversation and must not set coordinator model/effort or use Claude context: fork.
+Maintain one canonical inline skill router with relevant-on-demand references and one interface description. Frontmatter retains its restrictions and repository source, with a ≤250-character description containing `Use when` and a plain compatibility line. Invocation preserves the conversation, model, effort and settings; no coordinator override or Claude context fork. Product version is authored only in root VERSION.
 
 ### R48 — Read-only status and doctor report preferences
 
@@ -38,11 +38,11 @@ Type: I · Scenarios: [A75](#a75), [A135](#a135)
 
 Use Python 3.13+ on Linux, one bundle-as-package and standard-library facilities where practical. Run unit, incident, PTY/subprocess, installed-bundle, source-audit and hosted checks as specified, with independent review and separate live evidence.
 
-### R53 — Keep README approachable, implemented-only and linked
+### R53 — Keep contributor documents contextual and README approachable
 
 Type: B,I · Scenarios: [A38](../pod-spec.md#a38), [A75](#a75)
 
-Keep README approachable, implemented-only and linked to detailed contracts. Maintain one skill policy source and references. Document capability limits and actual evidence.
+Keep README approachable, implemented-only and linked to AGENTS for contextual contributor reading and completion criteria. AGENTS preserves host authority, worker/model judgment, mandatory fresh independent audit, native orchestration and metadata ownership. The verification contract defines change-class checks and milestones; installed runtime guidance contains no run-tests/checks reminders. Document capability limits and actual evidence.
 
 ### R55 — Distribute from main through the one-shot
 
@@ -62,11 +62,11 @@ Type: B,H · Scenarios: [A78](#a78)
 
 Keep host integration optional. Pod works on a suitable Linux environment without the owner's host tooling, paths, accounts or evidence, detecting and respecting host policies when present.
 
-### R62 — Keep one conditional execution-spec.md as the
+### R62 — Separate issue intake from PES authoring
 
 Type: B · Scenarios: [A97](#a97), [A98](#a98), [A204](#a204)
 
-Keep one conditional `execution-spec.md` as the authoring and interpretation source for human-readable Pod Execution Specs, numbered Proof of Done items, explicit delivery endpoints and the Evidence Evaluation Ledger (EEL) convention. An EEL issue's title starts with `EEL:` or its first non-empty unindented body line is exactly `**Format:** Evidence Evaluation Ledger v1`, optionally ending `<br>`; it is evidence only, never executed or restated as a direct objective to execute it, and implementation needs a separate Pod Execution Spec citing it. Equivalent clear Markdown is valid; there is no parser, DSL, required frontmatter, EEL section check or second template.
+Keep `execution-spec.md` as the conditional intake/interpretation source and `pes-template.md` as the sole installed human-readable PES authoring skeleton with numbered Proof of Done items and explicit delivery endpoints. Intake owns the Evidence Evaluation Ledger (EEL) convention: title starts with `EEL:` or the first nonempty unindented body line is exactly `**Format:** Evidence Evaluation Ledger v1`, optionally ending `<br>`. It is evidence only, never executed or restated as a direct objective; implementation needs a separate PES citing it. Equivalent clear Markdown is valid; no parser, DSL, required frontmatter, EEL section check or parallel template.
 
 ### R63 — Accept a direct objective or a
 
@@ -92,11 +92,11 @@ Type: B · Scenarios: [A113](#a113)
 
 README is the practical install and session guide: one-shot command, open/auth/invoke, direct and issue objectives, Plan Mode, worktrees, visible workers, verification, limits, update/removal and linked installation details. Describe implemented behavior only.
 
-### R71 — Keep SKILL at most 750 words
+### R71 — Bound the five-section router and nine references
 
 Type: B,H · Scenarios: [A114](#a114), [A115](#a115), [A180](#a180), [A233](#a233)
 
-Keep SKILL at most 750 words, each conditional reference at most 700 words and all references together at most 2200 words. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle; repository docs provide the detailed contracts.
+SKILL has exactly Roles, Done when, Boundaries, Helpers and Read when needed, at most 400 whitespace-delimited words including frontmatter. Its nine references each have at most 450 words and at most 2000 combined. Each has one unique triggered link from SKILL and no reference-to-reference links. The delivery path (SKILL plus execution-spec, planning, orca-boundary, models, verification and governor) is at most 2000 words. Validate frontmatter before word budgets and print every count. Installed guidance preserves authority, completion, judgment and recovery; repository documents provide contributor checks and detailed contracts.
 
 ### R73 — The model workspace is one table of exact routes
 
@@ -159,8 +159,8 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a75"></a>**A75** — Hosted Linux CI, incident discovery, compile/whitespace, skill validation, source hygiene, skills-CLI installation, independent audit and implemented-only docs cover each change to `main`; CI publishes nothing.
 - <a id="a77"></a>**A77** — The one-shot installer from `main` installs both global skills and the user-local `pod` command from one bundle.
 - <a id="a78"></a>**A78** — A copied bundle runs from an unrelated directory with no `PYTHONPATH` and no source tree; a missing prerequisite prints one actionable step, never an import traceback or an invented payment requirement.
-- <a id="a97"></a>**A97** — One installed conditional reference defines the readable Pod Execution Spec skeleton, terms, numbered PoD items and explicit delivery endpoint; no parallel template exists.
-- <a id="a98"></a>**A98** — A representative filled spec remains ordinary readable Markdown without parser-only boilerplate or empty ceremony.
+- <a id="a97"></a>**A97** — The installed intake and sole PES authoring template have distinct read-when triggers; the template holds readable terms, numbered PoD items and explicit delivery endpoint without a parallel skeleton.
+- <a id="a98"></a>**A98** — The PES authoring reference and a representative filled spec remain ordinary readable Markdown without parser-only boilerplate or empty ceremony.
 - <a id="a99"></a>**A99** — Complete authorized issue intake returns the full body and exact identity, while inaccessible or incomplete reads fail clearly without requesting credentials or claiming success.
 - <a id="a100"></a>**A100** — An issue for another repository is rejected against actual Git identity before implementation; issue text/comments cannot grant authority.
 - <a id="a101"></a>**A101** — A closed issue requires outcome and user-intent reconciliation rather than silently repeating work.
@@ -169,7 +169,7 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a111"></a>**A111** — Generic tracked-source/artifact hygiene detects representative private residue while permitting Pod identity, public links and sanitized fixtures.
 - <a id="a112"></a>**A112** — Public code and guidance require no external metadata service; AGENTS keeps only the short upstream ownership notice and introduces no competing writer.
 - <a id="a113"></a>**A113** — README covers the one-shot installer, normal session journey, TUI, limits, update and removal with linked detailed guidance.
-- <a id="a114"></a>**A114** — SKILL authoring stays at most 748 words, preserving the formal 750-word validator headroom for metadata guards, each conditional reference at most 700 and their combined total at most 2200; Execution Spec loads only for issue/spec work.
+- <a id="a114"></a>**A114** — SKILL is ≤400 words including frontmatter, each of nine references ≤450, their sum ≤2000 and the declared delivery path ≤2000; validation reports counts, rejects missing/duplicate/untriggered links and cross-reference links, and a full-400-word SKILL with duplicate VERSION reports the version restriction first.
 - <a id="a115"></a>**A115** — Human status names selected objective/source, worktree, relevant native work, blocker, next action, assignments, retained terminals and remaining gates; JSON retains detailed derived evidence without side effects.
 - <a id="a117"></a>**A117** — Focus updates the inspector without a model call; Space, `p` and `P` save exact-route edits immediately; a kept `pod/v1` file opens route setup instead of allowing edits, and saves only after confirmation; a save conflict or an outside change re-reads the file and rebuilds the preview, keeping only choices that still apply and naming any it cleared.
 - <a id="a118"></a>**A118** — The root `VERSION` holds one MAJOR.MINOR.PATCH line and is the only authored version; the bundle's `VERSION` links to it, an installed copy carries it as a file, `doctor` reports it, and no other file declares a version.
@@ -183,7 +183,7 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a140"></a>**A140** — Edits save immediately and survive restart and external edits, while browsing, sorting, filtering, grouping, paging and comparing never write; an invalid or missing preference file is announced as read-only after one held poll.
 - <a id="a142"></a>**A142** — A new install and explicit update leave ordinary agent sessions and running workers unchanged; coordinators reload before new starts.
 - <a id="a175"></a>**A175** — Current exact release/terminal/ownership/stage facts and retained reason are separate from start-time warnings, and every blocked text branch renders without a traceback. Two objectives on one Run produce `selection_required` and choices until `--objective` selects one; status then reports derived assignments with Orca's own attention for each active one (`unknown` when Orca gives none), gates, progress and next action without writes or invented telemetry.
-- <a id="a180"></a>**A180** — The installed skill validates within fixed word budgets and contains delivery, cleanup, critical-path, model and bookkeeping instructions; no repository-only instruction is needed to execute these paths.
+- <a id="a180"></a>**A180** — The installed five-section router and triggered references validate within fixed budgets, contain completion, delivery, cleanup, critical-path, model and bookkeeping guidance, and need no repository-only runtime instructions.
 
 
 - <a id="a183"></a>**A183** — In a real terminal, Pin and Preferred moves and clears use marks distinct from focus and route state, survive restart, sorting, filtering, resize, grouped and narrow views and ASCII/monochrome output, and stay visible as hidden summaries; invalidating edits, stale concurrent edits and persistence failures change no settings, and no action starts workers.
@@ -194,7 +194,7 @@ An `exact()` refusal names its record and its missing and unsupported field name
 - <a id="a201"></a>**A201** — The same inputs are accepted and refused with the same codes/details, obligation-kernel referents and corrections are self-describing without values, and numerous, long or control-character field names are bounded and cleaned.
 - <a id="a202"></a>**A202** — Issue intake, including `internal issue-intake`, returns no binding and refuses `issue_is_evidence_ledger` for an `EEL:` title, or for the exact format line as the first non-empty unindented body line with or without `<br>` and with LF or CRLF endings; the refusal says the issue is evidence only and implementation needs a separate Pod Execution Spec citing it.
 - <a id="a203"></a>**A203** — A bound Pod Execution Spec issue that later gains either marker, including only a title change, is refused at the next recheck; continuation, affected admission, final verification and `internal issue-recheck` surface the EEL refusal, not `issue_reconciliation_required`.
-- <a id="a204"></a>**A204** — A Pod Execution Spec citing an EEL is accepted unchanged; an indented or later marker line, inside a code block or not, a lowercase or non-prefix title and an amendment do not mark an issue; direct objectives and EEL source references are unaffected; the convention appears once, in the Execution Spec reference.
+- <a id="a204"></a>**A204** — A PES citing an EEL is accepted unchanged; an indented or later marker line, inside a code block or not, a lowercase or non-prefix title and an amendment do not mark an issue; direct objectives and EEL source references are unaffected; the convention appears once, in the intake reference, separate from the authoring template.
 - <a id="a216"></a>**A216** — `pod models [--json]`, `pod models refresh [--check] [--json]` and `pod models status [--json]` print the projection, delegate to the refresh and offline status, exit nonzero for a refresh that promotes or checks nothing, report a busy cache or missing observation module as a blocked envelope, and keep `pod update` software-only.
 - <a id="a217"></a>**A217** — The table lists exact routes from the shared projection sorted by AA index descending with unknowns last and stable ties; every metric, model, effort and state sort works in both directions with the sort metric visible; the grouped view collapses and keeps routes reachable; filters compose with search; new and unsupported observations are visible by default and non-routable, supported-only filtering remains available, and clearing filters restores the inclusive view; focus and hidden selections survive filtering, sorting and refresh.
 - <a id="a218"></a>**A218** — Inspector tabs show the disclaimer, profiles and qualifiers, units, each source's latest attempt with its earlier rows, authored routing guidance and native limits; the status line reports enabled count, Pin, Preferred, data age, refresh state, native status, last save and the config path as width allows, with exact Pin and Preferred keys never shortened, the age always available in Sources and first on the status line of every overlay; table and inspector scroll independently.
@@ -206,7 +206,7 @@ An `exact()` refusal names its record and its missing and unsupported field name
 
 - <a id="a230"></a>**A230** — Status reads exact current release, terminal, ownership, retention and Dispatch stage facts separately from start-time placement warnings, preserves live/older missing-field rendering, never presents a released worker as running, and renders all blocked branches with exit 1. Unknown objectives name the objective, repository context and searched state root; reads write nothing.
 
-- <a id="a233"></a>**A233** — The implemented Governor, proof_scope/REUSE, placement and recurring-delta correction guidance stays within SKILL 748 words, individual references 700 and combined references 2200; cuts preserve rules and inventory/guard tests retain real offline pointers.
+- <a id="a233"></a>**A233** — Governor, proof_scope/REUSE, placement and recurring-delta correction guidance remains within SKILL 400 words, each reference 450 and references/delivery path 2000; the single location-aware anchor table preserves required topics exactly once and all changed offline coverage pointers resolve.
 
 ## Public interfaces
 

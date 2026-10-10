@@ -449,7 +449,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_before_boundary_edit_refuses_with_no_admission_and_after_row_keeps_start",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_before_boundary_edit_refuses_with_no_admission_and_after_row_keeps_start",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_instruction_refusals.InstructionRefusalTests.test_both_preference_races_refuse_with_rule_and_bounded_next_action"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -857,7 +861,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_one_canonical_execution_spec_reference",
+      "offline_test": [
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_one_canonical_execution_spec_reference",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -865,7 +872,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_reference_has_readable_skeleton_and_numbered_proof",
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
       "status": "NOT_RUN"
     },
     {
@@ -916,7 +923,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_preserves_direct_plan_and_continuation_paths",
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
       "status": "NOT_RUN"
     },
     {
@@ -926,7 +933,7 @@
       ],
       "offline_test": [
         "tests.test_operations.AdmissionTests.test_same_selector_resolving_elsewhere_blocks_start_and_pending_replay",
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_new_objective_worktree_requests_the_orca_branch"
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
       ],
       "status": "NOT_RUN"
     },
@@ -973,7 +980,9 @@
         "unit",
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1008,7 +1017,12 @@
         "hosted_ci",
         "independent_review"
       ],
-      "offline_test": "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
+      "offline_test": [
+        "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
+        "tests.test_skill_validation.SkillValidationTests.test_full_budget_duplicate_version_reports_version_restriction"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1776,7 +1790,10 @@
       ],
       "offline_test": [
         "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
-        "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries"
+        "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
+        "tests.test_skill_validation.SkillValidationTests.test_full_budget_duplicate_version_reports_version_restriction"
       ],
       "status": "NOT_RUN"
     },
@@ -1812,7 +1829,7 @@
         "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_implementation_role_uses_pin",
         "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_investigation_role_uses_pin",
         "tests.test_issue29_boundaries.PinRoleBoundaryTests.test_review_role_uses_pin",
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_pin_limits"
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
       ],
       "status": "NOT_RUN"
     },
@@ -2100,7 +2117,8 @@
       ],
       "offline_test": [
         "tests.test_eel_intake.EelMarkerTests.test_nothing_else_changes",
-        "tests.test_eel_intake.EelMarkerTests.test_convention_and_rule_are_documented_once"
+        "tests.test_eel_intake.EelMarkerTests.test_convention_and_rule_are_documented_once",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
       ],
       "status": "NOT_RUN"
     },
@@ -2163,9 +2181,7 @@
       ],
       "offline_test": [
         "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_pin_limits",
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_installed_guidance_keeps_the_routing_decisions",
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_keeps_the_rules_references_no_longer_repeat"
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
       ],
       "status": "NOT_RUN"
     },
@@ -2606,7 +2622,9 @@
       ],
       "offline_test": [
         "tests.test_inventory.InventoryIntegrityTests.test_repository_owned_validator_checks_the_actual_canonical_skill",
-        "tests.test_issue41.GuidanceBudgetTests.test_actual_guidance_has_effective_headroom_and_all_four_rules"
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
+        "tests.test_skill_validation.SkillValidationTests.test_full_budget_duplicate_version_reports_version_restriction"
       ],
       "status": "NOT_RUN"
     },

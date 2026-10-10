@@ -47,17 +47,11 @@ The installer may append one guarded PATH block to `.zshrc`, `.bashrc` and a Bas
 
 `pod update` downloads `main`, runs the same staged checks, and returns “Already current” when the receipt, launcher and copy match. A change to the canonical skill is preserved under `preserved/` before the skills CLI replaces it. Running native workers remain untouched; reload active coordinator conversations before new starts.
 
-The 0.6.0 update is a hard objective-state cutover. Finish active 0.5
-objectives before updating, or settle their workers through Orca. The staged
-installer reports older objective schemas read-only; status and doctor list
-and block them after update without conversion or file mutation. New
-objectives work normally. Existing native worker attempts remain Orca-owned
-and settle through its installed guide; their reports are not ingested into
-an older Pod objective.
+Status and doctor diagnose unsupported objective schemas without conversion; existing native workers remain Orca-owned, and new objectives use the current schema.
 
 If a download, dependency install, or copy is interrupted, rerun the one-shot installer or `pod update`. A receipt still marked `installing` records the previous and target digests. A bundle with neither digest yields `install_incomplete` instead of false readiness. `pod doctor --json` reports the receipt, canonical digest, venv, launcher ownership, placements, duplicates, and relevant next action.
 
-An invalid preference file is kept untouched, with no eligible routes; use `pod config edit` to correct it. A 0.6.x `pod/v1` file is also kept byte for byte and reported as needing route setup: until you confirm the setup, no route is eligible for new delegation, while diagnosis and recovery of existing native work continue. Open `pod` in a terminal to review the proposed exact routes, the notes and the choices you still have to make, such as an exact effort for an earlier pin; saving keeps the original as `config.yaml.pod-v1` next to the new file. The setup never infers a Preferred route, invents a pin effort or carries a choice over to a replacement model generation. `pod config edit` remains the manual path. The installer never overwrites a foreign `~/.local/bin/pod` or a redirected rc file. If `pod` resolves to another command, inspect `command -v pod` and your PATH order before removing anything.
+An invalid preference file is kept untouched, with no eligible routes; use `pod config edit` to correct it. A 0.6.x `pod/v1` file is also kept byte for byte and reported as needing route setup: until you confirm the setup, no route is eligible for new delegation, while diagnosis and recovery of existing native work continue. Open `pod` in a terminal to review the proposed exact routes, the notes and the choices you still have to make, such as an exact effort for an earlier pin; saving keeps the original as `config.yaml.pod-v1` next to the new file. The setup never infers a Preferred route, invents a pin effort or carries a choice over to a replacement model generation; Sonnet 5.5 and GPT-6.1 Sol are not enabled from earlier Sonnet 5 or GPT-6 Sol choices. `pod config edit` remains the manual path. The installer never overwrites a foreign `~/.local/bin/pod` or a redirected rc file. If `pod` resolves to another command, inspect `command -v pod` and your PATH order before removing anything.
 
 ## Removal
 
