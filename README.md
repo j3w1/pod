@@ -39,7 +39,7 @@ Pod reads an issue completely before using it as scope. It checks that the issue
 4. Let the coordinator do simple work directly and delegate bounded independent assignments only when useful. Workers follow Orca's native launch path and your setting for new agent tabs. `pod status` reports placement and any native discoverability warning.
 5. Review the local checks, independent review, hosted CI, and project acceptance as separate evidence. Pod reports remaining gates and uncertain native work instead of assuming success.
 
-For persistent issue-backed work, the [Pod Execution Spec reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md) explains issue intake; its [PES authoring template](https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md) gives a readable format with numbered Proof of Done items. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
+For persistent issue-backed work, the [Issue intake reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/issue-intake.md) explains issue intake; its [PES authoring template](https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md) gives a readable format with numbered Proof of Done items. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
 
 ## Plan, direct work, and continuation
 

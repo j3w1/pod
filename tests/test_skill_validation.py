@@ -36,7 +36,7 @@ class SkillValidationTests(unittest.TestCase):
         self.assertLessEqual(sum(counts.values()), 2000)
         self.assertLessEqual(sum(len((BUNDLE / name).read_text().split())
                                  for name in DELIVERY_FILES), MAX_DELIVERY_WORDS)
-        self.assertIn("execution-spec.md", counts)
+        self.assertIn("issue-intake.md", counts)
     def test_repository_bundle_is_valid(self):
         result = validate_skill(BUNDLE)
         self.assertEqual(result["status"], "valid")
@@ -59,7 +59,7 @@ class SkillValidationTests(unittest.TestCase):
             ("description-trigger", "Use when", "Invoke if", "Use when"),
             ("compatibility", "compatibility: Linux,", "compatibility: |\n  Linux,", "one plain line"),
             ("sections", "## Roles", "## Other roles", "five router sections"),
-            ("duplicate-link", "- PES authoring:", "- Duplicate: [intake](references/execution-spec.md).\n- PES authoring:", "exactly once"),
+            ("duplicate-link", "- PES authoring:", "- Duplicate: [intake](references/issue-intake.md).\n- PES authoring:", "exactly once"),
             ("missing-trigger", "- PES authoring:", "-", "read-when trigger"),
             ("duplicate-trigger", "- PES authoring:", "- Issue intake:", "read-when trigger"),
         )

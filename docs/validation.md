@@ -96,7 +96,7 @@ upgrade and genuine-writer tests.
 
 Instruction budgets are whitespace-delimited, including frontmatter: SKILL ≤400
 words, each of nine references ≤450, all references ≤2000 and delivery path ≤2000.
-The delivery file list is `SKILL.md`, `references/execution-spec.md`,
+The delivery file list is `SKILL.md`, `references/issue-intake.md`,
 `references/planning.md`, `references/orca-boundary.md`, `references/models.md`,
 `references/verification.md` and `references/governor.md`, relative to `skills/pod`.
 Metadata restrictions precede word-budget checks. Every reference has one triggered

@@ -34,7 +34,7 @@ MAX_REFERENCE_WORDS = 450
 MAX_REFERENCE_WORDS_COMBINED = 2000
 MAX_DELIVERY_WORDS = 2000
 SECTIONS = ("Roles", "Done when", "Boundaries", "Helpers", "Read when needed")
-DELIVERY_FILES = ("SKILL.md", "references/execution-spec.md", "references/planning.md",
+DELIVERY_FILES = ("SKILL.md", "references/issue-intake.md", "references/planning.md",
                   "references/orca-boundary.md", "references/models.md",
                   "references/verification.md", "references/governor.md")
 SOURCE_PREFIX = "https://github.com/j3w1/pod"

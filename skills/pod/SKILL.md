@@ -42,7 +42,7 @@ Every map-bearing write, including full checkpoint/report and admission maps, ca
 
 Reuse unchanged guidance in context; reload lost relevant guidance. Trivial direct work reads none.
 
-- Issue intake: [intake](references/execution-spec.md).
+- Issue intake: [intake](references/issue-intake.md).
 - PES authoring: [template](references/pes-template.md).
 - Map/worktree/packets or delegation: [planning](references/planning.md).
 - First admission/supervision: [Orca](references/orca-boundary.md).

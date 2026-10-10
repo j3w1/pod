@@ -863,7 +863,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_one_canonical_execution_spec_reference",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_one_canonical_issue_intake_reference",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_reference_has_readable_skeleton_and_numbered_proof"
       ],
       "status": "NOT_RUN"

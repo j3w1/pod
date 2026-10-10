@@ -21,15 +21,15 @@ EXAMPLE_SPEC = """> **Outcome:** Search results include archived documents.\n\n\
 ## Completion\n+Report the commit, checks, review and open delivery gates.\n"""
 
 
-def execution_spec_source(root: Path, basename: str = "execution-spec.md") -> Path:
-    """Return the sole tracked or ordinary untracked authoring source."""
+def reference_source(root: Path, basename: str = "issue-intake.md") -> Path:
+    """Return the sole tracked or ordinary untracked reference source."""
     completed = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
          "--exclude-standard", "--", "*" + basename.removesuffix(".md") + "*"],
         capture_output=True, check=True)
     matches = sorted(root / Path(value.decode()) for value in completed.stdout.split(b"\0") if value)
     if len(matches) != 1:
-        raise ValueError("Execution Spec must have exactly one authoring source")
+        raise ValueError("Reference must have exactly one authoring source")
     return matches[0]
 
 
@@ -232,35 +232,35 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(__file__).resolve().parents[1]
 
-    def test_one_canonical_execution_spec_reference(self):
-        canonical = self.root / "skills" / "pod" / "references" / "execution-spec.md"
+    def test_one_canonical_issue_intake_reference(self):
+        canonical = self.root / "skills" / "pod" / "references" / "issue-intake.md"
         self.assertTrue(canonical.is_file())
-        self.assertEqual(execution_spec_source(self.root), canonical)
-        self.assertIn("references/execution-spec.md",
+        self.assertEqual(reference_source(self.root), canonical)
+        self.assertIn("references/issue-intake.md",
                       (self.root / "skills" / "pod" / "bundle.py").read_text())
         template = self.root / "skills" / "pod" / "references" / "pes-template.md"
-        self.assertEqual(execution_spec_source(self.root, "pes-template.md"), template)
+        self.assertEqual(reference_source(self.root, "pes-template.md"), template)
         self.assertIn("references/pes-template.md",
                       (self.root / "skills" / "pod" / "bundle.py").read_text())
 
-    def test_execution_spec_inventory_ignores_build_output_but_rejects_an_extra_source(self):
+    def test_issue_intake_inventory_ignores_build_output_but_rejects_an_extra_source(self):
         with fixture() as root:
             subprocess.run(["git", "init", "-q", str(root)], check=True)
-            canonical = root / "skills" / "pod" / "references" / "execution-spec.md"
+            canonical = root / "skills" / "pod" / "references" / "issue-intake.md"
             canonical.parent.mkdir(parents=True)
             canonical.write_text("canonical\n")
             (root / ".gitignore").write_text("build/\n")
             subprocess.run(["git", "-C", str(root), "add", ".gitignore",
-                            "skills/pod/references/execution-spec.md"], check=True)
-            generated = root / "build" / "lib" / "pod" / "references" / "execution-spec.md"
+                            "skills/pod/references/issue-intake.md"], check=True)
+            generated = root / "build" / "lib" / "pod" / "references" / "issue-intake.md"
             generated.parent.mkdir(parents=True)
             generated.write_text("generated\n")
-            self.assertEqual(execution_spec_source(root), canonical)
-            duplicate = root / "docs" / "execution-spec.md"
+            self.assertEqual(reference_source(root), canonical)
+            duplicate = root / "docs" / "issue-intake.md"
             duplicate.parent.mkdir()
             duplicate.write_text("second authoring source\n")
             with self.assertRaisesRegex(ValueError, "exactly one authoring source"):
-                execution_spec_source(root)
+                reference_source(root)
 
     def test_reference_has_readable_skeleton_and_numbered_proof(self):
         text = (self.root / "skills/pod/references/pes-template.md").read_text()
@@ -338,7 +338,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             "worktree": ("references/planning.md", "`--branch orca/<task-slug>`"),
             "project_audit": ("references/planning.md", "cited `project_policy` assurances"),
             "provider_boundary": ("references/orca-boundary.md", "write provider settings, automate provider prompts"),
-            "eel": ("references/execution-spec.md", "never execute it or restate it as a direct objective"),
+            "eel": ("references/issue-intake.md", "never execute it or restate it as a direct objective"),
             "continuation": ("references/recovery.md", "on resume read native state first"),
             "preference_races": ("references/recovery.md", "rechoose at most twice, then report the conflict"),
             "trivial": ("references/models.md", "trivial direct work needs no worker"),
@@ -374,13 +374,13 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         text = (self.root / "README.md").read_text()
         for phrase in ("curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh",
                        "$pod https://github.com/owner/project/issues/123",
-                       "Pod Execution Spec reference", "Authoring in ChatGPT",
+                       "Issue intake reference", "Authoring in ChatGPT",
                        "Plan only", "Continue after interruption",
                        "pod config --json", "native_default", "gpt-6-luna", "`VERSION`",
                        "pod update", "docs/installation.md"):
             self.assertIn(phrase, text)
         self.assertLess(text.index("curl -fsSL"), text.index("## Contents"))
-        self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md",
+        self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/issue-intake.md",
                       text)
         self.assertIn("https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md",
                       text)

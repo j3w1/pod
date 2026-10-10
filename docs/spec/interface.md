@@ -66,7 +66,7 @@ Keep host integration optional. Pod works on a suitable Linux environment withou
 
 Type: B · Scenarios: [A97](#a97), [A98](#a98), [A204](#a204)
 
-Keep `execution-spec.md` as the conditional intake/interpretation source and `pes-template.md` as the sole installed human-readable PES authoring skeleton with numbered Proof of Done items and explicit delivery endpoints. Intake owns the Evidence Evaluation Ledger (EEL) convention: title starts with `EEL:` or the first nonempty unindented body line is exactly `**Format:** Evidence Evaluation Ledger v1`, optionally ending `<br>`. It is evidence only, never executed or restated as a direct objective; implementation needs a separate PES citing it. Equivalent clear Markdown is valid; no parser, DSL, required frontmatter, EEL section check or parallel template.
+Keep `issue-intake.md` as the conditional intake/interpretation source and `pes-template.md` as the sole installed human-readable PES authoring skeleton with numbered Proof of Done items and explicit delivery endpoints. Intake owns the Evidence Evaluation Ledger (EEL) convention: title starts with `EEL:` or the first nonempty unindented body line is exactly `**Format:** Evidence Evaluation Ledger v1`, optionally ending `<br>`. It is evidence only, never executed or restated as a direct objective; implementation needs a separate PES citing it. Equivalent clear Markdown is valid; no parser, DSL, required frontmatter, EEL section check or parallel template.
 
 ### R63 — Accept a direct objective or a
 

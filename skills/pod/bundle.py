@@ -11,7 +11,7 @@ import yaml
 from .errors import PodError
 
 BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agents/openai.yaml", "scripts/pod.py",
-               "references/execution-spec.md", "references/planning.md", "references/models.md",
+               "references/issue-intake.md", "references/planning.md", "references/models.md",
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md", "references/pes-template.md",
                "references/recovery.md", "references/cleanup.md")
