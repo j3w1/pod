@@ -291,7 +291,10 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                 "read map on resume/`map_stale`", "`internal brief`", "read-only uncertain-input dry run")),
             ("A110", "references/recovery.md", ("`source=screen`", "displayed **Skip for now**",
                 "once, verify readiness", "same model/effort", "exact native `--retry-request` recovery, never resend",
-                "Unproven controls block", "Missing live opt-out proof stays NOT_RUN")),
+                "Through supported `terminal send`,", "Unproven controls block", "never guess input",
+                "No installation, other prompt automation, provider/settings/permission/safety changes, "
+                "duplicate pending requests or retry/controller loop.",
+                "Missing live opt-out proof stays NOT_RUN")),
         )
         coverage = {row["id"]: row for row in json.loads(
             (self.root / "docs/pod-coverage.json").read_text())["scenarios"]}
