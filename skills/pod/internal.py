@@ -16,7 +16,7 @@ from .context import execution_brief
 
 
 def _governor_projection(project: Path, objective: str, owner: str, *, mutating: bool,
-                         version_exempt: bool = False, effect_source: bool = False) -> dict:
+                         version_exempt: bool = False, forward_action: object = None) -> dict:
     """Join Governor work to stable current-Run authority and objective assignments."""
     from .ledger import continuity_locked, logical_projection, read
     from .operations import OrcaPort
@@ -34,9 +34,11 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     if mutating and not version_exempt:
         from .bundle import require_current_identity
         require_current_identity(state.get("checkpoint"))
-    if effect_source:
+    if forward_action is not None and not (isinstance(forward_action, dict)
+                                           and forward_action.get("kind") == "cancel_validation"):
         from .operations import _check_objective_source
-        _check_objective_source(project, (state.get("checkpoint") or {}).get("objective_source"))
+        _check_objective_source(project, (state.get("checkpoint") or {}).get("objective_source"),
+                                allow_closed=True)
     port = OrcaPort(project)
     authority_runs, runtimes, assignments = _governor_references(state)
 
@@ -335,7 +337,7 @@ def _op_governor(request: dict) -> dict:
     from .governor import decide
     project = Path(request["project"])
     projection = _governor_projection(project, request["objective"], request["owner"],
-                                      mutating=True, effect_source=True)
+                                      mutating=True, forward_action=request["action"])
     return decide(project, request["objective"], owner=request["owner"],
                   action=request["action"], exception=request.get("exception"),
                   native_projection=projection, pull_request=request.get("pull_request"))
@@ -416,7 +418,7 @@ def _op_governor_execute(request: dict) -> dict:
     from .governor import execute
     project = Path(request["project"])
     projection = _governor_projection(project, request["objective"], request["owner"],
-                                      mutating=True, effect_source=True)
+                                      mutating=True, forward_action=request["action"])
     # The production port is the installed gh and git; request JSON cannot supply one.
     return execute(project, request["objective"], owner=request["owner"],
                    action=request["action"], exception=request.get("exception"),

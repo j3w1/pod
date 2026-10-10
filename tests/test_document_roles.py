@@ -124,6 +124,79 @@ class DocumentEffectTests(ProductionCase):
         self.assertEqual(self.stored_bytes(), before)
         self.assertEqual(self.remote.calls, [])
 
+    def test_closed_issue_preserves_governor_finalization_but_not_new_admission(self):
+        from pod.operations import _check_objective_source
+        port, bound = self.bind_issue()
+        port.state = "CLOSED"
+        with patch("pod.github.GhPort", return_value=port):
+            self.assertEqual(self.op("governor", action=self.action())["decision"], "ALLOW")
+            self.op("governor-execute", action=self.action())
+        with self.assertRaises(PodError) as caught:
+            _check_objective_source(self.project, bound, issue_port=port)
+        self.assertEqual(caught.exception.code, "issue_reconciliation_required")
+
+    def test_body_drift_and_unavailable_reads_hold_forward_work(self):
+        port, bound = self.bind_issue()
+        port.body += "\nChanged requirements."
+        before = self.stored_bytes()
+        with patch("pod.github.GhPort", return_value=port), self.assertRaises(PodError) as caught:
+            self.op("governor-execute", action=self.action())
+        self.assertEqual(caught.exception.code, "issue_reconciliation_required")
+        self.assertEqual(self.stored_bytes(), before)
+        # Explicit source reconciliation retains the target and permits the next effect.
+        current = issue_intake(self.project, self.locator, port=port)["source"]
+        self.write(objective_source=current)
+        with patch("pod.github.GhPort", return_value=port):
+            self.op("governor-execute", action=self.action())
+        with patch("pod.github.issue_recheck", side_effect=PodError("issue_access_unavailable", "fixture unavailable")), \
+                self.assertRaises(PodError) as caught:
+            self.op("governor", action=self.action())
+        self.assertEqual(caught.exception.code, "issue_access_unavailable")
+
+
+class ContainmentTests(unittest.TestCase):
+    def test_cancellation_remains_available_after_source_changes_or_failed_reads(self):
+        from datetime import datetime, timezone
+        cases = ("seal", "eel", "body", "amendment", "closed", "unavailable")
+        for change in cases:
+            with self.subTest(change=change):
+                case = DocumentEffectTests()
+                case.setUp()
+                try:
+                    port, _ = case.bind_issue()
+                    if change == "amendment":
+                        source = issue_intake(case.project, case.locator, port=port,
+                                             amendments=[case.locator + "#issuecomment-99"])["source"]
+                        case.write(objective_source=source)
+                    original = case.remote._start
+                    def start(*args, **kwargs):
+                        row = original(*args, **kwargs)
+                        row["created_at"] = datetime.now(timezone.utc).isoformat()
+                        return row
+                    case.remote._start = start
+                    with patch("pod.github.GhPort", return_value=port):
+                        case.op("governor-execute", action=case.action())
+                        dispatched = case.op("governor-execute", action=case.action("workflow_dispatch"))
+                        case.move(); case.write()
+                        candidate = case.op("governor-prepare", unit="default")["candidate"]
+                        case.authorization = {**case.authorization, "candidate": candidate["commit"], "tree": candidate["tree"]}
+                    if change in ("seal", "eel"):
+                        port.title = change.upper() + ": export"
+                    elif change == "body": port.body += "\nChanged scope"
+                    elif change == "amendment": port.amendment_body = "Requirements only"
+                    elif change == "closed": port.state = "CLOSED"
+                    with patch("pod.github.GhPort", return_value=port), \
+                            patch("pod.github.issue_recheck", side_effect=AssertionError("containment must not depend on issue reads")):
+                        action = case.action("cancel_validation", target=dispatched["record_id"])
+                        decided = case.op("governor", action=action)
+                        self.assertEqual(decided["decision"], "ALLOW", decided)
+                        case.op("governor-outcome", record_id=decided["record_id"], outcome="CANCELED")
+                        executed = case.op("governor-execute", action=action)
+                        self.assertEqual(executed["outcome"], "PASS", executed)
+                        self.assertEqual(len([call for call in case.remote.calls if call[0] == "cancel"]), 1)
+                finally:
+                    case.doCleanups()
+
 
 class ParentTraceabilityTests(ProductionCase):
     def test_local_and_cross_repository_parents_do_not_replace_child_target(self):

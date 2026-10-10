@@ -339,6 +339,8 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             "project_audit": ("references/planning.md", "cited `project_policy` assurances"),
             "provider_boundary": ("references/orca-boundary.md", "write provider settings, automate provider prompts"),
             "eel": ("references/issue-intake.md", "never execute it or restate it as a direct objective"),
+            "seal_intake": ("references/issue-intake.md", "analysis grants no implementation authority"),
+            "parent_traceability": ("references/issue-intake.md", "child pess retain parent locator, observed body/amendment digests"),
             "continuation": ("references/recovery.md", "on resume read native state first"),
             "preference_races": ("references/recovery.md", "rechoose at most twice, then report the conflict"),
             "trivial": ("references/models.md", "trivial direct work needs no worker"),
