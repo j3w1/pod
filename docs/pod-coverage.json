@@ -1991,9 +1991,9 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_status_unverified.UnverifiedStatusTests.test_verified_read_matches_066_output_and_kernel_outstanding_is_unchanged",
+        "tests.test_status_unverified.UnverifiedStatusTests.test_verified_read_preserves_066_projection_with_v5_envelope_and_kernel_outstanding",
         "tests.incidents.test_runtime_change_incidents.R15StatusIncident.test_finished_rows_after_a_runtime_change_are_unverified_not_active",
-        "tests.test_status_unverified.RecordedGenerationStatusTests.test_verified_read_with_a_recorded_generation_matches_066_without_a_continuity_field"
+        "tests.test_status_unverified.RecordedGenerationStatusTests.test_recorded_generation_preserves_066_projection_with_v5_envelope"
       ],
       "status": "NOT_RUN"
     },
