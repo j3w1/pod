@@ -22,12 +22,15 @@ MAX_START_OBSERVATIONS = 16
 START_OBSERVATION_LIMIT = 3 * MAX_OUTPUT
 
 
-def _check_objective_source(project: Path, binding: dict | None, *, issue_port=None) -> None:
+def _check_objective_source(project: Path, binding: dict | None, *, issue_port=None,
+                            allow_closed: bool = False) -> None:
     if binding is None:
         return
     from .github import issue_recheck
     result = issue_recheck(project, binding, port=issue_port)
     if result["status"] != "current":
+        if allow_closed and result.get("reason") == "closed_issue_requires_intent_reconciliation":
+            return
         raise PodError("issue_reconciliation_required",
                        "Execution Spec issue changed or closed; reconcile before another effect")
 
