@@ -29,7 +29,7 @@ This installs the Pod skill for Codex and Claude Code, a user-local `pod` comman
 
 Your existing authenticated session remains the coordinator, with its current model and effort. Orca owns Runs, Tasks, Dispatches, worker tabs, messages, request recovery, worktrees, and lifecycle. Pod makes assignment choices, checks them at admission, and binds evidence to the objective. Your project decides what counts as accepted.
 
-Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. An Evidence Evaluation Ledger issue, titled `EEL:` or marked with its format line, is evidence only: Pod refuses to execute from it, and implementation needs a separate Pod Execution Spec that cites it. A direct objective follows the same process without an issue.
+Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. A SEAL supplies requirements; use a bounded PES or a scoped analysis/planning/decomposition request rather than executing the whole initiative. An Evidence Evaluation Ledger issue, titled `EEL:` or marked with its format line, is evidence only: Pod refuses to execute from it, and implementation needs a separate Pod Execution Spec that cites it. A direct objective follows the same process without an issue.
 
 ## The basic workflow
 
@@ -39,7 +39,7 @@ Pod reads an issue completely before using it as scope. It checks that the issue
 4. Let the coordinator do simple work directly and delegate bounded independent assignments only when useful. Workers follow Orca's native launch path and your setting for new agent tabs. `pod status` reports placement and any native discoverability warning.
 5. Review the local checks, independent review, hosted CI, and project acceptance as separate evidence. Pod reports remaining gates and uncertain native work instead of assuming success.
 
-For persistent issue-backed work, the [Issue intake reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/issue-intake.md) explains issue intake; its [PES authoring template](https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md) gives a readable format with numbered Proof of Done items. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
+For persistent issue-backed work, the [Issue intake reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/issue-intake.md) explains issue intake; the canonical [SEAL](https://github.com/j3w1/pod/blob/main/skills/pod/references/seal-template.md), [PES](https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md) and [EEL](https://github.com/j3w1/pod/blob/main/skills/pod/references/eel-template.md) authoring templates explain their separate roles and section responsibilities. The PES authoring template includes numbered Proof of Done items. Parent requirements are traceable sources, with their selected requirements and Limits reconciled; they do not replace the child repository target. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
 
 ## Plan, direct work, and continuation
 

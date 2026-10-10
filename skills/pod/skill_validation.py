@@ -31,7 +31,11 @@ REQUIRED_FORMS = ("pod config --json", "pod internal <op> --input FILE", "~/.loc
 MAX_SKILL_LINES = 500
 MAX_SKILL_WORDS = 400
 MAX_REFERENCE_WORDS = 450
-MAX_REFERENCE_WORDS_COMBINED = 2000
+AUTHORING_REFERENCES = ("references/seal-template.md", "references/pes-template.md",
+                       "references/eel-template.md")
+EXECUTION_REFERENCES = tuple(name for name in REFERENCES if name not in AUTHORING_REFERENCES)
+MAX_EXECUTION_WORDS = 2000
+MAX_AUTHORING_WORDS = 1350
 MAX_DELIVERY_WORDS = 2000
 SECTIONS = ("Roles", "Done when", "Boundaries", "Helpers", "Read when needed")
 DELIVERY_FILES = ("SKILL.md", "references/issue-intake.md", "references/planning.md",
@@ -140,9 +144,14 @@ def _check_body(root: Path, text: str, body: str) -> dict[str, int]:
             if pattern.search(data):
                 raise PodError("invalid_skill", f"{name} must not instruct {described}")
     counts["references_combined"] = sum(counts[name] for name in REFERENCES)
+    counts["execution_references"] = sum(counts[name] for name in EXECUTION_REFERENCES)
+    counts["authoring_templates"] = sum(counts[name] for name in AUTHORING_REFERENCES)
     counts["delivery_path"] = sum(counts[name] for name in DELIVERY_FILES)
-    if counts["references_combined"] > MAX_REFERENCE_WORDS_COMBINED:
-        raise PodError("invalid_skill", "Skill references exceed their combined word budget")
+    counts["installed_guidance"] = counts["SKILL.md"] + counts["references_combined"]
+    if counts["execution_references"] > MAX_EXECUTION_WORDS:
+        raise PodError("invalid_skill", "Skill execution references exceed their combined word budget")
+    if counts["authoring_templates"] > MAX_AUTHORING_WORDS:
+        raise PodError("invalid_skill", "Skill authoring templates exceed their combined word budget")
     if counts["delivery_path"] > MAX_DELIVERY_WORDS:
         raise PodError("invalid_skill", "Skill delivery path exceeds its word budget")
     return counts

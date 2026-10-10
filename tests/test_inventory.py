@@ -264,7 +264,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
 
     def test_reference_has_readable_skeleton_and_numbered_proof(self):
         text = (self.root / "skills/pod/references/pes-template.md").read_text()
-        headings = ("# <Title>", "## Objective", "## Context", "## Requirements",
+        headings = ("## Objective", "## Context", "## Requirements",
                     "## Non-goals", "## Design decisions", "## Proof of Done",
                     "## Validation", "## Completion")
         for heading in headings:
@@ -272,7 +272,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         positions = [text.index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
         for clause in ("**Outcome:**", "**Target:**", "**Format:**", "**Delivery:**",
-                       "PoD#1", "not a parser or DSL", "Number every Proof of Done item"):
+                       "PoD#1", "equivalent clear headings", "Use result conditions"):
             with self.subTest(clause=clause):
                 self.assertIn(clause, text)
         self.assertNotIn("N/A", text)
