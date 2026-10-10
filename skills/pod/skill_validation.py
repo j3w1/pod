@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+from urllib.parse import unquote, urlsplit
 
 from .bundle import (BUNDLE_FILES, BUNDLE_TEXT, MAX_SKILL, bundle_root, canonical,
                      frontmatter, installed_files, version)
@@ -28,9 +29,14 @@ FORBIDDEN_FORMS = (
 REQUIRED_FORMS = ("pod config --json", "pod internal <op> --input FILE", "~/.local/bin/pod",
                   "https://raw.githubusercontent.com/j3w1/pod/main/install.sh")
 MAX_SKILL_LINES = 500
-MAX_SKILL_WORDS = 750
-MAX_REFERENCE_WORDS = 700
-MAX_REFERENCE_WORDS_COMBINED = 2200
+MAX_SKILL_WORDS = 400
+MAX_REFERENCE_WORDS = 450
+MAX_REFERENCE_WORDS_COMBINED = 2000
+MAX_DELIVERY_WORDS = 2000
+SECTIONS = ("Roles", "Done when", "Boundaries", "Helpers", "Read when needed")
+DELIVERY_FILES = ("SKILL.md", "references/issue-intake.md", "references/planning.md",
+                  "references/orca-boundary.md", "references/models.md",
+                  "references/verification.md", "references/governor.md")
 SOURCE_PREFIX = "https://github.com/j3w1/pod"
 
 
@@ -40,8 +46,6 @@ def _skill_text(root: Path) -> str:
         raise PodError("invalid_skill", "SKILL.md is oversized")
     if len(text.splitlines()) > MAX_SKILL_LINES:
         raise PodError("invalid_skill", "SKILL.md exceeds its line budget")
-    if len(text.split()) > MAX_SKILL_WORDS:
-        raise PodError("invalid_skill", "SKILL.md exceeds its word budget")
     return text
 
 
@@ -55,12 +59,13 @@ def _check_metadata(metadata: dict) -> None:
     if metadata["name"] != "pod":
         raise PodError("invalid_skill", "Skill name must be pod")
     description = metadata["description"]
-    if not isinstance(description, str) or not description.strip() or len(description) > 1024:
-        raise PodError("invalid_skill", "Skill description is invalid")
+    if (not isinstance(description, str) or len(description) > 250
+            or "Use when" not in description or "\n" in description):
+        raise PodError("invalid_skill", "Skill description must contain Use when within 250 characters")
     compatibility = metadata.get("compatibility")
     if compatibility is not None and (not isinstance(compatibility, str) or len(compatibility) > 500
-                                      or not compatibility.strip()):
-        raise PodError("invalid_skill", "Skill compatibility is invalid")
+                                      or not compatibility.strip() or "\n" in compatibility):
+        raise PodError("invalid_skill", "Skill compatibility must be one plain line")
     license_name = metadata.get("license")
     if license_name is not None and (not isinstance(license_name, str) or len(license_name) > 200):
         raise PodError("invalid_skill", "Skill license is invalid")
@@ -85,7 +90,24 @@ def _check_version(root: Path) -> None:
         raise PodError("invalid_skill", "VERSION must hold one MAJOR.MINOR.PATCH line")
 
 
-def _check_body(root: Path, body: str) -> None:
+def _cross_reference(data: str) -> bool:
+    """Catch inline and definition links, including extensionless reference targets."""
+    targets = re.findall(r"\]\(\s*<?([^\s)>]+)", data)
+    targets += re.findall(r"(?m)^\s{0,3}\[[^]\n]+\]:\s*<?([^\s>]+)", data)
+    stems = {Path(name).stem for name in REFERENCES}
+    for target in targets:
+        path = unquote(urlsplit(target).path).rstrip("/")
+        basename = path.rsplit("/", 1)[-1]
+        if basename.removesuffix(".md") in stems or path.endswith(".md"):
+            return True
+    return False
+
+
+def _check_body(root: Path, text: str, body: str) -> dict[str, int]:
+    if len(text.split()) > MAX_SKILL_WORDS:
+        raise PodError("invalid_skill", "SKILL.md exceeds its word budget")
+    if tuple(re.findall(r"^## (.+)$", body, re.M)) != SECTIONS:
+        raise PodError("invalid_skill", "SKILL.md must have exactly the five router sections")
     for pattern, described in FORBIDDEN_FORMS:
         if pattern.search(body):
             raise PodError("invalid_skill", f"SKILL.md must not instruct {described}")
@@ -93,25 +115,37 @@ def _check_body(root: Path, body: str) -> None:
         if form not in body:
             raise PodError("invalid_skill", f"SKILL.md must show the {form} helper form")
     links = re.findall(r"\]\(((?:references|scripts)/[^)]+)\)", body)
-    if set(links) != set(REFERENCES):
-        raise PodError("invalid_skill", "SKILL.md must link every bundled reference and no other")
+    if set(links) != set(REFERENCES) or len(links) != len(REFERENCES):
+        raise PodError("invalid_skill", "SKILL.md must link every bundled reference exactly once and no other")
+    router = body.split("## Read when needed\n", 1)[-1]
+    triggered = re.findall(r"^- ([^:\n]+): \[[^\]\n]+\]\((references/[^)\n]+)\)\.$", router, re.M)
+    if ([link for _, link in triggered] != links
+            or len({trigger.casefold() for trigger, _ in triggered}) != len(triggered)):
+        raise PodError("invalid_skill", "Every reference link needs its own read-when trigger")
     for name in links:
         if name not in BUNDLE_FILES:
             raise PodError("invalid_skill", f"SKILL.md links {name}, which is not in the bundle")
-    combined_words = 0
+    counts = {"SKILL.md": len(text.split())}
     for name in REFERENCES:
         data = (root / name).read_text(encoding="utf-8")
         if not data.startswith("# ") or len(data.encode()) > MAX_SKILL:
             raise PodError("invalid_skill", f"{name} is missing a bounded title")
         words = len(data.split())
-        combined_words += words
+        counts[name] = words
         if words > MAX_REFERENCE_WORDS:
             raise PodError("invalid_skill", f"{name} exceeds its word budget")
+        if _cross_reference(data):
+            raise PodError("invalid_skill", f"{name} must not link another reference")
         for pattern, described in FORBIDDEN_FORMS:
             if pattern.search(data):
                 raise PodError("invalid_skill", f"{name} must not instruct {described}")
-    if combined_words > MAX_REFERENCE_WORDS_COMBINED:
+    counts["references_combined"] = sum(counts[name] for name in REFERENCES)
+    counts["delivery_path"] = sum(counts[name] for name in DELIVERY_FILES)
+    if counts["references_combined"] > MAX_REFERENCE_WORDS_COMBINED:
         raise PodError("invalid_skill", "Skill references exceed their combined word budget")
+    if counts["delivery_path"] > MAX_DELIVERY_WORDS:
+        raise PodError("invalid_skill", "Skill delivery path exceeds its word budget")
+    return counts
 
 
 def _check_launcher(root: Path) -> None:
@@ -173,15 +207,17 @@ def validate_skill(root: Path) -> dict:
         raise PodError("invalid_skill",
                        f"Bundle inventory mismatch; missing {missing}, unexpected {extra}")
     _check_version(root)
-    parsed = frontmatter(_skill_text(root))
+    text = _skill_text(root)
+    parsed = frontmatter(text)
     _check_metadata(parsed["metadata"])
-    _check_body(root, parsed["body"])
+    counts = _check_body(root, text, parsed["body"])
     _check_launcher(root)
     _check_interface(root)
     from .catalog import load as load_catalog
     load_catalog(root / "catalog.json")
     _check_observations(root)
-    return {"status": "valid", "name": "pod", "version": version(), "files": sorted(actual)}
+    return {"status": "valid", "name": "pod", "version": version(), "files": sorted(actual),
+            "word_counts": counts}
 
 
 def _check_observations(root: Path) -> None:
@@ -235,11 +271,13 @@ def main(argv: list[str] | None = None) -> int:
             validate_installed(args.installed)
             print("Installed skill matches the bundle!")
             return 0
-        validate_skill(args.skill if args.skill is not None else bundle_root())
+        result = validate_skill(args.skill if args.skill is not None else bundle_root())
     except (OSError, UnicodeError, PodError) as exc:
         print(f"Skill validation failed: {exc}")
         return 1
     print("Skill is valid!")
+    for name, count in result["word_counts"].items():
+        print(f"{name}: {count} words")
     return 0
 
 

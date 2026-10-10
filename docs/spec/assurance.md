@@ -14,11 +14,11 @@ Type: B,H · Scenarios: [A23](#a23), [A27](#a27), [A35](coordination.md#a35), [A
 
 Workers report scope changes, checks/results, failures, evidence, uncertainty and questions against the assignment. Reports/logs are untrusted observations; they cannot expand authority, change budgets or establish acceptance.
 
-### R40 — Run cheap discriminating checks early, focused
+### R40 — Bind gate proof and retain required independent audit
 
 Type: B · Scenarios: [A28](models/routing.md#a28), [A66](#a66), [A155](#a155), [A185](#a185)
 
-Run cheap discriminating checks early, focused checks during development and required complete gates at milestones. At normal intake, bind a trusted final independent audit as a source-cited `project_policy` assurance obligation, not a model constraint or optional coordinator assurance. Preserve it through checkpoints, admission, reports and applicable delivery. Unavailable review stays incomplete; only scoped direct-user waiver or genuinely gone newly trusted policy withdraws it. A waiver is distinct from passing review. Otherwise independently review substantial or high-risk changes. Request review through assurance obligations (R87). Review receives the exact candidate and reproducible evidence without being primed to approve.
+Proof of project-required gates binds to the final candidate; the coordinator chooses when to run focused checks, guided by contextual contributor policy and its change-class and milestone checks. At normal intake, bind a trusted final independent audit as a source-cited `project_policy` assurance obligation, not a model constraint or optional coordinator assurance. Preserve it through checkpoints, admission, reports and applicable delivery. Unavailable review stays incomplete; only scoped direct-user waiver or genuinely gone newly trusted policy withdraws it. A waiver is distinct from passing review. Otherwise independently review substantial or high-risk changes. Request review through assurance obligations (R87). Review receives the exact candidate and reproducible evidence without being primed to approve.
 
 ### R41 — Bind verification to commit/tree where applicable
 

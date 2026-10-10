@@ -1372,7 +1372,7 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
         raise PodError("setup_required", snapshot["errors"][0]["message"])
     ceiling = worker_ceiling(snapshot, state["constraints"])
     if len(projection["outstanding"]) >= ceiling:
-        raise PodError("logical_capacity_full", "Objective logical worker ceiling is occupied")
+        raise PodError("logical_capacity_full", "Objective logical worker ceiling is occupied by outstanding attempts. Next: inspect exact native settlement or wait for those attempts")
     if "delegate" in body.get("actions", []) and not any(
             c["kind"] == "allow_delegation" and c["provenance"] == "user_direct" and c.get("active", True)
             for c in state["constraints"]):
@@ -1382,23 +1382,26 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
     if not checked["allowed"]:
         if revision_changed:
             raise PodError("preference_changed",
-                           f"Preferences changed before dispatch and route is no longer allowed: {checked['code']}")
+                           f"Preferences changed before dispatch and route is no longer allowed: {checked['code']}. "
+                           "Next: reread pod config --json and rechoose at most twice before reporting the conflict")
         raise PodError(checked["code"],
                        f"Proposed route is not allowed at the current preference revision: {checked['code']}"
+                       + (". Next: choose a supported exact effort; native_default effort is not a new route"
+                          if checked["code"] == "effort_required" else "")
                        + (f"; reconsider at {checked['reconsider_at']} (no automatic start)"
                           if checked.get("reconsider_at") else ""))
     if revision_changed:
         raise PodError("preference_revision_stale",
-                       "Preferences changed before dispatch; reread them and record a fresh decision")
+                       "Preferences changed before dispatch. Next: reread pod config --json and rechoose at most twice before reporting the conflict")
     if reuse_of is not None:
         prior = state["admissions"].get(reuse_of)
         if (prior is None or prior["state"] not in ("bound", "closed")
                 or not binding_valid(prior.get("native_binding"))
                 or not prior["native_binding"]["terminalHandle"]):
-            raise PodError("reuse_unavailable", "Terminal reuse needs a settled, known prior attempt")
+            raise PodError("reuse_unavailable", "Terminal reuse needs a settled, known prior attempt. Next: read the prior exact native attempt and retain uncertainty until settlement")
         matches = [a for a in native["assignments"] if a.get("admission_id") == reuse_of]
         if len(matches) != 1 or matches[0].get("settled") is not True:
-            raise PodError("reuse_unavailable", "Prior attempt has not settled natively")
+            raise PodError("reuse_unavailable", "Prior attempt has not settled natively. Next: read the exact Dispatch settlement before terminal reuse")
         effective_route = prior["route_decision"].get("effective", {})
         if any(effective_route.get(key) in (None, "unknown")
                or requested[key] != effective_route[key] for key in ("agent", "model", "effort")):
@@ -1661,7 +1664,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         ctx = kernel_context(project, objective, state, authority.get("native"))
         settled = admission_id not in ctx["outstanding"]
         if not settled:
-            raise PodError("report_attempt_unverified", "The exact Dispatch has not settled natively")
+            raise PodError("report_attempt_unverified", "The exact Dispatch has not settled natively. Next: read its native settlement before consuming the report")
         report_value = observation.get("observation", {})
         report_identity = digest(observation)
         prior_report = row.get("report")

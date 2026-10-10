@@ -676,19 +676,6 @@ class RemainingDiagnosticsTests(ProductionCase):
         self.assertEqual(read(self.project,"objective")["checkpoint"]["candidate"],"folder-candidate")
 
 
-class GuidanceBudgetTests(unittest.TestCase):
-    def test_actual_guidance_has_effective_headroom_and_all_four_rules(self):
-        from pod.skill_validation import MAX_SKILL_WORDS,MAX_REFERENCE_WORDS,MAX_REFERENCE_WORDS_COMBINED
-        root=Path(__file__).resolve().parents[1] / "skills/pod"
-        self.assertLessEqual(len((root / "SKILL.md").read_text().split()),MAX_SKILL_WORDS-2)
-        references=[path.read_text() for path in (root / "references").glob('*.md')]
-        self.assertTrue(all(len(text.split()) <= MAX_REFERENCE_WORDS for text in references))
-        self.assertLessEqual(sum(len(text.split()) for text in references),MAX_REFERENCE_WORDS_COMBINED)
-        joined=" ".join(references)
-        for rule in ("governor-execute` directly","proof_scope","reuse: {from, ids}","per-assignment `placement`", "one predicate", "one table test"):
-            self.assertIn(rule,joined)
-
-
 class FinalDiagnosticShapesTests(ProductionCase):
     def test_cycle_refusal_lists_every_affected_dependent(self):
         rows=[self.criterion(),*[self.sub(f"S{i}",state="waiting",wait={"class":"dependency","referent":f"S{(i+1)%4}"}) for i in range(4)]]

@@ -1,8 +1,17 @@
 # Pod contributor instructions
 
-Read `docs/pod-spec.md`, the linked domain file for your change, and
-`docs/validation.md` before implementation. Inspect Git state
-and preserve unrelated work. Pod is a skill plus bounded Python helpers over Orca; Orca owns
+Apply every matching read-when row before implementation; a small diff is no
+exemption. Inspect Git state and preserve unrelated work.
+
+| Read when | Document or check |
+| --- | --- |
+| Changing behavior or a requirement | `docs/pod-spec.md` and the linked affected domain |
+| Editing skill text | The trigger list in `skills/pod/SKILL.md` and `python -m pod.skill_validation` |
+| Changing gates or CI | `docs/validation.md` |
+| Changing the installer | `docs/installation.md` and `docs/validation.md` |
+| Fixing outside these areas | Nothing extra |
+
+Pod is a skill plus bounded Python helpers over Orca; Orca owns
 native Runs, Tasks, Dispatches, environments and worker lifecycle, and project governance
 owns authority and acceptance.
 
@@ -42,14 +51,23 @@ A change to Pod's own admission, assurance or closure rules is reviewed and merg
 the mechanism installed before the change. Evidence the new mechanism produces about
 itself is recorded separately as self-hosting evidence and never substitutes for that review.
 
-Run focused tests during development and the gates in `docs/validation.md` at milestone
-boundaries. Missing live Orca, model or provider evidence must remain unavailable or
+Complete requested behavior with requirement/scenario/coverage agreement, passing change-class
+and applicable milestone gates from `docs/validation.md`, a fresh independent final audit
+with no open required correction, and a candidate-bound report before claiming completion. Missing live Orca, model or provider evidence must remain unavailable or
 NOT_RUN. Do not weaken a check or fabricate compatibility. Removing a requirement removes
 its scenario and coverage row in the same change.
 
 Keep README.md approachable and follow the editorial structure of
 https://github.com/obra/superpowers/blob/main/README.md with original Pod wording. Document
 only implemented behaviour. Keep detailed contracts in the linked documents.
+
+Local test suites and `tools/gates.py` may run without asking, using fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` and
+`POD_CACHE_HOME` in disposable task storage. Installer trials may also run without asking, using a truly scrubbed
+fresh temporary home: every installer base-directory variable (`HOME`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+`POD_CONFIG_HOME`, `POD_STATE_HOME`, `POD_CACHE_HOME`, `ZDOTDIR`) is contained there or unset, and PATH
+cannot select the real Pod launcher. These permissions cover only that process; never affect real
+launchers, skills, rc files, data, config or state.
 
 Fixture execution uses disposable projects; existing host and ordinary project trials are
 read-only. No production or provider mutation, and no package or release publication.

@@ -39,7 +39,7 @@ Pod reads an issue completely before using it as scope. It checks that the issue
 4. Let the coordinator do simple work directly and delegate bounded independent assignments only when useful. Workers follow Orca's native launch path and your setting for new agent tabs. `pod status` reports placement and any native discoverability warning.
 5. Review the local checks, independent review, hosted CI, and project acceptance as separate evidence. Pod reports remaining gates and uncertain native work instead of assuming success.
 
-For persistent issue-backed work, the [Pod Execution Spec reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/execution-spec.md) gives a readable format with numbered Proof of Done items. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
+For persistent issue-backed work, the [Issue intake reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/issue-intake.md) explains issue intake; its [PES authoring template](https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md) gives a readable format with numbered Proof of Done items. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
 
 ## Plan, direct work, and continuation
 
@@ -64,8 +64,6 @@ The coordinator chooses a suitable enabled route and an exact effort for each as
 
 With the default `refresh: automatic`, opening the workspace refreshes public model data in the background when it is missing or at least a day old. `pod models refresh` refreshes explicitly, `pod models refresh --check` validates and compares without saving, and `pod models status` diagnoses sources and the cache offline. Set `refresh: manual` to stop automatic network access. Press `R` to refresh now and see AA rows added, changed and removed. Newly discovered and unsupported observations appear in the default view with clear labels; `o` cycles filters, including supported routes only. A refresh never changes your preferences, and an update leaves newly supported routes not set until you enable them.
 
-When you update from 0.6.x, Pod keeps your preference file unchanged and asks for a route setup before new delegation. Open `pod` in a terminal to review the proposed routes and notes, choose an exact effort for an earlier pin or clear it, and confirm; the original stays next to it as `config.yaml.pod-v1`. Sonnet 5.5 and GPT-6.1 Sol are not enabled from your earlier Sonnet 5 or GPT-6 Sol choices.
-
 Temporary readiness failures remain local observations with unknown cause. Pod honors native retry-after or a 60-second reconsideration point; a later coordinator decision can retry, while expiry itself starts nothing. Preferences and the pin stay unchanged.
 
 ## Delivery and cleanup
@@ -78,7 +76,7 @@ For managed remote actions, `governor-execute` admits and performs the supported
 
 ## Troubleshooting
 
-`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, cached model observations, and available Orca capability without starting a worker or fetching anything. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. If Pod cannot verify native settlement, for example after an Orca runtime change, open assignments are shown as unverified rather than active, with the failed read and both runtimes. The next mutation rebinds an objective whose Run, coordinator and workers are unchanged, and asks for your decision when it cannot tell. When a Run has several objectives, status lists choices instead of picking one. A missing or invalid preference file leaves no eligible routes; use `pod config edit` to correct it. A preference file from 0.6.x needs the route setup described above before new delegation.
+`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, cached model observations, and available Orca capability without starting a worker or fetching anything. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. If Pod cannot verify native settlement, for example after an Orca runtime change, open assignments are shown as unverified rather than active, with the failed read and both runtimes. The next mutation rebinds an objective whose Run, coordinator and workers are unchanged, and asks for your decision when it cannot tell. When a Run has several objectives, status lists choices instead of picking one. A missing or invalid preference file leaves no eligible routes; use `pod config edit` to correct it. For preference upgrade setup, see [installation](docs/installation.md#updating-and-recovery).
 
 If Orca reports the previous coordinator's handle stale or gone, `pod status --objective ID` may show `handoff_available`. Pod asks one plain question to make the current terminal the objective coordinator. With your exact confirmation it records a pending handoff before rebinding the existing Run, then verifies and completes it; a lost response can resume without a second rebind. Work is preserved, and a manual `run-use` cannot establish handoff lineage. Status names any blocking identity, live coordinator or shared Run. A closed peer on the same Run can also hold handoff when its retained REUSE changed definition and the original scope was never recorded. Ordinary work remains available; status names the unverifiable peer, and confirmation cannot override this hold.
 
@@ -108,7 +106,7 @@ Run `pod update` to fetch the current `main` bundle through the same staged inst
 
 ## Contributing
 
-Read [AGENTS.md](AGENTS.md), the [specification](docs/pod-spec.md), and the [validation gates](docs/validation.md). The root `VERSION` is the only authored product version. Run the full offline and PTY gates before proposing a change.
+Start with [AGENTS.md](AGENTS.md) for contributor reading triggers and completion criteria. The root `VERSION` is the only authored product version.
 
 ## License
 

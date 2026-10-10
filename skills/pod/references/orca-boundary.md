@@ -1,56 +1,11 @@
-# The Orca boundary
+# Admission and supervision
 
-Use Orca's installed guide for runtime operations and cleanup; Pod adds no
-lifecycle journal.
+Before delegation load Orca's installed orchestration guide. Freeze the outcome packet and record agent, model, exact effort, context `native_default` and reason; use installed `pod internal admission --input FILE`. Helpers validate rather than choose routes. Other starts use only documented Orca launch preferences. The logical ceiling defaults to two, allows 0–8, and admits only current unsatisfied obligations; `capacity` waits require the ceiling.
 
-## Pod admission
+Answer routine questions through Orca; escalate worker owner-intent questions; ask plainly. Workers use Orca's agent-tab setting. Preserve the report, then follow native Delivery acknowledgment and release order promptly. Reuse requires an immediate supported follow-up. Keep selected models after faster-model advisories; use supported Orca dismissal. Informational warnings need no response. Check exact objective workers before final reporting.
 
-Admission serializes logical reservations. A mapped packet serves current
-unsatisfied obligations with role and boundary; its row atomically activates
-them and refuses overlapping ownership. It validates coordinator authority,
-packet, placement, sources, version, eligibility, constraints, route and
-ceiling. A changed choice refuses
-`preference_changed` without a write. Later edits affect later starts.
+Report Task/Dispatch, worktree, terminal/tab and native placement warnings. Background/discoverability observations prove neither rendering nor focus; those need UI evidence. Diagnose missing tabs with the existing worker. Missing attention proves nothing; invent no visibility flag. Focus needs supported behavior and user request. Retain protected/uncertain resources.
 
-Exact native settlement frees the logical slot even with a retained terminal. Reserved and unresolved requests remain outstanding.
+Catalog limits prove no effective context. Requested settings are not effective proof: missing model/effort stays unknown; mismatch blocks acceptance. Orca has no per-worker context selector; omit its flag. If context is inadequate, narrow/decompose. Missing launch capability blocks delegation while safe direct work remains available.
 
-Normal workers use native worker-start.
-Report Task/Dispatch, worktree, terminal/tab references and native placement
-warnings through status/readback. `surface: background` and discoverability
-warnings describe native placement; terminal presence/absence proves neither
-rendering nor focus. Diagnose missing tabs with the existing worker.
-`pod status` shows Orca attention per assignment; a missing "Needs you" proves
-nothing; ask owner questions plainly. Invent no visibility flag. Focus requires
-supported behavior and user request. Retain protected/uncertain resources.
-
-Orca's documented effect-free refusals `task_not_found`, `task_not_startable`
-and `inject_rejected` record `deferred` with no binding or blind retry.
-`runtime_error`, unknown codes and malformed, lost or partial-effect receipts
-stay unresolved until exact native request and worker readback settle them.
-Orca issues recovery UUIDs.
-Completed/absent diagnosis is read-only. Pending replay preserves
-its original request and checks authority, runtime, placement, issue body and
-checkpoint core.
-
-Terminal reuse requires a settled prior attempt with a known
-terminal, copies its effective route and rechecks eligibility and pin. Native
-`worker-start --terminal` carries no model or effort flag. Other starts use only Orca's documented launch preferences,
-which only delegation requires.
-
-Requested/effective model and effort differ. Missing values stay `unknown`; an exact bound attempt with a mismatch is marked
-`route_mismatch` and blocks acceptance. Orca has no per-worker
-context selector; omit the context flag and record `native_default`. Do not
-write provider settings, automate provider prompts or wrap direct APIs.
-
-## Private state
-
-`pod-context/v4` stores compact `pod-admission/v4` reservations (`reserved`,
-`bound`, `unresolved`, `closed`, `deferred`), checkpoints, source rejections and
-interventions. `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` identify
-changed shapes. A record in another schema blocks only its objective and is
-reported, never converted. Status and doctor list older objectives; native
-workers remain Orca's authority.
-
-New admissions and Governor mutations refuse `installed_version_changed`
-until skill reload and a fresh Pod-stamped checkpoint. Recovery is exempt.
-On continuation, read native state first and retain the next safe action.
+Do not mirror native account state, write provider settings, automate provider prompts, invent receipt fields or wrap direct APIs. Supported Orca advisory dismissal and recognized Codex update opt-out remain bounded exceptions; use recovery guidance for the latter.

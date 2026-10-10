@@ -146,7 +146,7 @@ Type: B · Scenarios: [A176](#a176), [A177](#a177)
 
 Optimize time to a verified result, not utilization or worker count. Re-evaluate at transitions; dispatch only ready, distinct, time-saving work. Once a candidate is frozen, run local gates and same-candidate read-only review concurrently when useful; acceptance requires both. Governor validation may overlap that review, while release waits. Waiting is valid; spare capacity creates no duty to dispatch, and lean is never a one-worker rule.
 
-Corrections use ordinary direct-work/delegation judgment and current eligible pool or pin. Their substantive briefs name the failed rule, alternate entrypoints, supported older records and status/wait consumers, with focused related-case regressions; when a defect class recurs in delta review, state the violated invariant as one predicate and cover sibling states in one table test. Independent and delta review remain required.
+Corrections use ordinary direct-work/delegation judgment and current eligible pool or pin. Their substantive briefs name the failed rule, alternate entrypoints, supported older records and status/wait consumers, with focused related-case regressions. Independent and delta review remain required.
 
 ## Acceptance scenarios
 

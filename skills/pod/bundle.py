@@ -11,9 +11,10 @@ import yaml
 from .errors import PodError
 
 BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agents/openai.yaml", "scripts/pod.py",
-               "references/execution-spec.md", "references/planning.md", "references/models.md",
+               "references/issue-intake.md", "references/planning.md", "references/models.md",
                "references/orca-boundary.md", "references/verification.md",
-               "references/governor.md")
+               "references/governor.md", "references/pes-template.md",
+               "references/recovery.md", "references/cleanup.md")
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py", "cli.py", "config.py", "context.py",
                   "errors.py", "github.py", "gitio.py", "handoff.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py",
                   "obligations.py", "observations.py", "operations.py", "orca.py", "placement.py", "records.py",

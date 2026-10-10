@@ -1,3 +1,3 @@
 interface:
-  display_name: Pod
-  short_description: "Coordinate a pod of Orca-native workers"
+  display_name: "Pod"
+  short_description: "Deliver an objective with supervised Orca workers"
