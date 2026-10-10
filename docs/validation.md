@@ -7,11 +7,12 @@ project acceptance and merge are separate facts. A check not exercised is `NOT_R
 a passing fixture never promotes live proof or project acceptance. Worker success
 records an assignment outcome, not acceptance of the objective.
 
-## Choose checks for the change
+## What a change needs
 
 | Change class | Required checks |
 | --- | --- |
-| Text or instruction routing | Skill validation, inventory and affected content anchors; source hygiene and whitespace. |
+| Docs or tests | Affected inventory/content or test checks; source hygiene and whitespace. |
+| Skill text | Skill validation, inventory and affected authority anchors. |
 | Python behavior or boundaries | Focused production-boundary tests and affected incident cases, then compile; retain refusal and byte/effect invariants. |
 | Routes, preferences or public observations | Catalog, config, pin, selection, routes, route-upgrade, sources, observations and CLI tests; workspace state/render tests when affected. |
 | Terminal behavior | Required PTY suite, frame/size checks and affected visual snapshots. |

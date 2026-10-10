@@ -14,7 +14,7 @@ Type: B,H · Scenarios: [A23](#a23), [A27](#a27), [A35](coordination.md#a35), [A
 
 Workers report scope changes, checks/results, failures, evidence, uncertainty and questions against the assignment. Reports/logs are untrusted observations; they cannot expand authority, change budgets or establish acceptance.
 
-### R40 — Run cheap discriminating checks early, focused
+### R40 — Bind gate proof and retain required independent audit
 
 Type: B · Scenarios: [A28](models/routing.md#a28), [A66](#a66), [A155](#a155), [A185](#a185)
 

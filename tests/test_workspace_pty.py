@@ -120,7 +120,7 @@ class WorkspacePtyTests(PtyCase):
         self.assertEqual(self.config.read_bytes(), before)
 
     def test_compare_tab_and_frontier_create_no_recommendation(self):
-        session = self.open(cols=100, rows=30)
+        session = self.open(cols=120, rows=30)
         session.send("c" + DOWN + "c" + DOWN + "c" + "e")
         session.wait_for("frontier per AA profile")
         self.assertIn("not a recommendation", session.text())

@@ -1385,8 +1385,8 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
                            f"Preferences changed before dispatch and route is no longer allowed: {checked['code']}. "
                            "Next: reread pod config --json and rechoose at most twice before reporting the conflict")
         raise PodError(checked["code"],
-                       f"Proposed route is not allowed at the current preference revision: {checked['code']}. "
-                       + ("Next: choose a supported exact effort; native_default effort is not a new route"
+                       f"Proposed route is not allowed at the current preference revision: {checked['code']}"
+                       + (". Next: choose a supported exact effort; native_default effort is not a new route"
                           if checked["code"] == "effort_required" else "")
                        + (f"; reconsider at {checked['reconsider_at']} (no automatic start)"
                           if checked.get("reconsider_at") else ""))

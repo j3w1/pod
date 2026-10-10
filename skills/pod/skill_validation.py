@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+from urllib.parse import unquote, urlsplit
 
 from .bundle import (BUNDLE_FILES, BUNDLE_TEXT, MAX_SKILL, bundle_root, canonical,
                      frontmatter, installed_files, version)
@@ -62,8 +63,8 @@ def _check_metadata(metadata: dict) -> None:
             or "Use when" not in description or "\n" in description):
         raise PodError("invalid_skill", "Skill description must contain Use when within 250 characters")
     compatibility = metadata.get("compatibility")
-    if (not isinstance(compatibility, str) or len(compatibility) > 500
-            or not compatibility.strip() or "\n" in compatibility):
+    if compatibility is not None and (not isinstance(compatibility, str) or len(compatibility) > 500
+                                      or not compatibility.strip() or "\n" in compatibility):
         raise PodError("invalid_skill", "Skill compatibility must be one plain line")
     license_name = metadata.get("license")
     if license_name is not None and (not isinstance(license_name, str) or len(license_name) > 200):
@@ -87,6 +88,19 @@ def _check_version(root: Path) -> None:
         raise PodError("invalid_skill", "The bundle VERSION is unreadable") from exc
     if re.fullmatch(r"\d+\.\d+\.\d+\n", text) is None:
         raise PodError("invalid_skill", "VERSION must hold one MAJOR.MINOR.PATCH line")
+
+
+def _cross_reference(data: str) -> bool:
+    """Catch inline and definition links, including extensionless reference targets."""
+    targets = re.findall(r"\]\(\s*<?([^\s)>]+)", data)
+    targets += re.findall(r"(?m)^\s{0,3}\[[^]\n]+\]:\s*<?([^\s>]+)", data)
+    stems = {Path(name).stem for name in REFERENCES}
+    for target in targets:
+        path = unquote(urlsplit(target).path).rstrip("/")
+        basename = path.rsplit("/", 1)[-1]
+        if basename.removesuffix(".md") in stems or path.endswith(".md"):
+            return True
+    return False
 
 
 def _check_body(root: Path, text: str, body: str) -> dict[str, int]:
@@ -120,7 +134,7 @@ def _check_body(root: Path, text: str, body: str) -> dict[str, int]:
         counts[name] = words
         if words > MAX_REFERENCE_WORDS:
             raise PodError("invalid_skill", f"{name} exceeds its word budget")
-        if re.search(r"\]\([^)]*\.md(?:[?#][^)]*)?\)", data):
+        if _cross_reference(data):
             raise PodError("invalid_skill", f"{name} must not link another reference")
         for pattern, described in FORBIDDEN_FORMS:
             if pattern.search(data):

@@ -1,4 +1,4 @@
-# Proof, review and REUSE
+# Proof
 
 Bind proof to obligation, final candidate, sources, policy, dependencies, environment, command, time and reviewer attempt. Declare non-assurance `proof_scope` at intake; assurance uses reviewed scope. Candidate movement requires explicit `reuse: {from, ids}` for unaffected obligations with Git delta rechecked at later moves. Changed bindings reopen proof; project rules govern reuse, preferences do not change Governor candidates.
 

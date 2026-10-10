@@ -1,4 +1,4 @@
-# Worktree and branch cleanup
+# Cleanup
 
 `internal cleanup-plan` is read-only and objective-scoped: it shows integrated, merged remote head, unique/protected resources, dirty data, stashes, other worktrees, refs and terminals.
 

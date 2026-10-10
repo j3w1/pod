@@ -61,8 +61,8 @@ Keep README.md approachable and follow the editorial structure of
 https://github.com/obra/superpowers/blob/main/README.md with original Pod wording. Document
 only implemented behaviour. Keep detailed contracts in the linked documents.
 
-Local gates may use fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` and
-`POD_CACHE_HOME` in disposable task storage. Installer trials may use a truly scrubbed
+Local test suites and `tools/gates.py` may run without asking, using fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` and
+`POD_CACHE_HOME` in disposable task storage. Installer trials may also run without asking, using a truly scrubbed
 fresh temporary home: every installer base-directory variable (`HOME`, `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
 `POD_CONFIG_HOME`, `POD_STATE_HOME`, `POD_CACHE_HOME`, `ZDOTDIR`) is contained there or unset, and PATH

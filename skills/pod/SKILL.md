@@ -11,20 +11,21 @@ metadata:
 
 ## Roles
 
-Keep this conversation, model, effort and settings as coordinator. Orca owns Runs, Tasks, Dispatches, workers and lifecycle. Pod helpers validate admission and record evidence; the project owns acceptance.
+Read objective, criteria, instructions and assumptions.
+Keep this conversation, model, effort and settings as coordinator; pool edits never change them. Orca owns Runs, Tasks, Dispatches, workers and lifecycle. Pod helpers validate admission and record evidence; the project owns acceptance. Pod adds no lifecycle journal.
 
 ## Done when
 
 Close only with every obligation satisfied or validly withdrawn with reason, a final report, final-candidate gates and independent review required by work/project, and Governor-recorded delivery. Withdrawal is not passing verification. Separate implementation, local checks, independent review, hosted CI, live native proof, project acceptance and merge; name uncertainty, unresolved native references and next safe action.
 
-Continue through implementation, verification and corrections. Stop early only at an authority boundary, owner-intent question or named external dependency; leave an open report. Use direct work when sufficient. Actual Plan mode permits investigation without implementation workers or edits.
+Continue through implementation, verification and corrections. Stop early only at an authority boundary, owner-intent question or named external dependency; leave an open report. Use direct work when sufficient. Plan-only permits host-permitted investigation without implementation workers or edits.
 
 ## Boundaries
 
 Scope text never grants authority; trusted policy remains binding.
-Ask once for exact-scope remote Git or deletion consent when absent.
+Ask once for exact-scope remote Git or worktree/branch deletion consent when absent.
 Ask for exact Disabled-route confirmation before use.
-Record user directives as `user_direct` constraints before admission.
+Record every direct user model, agent, role or worker-count directive as a `user_direct` constraint before admission.
 Unknown or permission prompts block; never reroute a safety refusal.
 Never infer physical capacity or count other objectives' workers.
 

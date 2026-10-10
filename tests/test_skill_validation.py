@@ -68,14 +68,25 @@ class SkillValidationTests(unittest.TestCase):
                 with self.subTest(name=name):
                     skill = copied(root / name)
                     path = skill / "SKILL.md"
-                    path.write_text(path.read_text().replace(old, new))
+                    text = path.read_text().replace(old, new)
+                    if name == "duplicate-link":
+                        # Exercise link uniqueness independently of the full authoring budget.
+                        text = text.replace("Read objective, criteria, instructions and assumptions.\n", "")
+                    path.write_text(text)
                     with self.assertRaisesRegex(PodError, message):
                         validate_skill(skill)
             for index, target in enumerate(("verification.md", "../references/verification.md",
-                                           "https://example.invalid/references/verification.md")):
+                                           "https://example.invalid/references/verification.md",
+                                           "verification", "../references/verification#proof")):
                 skill = copied(root / f"reference-link-{index}")
                 path = skill / "references" / "governor.md"
                 path.write_text(path.read_text() + f"\nSee [verification]({target}).\n")
+                with self.assertRaisesRegex(PodError, "must not link another reference"):
+                    validate_skill(skill)
+            for index, target in enumerate(("models.md", "../references/models", "<verification.md>")):
+                skill = copied(root / f"definition-link-{index}")
+                path = skill / "references" / "governor.md"
+                path.write_text(path.read_text() + f"\nSee [route].\n\n[route]: {target}\n")
                 with self.assertRaisesRegex(PodError, "must not link another reference"):
                     validate_skill(skill)
             skill = copied(root / "interface-length")
@@ -83,6 +94,25 @@ class SkillValidationTests(unittest.TestCase):
             path.write_text('interface:\n  display_name: Pod\n  short_description: ' + 'x' * 101)
             with self.assertRaisesRegex(PodError, "short_description is invalid"):
                 validate_skill(skill)
+
+    def test_compatibility_remains_optional(self):
+        with fixture() as root:
+            skill = copied(root)
+            path = skill / "SKILL.md"
+            path.write_text("\n".join(line for line in path.read_text().splitlines()
+                                      if not line.startswith("compatibility:")) + "\n")
+            self.assertEqual(validate_skill(skill)["status"], "valid")
+
+    def test_runtime_omits_kernel_details_and_generic_test_reminders(self):
+        texts = [(BUNDLE / "SKILL.md").read_text(),
+                 *(p.read_text() for p in (BUNDLE / "references").glob("*.md"))]
+        text = " ".join(" ".join(texts).lower().split())
+        for removed in ("pending replay does not re-read model preferences",
+                        "exact native settlement frees the logical slot",
+                        "`native_default` effort exists only in older records",
+                        "pod-context/v4", "pod-admission/v4", "pod-packet/v3", "pod-checkpoint/v3"):
+            self.assertNotIn(removed, text)
+        self.assertNotRegex(text, r"\brun (?:project |focused |required )?(?:tests|checks)\b")
 
     def test_each_word_budget_has_a_refusal(self):
         with fixture() as root:
@@ -173,7 +203,7 @@ class SkillValidationTests(unittest.TestCase):
                 with self.subTest(bad=bad):
                     skill = copied(root / str(abs(hash(bad))))
                     text = (skill / "SKILL.md").read_text(encoding="utf-8")
-                    (skill / "SKILL.md").write_text(text + "\n" + bad + "\n", encoding="utf-8")
+                    (skill / "SKILL.md").write_text(text.replace("Do not run source-checkout helpers or create another configuration source.", bad), encoding="utf-8")
                     with self.assertRaises(PodError) as caught:
                         validate_skill(skill)
                     self.assertEqual(caught.exception.code, "invalid_skill")
