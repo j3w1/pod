@@ -77,18 +77,46 @@ class OperationFieldRefusalTests(unittest.TestCase):
                     self.assertIn(name, message)
                 self.assertEqual(envelope["error"]["detail"],
                                  {"operation": operation, "record": record, "missing": [dropped],
-                                  "unsupported": ["unexpected_field"], "omitted": 0})
+                                  "unsupported": ["unexpected_field"], "omitted": 0,
+                                  "accepted": envelope["error"]["detail"]["accepted"],
+                                  "optional": envelope["error"]["detail"]["optional"]})
+                shape = envelope["error"]["detail"]
+                self.assertEqual(set(shape["accepted"]) - set(shape["optional"]), set(required))
+                self.assertEqual(shape["accepted"], sorted(shape["accepted"]))
                 self.assertNotIn(SENTINEL, stdout + stderr)
 
     def test_non_object_names_only_the_expected_type(self):
         code, stdout, stderr = self.invoke("map", [SENTINEL])
         error = json.loads(stdout)["error"]
         self.assertEqual((code, error["code"]), (1, "invalid_request"))
-        self.assertEqual(error["detail"], {"operation": "map", "record": "request", "expected": "object"})
+        self.assertEqual(error["detail"], {"operation": "map", "record": "request", "expected": "object",
+                                         "accepted": ["objective", "project"], "optional": []})
         self.assertNotIn(SENTINEL, stdout + stderr)
 
 
 class ExactRefusalTests(unittest.TestCase):
+    def test_constant_shape_names_are_complete_through_both_refusal_paths(self):
+        fields = {f"field{index:02d}" for index in range(24)} | {"clean\u202ename"}
+        required = {"field00", "field01"}
+        expected = sorted({name.replace("\u202e", "") for name in fields})
+        for check in (exact, _exact):
+            for value in ({"unexpected": SENTINEL}, None):
+                with self.subTest(check=check.__name__, value=value), self.assertRaises(PodError) as caught:
+                    check(value, fields, required, "record") if check is _exact else check(value, fields, required, name="record")
+                detail = caught.exception.detail
+                shape = detail["referent"] if check is _exact else detail
+                self.assertEqual(shape["accepted"], expected)
+                self.assertEqual(shape["optional"], [name for name in expected if name not in required])
+                self.assertNotIn(SENTINEL, str(caught.exception) + json.dumps(detail))
+                self.assertNotIn("\u202e", str(caught.exception))
+
+    def test_large_real_obligation_shape_names_every_optional_field(self):
+        from pod.obligations import _structure, _OBLIGATION_FIELDS
+        with self.assertRaises(PodError) as caught:
+            _structure({"wrong": SENTINEL})
+        referent = caught.exception.detail["referent"]
+        self.assertEqual(set(referent["accepted"]), _OBLIGATION_FIELDS)
+        self.assertEqual(set(referent["optional"]), _OBLIGATION_FIELDS - {"id", "kind", "provenance"})
     def test_echoed_names_are_bounded_and_stripped_of_control_characters(self):
         value = {f"extra{index:02d}": SENTINEL for index in range(MAX_NAMED_FIELDS + 3)}
         value["bad\x1b[31m‮name" + "x" * 200] = SENTINEL

@@ -2,7 +2,7 @@
 
 Optimize for a verified result: expected total work, cost, delay and rework govern, not next-call price. Trivial direct work needs no worker; strongly testable work favors efficiency; high-risk judgment needs proportionate margin, not automatic max; blocking latency favors responsiveness; recurring tasks favor proven efficient routes. Weigh ambiguity, failure cost, breadth, tools and context. Missing capability disqualifies; narrow/decompose inadequate packets.
 
-Use `pod models --json`, the smallest existing form with guidance and AA comparisons after suitability; text lacks guidance. Missing metrics never block; no score or winner decides. A route no better on any selected comparable dimension and worse on one normally needs an assignment-specific reason.
+Use `pod models --json --eligible-only` for eligible routes with guidance and AA comparisons after suitability. Missing metrics never block; no score or winner decides. A route no better on any selected comparable dimension and worse on one normally needs an assignment-specific reason.
 
 Without config errors, a pin controls every Pod-routed role/correction at exact model and effort, overriding repository model rules; it excludes coordinator, direct work and host-created helpers. No delegation just to apply a pin. Pin limits preserve direct user constraints, host restrictions, review independence, tool permissions and spending; report pin conflicts. Otherwise use Preferred when suitable; Preferred overrides need material task-specific reasons, including insufficient margin, capability/context, unavailability, disproportionate cost, unsuitable latency or useful review diversity.
 

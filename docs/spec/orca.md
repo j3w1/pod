@@ -60,7 +60,7 @@ Worker reuse, retention, release and terminal/resource disposition are explicit 
 
 Type: I,H · Scenarios: [A31](coordination.md#a31), [A35](coordination.md#a35), [A39](../pod-spec.md#a39), [A69](#a69), [A96](#a96), [A132](#a132), [A161](#a161), [A226](#a226)
 
-Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`, `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v4` contracts. Another schema is reported and blocks only its objective (R90); nothing converts it. Objective context, Governor and native-start observation files use compact canonical JSON at unchanged byte limits; cache formatting is unchanged. Indented older records read unchanged. Oversize refusals report current/proposed sizes, limit and largest sections before any write. Optional fields stay within existing schemas without conversion; genuine 0.7.1 proof at full-id candidates remains valid. Keep native ids as references, never copied lifecycle state, and keep private data out of Git.
+Persist compact `pod-context/v4` policy and evidence with the `pod-admission/v4`, `pod-packet/v3`, `pod-checkpoint/v3` and `pod-cli/v5` contracts. Another schema is reported and blocks only its objective (R90); nothing converts it. Objective context, Governor and native-start observation files use compact canonical JSON at unchanged byte limits; cache formatting is unchanged. Indented older records read unchanged. Oversize refusals report current/proposed sizes, limit and largest sections before any write. Optional fields stay within existing schemas without conversion; genuine 0.7.1 proof at full-id candidates remains valid. Keep native ids as references, never copied lifecycle state, and keep private data out of Git.
 
 ### R45 — Recovery selects the objective and reads
 

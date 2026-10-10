@@ -23,7 +23,7 @@ class StatusProjectionTests(unittest.TestCase):
              patch("pod.cli.current_run", return_value={"run": None}):
             result = execute(parser().parse_args(["status", "--json"]), Path("/fixture"))
         self.assertEqual(result, {
-            "schema": "pod-cli/v4", "status": "selection_required", "run": None,
+            "schema": "pod-cli/v5", "status": "selection_required", "run": None,
             "bundle_identity": {"running": {"version": "0.6.4", "bundle_digest": "d"},
                                 "checkpoint": None, "drift": None},
             "preferences": {key: value for key, value in preferences.items() if key != "routes"},

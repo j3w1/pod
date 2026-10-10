@@ -77,6 +77,7 @@ MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "gove
 
 
 def refuse(code: str, detail: str, message: str, *, next_action: str | None = None,
+           accepted: set[str] | None = None, optional: set[str] | None = None,
            **referent: Any) -> PodError:
     """One boundary refusal naming its detail, referent and next safe action."""
     actions = {
@@ -95,6 +96,10 @@ def refuse(code: str, detail: str, message: str, *, next_action: str | None = No
             return [safe(item) for item in value[:8]]
         return value
     referent = safe(referent)
+    # Shape vocabulary comes from code, unlike the bounded caller referents above.
+    if accepted is not None:
+        referent.update(accepted=_field_names(accepted, complete=True)[0],
+                        optional=_field_names(optional or set(), complete=True)[0])
     named = ", ".join(f"{key}={value}" for key, value in sorted(referent.items()))
     text = f"{detail}: {message}" + (f" ({named})" if named else "") + f". Next: {action}"
     return PodError(code, text, {"detail": detail, "referent": referent, "next_action": action})
@@ -121,13 +126,14 @@ def _exact(value: Any, fields: set[str], required: set[str], name: str, *,
            code: str = "obligation_invalid", obligation: str | None = None) -> dict:
     if not isinstance(value, dict) or set(value) - fields or required - set(value):
         if not isinstance(value, dict):
-            raise refuse(code, "malformed", f"{name} must be a JSON object", record=name, expected="object", **({"obligation": obligation} if obligation is not None else {}))
+            raise refuse(code, "malformed", f"{name} must be a JSON object", record=name, expected="object", accepted=fields, optional=fields-required, **({"obligation": obligation} if obligation is not None else {}))
         missing, m = _field_names(required - set(value))
         unsupported, u = _field_names(set(value) - fields)
         known = obligation or value.get("id")
         referent = {"obligation": known} if isinstance(known, str) and _ID.fullmatch(known) else {}
         raise refuse(code, "malformed", f"{name} has missing or unsupported fields: missing {missing}; unsupported {unsupported}",
-                     record=name, missing=missing, unsupported=unsupported, omitted=m+u, **referent)
+                     record=name, missing=missing, unsupported=unsupported, omitted=m+u,
+                     accepted=fields, optional=fields-required, **referent)
     return value
 
 

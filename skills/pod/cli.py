@@ -39,6 +39,8 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("update", help="update the installed bundle")
     models = sub.add_parser("models", help="model routes and cached public observations")
     models.add_argument("--json", action="store_true")
+    models.add_argument("--eligible-only", action="store_true",
+                        help="limit models --json to eligible routes with guidance and observations")
     models_sub = models.add_subparsers(dest="models_command")
     refresh = models_sub.add_parser("refresh", help="fetch and promote public model observations")
     refresh.add_argument("--check", action="store_true", help="validate and compare without saving")
@@ -88,7 +90,7 @@ def _config(project: Path, *, edit: bool) -> dict:
     snapshot = load_config(project)
     projection = project_routes(project, preferences=snapshot, observations=NOT_READ)
     result.update({key: snapshot[key] for key in PREFERENCE_KEYS if key not in ("schema", "status")})
-    result.update({"schema": "pod-cli/v4", "preference_schema": snapshot["schema"],
+    result.update({"schema": "pod-cli/v5", "preference_schema": snapshot["schema"],
                    "preference_status": snapshot["status"],
                    "routes": [{key: row[key] for key in ("key", "agent", "model", "effort", "state",
                                                          "preferred", "pinned")}
@@ -169,7 +171,7 @@ def _doctor(project: Path) -> dict:
         installation_checks = {"error": str(exc)}
         receipt_identity = None
         drift = None
-    return {"schema": "pod-cli/v4", "status": "observed", "version": version(),
+    return {"schema": "pod-cli/v5", "status": "observed", "version": version(),
             "bundle": str(bundle_root()), "installation": installed,
             "bundle_identity": {"running": running, "receipt": receipt_identity, "drift": drift},
             "installed_version_drift": drift,
@@ -212,23 +214,30 @@ def _observation_status(preferences: dict) -> dict:
             "diagnostics": list(report.get("diagnostics") or [])[:16]}
 
 
-def _models(project: Path, action: str | None, *, check: bool = False) -> dict:
+def _models(project: Path, action: str | None, *, check: bool = False,
+            eligible_only: bool = False) -> dict:
     observations = _observations()
     if action == "refresh":
         result = observations.refresh(check=check)
-        return {"schema": "pod-cli/v4", "status": result["outcome"], "refresh": result}
+        return {"schema": "pod-cli/v5", "status": result["outcome"], "refresh": result}
     if action == "status":
         report = observations.status(setting=load_config(project)["refresh"])
-        return {"schema": "pod-cli/v4", "status": "observed", "observations": report}
+        return {"schema": "pod-cli/v5", "status": "observed", "observations": report}
     from .routes import project as project_routes
-    return {"schema": "pod-cli/v4", "status": "observed", "projection": project_routes(project)}
+    projection = project_routes(project)
+    if eligible_only:
+        eligible = set(projection["preferences"]["eligible"])
+        projection = {**projection, "filter": "eligible", "unmapped": [],
+                      "routes": [row for row in projection["routes"] if row["key"] in eligible]}
+    return {"schema": "pod-cli/v5", "status": "observed", "projection": projection}
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
     if args.command == "config":
         return _config(project, edit=getattr(args, "config_action", None) == "edit")
     if args.command in (None, "models"):
-        return _models(project, getattr(args, "models_command", None), check=getattr(args, "check", False))
+        return _models(project, getattr(args, "models_command", None), check=getattr(args, "check", False),
+                       eligible_only=getattr(args, "eligible_only", False))
     if args.command == "doctor":
         return _doctor(project)
     if args.command == "status":
@@ -321,7 +330,10 @@ def _exit_code(args: argparse.Namespace, result: dict) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    command_parser = parser()
+    args = command_parser.parse_args(argv)
+    if getattr(args, "eligible_only", False) and (not args.json or args.models_command is not None):
+        command_parser.error("--eligible-only requires models --json without a subcommand")
     if args.command == "update":
         from .installer import main as installer_main
         return installer_main(["--update"])
@@ -337,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = execute(args, Path.cwd())
     except PodError as exc:
-        result = {"schema": "pod-cli/v4", "status": "blocked",
+        result = {"schema": "pod-cli/v5", "status": "blocked",
                   "error": {"code": exc.code, "message": str(exc)}}
     if getattr(args, "json", False):
         print(json.dumps(result.get("projection", result) if args.command == "models"

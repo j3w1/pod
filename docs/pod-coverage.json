@@ -2076,7 +2076,8 @@
       ],
       "offline_test": [
         "tests.test_input_refusals.OperationFieldRefusalTests.test_every_operation_names_operation_record_and_both_fields_without_values",
-        "tests.test_input_refusals.OperationFieldRefusalTests.test_non_object_names_only_the_expected_type"
+        "tests.test_input_refusals.OperationFieldRefusalTests.test_non_object_names_only_the_expected_type",
+        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths"
       ],
       "status": "NOT_RUN"
     },
@@ -2089,7 +2090,8 @@
         "tests.test_input_refusals.ExactRefusalTests.test_acceptance_and_codes_are_unchanged",
         "tests.test_input_refusals.ExactRefusalTests.test_caller_supplied_error_keeps_obligation_refusals_unchanged",
         "tests.test_input_refusals.ExactRefusalTests.test_echoed_names_are_bounded_and_stripped_of_control_characters",
-        "tests.test_input_refusals.ExactRefusalTests.test_other_invalid_refusals_do_not_gain_an_operation"
+        "tests.test_input_refusals.ExactRefusalTests.test_other_invalid_refusals_do_not_gain_an_operation",
+        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths"
       ],
       "status": "NOT_RUN"
     },
@@ -2547,7 +2549,8 @@
         "tests.test_issue41.FinalDiagnosticShapesTests.test_disposition_exact_fields_are_named_without_values",
         "tests.test_issue41_corrections.RefusalCorrectionTests.test_nested_refusals_keep_known_obligation_and_hide_refused_values",
         "tests.test_issue41_corrections.RefusalCorrectionTests.test_review_record_siblings_keep_known_assurance_and_hide_refused_values",
-        "tests.test_issue41_corrections.RefusalCorrectionTests.test_kernel_operation_tags_preserve_codes_details_and_first_referents"
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_kernel_operation_tags_preserve_codes_details_and_first_referents",
+        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths"
       ],
       "status": "NOT_RUN"
     },
@@ -2851,6 +2854,35 @@
       "offline_test": [
         "tests.test_owner_handoff.CompatibilityTests.test_exact_native_allowlists"
       ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A251",
+      "required_evidence": [
+        "unit",
+        "installed_bundle",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_admission_sibling_states_keep_the_same_actual_recovery_request",
+        "tests.test_output_acknowledgements.GovernorAcknowledgementTests.test_execution_and_reconciliation_exceptions_are_exact_in_sibling_states",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_report_ingestion_drives_actual_disposition_and_preserves_exceptions",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_missing_verification_stays_visible_and_cannot_qualify_after_context_change",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_route_failure_acknowledgement_drives_exact_clear_and_readback_failure_is_successful",
+        "tests.test_output_acknowledgements.GovernorAcknowledgementTests.test_prepare_preflight_and_decision_keep_candidate_bindings",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_manual_continuity_acknowledgement_supports_existing_admission_recovery",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_owner_handoff_acknowledgement_drives_the_next_owned_checkpoint",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_real_invalidations_and_refusals_keep_their_details_and_bytes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A252",
+      "required_evidence": [
+        "unit",
+        "installed_bundle"
+      ],
+      "offline_test": "tests.test_cli.CliTests.test_eligible_json_preserves_exact_route_rows_and_offline_behavior",
       "status": "NOT_RUN"
     }
   ]

@@ -2,7 +2,7 @@
 
 Governor ALLOW/REUSE/DEFER never overrides project authority. Efficiency exceptions never lift authority or correctness. Mutation needs the existing owner and stable native current Run/coordinator/generation binding; missing proof permits direct work/read-only status. Establish/adopt through Orca; join only exact objective assignments.
 
-Group corrections in one delivery unit. `internal governor-prepare` names Tasks, branch, base, workflows and checks; freezes commit, tree, base, workflow digests, toolchain, environment and policy. Changed inputs open a generation; tracked dirt leaves it unfrozen. `governor-preflight` records configured checks; CI-triggering push is validation.
+Group corrections in one delivery unit. `internal governor-prepare` freezes candidate bindings; its acknowledgement supplies the next request. Changed inputs open a generation; tracked dirt leaves it unfrozen. `governor-preflight` records configured checks; CI-triggering push is validation.
 
 `governor-status` reads Governor state. Use `governor-execute` directly for push, PR update, workflow dispatch, rerun, diagnostic and cancellation. `governor` reserves caller execution: ALLOW permits, REUSE attaches work/proof, DEFER names hold. Gates, validation and read-only review may overlap on one frozen candidate; merge/release/deploy waits for valid results. Execute the bound commit; merge/release/deploy remain decide-only. Lost responses stay UNKNOWN; `governor-reconcile` reads provider state without resubmission.
 

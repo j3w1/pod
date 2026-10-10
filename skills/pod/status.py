@@ -166,7 +166,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
            worker_rows_fn=worker_rows) -> dict:
     preferences = load_config(project)
     running = running_identity()
-    result = {"schema": "pod-cli/v4", "status": "selection_required", "run": run,
+    result = {"schema": "pod-cli/v5", "status": "selection_required", "run": run,
               "bundle_identity": {"running": running, "checkpoint": None, "drift": None},
               "preferences": {key: preferences[key] for key in PREFERENCE_KEYS},
               "routes": project_routes(project, preferences=preferences, observations=NOT_READ)["summary"],

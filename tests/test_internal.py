@@ -35,7 +35,7 @@ class InternalErrorBoundaryTests(unittest.TestCase):
             exit_code = main(["source", "--input", "-"])
         self.assertEqual(exit_code, 1)
         self.assertEqual(json.loads(output.getvalue()),
-                         {"schema": "pod-cli/v4", "status": "blocked",
+                         {"schema": "pod-cli/v5", "status": "blocked",
                           "error": {"code": "internal_error", "message": "Internal helper failed (RuntimeError)"}})
         self.assertIn("Traceback", errors.getvalue())
 

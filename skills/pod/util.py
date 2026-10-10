@@ -166,12 +166,12 @@ MAX_NAMED_FIELDS = 8
 MAX_FIELD_NAME = 64
 
 
-def _field_names(names: set) -> tuple[list[str], int]:
-    """Sorted, control-stripped and truncated names; never a value."""
+def _field_names(names: set, *, complete: bool = False) -> tuple[list[str], int]:
+    """Sorted, control-stripped names; only caller vocabulary has a count bound."""
     cleaned = sorted({"".join(character for character in str(name)
                               if unicodedata.category(character) not in ("Cc", "Cf", "Cs"))[:MAX_FIELD_NAME]
                       for name in names})
-    return cleaned[:MAX_NAMED_FIELDS], max(0, len(cleaned) - MAX_NAMED_FIELDS)
+    return (cleaned, 0) if complete else (cleaned[:MAX_NAMED_FIELDS], max(0, len(cleaned) - MAX_NAMED_FIELDS))
 
 
 def exact(value: Any, fields: set[str], required: set[str] | None = None, *,
@@ -179,9 +179,11 @@ def exact(value: Any, fields: set[str], required: set[str] | None = None, *,
     if not isinstance(value, dict) or set(value) - fields or (required or set()) - set(value):
         if error is not None:
             raise error(name)
+        shape = {"accepted": _field_names(fields, complete=True)[0],
+                 "optional": _field_names(fields - (required or set()), complete=True)[0]}
         if not isinstance(value, dict):
             raise FieldRefusal("invalid_" + name, f"{name} must be a JSON object",
-                               {"record": name, "expected": "object"})
+                               {"record": name, "expected": "object", **shape})
         missing, missing_omitted = _field_names((required or set()) - set(value))
         unsupported, unsupported_omitted = _field_names(set(value) - fields)
         parts = [f"{label} {', '.join(names)}" + (f" (+{omitted} more)" if omitted else "")
@@ -191,7 +193,7 @@ def exact(value: Any, fields: set[str], required: set[str] | None = None, *,
         raise FieldRefusal("invalid_" + name,
                            f"{name} has missing or unsupported fields: {'; '.join(parts)}",
                            {"record": name, "missing": missing, "unsupported": unsupported,
-                            "omitted": missing_omitted + unsupported_omitted})
+                            "omitted": missing_omitted + unsupported_omitted, **shape})
     return value
 
 
