@@ -191,15 +191,21 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
             cleared, _ = case.invoke("route-failure", request)
             case.assertEqual(cleared["admission"]["failures"][-1]["cleared_by"], "user")
             before = case.stored_bytes(), case.effects()
-            with patch("pod.ledger.read", side_effect=PodError("unsafe_state", "unreadable")):
-                ack = internal.acknowledge("admission", case.owned(), raw)
-            case.assertEqual(ack["status"], "bound")
-            case.assertIn("internal map", ack["acknowledgement_warning"])
-            case.assertEqual((case.stored_bytes(), case.effects()), before)
+            for unavailable in (None, PodError("unsafe_state", "unreadable"), RuntimeError("unreadable")):
+                with case.subTest(unavailable=type(unavailable).__name__), patch("pod.ledger.read",
+                        side_effect=unavailable if isinstance(unavailable, Exception) else None, return_value=None):
+                    ack = internal.acknowledge("admission", case.owned(), raw)
+                case.assertEqual(ack["status"], "bound")
+                case.assertIn("internal map", ack["acknowledgement_warning"])
+                case.assertEqual(ack["admission"]["request_uuid"], raw["admission"]["request_uuid"])
+                case.assertEqual((case.stored_bytes(), case.effects()), before)
 
     def test_report_ingestion_drives_actual_disposition_and_preserves_exceptions(self):
-        for outcome, scope in (("succeeded", ["src"]), ("failed", ["src"]), ("succeeded", ["elsewhere"])):
-            with self.subTest(outcome=outcome, scope=scope), boundary() as case:
+        states = (("succeeded", ["src"]), ("failed", ["src"]), ("succeeded", ["elsewhere"]))
+        optionals = ({}, {"triage": None, "proposals": None}, {"triage": [], "proposals": []},
+                     {"triage": False, "proposals": ""})
+        for outcome, scope, optional in ((outcome, scope, optional) for outcome, scope in states for optional in optionals):
+            with self.subTest(outcome=outcome, scope=scope, optional=optional), boundary() as case:
                 case.intake(case.sub("S", boundary={"paths": ["src"]}))
                 frozen = case.packet(["S"], boundary={"paths": ["src"]})
                 started, _ = case.invoke("admission", case.owned(run="run", task="task", plan_revision="plan", packet=frozen))
@@ -211,7 +217,7 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
                           "failures": [] if outcome == "succeeded" else ["failed check"],
                           "evidence": [], "uncertainty": ["fixture only"], "questions": []}
                 request = {"project": str(case.project), "objective": "objective", "packet": frozen,
-                           "admission_id": admission["admission_id"], "report": report}
+                           "admission_id": admission["admission_id"], "report": report, **optional}
                 rows = [case.criterion(), case.sub("S", boundary={"paths": ["src"]})]
                 request["map"] = {"seq": started["next_seq"], "obligations": rows}
                 lean, raw = case.invoke("report", request)

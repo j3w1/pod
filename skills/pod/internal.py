@@ -595,8 +595,8 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
                                       ("assignment", "attempt", "candidate", "outcome")}
         acknowledgement["written"].update(
             admission_id=request["admission_id"],
-            findings=[row["finding"] for row in request.get("triage", [])],
-            proposals=[row["id"] for row in request.get("proposals", [])])
+            findings=[row["finding"] for row in (request.get("triage") or [])],
+            proposals=[row["id"] for row in (request.get("proposals") or [])])
         acknowledgement.update({key: observation[key] for key in ("failures", "uncertainty", "questions")})
     elif operation in {"admission", "route-failure"}:
         row = result["admission"] if operation == "admission" else result
@@ -640,7 +640,7 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
         from .ledger import read
         try:
             state = read(Path(request["project"]), request["objective"])
-        except (PodError, OSError):
+        except Exception:
             # A successful effect must never become a refusal because readback failed.
             state = None
         if state is None:
