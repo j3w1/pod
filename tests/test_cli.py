@@ -1,6 +1,7 @@
 import json
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import shutil
@@ -35,7 +36,10 @@ class CliTests(unittest.TestCase):
                 document['routes'] = {key: 'disabled' for key in keys}
                 path.write_text(yaml.safe_dump(document))
             current = path.read_bytes()
-            with self.subTest(state=state), patch('pod.observations.refresh') as fetch:
+            moment = datetime.now(timezone.utc)
+            with self.subTest(state=state), patch('pod.observations.refresh') as fetch, \
+                    patch('pod.routes.datetime', wraps=datetime) as clock:
+                clock.now.return_value = moment
                 full = execute(parser().parse_args(['models', '--json']), self.project)['projection']
                 lean = execute(parser().parse_args(['models', '--json', '--eligible-only']), self.project)['projection']
                 expected = [row for row in full['routes'] if row['key'] in full['preferences']['eligible']]

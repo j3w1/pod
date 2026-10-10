@@ -2872,7 +2872,12 @@
         "tests.test_output_acknowledgements.GovernorAcknowledgementTests.test_prepare_preflight_and_decision_keep_candidate_bindings",
         "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_manual_continuity_acknowledgement_supports_existing_admission_recovery",
         "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_owner_handoff_acknowledgement_drives_the_next_owned_checkpoint",
-        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_real_invalidations_and_refusals_keep_their_details_and_bytes"
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_real_invalidations_and_refusals_keep_their_details_and_bytes",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_and_constraint_acknowledgements_drive_actual_next_writes",
+        "tests.test_output_acknowledgements.GovernorAcknowledgementTests.test_classification_drives_correction_without_echoing_the_stored_row",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_triage_and_generated_proposal_ids_drive_real_adoption_and_replay",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_bindings_support_reload_without_echoing_future_stored_fields",
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_delivery_and_closure_acknowledgements_support_real_followup"
       ],
       "status": "NOT_RUN"
     },

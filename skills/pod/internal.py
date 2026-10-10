@@ -563,6 +563,11 @@ def run(operation: str, request: dict) -> dict:
     return {**result, "runtime_continuity": rebinds} if rebinds and isinstance(result, dict) else result
 
 
+_CHECKPOINT_ACK_FIELDS = ("schema", "criteria", "candidate", "plan_revision", "policy_revision",
+                          "objective_source", "worktree", "verification", "pod_version",
+                          "bundle_digest", "native_refs", "next_safe_action", "delivery")
+
+
 def acknowledge(operation: str, request: dict, result: dict) -> dict:
     """Project successful CLI writes; handlers and their stored values stay unchanged.
 
@@ -581,22 +586,27 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
         checkpoint = result["checkpoint"]
         acknowledgement = {"status": "recorded", "objective": request["objective"],
                            "context_revision": result["revision"],
-                           "checkpoint": {key: value for key, value in checkpoint.items()
-                                          if key not in {"obligations", "proposals", "observations",
-                                                         "rationale", "governance_sources"}},
+                           "checkpoint": {key: checkpoint[key] for key in _CHECKPOINT_ACK_FIELDS if key in checkpoint},
                            "written": {key: [row["id"] for row in checkpoint.get(key, [])]
                                        for key in ("obligations", "proposals")}}
+        if checkpoint.get("continuity"):
+            acknowledgement["checkpoint"]["continuity"] = {"binding": checkpoint["continuity"]["binding"]}
+        if checkpoint.get("closure"):
+            acknowledgement["checkpoint"]["closure"] = {key: checkpoint["closure"][key] for key in ("seq", "revision")}
+        if checkpoint.get("observations"):
+            acknowledgement["checkpoint"]["observations"] = {
+                key: checkpoint["observations"][key]
+                for key in ("inputs", "governance_stale", "policy_gone", "serialization", "churn")
+                if key in checkpoint["observations"]}
         if "report" in result:
             acknowledgement["report"] = result["report"]
     elif operation == "report":
         observation = result["observation"]
         acknowledgement.pop("observation")
-        acknowledgement["written"] = {key: observation[key] for key in
-                                      ("assignment", "attempt", "candidate", "outcome")}
-        acknowledgement["written"].update(
-            admission_id=request["admission_id"],
-            findings=[row["finding"] for row in (request.get("triage") or [])],
-            proposals=[row["id"] for row in (request.get("proposals") or [])])
+        acknowledgement["written"] = {**result["written"],
+                                      **{key: observation[key] for key in
+                                         ("assignment", "attempt", "candidate", "outcome")},
+                                      "admission_id": request["admission_id"]}
         acknowledgement.update({key: observation[key] for key in ("failures", "uncertainty", "questions")})
     elif operation in {"admission", "route-failure"}:
         row = result["admission"] if operation == "admission" else result

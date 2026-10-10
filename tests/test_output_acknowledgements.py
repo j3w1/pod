@@ -98,8 +98,8 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
             # The caller already owns the rows it supplied; it needs the new seq,
             # normalized candidate bindings and next action, not another full record.
             request = case.owned(value=case.core(obligations=rows, seq=first["next_seq"]))
-            legacy = case.owned(value=case.core(obligations=rows, seq=raw["checkpoint"]["seq"] + 1))
-            case.assertEqual(request, legacy)
+            original = case.owned(value=case.core(obligations=rows, seq=raw["checkpoint"]["seq"] + 1))
+            case.assertEqual(request, original)
             second, _ = case.invoke("checkpoint", request)
             case.assertEqual(second["seq"], first["seq"] + 1)
             case.assertEqual(second["revision"], first["revision"])
@@ -112,6 +112,55 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
             case.assertEqual(revoked["constraint"], {"id": "limit", "active": False})
             listed, full = case.invoke("constraint", case.owned(action="list"))
             case.assertEqual(listed, full)
+
+    def test_checkpoint_bindings_support_reload_without_echoing_future_stored_fields(self):
+        with boundary() as case:
+            rows = [case.criterion(), case.sub("S")]
+            request = case.owned(value=case.core(obligations=rows, governance={"base_ref": "target"}))
+            lean, raw = case.invoke("checkpoint", request)
+            future = deepcopy(raw)
+            future["checkpoint"]["future_stored_field"] = "stored only"
+            case.assertNotIn("future_stored_field", internal.acknowledge("checkpoint", request, future)["checkpoint"])
+            frozen = case.packet(["S"])
+            admission = case.owned(run="run", task="task", plan_revision="plan", packet=frozen)
+            before = case.stored_bytes(), case.effects()
+            with patch("pod.__version__", "next-version"):
+                blocked, _ = case.invoke("admission", admission, code=1)
+                case.assertEqual(blocked["code"], "installed_version_changed")
+                case.assertEqual(case.stored_bytes(), before[0])
+                value = {key: lean["checkpoint"][key] for key in
+                         ("schema", "criteria", "candidate", "plan_revision", "policy_revision", "native_refs", "verification")}
+                value.update(seq=lean["next_seq"], obligations=rows)
+                refreshed, _ = case.invoke("checkpoint", case.owned(value=value))
+                case.assertEqual(refreshed["checkpoint"]["pod_version"], "next-version")
+                case.assertEqual(refreshed["checkpoint"]["bundle_digest"], lean["checkpoint"]["bundle_digest"])
+                started, _ = case.invoke("admission", admission)
+                case.assertEqual(started["status"], "bound")
+                case.assertEqual(len(case.port.starts), 1)
+
+    def test_checkpoint_delivery_and_closure_acknowledgements_support_real_followup(self):
+        from tests.test_delivery import VerifiedDeliveryTests
+        with boundary() as case:
+            # The existing delivery fixture supplies a local Git result and exact
+            # Governor merge receipt; no provider is contacted.
+            candidate, tree, result = VerifiedDeliveryTests.prepare_result(case)
+            delivered, raw = case.invoke("checkpoint", case.owned(value=case.core(
+                obligations=[case.criterion()], seq=2, delivery={"record": "merge-1"})))
+            delivery = delivered["checkpoint"]["delivery"]
+            case.assertEqual(delivery, raw["checkpoint"]["delivery"])
+            case.assertEqual((delivery["candidate"], delivery["tree"], delivery["result"]), (candidate, tree, result))
+            observed, _ = case.invoke("integration-observe", {"project": str(case.project),
+                "objective": delivered["objective"], "candidate": delivery["candidate"]})
+            case.assertTrue(observed["ancestor_of_base"])
+            value = {key: delivered["checkpoint"][key] for key in
+                     ("schema", "criteria", "candidate", "plan_revision", "policy_revision", "native_refs", "verification")}
+            value.update(seq=delivered["next_seq"], close=True, obligations=[case.criterion(state="satisfied", evidence=[{
+                "check": "unit", "command": "unit", "result": "passed", "reference": "fixture-proof"}])])
+            closed, raw = case.invoke("checkpoint", case.owned(value=value))
+            case.assertEqual(closed["report"], raw["report"])
+            case.assertEqual(closed["report"]["status"], "closed")
+            case.assertEqual(closed["checkpoint"]["closure"], {"seq": closed["seq"], "revision": closed["revision"]})
+            case.assertEqual(closed["checkpoint"]["delivery"], delivery)
 
     def test_admission_sibling_states_keep_the_same_actual_recovery_request(self):
         cases = ("successful", "refused", "pending", "UNKNOWN", "absent", "mismatch", "effective_unknown", "headless")
@@ -131,7 +180,7 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
                 if scenario == "headless": case.port.headless = True
                 lean, raw = case.invoke("admission", request)
                 admission = lean["admission"]
-                legacy = raw["admission"]
+                original = raw["admission"]
                 case.assertLess(len(json.dumps(lean)), len(json.dumps(raw)))
                 case.assertEqual(lean["decision"], raw["decision"])
                 # Build the actual re-entry, including the frozen packet identity,
@@ -140,9 +189,9 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
                     case.assertEqual(row["packet_id"], frozen["packet_id"])
                     return case.owned(run=row["run_id"], task=row["task_id"], plan_revision=row["plan_revision"],
                                       packet=frozen, worktree=row["worktree"])
-                case.assertEqual(reentry(admission), reentry(legacy))
-                case.assertEqual(admission["recovery"], legacy["recovery"])
-                case.assertEqual(admission["error"], legacy["error"])
+                case.assertEqual(reentry(admission), reentry(original))
+                case.assertEqual(admission["recovery"], original["recovery"])
+                case.assertEqual(admission["error"], original["error"])
                 if scenario in ("pending", "absent"):
                     update_admission(case.project, "objective", owner="owner", admission_id=admission["admission_id"],
                                      update=lambda row: row.update(state="unresolved", native_binding=None))
@@ -159,10 +208,10 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
                 sibling, _ = case.invoke("checkpoint", case.owned(value=case.core(
                     obligations=sibling_rows, seq=lean["next_seq"])))
                 before = len(case.port.starts)
-                recovered, legacy_recovery = case.invoke("admission", reentry(admission))
-                case.assertEqual(recovered["status"], legacy_recovery["status"])
-                case.assertEqual(recovered["action"], legacy_recovery["action"])
-                case.assertEqual(recovered["admission"]["native_binding"], legacy_recovery["admission"]["native_binding"])
+                recovered, full_recovery = case.invoke("admission", reentry(admission))
+                case.assertEqual(recovered["status"], full_recovery["status"])
+                case.assertEqual(recovered["action"], full_recovery["action"])
+                case.assertEqual(recovered["admission"]["native_binding"], full_recovery["admission"]["native_binding"])
                 case.assertEqual(recovered["admission"]["request_uuid"], admission["request_uuid"])
                 case.assertEqual(recovered["seq"], sibling["seq"])
                 case.assertGreater(recovered["seq"], recovered["admission"]["admitted_seq"])
@@ -227,8 +276,8 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
                 case.assertEqual(lean.get("deviations"), raw.get("deviations"))
                 disposition = {"admission": lean["written"]["admission_id"], "discarded": True,
                                "reason": "fixture result not integrated"}
-                legacy = {**disposition, "admission": admission["admission_id"]}
-                case.assertEqual(disposition, legacy)
+                original = {**disposition, "admission": admission["admission_id"]}
+                case.assertEqual(disposition, original)
                 following = case.owned(value=case.core(obligations=rows, seq=lean["next_seq"], dispositions=[disposition]))
                 case.assertEqual(following["value"]["seq"], raw["map"]["seq"] + 1)
                 case.invoke("checkpoint", following)
@@ -257,6 +306,66 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
             case.assertEqual(refused["detail"]["detail"], "evidence_invalidated")
             case.assertTrue(refused["detail"]["referent"]["invalidations"])
             case.assertEqual(case.stored_bytes(), before)
+
+    def test_triage_and_generated_proposal_ids_drive_real_adoption_and_replay(self):
+        for grouped in (False, True):
+            for required in (False, True):
+                with self.subTest(grouped=grouped, required=required), boundary() as case:
+                    rows = [case.criterion(), {"id": "A", "kind": "assurance", "provenance": "coordinator",
+                        "parent": "O1", "check": "independent review", "scope": {"paths": ["src"]},
+                        "question": "is src correct?", "candidate": case.candidate,
+                        "existing_evidence": "unit", "insufficiency": "no independent review",
+                        "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}]
+                    case.invoke("checkpoint", case.owned(value=case.core(obligations=rows, governance={"base_ref": "target"})))
+                    frozen = case.packet(["A"], role="review")
+                    started, _ = case.invoke("admission", case.owned(run="run", task="review", plan_revision="plan", packet=frozen))
+                    admitted = started["admission"]
+                    case.settle(admitted)
+                    ids = ["F1", "F2"] if grouped else ["F1"]
+                    triage = {"triage": "required_correction" if required else "advisory", "summary": "review concern"}
+                    if grouped:
+                        triage.update(findings=[{"finding": identity, "severity": "major"} for identity in ids],
+                                      root_cause="shared cause")
+                    else:
+                        triage.update(finding="F1", severity="major")
+                    if required:
+                        triage["correction"] = "K"
+                        rows.append({"id": "K", "kind": "correction", "provenance": "coordinator",
+                                     "parent": "A", "check": "repair review concern", "state": "waiting",
+                                     "wait": {"class": "sequenced", "referent": "O1"}})
+                    else:
+                        triage["reason"] = "outside the reviewed contract; record as proposed work"
+                    report = {"schema": "pod-report/v1", "assignment": frozen["packet_id"],
+                        "attempt": admitted["native_binding"]["dispatchId"], "candidate": case.candidate,
+                        "outcome": "succeeded", "scope": frozen["body"]["scope"], "files": [], "checks": ["unit"],
+                        "failures": [], "evidence": [], "uncertainty": [], "questions": []}
+                    request = {"project": str(case.project), "objective": "objective", "packet": frozen,
+                        "admission_id": admitted["admission_id"], "report": report,
+                        "map": {"seq": started["next_seq"], "obligations": rows}, "triage": [triage],
+                        "proposals": [{"summary": "optional report proposal", "source": "worker_report"}]}
+                    lean, raw = case.invoke("report", request)
+                    case.assertEqual(lean["written"]["findings"], ids)
+                    case.assertEqual(lean["written"]["corrections"], ["K"] if required else [])
+                    case.assertEqual(lean["written"]["proposals"], raw["written"]["proposals"])
+                    proposal = next(row["id"] for row in lean["report"]["proposals_out_of_scope"]
+                                    if row["summary"] == "optional report proposal")
+                    case.assertIn(proposal, lean["written"]["proposals"])
+                    rows.append(case.sub("N", provenance="user_direct", adopts=proposal,
+                                         source={"instruction": "Adopt the report proposal"}))
+                    following = case.owned(value=case.core(obligations=rows, seq=lean["next_seq"],
+                        revision_authority={"provenance": "user_direct", "instruction": "Adopt the report proposal"}))
+                    case.assertEqual(following["value"]["seq"], raw["map"]["seq"] + 1)
+                    adopted, _ = case.invoke("checkpoint", following)
+                    case.assertNotIn(proposal, [row["id"] for row in adopted["report"]["proposals_out_of_scope"]])
+                    request["map"] = {"seq": adopted["next_seq"], "obligations": rows}
+                    replayed, _ = case.invoke("report", request)
+                    case.assertEqual(replayed["written"], lean["written"])
+                    request.pop("map")
+                    request.pop("triage")
+                    request.pop("proposals")
+                    stable, _ = case.invoke("report", request)
+                    case.assertEqual(stable["written"], lean["written"])
+                    case.assertEqual(stable["seq"], replayed["seq"])
 
     def test_missing_verification_stays_visible_and_cannot_qualify_after_context_change(self):
         with boundary() as case:

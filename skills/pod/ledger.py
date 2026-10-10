@@ -1635,6 +1635,17 @@ def _ingest_result(row: dict, result_commit: str | None) -> dict:
     return observed
 
 
+def _report_written_ids(map_state: dict, admission_id: str) -> dict:
+    """Project the accepted map's report identities, never reconstruct request policy."""
+    findings = [finding for row in map_state["obligations"] for finding in row.get("findings", [])
+                if finding.get("attempt") == admission_id]
+    return {"findings": sorted({identity for finding in findings
+                                for identity in finding.get("findings", [finding["finding"]])}),
+            "corrections": sorted({finding["correction"] for finding in findings if "correction" in finding}),
+            "proposals": [row["id"] for row in map_state["proposals"]
+                          if row.get("origin_ref") == admission_id[:64]]}
+
+
 def consume_report(project: Path, objective: str, *, owner: str, admission_id: str,
                    observation: dict, accompanying: dict | None = None, findings: list | None = None,
                    proposals: list | None = None, result_commit: str | None = None) -> dict:
@@ -1674,6 +1685,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         if prior_report is not None and not accompanying and not findings and not proposals:
             ingestion = _stored_ingestion(row)
             return {"ingestion": ingestion, "settled": True,
+                    "written": _report_written_ids(map_state, admission_id),
                     "map": {"seq": map_state["seq"], "revision": map_state["revision"],
                             "quiescence": map_state["quiescence"]},
                     "report": report_projection(map_state, ctx)}
@@ -1699,6 +1711,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             if (prior_report is not None and not accompanying and value.get("obligations") == map_state["obligations"]
                     and value.get("proposals") == map_state["proposals"]):
                 return {"ingestion": _stored_ingestion(row), "settled": True,
+                        "written": _report_written_ids(map_state, admission_id),
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
                         "report": report_projection(map_state, ctx)}
             new_map = accept_write(map_state, value, ctx, triaged=triaged)
@@ -1718,6 +1731,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                         failure["cleared_by"] = admission_id
         _write(path, state)
         return {"ingestion": ingestion, "settled": settled,
+                "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
                         "quiescence": new_map["quiescence"]},
                 "report": report_projection(state["checkpoint"], ctx)}
