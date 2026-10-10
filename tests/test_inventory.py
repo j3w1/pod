@@ -262,6 +262,47 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exactly one authoring source"):
                 execution_spec_source(root)
 
+    def test_reference_has_readable_skeleton_and_numbered_proof(self):
+        text = (self.root / "skills/pod/references/pes-template.md").read_text()
+        headings = ("# <Title>", "## Objective", "## Context", "## Requirements",
+                    "## Non-goals", "## Design decisions", "## Proof of Done",
+                    "## Validation", "## Completion")
+        for heading in headings:
+            self.assertIn(heading, text)
+        positions = [text.index(heading) for heading in headings]
+        self.assertEqual(positions, sorted(positions))
+        for clause in ("**Outcome:**", "**Target:**", "**Format:**", "**Delivery:**",
+                       "PoD#1", "not a parser or DSL", "Number every Proof of Done item"):
+            with self.subTest(clause=clause):
+                self.assertIn(clause, text)
+        self.assertNotIn("N/A", text)
+
+    def test_shipped_content_supports_affected_coverage_clauses(self):
+        # Canonical-content claims read shipped text; in-test examples are separate proof.
+        # This bounded sibling check does not expand the one-anchor topic table.
+        clauses = (
+            ("A52", "SKILL.md", ("Read config at intake, new-session continuation, preference-change notice",
+                "preference_changed", "preference_revision_stale", "policy_revision_mismatch",
+                "setup_required", "installed_version_changed")),
+            ("A180", "references/cleanup.md", ("read-only and objective-scoped", "changed facts stop cleanup",
+                "Protected/uncertain resources stay")),
+            ("A180", "references/planning.md", ("Optimize time to a verified result",)),
+            ("A180", "SKILL.md", ("Every map-bearing write", "carries next `seq`",
+                "read map on resume/`map_stale`", "`internal brief`", "read-only uncertain-input dry run")),
+            ("A110", "references/recovery.md", ("`source=screen`", "displayed **Skip for now**",
+                "once, verify readiness", "same model/effort", "exact native `--retry-request` recovery, never resend",
+                "Unproven controls block", "Missing live opt-out proof stays NOT_RUN")),
+        )
+        coverage = {row["id"]: row for row in json.loads(
+            (self.root / "docs/pod-coverage.json").read_text())["scenarios"]}
+        pointer = "tests.test_inventory.ExecutionSpecDocumentationTests.test_shipped_content_supports_affected_coverage_clauses"
+        for scenario, relative, anchors in clauses:
+            with self.subTest(scenario=scenario, path=relative):
+                self.assertIn(pointer, offline_test_references(coverage[scenario]["offline_test"]))
+                text = (self.root / "skills/pod" / relative).read_text()
+                for anchor in anchors:
+                    self.assertIn(anchor, text)
+
     def test_skill_states_its_boundaries(self):
         root = self.root / "skills" / "pod"
         texts = {"SKILL.md": " ".join((root / "SKILL.md").read_text().lower().split())}

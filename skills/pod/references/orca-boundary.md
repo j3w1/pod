@@ -2,7 +2,7 @@
 
 Before delegation load Orca's installed orchestration guide. Freeze the outcome packet and record agent, model, exact effort, context `native_default` and reason; use installed `pod internal admission --input FILE`. Helpers validate rather than choose routes. Other starts use only documented Orca launch preferences. The logical ceiling defaults to two, allows 0–8, and admits only current unsatisfied obligations; `capacity` waits require the ceiling.
 
-Answer routine questions through Orca; ask owner questions plainly. Workers use Orca's agent-tab setting. Preserve the report, then follow native Delivery acknowledgment and release order promptly. Reuse requires an immediate supported follow-up. Keep selected models after faster-model advisories; use supported Orca dismissal. Informational warnings need no response. Check exact objective workers before final reporting.
+Answer routine questions through Orca; escalate worker owner-intent questions; ask plainly. Workers use Orca's agent-tab setting. Preserve the report, then follow native Delivery acknowledgment and release order promptly. Reuse requires an immediate supported follow-up. Keep selected models after faster-model advisories; use supported Orca dismissal. Informational warnings need no response. Check exact objective workers before final reporting.
 
 Report Task/Dispatch, worktree, terminal/tab and native placement warnings. Background/discoverability observations prove neither rendering nor focus; those need UI evidence. Diagnose missing tabs with the existing worker. Missing attention proves nothing; invent no visibility flag. Focus needs supported behavior and user request. Retain protected/uncertain resources.
 

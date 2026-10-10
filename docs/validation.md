@@ -20,7 +20,7 @@ records an assignment outcome, not acceptance of the objective.
 | Admission, assurance or closure governance | The preceding installed mechanism's independent final audit, with affected policy and production-boundary evidence. Candidate self-hosting evidence is separate. |
 | Milestone | A root `VERSION` bump defines a milestone: all local gates below, then separate hosted, review, live and acceptance evidence as required. |
 
-Use cheap discriminating checks early and focused checks during development (R40).
+Use cheap discriminating checks early and focused checks during development.
 Do not run the full suite after every small edit. At a milestone run all gates against
 the frozen candidate. Corrections repeat affected checks; new failures or uncertainty
 justify broader checks. A requirement change updates its scenario and coverage row

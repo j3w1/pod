@@ -452,7 +452,8 @@
       "offline_test": [
         "tests.test_operations.AdmissionTests.test_before_boundary_edit_refuses_with_no_admission_and_after_row_keeps_start",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
-        "tests.test_instruction_refusals.InstructionRefusalTests.test_both_preference_races_refuse_with_rule_and_bounded_next_action"
+        "tests.test_instruction_refusals.InstructionRefusalTests.test_both_preference_races_refuse_with_rule_and_bounded_next_action",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_shipped_content_supports_affected_coverage_clauses"
       ],
       "status": "NOT_RUN"
     },
@@ -863,7 +864,7 @@
       ],
       "offline_test": [
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_one_canonical_execution_spec_reference",
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_reference_has_readable_skeleton_and_numbered_proof"
       ],
       "status": "NOT_RUN"
     },
@@ -872,7 +873,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+      "offline_test": [
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_reference_has_readable_skeleton_and_numbered_proof",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -981,7 +985,8 @@
         "live_native"
       ],
       "offline_test": [
-        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_shipped_content_supports_affected_coverage_clauses"
       ],
       "status": "NOT_RUN"
     },
@@ -1793,7 +1798,8 @@
         "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
-        "tests.test_skill_validation.SkillValidationTests.test_the_version_lives_only_in_a_well_formed_version_file"
+        "tests.test_skill_validation.SkillValidationTests.test_the_version_lives_only_in_a_well_formed_version_file",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_shipped_content_supports_affected_coverage_clauses"
       ],
       "status": "NOT_RUN"
     },
