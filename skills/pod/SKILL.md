@@ -40,10 +40,12 @@ Every map-bearing write, including full checkpoint/report and admission maps, ca
 
 ## Read when needed
 
-Reuse unchanged guidance in context; reload lost relevant guidance. Trivial direct work reads none.
+Reload lost guidance. Trivial work reads none.
 
 - Issue intake: [intake](references/issue-intake.md).
-- PES authoring: [template](references/pes-template.md).
+- SEAL authoring/revision: [template](references/seal-template.md).
+- PES authoring/revision: [template](references/pes-template.md).
+- EEL authoring/revision: [template](references/eel-template.md).
 - Map/worktree/packets or delegation: [planning](references/planning.md).
 - First admission/supervision: [Orca](references/orca-boundary.md).
 - Any route choice: [models](references/models.md).

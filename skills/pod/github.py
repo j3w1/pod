@@ -250,27 +250,43 @@ def validate_issue_binding(value: object) -> dict:
 
 EEL_TITLE = "EEL:"
 EEL_FORMAT = "**Format:** Evidence Evaluation Ledger v1"
+SEAL_TITLE = "SEAL:"
+SEAL_FORMAT = "**Format:** SEAL v1"
 
 
-def _eel_marker(title: object, body: object) -> str | None:
+def _document_marker(title: object, body: object, prefix: str, declaration: str) -> str | None:
     """The exact title prefix, or the first non-empty unindented body line; nothing else is read."""
-    if isinstance(title, str) and title.startswith(EEL_TITLE):
+    if isinstance(title, str) and title.startswith(prefix):
         return "title"
     for line in body.split("\n") if isinstance(body, str) else ():
         line = line[:-1] if line.endswith("\r") else line
         if line.strip():
-            return "body" if line in (EEL_FORMAT, EEL_FORMAT + "<br>") else None
+            return "body" if line in (declaration, declaration + "<br>") else None
     return None
 
 
 def _refuse_eel(row: dict, locator: str) -> None:
-    marker = _eel_marker(row.get("title"), row.get("body"))
+    marker = _document_marker(row.get("title"), row.get("body"), EEL_TITLE, EEL_FORMAT)
     if marker is not None:
         raise PodError("issue_is_evidence_ledger",
                        "Issue is an Evidence Evaluation Ledger (EEL): evidence only, never an objective "
                        "source. Implementation needs a separate Pod Execution Spec that cites it",
                        {"marker": marker, "locator": locator,
                         "next_action": "write or use a separate Pod Execution Spec that cites this EEL"})
+
+
+def _refuse_requirements(row: dict, locator: str) -> None:
+    # Either restrictive identity wins over a conflicting executable declaration.
+    # Preserve the EEL diagnostic, including when the other marker says SEAL.
+    _refuse_eel(row, locator)
+    marker = _document_marker(row.get("title"), row.get("body"), SEAL_TITLE, SEAL_FORMAT)
+    if marker is not None:
+        raise PodError("issue_is_requirements_spec",
+                       "Issue is a SEAL (Scope, Expectations, Acceptance & Limits): requirements input, "
+                       "not a primary executable issue for the whole initiative",
+                       {"marker": marker, "locator": locator,
+                        "next_action": "use a bounded Pod Execution Spec citing selected SEAL requirements, "
+                                       "or an explicitly scoped analysis, planning or decomposition request"})
 
 
 def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
@@ -286,7 +302,7 @@ def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
     if (not isinstance(title, str) or not title.strip() or len(title) > 512
             or not isinstance(body, str) or not body.strip() or len(body.encode()) > 512 * 1024):
         raise PodError("incomplete_issue_source", "Issue body is empty or exceeds the bounded source size")
-    _refuse_eel(row, parsed["locator"])
+    _refuse_requirements(row, parsed["locator"])
     requested_amendments = amendments or []
     if (not isinstance(requested_amendments, list) or len(requested_amendments) > 32
             or any(not isinstance(value, str) for value in requested_amendments)
@@ -327,8 +343,8 @@ def issue_recheck(project: Path, binding: dict, *, port: "GhPort | None" = None)
     if context["repository"] is None or context["repository"].casefold() != source["repository"].casefold():
         raise PodError("repository_mismatch", "Bound issue target differs from the actual checkout")
     row = (port or GhPort(project)).issue(repository=source["repository"], number=source["number"])
-    # Gaining either EEL marker stops execution even though a title is otherwise metadata (A102).
-    _refuse_eel(row, source["locator"])
+    # A restrictive document identity stops execution even when only its title changed.
+    _refuse_requirements(row, source["locator"])
     digest_now = hashlib.sha256(row["body"].encode()).hexdigest()
     changed = digest_now != source["body_sha256"]
     amendment_changed = False

@@ -95,7 +95,13 @@ provenance; neither is live proof. Hosted checkout fetches complete Git objects 
 upgrade and genuine-writer tests.
 
 Instruction budgets are whitespace-delimited, including frontmatter: SKILL ≤400
-words, each of nine references ≤450, all references ≤2000 and delivery path ≤2000.
+words, each reference ≤450, eight execution references ≤2000 combined, three
+canonical authoring templates ≤1350 combined and delivery path ≤2000. Only
+seal-template.md, pes-template.md and eel-template.md use the authoring allowance.
+Print every file count and execution, authoring, delivery, all-reference and full
+installed-guidance totals. Runtime anchors and independent content review check
+that runtime rules remain in execution guidance; word counts do not measure
+agent reading, tokens, cost or suitability.
 The delivery file list is `SKILL.md`, `references/issue-intake.md`,
 `references/planning.md`, `references/orca-boundary.md`, `references/models.md`,
 `references/verification.md` and `references/governor.md`, relative to `skills/pod`.

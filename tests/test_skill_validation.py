@@ -8,6 +8,7 @@ import unittest
 from pod.bundle import BUNDLE_FILES, bundle_root, canonical
 from pod.errors import PodError
 from pod.skill_validation import (DELIVERY_FILES, MAX_DELIVERY_WORDS, MAX_SKILL_WORDS,
+                                  AUTHORING_REFERENCES, EXECUTION_REFERENCES,
                                   main, validate_installed, validate_skill)
 from tests.common import fixture
 
@@ -27,13 +28,30 @@ def rewrite_frontmatter(skill: Path, replacement: str) -> None:
 
 
 class SkillValidationTests(unittest.TestCase):
+    def test_authoring_allowance_is_separate_and_cannot_hide_execution_guidance(self):
+        with fixture() as root:
+            skill = copied(root)
+            for name in AUTHORING_REFERENCES:
+                path = skill / name
+                text = path.read_text()
+                path.write_text(text + " word" * (450 - len(text.split())))
+            counts = validate_skill(skill)["word_counts"]
+            self.assertEqual(counts["authoring_templates"], 1350)
+            self.assertGreater(counts["references_combined"], 2000)
+            self.assertLessEqual(counts["execution_references"], 2000)
+            path = skill / AUTHORING_REFERENCES[0]
+            path.write_text(path.read_text() + " extra")
+            with self.assertRaisesRegex(PodError, "seal-template.md exceeds"):
+                validate_skill(skill)
+
     def test_instruction_word_budgets(self):
         skill_words = len((BUNDLE / "SKILL.md").read_text().split())
         references = sorted((BUNDLE / "references").glob("*.md"))
         counts = {path.name: len(path.read_text().split()) for path in references}
         self.assertLessEqual(skill_words, 400)
         self.assertTrue(all(count <= 450 for count in counts.values()), counts)
-        self.assertLessEqual(sum(counts.values()), 2000)
+        self.assertLessEqual(sum(counts[Path(name).name] for name in EXECUTION_REFERENCES), 2000)
+        self.assertLessEqual(sum(counts[Path(name).name] for name in AUTHORING_REFERENCES), 1350)
         self.assertLessEqual(sum(len((BUNDLE / name).read_text().split())
                                  for name in DELIVERY_FILES), MAX_DELIVERY_WORDS)
         self.assertIn("issue-intake.md", counts)
@@ -50,6 +68,9 @@ class SkillValidationTests(unittest.TestCase):
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(main([str(BUNDLE)]), 0)
+        self.assertEqual(counts["execution_references"], sum(counts[name] for name in EXECUTION_REFERENCES))
+        self.assertEqual(counts["authoring_templates"], sum(counts[name] for name in AUTHORING_REFERENCES))
+        self.assertEqual(counts["installed_guidance"], counts["SKILL.md"] + counts["references_combined"])
         for name, count in counts.items():
             self.assertIn(f"{name}: {count} words", output.getvalue())
 
@@ -58,10 +79,10 @@ class SkillValidationTests(unittest.TestCase):
             ("description-length", "description: ", "description: Use when " + "x" * 251 + " # ", "250 characters"),
             ("description-trigger", "Use when", "Invoke if", "Use when"),
             ("compatibility", "compatibility: Linux,", "compatibility: |\n  Linux,", "one plain line"),
-            ("sections", "## Roles", "## Other roles", "five router sections"),
-            ("duplicate-link", "- PES authoring:", "- Duplicate: [intake](references/issue-intake.md).\n- PES authoring:", "exactly once"),
-            ("missing-trigger", "- PES authoring:", "-", "read-when trigger"),
-            ("duplicate-trigger", "- PES authoring:", "- Issue intake:", "read-when trigger"),
+            ("sections", "## Roles", "## Else", "five router sections"),
+            ("duplicate-link", "- PES authoring/revision:", "- Duplicate: [intake](references/issue-intake.md).\n- PES authoring/revision:", "exactly once"),
+            ("missing-trigger", "- PES authoring/revision:", "-", "read-when trigger"),
+            ("duplicate-trigger", "- PES authoring/revision:", "- Issue intake:", "read-when trigger"),
         )
         with fixture() as root:
             for name, old, new, message in cases:
@@ -127,9 +148,9 @@ class SkillValidationTests(unittest.TestCase):
             for kind in ("combined", "delivery"):
                 skill = copied(root / kind)
                 counts = validate_skill(skill)["word_counts"]
-                total = counts["references_combined" if kind == "combined" else "delivery_path"]
+                total = counts["execution_references" if kind == "combined" else "delivery_path"]
                 remaining = 2001 - total
-                names = (["references/cleanup.md", "references/pes-template.md"] if kind == "combined"
+                names = (["references/cleanup.md", "references/recovery.md"] if kind == "combined"
                          else list(DELIVERY_FILES[1:]))
                 for name in names:
                     path = skill / name
@@ -142,7 +163,7 @@ class SkillValidationTests(unittest.TestCase):
                 if kind == "delivery":
                     for name in ("references/cleanup.md", "references/pes-template.md", "references/recovery.md"):
                         (skill / name).write_text("# Optional\n")
-                with self.assertRaisesRegex(PodError, f"{'Skill references' if kind == 'combined' else 'Skill delivery path'} exceed"):
+                with self.assertRaisesRegex(PodError, f"{'Skill execution references' if kind == 'combined' else 'Skill delivery path'} exceed"):
                     validate_skill(skill)
 
     def test_frontmatter_allowlist_rejects_coordinator_overrides(self):

@@ -113,7 +113,7 @@ class EelMarkerTests(unittest.TestCase):
         bundle = Path(__file__).resolve().parents[1] / "skills" / "pod"
         documents = [bundle / "SKILL.md", *sorted((bundle / "references").glob("*.md"))]
         holders = [path.name for path in documents if FORMAT in path.read_text(encoding="utf-8")]
-        self.assertEqual(holders, ["issue-intake.md"])
+        self.assertEqual(holders, ["eel-template.md", "issue-intake.md"])
         text = (bundle / "references" / "issue-intake.md").read_text(encoding="utf-8")
         for phrase in ("`EEL:", "evidence only", "Never execute it or restate it as a direct",
                        "separate PES citing it"):
