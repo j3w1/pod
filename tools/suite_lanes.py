@@ -603,6 +603,12 @@ def gate_candidates(results: dict, manifest: dict) -> list[tuple[str, str, float
     return candidates
 
 
+def ranked_candidates(results: dict, manifest: dict) -> list[tuple[str, str, float]]:
+    """Ceiling breaches, then new slow tests, then drift (slowest first): the limits exist for the first two."""
+    rank = {"CEILING": 0, "UNRECORDED SLOW": 1, "DRIFT": 2}
+    return sorted(gate_candidates(results, manifest), key=lambda item: (rank[item[1]], -item[2], item[0]))
+
+
 def violation(manifest: dict, test_id: str, seconds: float) -> str | None:
     budgets, recorded = manifest["budgets"], manifest["durations"].get(test_id)
     if seconds > budgets["test_max_seconds"]:
@@ -688,10 +694,14 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
                                            "or split its slowest tests")
             else:
                 outcome["warnings"].append(message)
-        candidates = sorted(gate_candidates(outcome["results"], manifest), key=lambda item: -item[2])
+        # Past the cap, an unconfirmed ceiling breach or new slow test still fails; drift only warns.
+        candidates = ranked_candidates(outcome["results"], manifest)
         for test_id, kind, seconds in candidates[SOLO_LIMIT:]:
-            outcome["warnings"].append(gate_message(kind, test_id, seconds, None, manifest)
-                                       + f" [not timed alone: only the {SOLO_LIMIT} slowest are]")
+            message = gate_message(kind, test_id, seconds, None, manifest) + " [not timed alone]"
+            if strict and kind != "DRIFT":
+                outcome["problems"].append(message)
+            else:
+                outcome["warnings"].append(message)
         for test_id, kind, seconds in candidates[:SOLO_LIMIT]:
             solo_timeout = min(300.0, 3 * seconds + 30)
             alone_item = run_pool(root, [("solo", [test_id], solo_timeout)], directory, 1)[0]

@@ -43,6 +43,7 @@ SWEEP_COLUMNS = range(40, 201)
 
 class StrictSweepTests(unittest.TestCase):
     # The strict 40-200 column sweep, split into column bands so suite lanes can spread it.
+    RUNNER = "sweep"
     GROUPS = {
         "test_strict_sweep_has_no_overflow_from_40_to_79_columns": range(40, 80),
         "test_strict_sweep_has_no_overflow_from_80_to_119_columns": range(80, 120),

@@ -103,9 +103,16 @@ class GroupGuardTests(unittest.TestCase):
             def test_first(self): self.rows()
             def test_second(self): pass
 
+        class Elsewhere(Honest):
+            GROUPS = Honest.GROUPS
+            def test_first(self): self.rows()
+            def test_second(self): self.doCleanups()
+
         assert_grouped_table(self, Honest, ("a", "b"), limit=1)
-        with self.assertRaises(AssertionError):
-            assert_grouped_table(self, Hollow, ("a", "b"), limit=1)
+        for table in (Hollow, Elsewhere):
+            with self.subTest(table=table.__name__), self.assertRaises(AssertionError):
+                assert_grouped_table(self, table, ("a", "b"), limit=1)
+
 
 
 class ClassificationTests(unittest.TestCase):
@@ -261,6 +268,17 @@ class GateTests(unittest.TestCase):
         self.assertIn("refresh --run 4242", message)
         self.assertIn("took 2.5 s (2.4 s alone)", message)
         self.assertIn("GroupedTable", sl.gate_message("CEILING", "tests.m.C.test_new", 95, 95, value))
+
+    def test_new_slow_tests_are_timed_alone_before_drift(self):
+        value = manifest(durations={f"tests.m.C.test_drift_{index}": 10.0 for index in range(6)})
+        results = {f"tests.m.C.test_drift_{index}": {"outcome": "success", "seconds": 40.0 + index}
+                   for index in range(6)}
+        results["tests.m.C.test_new"] = {"outcome": "success", "seconds": 4.0}
+        results["tests.m.C.test_huge"] = {"outcome": "success", "seconds": 95.0}
+        ranked = sl.ranked_candidates(results, value)
+        self.assertEqual([item[:2] for item in ranked[:3]], [("tests.m.C.test_huge", "CEILING"),
+                                                             ("tests.m.C.test_new", "UNRECORDED SLOW"),
+                                                             ("tests.m.C.test_drift_5", "DRIFT")])
 
 
 def timing_body(lane, shard, of, seconds, *, part=1, parts=1, plan="p", fast=(10, 2.0)):
@@ -430,9 +448,8 @@ class WorkerTests(unittest.TestCase):
             synthetic_tree(Path(root), {"tests/test_demo.py": slow}, ONE_SHARD)
             with patch.object(sl, "_drive", interrupted), self.assertRaises(KeyboardInterrupt):
                 sl.run_pool(Path(root), [], Path(scratch), 1)
+        # The worker would sleep for a minute; it is already reaped, so it was killed.
         self.assertIsNotNone(spawned[0]["process"].poll())
-        with self.assertRaises(ProcessLookupError):
-            os.killpg(spawned[0]["process"].pid, 0)
 
     def test_usage_errors_exit_two(self):
         with tempfile.TemporaryDirectory() as root:

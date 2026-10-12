@@ -67,7 +67,7 @@ installation proof remains separate, including endpoint lag after merge.
 terminal harness (`tests/pty_harness.py`), directly or through a `tests` helper, runs in
 `serial`, alone on its runner; one that imports the installer harness runs in `installer`;
 every other test runs in `parallel`. A heuristic flags a test outside `serial` whose method,
-or whose class's helpers, reads `time.monotonic`, `time.perf_counter` or `time.time` and whose
+or whose class's helpers, calls `monotonic`, `perf_counter` or `time` (any `_ns` form included) and whose
 method calls `assertLess` or `assertLessEqual`; it misses other bounds, such as a timeout
 argument, so authors classify those themselves. A flagged test needs an override in
 `tests/suite_lanes.json` with a reason: `serial` needs no decision, and keeping it out of
@@ -83,7 +83,8 @@ Each hosted lane share proves that every planned test ran exactly once and that 
 finished cleanly after its last test, and fails on any skip. Suite-health limits bound hosted
 CI time: a share fails for an unrecorded test over 2 s, any test over the 90 s ceiling, or a
 recorded test at more than twice its recorded duration and 10 s over it, once timing the test
-again alone confirms it (the five slowest per share are timed again; any others are warnings);
+again alone confirms it (up to five per share, ceiling breaches and new slow tests first; past
+that, those two fail unconfirmed and drift only warns);
 it also fails beyond twice its lane target. These limits govern the suite's own runtime, not product performance. Record a
 necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`
 and commit the manifest; `refresh` reads only that run's log lines. Split a growing table into

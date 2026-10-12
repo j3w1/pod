@@ -24,6 +24,7 @@ class GroupedTable(unittest.TestCase):
     """
     GROUPS: dict = {}
     PHASES: tuple = ()
+    RUNNER = "rows"
 
     def rows(self):
         group = self.GROUPS[self._testMethodName]
@@ -51,7 +52,8 @@ def assert_grouped_table(test: unittest.TestCase, table: type, cases, *, limit: 
         call = body[0].value if len(body) == 1 and isinstance(body[0], ast.Expr) else None
         test.assertTrue(isinstance(call, ast.Call) and not call.args and not call.keywords
                         and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
-                        and call.func.value.id == "self", f"{name} must only call its group runner")
+                        and call.func.value.id == "self" and call.func.attr == getattr(table, "RUNNER", "rows"),
+                        f"{name} must only call self.{getattr(table, 'RUNNER', 'rows')}()")
 
 
 def disposable_path(home: Path) -> str:
