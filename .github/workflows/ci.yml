@@ -20,9 +20,49 @@ env:
   DO_NOT_TRACK: "1"
 
 jobs:
-  linux:
-    name: linux
+  tests:
+    name: tests (${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # One row per lane share; tests/suite_lanes.json names the same shards.
+        include:
+          - {lane: parallel, shard: 1, of: 4}
+          - {lane: parallel, shard: 2, of: 4}
+          - {lane: parallel, shard: 3, of: 4}
+          - {lane: parallel, shard: 4, of: 4}
+          - {lane: serial, shard: 1, of: 1}
+          - {lane: installer, shard: 1, of: 1}
+    env:
+      PYTHONPATH: skills
+      LANE: ${{ matrix.lane }}
+      SHARD: ${{ matrix.shard }}
+      OF: ${{ matrix.of }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install zsh for installer shell tests
+        if: matrix.lane == 'installer'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y zsh
+      - name: Install Python test prerequisites
+        run: |
+          PIN="$(python -c 'from pod.installer import PIN; print(PIN)')"
+          python -m pip install "$PIN" -r tests/requirements-pty.txt
+      - name: Unit, incident, PTY and installer tests in this lane share
+        run: python tools/suite_lanes.py run --lane "$LANE" --shard "$SHARD" --of "$OF" --strict --forbid-skips
+
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,15 +73,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Install terminal and Python test prerequisites
+      - name: Install Python prerequisites
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y zsh
           PIN="$(PYTHONPATH=skills python -c 'from pod.installer import PIN; print(PIN)')"
-          python -m pip install "$PIN" -r tests/requirements-pty.txt
-
-      - name: Unit, incident, and installer subprocess suite
-        run: python -m unittest discover -s tests -v
+          python -m pip install "$PIN"
+      - name: Suite lanes, budgets and incident modules
+        run: python tools/suite_lanes.py check
         env:
           PYTHONPATH: skills
       - name: Explicit incident discovery
@@ -137,3 +174,19 @@ jobs:
             XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
             CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
             "$SMOKE/home/.local/bin/pod" --version)" = "$(cat VERSION)"
+
+  linux:
+    name: linux
+    needs: [tests, checks]
+    # Always reports, so the required check is never a skipped one; it passes only when every
+    # lane share and every check passed.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every lane share and check passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null

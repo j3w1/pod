@@ -11,7 +11,7 @@ records an assignment outcome, not acceptance of the objective.
 
 | Change class | Required checks |
 | --- | --- |
-| Docs or tests | Affected inventory/content or test checks; source hygiene and whitespace. |
+| Docs or tests | Affected inventory/content or test checks; `tools/suite_lanes.py check`; source hygiene and whitespace. |
 | Skill text | Skill validation, inventory and affected authority anchors. |
 | Python behavior or boundaries | Focused production-boundary tests and affected incident cases, then compile; retain refusal and byte/effect invariants. |
 | Routes, preferences or public observations | Catalog, config, pin, selection, routes, route-upgrade, sources, observations and CLI tests; workspace state/render tests when affected. |
@@ -31,7 +31,8 @@ fabricate compatibility to make a result pass.
 
 | Check | Command or evidence | What it proves |
 | --- | --- | --- |
-| Unit and incident suite | `PYTHONPATH=skills python -m unittest discover -s tests -v` | Current behavior in disposable fixtures. |
+| Unit and incident suite | `PYTHONPATH=skills python tools/suite_lanes.py run` | Current behavior in disposable fixtures; every discovered test once, in its lane. `python -m unittest discover -s tests -v` is the equivalent serial run. |
+| Suite lanes | `PYTHONPATH=skills python tools/suite_lanes.py check` | Each test has one lane, timing-sensitive tests are classified, recorded entries name real tests, incident modules yield tests and every lane fits its target. |
 | Explicit incidents | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident cases are discovered. |
 | Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check $(git hash-object -t tree /dev/null) HEAD` | Syntax and whole-candidate whitespace. |
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Inventory, root VERSION link, frontmatter, descriptors, triggered links, launcher safety and printed budgets. |
@@ -43,7 +44,7 @@ fabricate compatibility to make a result pass.
 | Installer/copied bundle | `PYTHONPATH=skills python -m unittest tests.test_installer tests.test_bundle_install -v` | Shell entrypoints, interruption/recovery, parity and an independent placed bundle. |
 | Disposable installer | `POD_INSTALL_SOURCE=file://… sh install.sh` in scrubbed temporary home; `--installed` parity and launcher checks | Dependencies, both skills, receipt, preferences, PATH and update. |
 | SHA-pinned public install | Fetch `install.sh` from `raw.githubusercontent.com` at candidate SHA and matching `codeload.github.com` tarball in hosted CI | Public endpoints serve the candidate. |
-| Hosted Linux | Applicable gates in the single `linux` job for PRs and `main` | Exact-commit hosted result. |
+| Hosted Linux | Every lane share of the `tests` matrix and the `checks` job for PRs and `main`; the required `linux` job always reports and passes only when all of them passed | Exact-commit hosted result. |
 | Independent audit | Fresh reviewer, exact candidate and reproducible unprimed evidence | Findings and review proof under project governance. |
 | Live core/delegation | Codex and Claude Code separately on Linux with disposable objectives | Native launch/effective route, supervision, request recovery, continuation, Delivery and release. |
 | Public-source reads | One bounded real refresh in disposable `POD_CACHE_HOME`; manually compare representative rows, units and profile labels | Per-source availability and parser limits; a cached fetch is not fresh proof. |
@@ -59,6 +60,29 @@ outside the checkout without `PYTHONPATH`. The source archive must include the w
 bundle, and its placed bytes must match. Installer tests use a local tarball/HTTP
 server, offline PyYAML wheel and npx double; they make no external request. Public
 installation proof remains separate, including endpoint lag after merge.
+
+## Test lanes
+
+`tools/suite_lanes.py` routes each discovered test to one lane. A test that imports the
+terminal harness (`tests/pty_harness.py`), directly or through a `tests` helper, runs in
+`serial`, alone on its runner; one that imports the installer harness runs in `installer`;
+every other test runs in `parallel`. A test whose source asserts a wall-clock bound must carry
+an override in `tests/suite_lanes.json`, normally `serial`, with a reason. Recorded CI
+durations of tests that take a second or more balance each lane's shards and workers
+longest-first; an unrecorded test is planned at the recorded fast mean. Every pull request and
+`main` push runs the full suite: lanes decide where a test runs, never whether it runs.
+
+Each hosted lane share proves that every planned test ran exactly once and fails on any skip.
+Suite-health limits bound hosted CI time: a share fails for an unrecorded test over 2 s, any
+test over the 90 s ceiling, or a recorded test at more than twice its recorded duration and
+10 s over it, each confirmed by timing the test again alone; it also fails beyond twice its
+lane target. These limits govern the suite's own runtime, not product performance. Record a
+necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`
+and commit the manifest; `refresh` reads only that run's log lines. Split a growing table into
+named group methods (`tests.common.GroupedTable`) before any method nears the ceiling. When
+`check` projects a lane over its target, raise that lane's shards in the manifest and add the
+matching `ci.yml` rows, up to `max_parallel_shards`. Budgets, lane targets,
+`max_parallel_shards` and overrides change only by owner decision.
 
 ## Evidence and review
 

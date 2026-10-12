@@ -8,6 +8,7 @@ exemption. Inspect Git state and preserve unrelated work.
 | Changing behavior or a requirement | `docs/pod-spec.md` and the linked affected domain |
 | Editing skill text | The trigger list in `skills/pod/SKILL.md` and `python -m pod.skill_validation` |
 | Changing gates or CI | `docs/validation.md` |
+| Adding or changing tests | `docs/validation.md` "Test lanes"; `python tools/suite_lanes.py check` |
 | Changing the installer | `docs/installation.md` and `docs/validation.md` |
 | Fixing outside these areas | Nothing extra |
 
@@ -68,6 +69,12 @@ fresh temporary home: every installer base-directory variable (`HOME`, `XDG_CONF
 `POD_CONFIG_HOME`, `POD_STATE_HOME`, `POD_CACHE_HOME`, `ZDOTDIR`) is contained there or unset, and PATH
 cannot select the real Pod launcher. These permissions cover only that process; never affect real
 launchers, skills, rc files, data, config or state.
+
+Every pull request runs the full suite in the lanes of `tools/suite_lanes.py`. Keep each new
+test under its 2 s fast limit: build expensive fixtures once, never sleep for time to pass, and
+split a table into named group methods before any method nears the ceiling. Record a
+necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`.
+Budgets, lane targets and overrides change only by owner decision.
 
 Fixture execution uses disposable projects; existing host and ordinary project trials are
 read-only. No production or provider mutation, and no package or release publication.
