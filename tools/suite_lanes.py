@@ -45,7 +45,7 @@ PRECEDENCE = ("serial", "installer")
 BUDGETS = ("record_at_seconds", "unrecorded_max_seconds", "drift_ratio", "drift_slack_seconds",
            "test_max_seconds", "max_parallel_shards")
 KEYS = {"schema", "budgets", "lanes", "overrides", "source", "durations", "fast_mean_seconds"}
-CLOCKS = frozenset({"monotonic", "perf_counter", "monotonic_ns", "perf_counter_ns", "time"})
+CLOCKS = frozenset({"monotonic", "perf_counter", "time", "monotonic_ns", "perf_counter_ns", "time_ns"})
 BOUNDS = frozenset({"assertLess", "assertLessEqual"})
 CHUNK = 100
 SOLO_LIMIT = 5
@@ -694,28 +694,35 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
                                            "or split its slowest tests")
             else:
                 outcome["warnings"].append(message)
-        # Past the cap, an unconfirmed ceiling breach or new slow test still fails; drift only warns.
-        candidates = ranked_candidates(outcome["results"], manifest)
-        for test_id, kind, seconds in candidates[SOLO_LIMIT:]:
-            message = gate_message(kind, test_id, seconds, None, manifest) + " [not timed alone]"
-            if strict and kind != "DRIFT":
-                outcome["problems"].append(message)
-            else:
-                outcome["warnings"].append(message)
-        for test_id, kind, seconds in candidates[:SOLO_LIMIT]:
-            solo_timeout = min(300.0, 3 * seconds + 30)
-            alone_item = run_pool(root, [("solo", [test_id], solo_timeout)], directory, 1)[0]
-            stops = [event for event in _read_events(alone_item["events"]) if event.get("event") == "stop"]
-            alone = stops[-1]["seconds"] if stops else float("inf")
-            message = gate_message(kind, test_id, seconds, alone, manifest)
-            if violation(manifest, test_id, alone) and strict:
-                outcome["problems"].append(message)
-            else:
-                outcome["warnings"].append(message + ("" if violation(manifest, test_id, alone)
-                                                      else " [within limits alone: runner contention]"))
-            alone_item["events"].unlink(missing_ok=True)
+        def alone(test_id: str, seconds: float) -> float:
+            item = run_pool(root, [("solo", [test_id], min(300.0, 3 * seconds + 30))], directory, 1)[0]
+            stops = [event for event in _read_events(item["events"]) if event.get("event") == "stop"]
+            item["events"].unlink(missing_ok=True)
+            return stops[-1]["seconds"] if stops else float("inf")
+
+        problems, warnings = judge(ranked_candidates(outcome["results"], manifest), manifest, strict, alone)
+        outcome["problems"] += problems
+        outcome["warnings"] += warnings
     outcome["wall"] = time.monotonic() - started
     return outcome
+
+
+def judge(candidates: list[tuple[str, str, float]], manifest: dict, strict: bool, alone) -> tuple[list, list]:
+    """Turn ranked gate hits into findings and warnings, timing at most SOLO_LIMIT of them alone."""
+    problems, warnings = [], []
+    for test_id, kind, seconds in candidates[SOLO_LIMIT:]:
+        # Past the cap, an unconfirmed ceiling breach or new slow test still fails; drift only warns.
+        message = gate_message(kind, test_id, seconds, None, manifest) + " [not timed alone]"
+        (problems if strict and kind != "DRIFT" else warnings).append(message)
+    for test_id, kind, seconds in candidates[:SOLO_LIMIT]:
+        solo = alone(test_id, seconds)
+        message = gate_message(kind, test_id, seconds, solo, manifest)
+        if violation(manifest, test_id, solo) and strict:
+            problems.append(message)
+        else:
+            warnings.append(message + ("" if violation(manifest, test_id, solo)
+                                       else " [within limits alone: runner contention]"))
+    return problems, warnings
 
 
 def summary(title: str, outcome: dict) -> str:

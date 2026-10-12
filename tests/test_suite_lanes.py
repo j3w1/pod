@@ -280,6 +280,25 @@ class GateTests(unittest.TestCase):
                                                              ("tests.m.C.test_new", "UNRECORDED SLOW"),
                                                              ("tests.m.C.test_drift_5", "DRIFT")])
 
+    def test_past_the_cap_new_slow_tests_fail_and_drift_warns(self):
+        value = manifest(durations={f"tests.m.C.test_drift_{index}": 10.0 for index in range(3)})
+        candidates = ([(f"tests.m.C.test_new_{index}", "UNRECORDED SLOW", 4.0 - index / 10) for index in range(6)]
+                      + [(f"tests.m.C.test_drift_{index}", "DRIFT", 40.0) for index in range(3)])
+        timed = []
+
+        def alone(test_id, seconds):  # Every test is within limits alone: pure contention.
+            timed.append(test_id)
+            return 0.5
+
+        problems, warnings = sl.judge(candidates, value, True, alone)
+        self.assertEqual(timed, [f"tests.m.C.test_new_{index}" for index in range(sl.SOLO_LIMIT)])
+        self.assertEqual(problems, [sl.gate_message("UNRECORDED SLOW", "tests.m.C.test_new_5", 3.5, None, value)
+                                    + " [not timed alone]"])
+        self.assertEqual(sum("[not timed alone]" in item for item in warnings), 3)
+        self.assertEqual(sum("runner contention" in item for item in warnings), sl.SOLO_LIMIT)
+        relaxed, _ = sl.judge(candidates, value, False, alone)
+        self.assertEqual(relaxed, [])
+
 
 def timing_body(lane, shard, of, seconds, *, part=1, parts=1, plan="p", fast=(10, 2.0)):
     return {"schema": sl.TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "plan": plan, "part": part,
