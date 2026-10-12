@@ -15,6 +15,7 @@ from pod.errors import PodError
 from pod.internal import run
 from pod.ledger import objective_root, read
 from pod.operations import OrcaPort
+from tests.common import GroupedTable, assert_grouped_table
 from tests.issue41_support import ProductionCase
 
 SENTINEL = "PRESENTATION-MUST-NOT-LEAK"
@@ -376,354 +377,6 @@ class DetectionTableTests(HandoffCase):
                         case.assert_peer_scope(peer, eligible=False, phase=phase, unverifiable=True)
                 finally: case.doCleanups()
 
-    def test_faithful_observations_remain_readable_and_never_qualify(self):
-        for phase in ("fresh", "pending"):
-            for kind in ("noverif-succeeded", "noverif-failed", "implementation", "other-assurance"):
-                for path in ("carry", "restated", "coordinator", "user"):
-                    case = HandoffCase(); case.setUp()
-                    try:
-                        with self.subTest(phase=phase, kind=kind, path=path):
-                            case.establish()
-                            if phase == "pending":
-                                case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
-                            checkpoint, admission = case.observation_peer(kind)
-                            peer = objective_root(case.project, "observation-peer") / "context.json"
-                            original = deepcopy(read(case.project, "observation-peer")["checkpoint"]["obligations"][1]["receipts"])
-                            rows = deepcopy(read(case.project, "observation-peer")["checkpoint"]["obligations"])
-                            if path in ("coordinator", "user"):
-                                for field in ("wait", "executor", "evidence"): rows[1].pop(field, None)
-                                rows[1].update(state="withdrawn", withdrawal={"by":"coordinator" if path == "coordinator" else "user_direct", "reason":"observation retained"})
-                            authority = {"provenance":"user_direct", "instruction":"Withdraw the disposable assurance"}
-                            checkpoint(None if path == "carry" else rows, **({"revision_authority":authority} if path == "user" else {}))
-                            state = read(case.project, "observation-peer")
-                            self.assertEqual(state["checkpoint"]["obligations"][1]["receipts"], original)
-                            # Native settlement alone cannot promote an observation to proof.
-                            from pod.ledger import kernel_view
-                            from pod.assurance import evidence_valid
-                            from pod.obligations import governance_digest
-                            case.settle(admission)
-                            case.closed_review_peer(objective="qualification-positive", unknown=True)
-                            positive = read(case.project, "qualification-positive")
-                            accepted = positive["checkpoint"]["obligations"][1]
-                            positive_ctx = kernel_view(case.project, "qualification-positive", state=positive)["ctx"]
-                            positive_gov = governance_digest(positive["checkpoint"]["governance_sources"])
-                            self.assertFalse(positive_ctx["outstanding"])
-                            self.assertTrue(evidence_valid(accepted, positive_ctx, positive_gov))
-                            unknown = accepted["receipts"][0]["evidence"]
-                            self.assertEqual(unknown["attempt"], "unobserved-review")
-                            self.assertFalse(evidence_valid({**accepted, "evidence":[unknown]}, positive_ctx, positive_gov))
-                            evidence = original[0]["evidence"]
-                            ob = state["checkpoint"]["obligations"][1]
-                            ctx = kernel_view(case.project, "observation-peer", state=state)["ctx"]
-                            self.assertNotIn(admission["admission_id"], ctx["outstanding"])
-                            self.assertFalse(evidence_valid({**ob, "evidence":[evidence]}, ctx, governance_digest(state["checkpoint"]["governance_sources"])))
-                            if kind.startswith("noverif"):
-                                rows = deepcopy(state["checkpoint"]["obligations"])
-                                for row in rows:
-                                    if row["state"] == "withdrawn": continue
-                                    for field in ("wait", "executor", "evidence", "withdrawal"): row.pop(field, None)
-                                    row.update(state="withdrawn", withdrawal={"by":"user_direct", "reason":"close observation-only peer"})
-                                checkpoint(rows, close=True, revision_authority=authority)
-                            if phase == "fresh": case.lose()
-                            case.assert_peer_scope(peer, eligible=kind.startswith("noverif"), phase=phase)
-                    finally: case.doCleanups()
-
-    def test_retained_review_history_keeps_assignment_and_git_facts(self):
-        marker_cases = [(markers, kind) for markers in ((), ("accepted_seq",), ("reported_seq",), ("accepted_seq", "reported_seq"))
-                        for kind in ("genuine", "null-governance", "role", "serves")]
-        cases = marker_cases + [((), kind) for kind in ("unknown-genuine", "duplicate", "reported-before-admitted", "reuse-genuine",
-                 "reuse-unknown-target", "reuse-false-delta", "reuse-source", "reuse-definition", "reuse-duplicate", "reuse-unreadable", "reuse-touched-accurate")]
-        for phase in ("fresh", "pending"):
-            for markers, kind in cases:
-                case = HandoffCase(); case.setUp()
-                try:
-                    with self.subTest(phase=phase, omitted=markers, kind=kind):
-                        case.establish()
-                        if phase == "pending":
-                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
-                        if kind.startswith("reuse-"): case.reused_review_peer()
-                        else: case.closed_review_peer(withdrawn=True, objective="history-peer", unknown=kind == "unknown-genuine")
-                        peer = objective_root(case.project, "history-peer") / "context.json"
-                        raw = json.loads(peer.read_text()); cp = raw["checkpoint"]
-                        ob = cp["obligations"][1]; receipt = ob["receipts"][0]; evidence = receipt["evidence"]
-                        admission = next(iter(raw["admissions"].values()))
-                        for marker in markers: receipt.pop(marker)
-                        if kind == "null-governance": evidence["governance"] = None
-                        elif kind == "role": admission["role"] = "investigate"
-                        elif kind == "serves": admission["serves"] = ["O1"]
-                        elif kind == "duplicate": ob["receipts"].append(deepcopy(receipt))
-                        elif kind == "reported-before-admitted": receipt["reported_seq"] = admission["admitted_seq"] - 1
-                        elif kind == "reuse-unknown-target": receipt["reuse"]["to"] = "nonexistent-target"
-                        elif kind == "reuse-false-delta": receipt["reuse"]["delta"] = []
-                        elif kind == "reuse-source": receipt["reuse"]["from"] = "unknown-source"
-                        elif kind == "reuse-definition": receipt["reuse"]["definition"] = "0" * 64
-                        elif kind == "reuse-duplicate": receipt["reuse"]["delta"] *= 2
-                        elif kind == "reuse-unreadable":
-                            receipt["reuse"]["to"] = "0" * 40
-                        elif kind == "reuse-touched-accurate":
-                            from tests.kernel_support import git
-                            (case.project / "src/old.py").write_text("changed original reviewed scope\n")
-                            git(case.project, "add", "."); git(case.project, "commit", "-qm", "touch reviewed scope")
-                            target = git(case.project, "rev-parse", "HEAD")
-                            receipt["reuse"].update(to=target, delta=sorted(git(case.project, "diff", "--name-only", receipt["reuse"]["from"], target).split()))
-                        if markers or kind not in ("genuine", "reuse-genuine", "unknown-genuine"):
-                            peer.write_text(json.dumps(raw))  # Defensive corrupt-record control, never writer/live proof.
-                        if phase == "fresh": case.lose()
-                        case.assert_peer_scope(peer, eligible=kind in ("genuine", "reuse-genuine", "unknown-genuine"), phase=phase)
-                finally: case.doCleanups()
-
-    def test_continuity_runtime_shapes_refuse_before_fingerprint_collection(self):
-        values = ([], {}, None, "", " ", "runtime\x00bad", "x" * 4097, 1, True)
-        cases = [(field, value) for field in ("from_runtime", "to_runtime") for value in values]
-        cases += [(field, "missing") for field in ("from_runtime", "to_runtime")]
-        cases += [("row", value) for value in (None, [], "bad", {}, {"provenance":"owner_handoff"})]
-        for phase in ("fresh", "pending"):
-            for field, value in cases:
-                case = HandoffCase(); case.setUp()
-                try:
-                    with self.subTest(phase=phase, field=field, shape=type(value).__name__):
-                        case.establish()
-                        if phase == "pending":
-                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
-                        case.closed_review_peer(withdrawn=True, objective="runtime-peer")
-                        peer = objective_root(case.project, "runtime-peer") / "context.json"
-                        raw = json.loads(peer.read_text()); entry = {"from_runtime":"runtime", "to_runtime":"runtime",
-                            "at":"offline control", "provenance":"automatic", "verified":{}}
-                        if field == "row": entry = value
-                        elif value == "missing": entry.pop(field)
-                        else: entry[field] = value
-                        raw["checkpoint"]["continuity"]["history"].append(entry)
-                        peer.write_text(json.dumps(raw))  # Defensive shape control, never writer/live proof.
-                        before = case.snapshot()
-                        error = case.refused(lambda:run("checkpoint", {"project":str(case.project), "objective":"runtime-peer",
-                            "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":case.core(reopen=True,
-                            revision_authority={"provenance":"user_direct", "instruction":"Reopen disposable peer"}, close=True)}))
-                        self.assertTrue(error.code.startswith(("invalid_", "state_")))
-                        self.assertIsInstance(case.status(objective="runtime-peer"), dict)
-                        case.status(text=True, objective="runtime-peer")
-                        self.assertEqual(before, case.snapshot())
-                        if phase == "fresh": case.lose()
-                        case.assert_peer_scope(peer, eligible=False, phase=phase)
-                finally: case.doCleanups()
-
-    def test_complete_persisted_closure_contract_for_fresh_and_pending(self):
-        # One scope invariant at real boundaries. Corruption controls begin with
-        # real accepted records; none claims genuine-writer or live-loss proof.
-        fields = ("schema", "criterion", "candidate", "sources", "policy_revision", "dependencies",
-                  "environment", "check", "command", "result", "timestamp", "status", "reference", "definition", "governance")
-        cases = (["selected-missing-" + field for field in fields]
-                 + ["retained-missing-" + field for field in fields]
-                 + ["selected-null", "selected-string", "selected-empty", "selected-extra", "selected-criterion",
-                    "selected-sources", "selected-dependencies", "selected-reference", "retained-null",
-                    "missing-receipts", "null-receipts", "null-receipt", "duplicate-receipt", "contradictory-receipt",
-                    "receipt-negative", "receipt-zero", "receipt-boolean", "receipt-future", "receipt-unaccepted",
-                    "receipt-reuse", "retained-negative", "history-overflow", "withdrawal-coordinator",
-                    "withdrawal-nobody", "withdrawal-null", "withdrawal-no-by", "withdrawal-no-reason",
-                    "withdrawal-no-instruction", "withdrawal-empty-instruction", "withdrawal-extra",
-                    "criteria-missing", "criteria-extra", "criteria-null", "obligations-empty", "duplicate-id",
-                    "introduced-negative", "definition-invalid", "boundary-missing", "source-null", "governance-null",
-                    "checkpoint-missing-candidate", "checkpoint-invalid-verification", "checkpoint-unknown-field",
-                    "outer-nonobject", "outer-unsupported", "outer-unsupported-foreign",
-                    "outstanding-bound", "outstanding-reserved", "outstanding-unresolved",
-                    "genuine-closed", "genuine-history", "genuine-user-withdrawal", "genuine-coordinator-withdrawal",
-                    "genuine-steering", "genuine-assurance-withdrawal", "genuine-foreign", "genuine-071", "genuine-080", "released-050-shared",
-                    "governance-header-null", "proposals-null", "proposal-null", "observations-null", "observation-row-null",
-                    "reopened-null", "reopen-row-null", "quiescence-invalid", "slot-contradiction",
-                    "assurance-findings-null", "assurance-finding-null",
-                    "worktree-list", "worktree-string", "worktree-integer", "worktree-boolean", "worktree-null",
-                    "checkpoint-null-policy", "retained-reuse-conflict", "retained-reuse-definition",
-                    "governance-header-base", "governance-header-selection", "governance-header-exclusion",
-                    "genuine-policy", "policy-line-reversed", "policy-line-outside", "policy-quote",
-                    "policy-revision", "policy-base", "policy-undeclared", "policy-forged-gone"])
-        cases += ["genuine-reviewed-closed", "genuine-reviewed-withdrawn", "consumed-report-null", "consumed-report-digest",
-                  "consumed-report-attempt", "consumed-report-observation", "consumed-report-result", "consumed-report-runtime",
-                  "accepted-review-null-governance", "accepted-review-null-binding", "accepted-review-null-definition",
-                  "accepted-review-null-candidate",
-                  *["consumed-report-missing-" + field for field in ("schema", "assignment", "attempt", "candidate", "outcome",
-                    "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions")]]
-        for phase in ("fresh", "pending"):
-            for kind in cases:
-                case = HandoffCase(); case.setUp()
-                try:
-                    with self.subTest(phase=phase, kind=kind):
-                        if kind.startswith("policy-") or kind == "genuine-policy":
-                            from tests.kernel_support import git
-                            (case.project / "AGENTS.md").write_text("# Rules\n\nKeep project facts intact.\n")
-                            git(case.project, "add", "AGENTS.md"); git(case.project, "commit", "-qm", "policy")
-                            case.base = case.candidate = git(case.project, "rev-parse", "HEAD")
-                            git(case.project, "update-ref", "refs/remotes/origin/target", case.base)
-                        case.establish()
-                        if phase == "pending":
-                            case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
-                        current = deepcopy(case.current)
-                        if kind in ("genuine-foreign", "outer-unsupported-foreign"):
-                            case.current.update(id="foreign-run")
-                        def checkpoint(rows, **extra):
-                            return run("checkpoint", {"project":str(case.project), "objective":"closure-peer",
-                                "owner":os.environ["ORCA_TERMINAL_HANDLE"],
-                                "value":case.core(obligations=rows, governance={"base_ref":"refs/remotes/origin/target"}, **extra)})
-                        # Two genuine writes establish immutable selected/retained receipts.
-                        released = kind in ("genuine-071", "genuine-080", "released-050-shared")
-                        if released:
-                            commit, version = {"genuine-071":("2f02be99f27e6a860c3115a9c62539b0812bc038", "0.7.1"),
-                                               "genuine-080":(BASELINE, "0.8.0"),
-                                               "released-050-shared":("9c8639a5d7406b708b67b96a5ab26677efae1581", "0.5.0")}[kind]
-                            case.released_peer(commit, version)
-                        else:
-                            checkpoint([case.criterion("active" if kind == "genuine-history" else "satisfied",
-                                evidence=[case.proof("O1", reference="history-proof", status="FAILED" if kind == "genuine-history" else "PASS")])])
-                        rows = [case.criterion("satisfied", evidence=[case.proof("O1", reference="selected-proof")])]
-                        extra = {"close":True}
-                        if kind.startswith("policy-") or kind == "genuine-policy":
-                            rows.append({"id":"P", "kind":"criterion", "provenance":"project_policy",
-                                "source":{"path":"AGENTS.md", "lines":"3"}, "check":"policy satisfied",
-                                "state":"satisfied", "evidence":[{"check":"policy satisfied", "command":"policy check",
-                                    "result":"passed", "reference":"policy-proof"}]})
-                        if kind.startswith("withdrawal-") or kind == "genuine-user-withdrawal":
-                            rows = [case.criterion("withdrawn", withdrawal={"by":"user_direct", "reason":"Owner withdrew this criterion"})]
-                            extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw the peer criterion"}
-                        elif kind == "genuine-coordinator-withdrawal":
-                            rows.append(case.sub("S", "withdrawn", withdrawal={"by":"coordinator", "reason":"Subgoal no longer needed"}))
-                        elif kind == "genuine-steering":
-                            rows.append({"id":"U", "kind":"steer", "provenance":"user_direct", "source":{"instruction":"Record steering", "ref":"owner-note"},
-                                "check":"steering recorded", "state":"withdrawn", "withdrawal":{"by":"user_direct", "reason":"Owner withdrew steering"}})
-                            extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Record then withdraw steering"}
-                        elif kind in ("genuine-assurance-withdrawal", "assurance-findings-null", "assurance-finding-null"):
-                            rows.append({"id":"A", "kind":"assurance", "provenance":"coordinator", "parent":"O1",
-                                "check":"independent review", "scope":{"paths":["src"]}, "question":"correct?", "candidate":case.candidate,
-                                "existing_evidence":"tests", "insufficiency":"no review", "state":"withdrawn",
-                                "withdrawal":{"by":"user_direct", "reason":"Owner withdrew peer review"}})
-                            extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw peer review"}
-                        reviewed = kind.startswith(("consumed-report-", "accepted-review-")) or kind in ("genuine-reviewed-closed", "genuine-reviewed-withdrawn")
-                        if reviewed: case.closed_review_peer(withdrawn=kind == "genuine-reviewed-withdrawn" or kind.startswith("accepted-review-"))
-                        elif not released: checkpoint(rows, **extra)
-                        case.current = current
-                        peer = objective_root(case.project, "closure-peer") / "context.json"
-                        raw = json.loads(peer.read_text()); cp = raw["checkpoint"]; ob = (cp.get("obligations") or [{}])[0]
-                        selected = ob.get("evidence", [{}])[0] if ob.get("evidence") else {}
-                        retained = (ob.get("receipts") or [{"evidence":{}}])[0]["evidence"]
-                        if kind.startswith("selected-missing-"): selected.pop(kind.removeprefix("selected-missing-"))
-                        elif kind.startswith("retained-missing-"): retained.pop(kind.removeprefix("retained-missing-"))
-                        elif kind == "selected-null": ob["evidence"] = [None]
-                        elif kind == "selected-string": ob["evidence"] = ["not evidence"]
-                        elif kind == "selected-empty": ob["evidence"] = []
-                        elif kind == "selected-extra": selected["unknown"] = True
-                        elif kind == "selected-criterion": selected["criterion"] = "other"
-                        elif kind == "selected-sources": selected["sources"] = [None]
-                        elif kind == "selected-dependencies": selected["dependencies"] = None
-                        elif kind == "selected-reference": selected["reference"] = "unrecorded"
-                        elif kind == "retained-null": ob["receipts"][0]["evidence"] = None
-                        elif kind == "missing-receipts": ob.pop("receipts")
-                        elif kind == "null-receipts": ob["receipts"] = None
-                        elif kind == "null-receipt": ob["receipts"] = [None]
-                        elif kind == "duplicate-receipt": ob["receipts"].append(deepcopy(ob["receipts"][0]))
-                        elif kind == "contradictory-receipt": ob["receipts"][-1]["evidence"]["candidate"] = "0" * 40
-                        elif kind in ("receipt-negative", "receipt-zero", "receipt-boolean", "receipt-future"):
-                            ob["receipts"][-1]["accepted_seq"] = {"receipt-negative":-1, "receipt-zero":0, "receipt-boolean":True, "receipt-future":cp["seq"]+1}[kind]
-                        elif kind == "receipt-unaccepted": ob["receipts"][-1].pop("accepted_seq")
-                        elif kind == "receipt-reuse": ob["receipts"][-1]["reuse"] = {"from":"unrecorded"}
-                        elif kind == "retained-negative": ob["receipts"][0]["accepted_seq"] = -1
-                        elif kind == "history-overflow": ob["receipts"] *= 9
-                        elif kind == "withdrawal-coordinator": ob["withdrawal"] = {"by":"coordinator", "reason":"discard objective criterion"}
-                        elif kind == "withdrawal-nobody": ob["withdrawal"] = {"by":"nobody", "reason":""}
-                        elif kind == "withdrawal-null": ob["withdrawal"] = None
-                        elif kind.startswith("withdrawal-no-"): ob["withdrawal"].pop(kind.removeprefix("withdrawal-no-"))
-                        elif kind == "withdrawal-empty-instruction": ob["withdrawal"]["instruction"] = ""
-                        elif kind == "withdrawal-extra": ob["withdrawal"]["extra"] = True
-                        elif kind == "criteria-missing": cp["criteria"] = []
-                        elif kind == "criteria-extra": cp["criteria"].append("uncovered")
-                        elif kind == "criteria-null": cp["criteria"] = None
-                        elif kind == "obligations-empty": cp["obligations"] = []
-                        elif kind == "duplicate-id": cp["obligations"].append(deepcopy(ob))
-                        elif kind == "introduced-negative": ob["introduced_seq"] = -1
-                        elif kind == "definition-invalid": ob["definition"] = "0" * 64
-                        elif kind == "boundary-missing": ob.pop("boundary")
-                        elif kind == "source-null": ob["source"] = None
-                        elif kind == "governance-null": cp["governance_sources"] = [None]
-                        elif kind == "checkpoint-missing-candidate": cp.pop("candidate")
-                        elif kind == "checkpoint-invalid-verification": cp["verification"] = None
-                        elif kind == "checkpoint-unknown-field": cp["unknown"] = True
-                        elif kind.startswith("accepted-review-null-"):
-                            cp["obligations"][1]["receipts"][0]["evidence"][kind.removeprefix("accepted-review-null-")] = None
-                        elif kind.startswith("consumed-report-"):
-                            admission = next(iter(raw["admissions"].values())); report = admission["report"]
-                            if kind.startswith("consumed-report-missing-"):
-                                report["observation"].pop(kind.removeprefix("consumed-report-missing-"))
-                            elif kind == "consumed-report-null": admission["report"] = None
-                            elif kind == "consumed-report-digest": report["observation_digest"] = "0" * 64
-                            elif kind == "consumed-report-attempt": report["attempt"] = "unobserved"
-                            elif kind == "consumed-report-observation": report["observation"]["checks"] = ["changed observation"]
-                            elif kind == "consumed-report-result": report["outcome"] = "failed"
-                            elif kind == "consumed-report-runtime": admission["runtime"] = "unknown-runtime"
-                        elif kind.startswith("worktree-"):
-                            cp["worktree"] = {"worktree-list":[None], "worktree-string":"bad", "worktree-integer":1,
-                                              "worktree-boolean":True, "worktree-null":None}[kind]
-                        elif kind == "checkpoint-null-policy": cp["policy_revision"] = None
-                        elif kind in ("retained-reuse-conflict", "retained-reuse-definition"):
-                            ob["receipts"][0]["reuse"] = {"from":"unobserved" if kind.endswith("conflict") else retained["candidate"],
-                                "to":case.candidate, "delta":[], "definition":"0" * 64 if kind.endswith("definition") else retained["definition"]}
-                        elif kind == "governance-header-base": cp["governance"]["base"] = "0" * 40
-                        elif kind == "governance-header-selection": cp["governance"]["selection"] = "unsupported-selection"
-                        elif kind == "governance-header-exclusion": cp["governance"]["exclude"] = ["AGENTS.md"]
-                        elif kind.startswith("policy-"):
-                            policy = cp["obligations"][1]; source = policy["source"]
-                            changes = {"policy-line-reversed":("lines", "4-3"), "policy-line-outside":("lines", "9999"),
-                                "policy-quote":("quote_sha256", "0" * 64), "policy-revision":("revision", "sha256:" + "0" * 64),
-                                "policy-base":("base", "0" * 40), "policy-undeclared":("path", ".pod/config.yaml")}
-                            if kind in changes:
-                                field, value = changes[kind]; source[field] = value
-                            else:
-                                source["gone"] = True
-                                policy.update(state="withdrawn", withdrawal={"by":"project_policy", "reason":"policy supposedly gone"})
-                                cp["closure"]["report"]["satisfied"] = ["O1"]
-                                cp["closure"]["report"]["withdrawn"] = [{"obligation":"P", "provenance":"project_policy", **policy["withdrawal"]}]
-                        elif kind == "governance-header-null": cp["governance"] = None
-                        elif kind == "proposals-null": cp["proposals"] = None
-                        elif kind == "proposal-null": cp["proposals"] = [None]
-                        elif kind == "observations-null": cp["observations"] = None
-                        elif kind == "observation-row-null": cp["observations"]["outstanding"] = [None]
-                        elif kind == "reopened-null": cp["reopened"] = None
-                        elif kind == "reopen-row-null": cp["reopened"] = [None]
-                        elif kind == "quiescence-invalid": cp["quiescence"] = {"state":"unknown"}
-                        elif kind == "slot-contradiction": cp["coordinator_slot"] = "O1"
-                        elif kind == "assurance-findings-null": cp["obligations"][1]["findings"] = None
-                        elif kind == "assurance-finding-null": cp["obligations"][1]["findings"] = [None]
-                        elif kind.startswith("outer-unsupported"): raw["schema"] = "unsupported-future-context"
-                        elif kind.startswith("outstanding-"):
-                            admission = deepcopy(case.admission); admission.update(objective="closure-peer", serves=["O1"], state=kind.removeprefix("outstanding-"))
-                            raw["admissions"][admission["admission_id"]] = admission
-                        if kind.startswith("withdrawal-") and isinstance(ob["withdrawal"], dict):
-                            cp["closure"]["report"]["withdrawn"] = [{"obligation":ob["id"], "provenance":ob["provenance"], **ob["withdrawal"]}]
-                        if not kind.startswith("genuine-") and not released:
-                            peer.write_text(json.dumps([] if kind == "outer-nonobject" else raw))
-                        if phase == "fresh": case.lose()
-                        before = case.snapshot(); own = deepcopy(case.state()); calls = len(case.mutations)
-                        starts, workers = deepcopy(case.port.starts), deepcopy(case.port.workers)
-                        verdict = case.status()["owner_handoff"]; text = case.status(text=True)
-                        if kind.startswith("genuine-"):
-                            self.assertEqual(verdict["status"], "handoff_available")
-                            case.handoff(); self.assertEqual(case.entry()["state"], "done")
-                            self.assertEqual(len(case.mutations), 1)
-                            case.assert_only_handoff_changes(own, case.state(), completed=True)
-                        else:
-                            expected = "scope_unreadable" if kind in ("outer-nonobject", "outer-unsupported-foreign") else "run_shared"
-                            self.assertEqual(verdict["condition"], expected); self.assertIn(expected, text)
-                            for supplied in ("owner", "next"):
-                                for boundary, call in case.boundary_calls(supplied).items():
-                                    error = case.refused(call)
-                                    self.assertEqual(error.detail["owner_handoff"]["condition"], expected)
-                            case.refused(lambda:case.handoff())
-                            self.assertEqual(len(case.mutations), calls)
-                            if phase == "pending" and expected == "run_shared":
-                                self.assertEqual(case.entry()["state"], "aborted")
-                                case.assert_only_handoff_changes(own, case.state(), completed=False)
-                            else: self.assertEqual(case.state(), own)
-                        own_key = str((objective_root(case.project, "objective") / "context.json").relative_to(case.root / "state"))
-                        self.assertEqual({key:value for key,value in case.snapshot().items() if key != own_key},
-                                         {key:value for key,value in before.items() if key != own_key})
-                        self.assertEqual(case.port.starts, starts); self.assertEqual(case.port.workers, workers)
-                finally: case.doCleanups()
-
     def test_detection_table_through_status_and_every_authority_boundary(self):
         self.establish()
         original_worker = deepcopy(self.port.workers)
@@ -981,6 +634,519 @@ class DetectionTableTests(HandoffCase):
             self.assertIn("worker read unavailable", text)
             self.assertIn(self.admission["admission_id"], text)
 
+
+# Each giant table runs as named group methods so suite lanes can spread its rows; every
+# row and assertion is unchanged, and SplitTableTests proves each row still runs exactly once.
+PHASES = ("fresh", "pending")
+
+
+def _closure_kinds():
+    # One scope invariant at real boundaries. Corruption controls begin with
+    # real accepted records; none claims genuine-writer or live-loss proof.
+    fields = ("schema", "criterion", "candidate", "sources", "policy_revision", "dependencies",
+              "environment", "check", "command", "result", "timestamp", "status", "reference", "definition", "governance")
+    cases = (["selected-missing-" + field for field in fields]
+             + ["retained-missing-" + field for field in fields]
+             + ["selected-null", "selected-string", "selected-empty", "selected-extra", "selected-criterion",
+                "selected-sources", "selected-dependencies", "selected-reference", "retained-null",
+                "missing-receipts", "null-receipts", "null-receipt", "duplicate-receipt", "contradictory-receipt",
+                "receipt-negative", "receipt-zero", "receipt-boolean", "receipt-future", "receipt-unaccepted",
+                "receipt-reuse", "retained-negative", "history-overflow", "withdrawal-coordinator",
+                "withdrawal-nobody", "withdrawal-null", "withdrawal-no-by", "withdrawal-no-reason",
+                "withdrawal-no-instruction", "withdrawal-empty-instruction", "withdrawal-extra",
+                "criteria-missing", "criteria-extra", "criteria-null", "obligations-empty", "duplicate-id",
+                "introduced-negative", "definition-invalid", "boundary-missing", "source-null", "governance-null",
+                "checkpoint-missing-candidate", "checkpoint-invalid-verification", "checkpoint-unknown-field",
+                "outer-nonobject", "outer-unsupported", "outer-unsupported-foreign",
+                "outstanding-bound", "outstanding-reserved", "outstanding-unresolved",
+                "genuine-closed", "genuine-history", "genuine-user-withdrawal", "genuine-coordinator-withdrawal",
+                "genuine-steering", "genuine-assurance-withdrawal", "genuine-foreign", "genuine-071", "genuine-080", "released-050-shared",
+                "governance-header-null", "proposals-null", "proposal-null", "observations-null", "observation-row-null",
+                "reopened-null", "reopen-row-null", "quiescence-invalid", "slot-contradiction",
+                "assurance-findings-null", "assurance-finding-null",
+                "worktree-list", "worktree-string", "worktree-integer", "worktree-boolean", "worktree-null",
+                "checkpoint-null-policy", "retained-reuse-conflict", "retained-reuse-definition",
+                "governance-header-base", "governance-header-selection", "governance-header-exclusion",
+                "genuine-policy", "policy-line-reversed", "policy-line-outside", "policy-quote",
+                "policy-revision", "policy-base", "policy-undeclared", "policy-forged-gone"])
+    cases += ["genuine-reviewed-closed", "genuine-reviewed-withdrawn", "consumed-report-null", "consumed-report-digest",
+              "consumed-report-attempt", "consumed-report-observation", "consumed-report-result", "consumed-report-runtime",
+              "accepted-review-null-governance", "accepted-review-null-binding", "accepted-review-null-definition",
+              "accepted-review-null-candidate",
+              *["consumed-report-missing-" + field for field in ("schema", "assignment", "attempt", "candidate", "outcome",
+                "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions")]]
+    return tuple(cases)
+
+
+def _review_history_cases():
+    marker_cases = [(markers, kind) for markers in ((), ("accepted_seq",), ("reported_seq",), ("accepted_seq", "reported_seq"))
+                    for kind in ("genuine", "null-governance", "role", "serves")]
+    cases = marker_cases + [((), kind) for kind in ("unknown-genuine", "duplicate", "reported-before-admitted", "reuse-genuine",
+             "reuse-unknown-target", "reuse-false-delta", "reuse-source", "reuse-definition", "reuse-duplicate", "reuse-unreadable", "reuse-touched-accurate")]
+    return tuple(cases)
+
+
+def _runtime_shape_cases():
+    values = ([], {}, None, "", " ", "runtime\x00bad", "x" * 4097, 1, True)
+    cases = [(field, value) for field in ("from_runtime", "to_runtime") for value in values]
+    cases += [(field, "missing") for field in ("from_runtime", "to_runtime")]
+    cases += [("row", value) for value in (None, [], "bad", {}, {"provenance":"owner_handoff"})]
+    return tuple(cases)
+
+
+def _pick(table, *items):
+    """The listed rows of one table, refusing a row the table does not contain."""
+    missing = [item for item in items if item not in table]
+    if missing:
+        raise AssertionError(f"rows outside their table: {missing}")
+    return tuple(items)
+
+
+CLOSURE_KINDS = _closure_kinds()
+IDENTITY_FIELDS = ("schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment")
+OUTCOME_FIELDS = ("check", "command", "result", "timestamp", "status", "reference", "definition", "governance")
+REVIEW_HISTORY_CASES = _review_history_cases()
+MARKER_KINDS = ("genuine", "null-governance", "role", "serves")
+OBSERVATION_CASES = tuple((kind, path) for kind in ("noverif-succeeded", "noverif-failed", "implementation", "other-assurance")
+                          for path in ("carry", "restated", "coordinator", "user"))
+RUNTIME_SHAPE_CASES = _runtime_shape_cases()
+
+
+class ClosureContractTableTests(GroupedTable):
+    PHASES = PHASES
+    GROUPS = {
+        "test_selected_receipt_missing_identity_fields": _pick(CLOSURE_KINDS, *("selected-missing-" + field for field in IDENTITY_FIELDS)),
+        "test_selected_receipt_missing_outcome_fields": _pick(CLOSURE_KINDS, *("selected-missing-" + field for field in OUTCOME_FIELDS)),
+        "test_retained_receipt_missing_identity_fields": _pick(CLOSURE_KINDS, *("retained-missing-" + field for field in IDENTITY_FIELDS)),
+        "test_retained_receipt_missing_outcome_fields": _pick(CLOSURE_KINDS, *("retained-missing-" + field for field in OUTCOME_FIELDS)),
+        "test_selected_evidence_shapes": _pick(CLOSURE_KINDS, "selected-null", "selected-string", "selected-empty", "selected-extra",
+                                                "selected-criterion", "selected-sources", "selected-dependencies", "selected-reference"),
+        "test_receipt_list_shapes": _pick(CLOSURE_KINDS, "retained-null", "missing-receipts", "null-receipts", "null-receipt",
+                                           "duplicate-receipt", "contradictory-receipt", "history-overflow", "retained-negative"),
+        "test_receipt_sequence_and_reuse_shapes": _pick(CLOSURE_KINDS, "receipt-negative", "receipt-zero", "receipt-boolean", "receipt-future",
+                                                         "receipt-unaccepted", "receipt-reuse", "retained-reuse-conflict",
+                                                         "retained-reuse-definition"),
+        "test_withdrawal_shapes": _pick(CLOSURE_KINDS, "withdrawal-coordinator", "withdrawal-nobody", "withdrawal-null", "withdrawal-no-by",
+                                         "withdrawal-no-reason", "withdrawal-no-instruction", "withdrawal-empty-instruction",
+                                         "withdrawal-extra"),
+        "test_criteria_and_obligation_shapes": _pick(CLOSURE_KINDS, "criteria-missing", "criteria-extra", "criteria-null", "obligations-empty",
+                                                      "duplicate-id", "introduced-negative", "definition-invalid", "boundary-missing"),
+        "test_checkpoint_field_shapes": _pick(CLOSURE_KINDS, "source-null", "governance-null", "checkpoint-missing-candidate",
+                                               "checkpoint-invalid-verification", "checkpoint-unknown-field", "checkpoint-null-policy",
+                                               "governance-header-null", "slot-contradiction"),
+        "test_checkpoint_collection_shapes": _pick(CLOSURE_KINDS, "proposals-null", "proposal-null", "observations-null", "observation-row-null",
+                                                    "reopened-null", "reopen-row-null", "quiescence-invalid"),
+        "test_worktree_and_governance_header_shapes": _pick(CLOSURE_KINDS, "worktree-list", "worktree-string", "worktree-integer",
+                                                             "worktree-boolean", "worktree-null", "governance-header-base",
+                                                             "governance-header-selection", "governance-header-exclusion"),
+        "test_outer_record_and_outstanding_admissions": _pick(CLOSURE_KINDS, "outer-nonobject", "outer-unsupported", "outer-unsupported-foreign",
+                                                               "outstanding-bound", "outstanding-reserved", "outstanding-unresolved"),
+        "test_genuine_current_writer_peers": _pick(CLOSURE_KINDS, "genuine-closed", "genuine-history", "genuine-user-withdrawal",
+                                                    "genuine-coordinator-withdrawal", "genuine-steering", "genuine-foreign"),
+        "test_assurance_withdrawal_and_findings": _pick(CLOSURE_KINDS, "genuine-assurance-withdrawal", "assurance-findings-null",
+                                                         "assurance-finding-null"),
+        "test_released_writer_peers": _pick(CLOSURE_KINDS, "genuine-071", "genuine-080", "released-050-shared"),
+        "test_project_policy_line_and_quote_citations": _pick(CLOSURE_KINDS, "genuine-policy", "policy-line-reversed", "policy-line-outside",
+                                                               "policy-quote"),
+        "test_project_policy_revision_base_and_declaration": _pick(CLOSURE_KINDS, "policy-revision", "policy-base", "policy-undeclared",
+                                                                    "policy-forged-gone"),
+        "test_reviewed_peers_and_report_binding": _pick(CLOSURE_KINDS, "genuine-reviewed-closed", "genuine-reviewed-withdrawn",
+                                                         "consumed-report-null", "consumed-report-digest", "consumed-report-attempt",
+                                                         "consumed-report-observation"),
+        "test_consumed_report_outcome_and_accepted_review_nulls": _pick(CLOSURE_KINDS, "consumed-report-result", "consumed-report-runtime",
+                                                                         "accepted-review-null-governance", "accepted-review-null-binding",
+                                                                         "accepted-review-null-definition", "accepted-review-null-candidate"),
+        "test_consumed_report_missing_identity_fields": _pick(CLOSURE_KINDS, *("consumed-report-missing-" + field for field in
+                                                                 ("schema", "assignment", "attempt", "candidate", "outcome", "scope"))),
+        "test_consumed_report_missing_content_fields": _pick(CLOSURE_KINDS, *("consumed-report-missing-" + field for field in
+                                                                ("files", "checks", "failures", "evidence", "uncertainty", "questions"))),
+    }
+
+    def row(self, phase, kind):
+        case = HandoffCase(); case.setUp()
+        try:
+            with self.subTest(phase=phase, kind=kind):
+                if kind.startswith("policy-") or kind == "genuine-policy":
+                    from tests.kernel_support import git
+                    (case.project / "AGENTS.md").write_text("# Rules\n\nKeep project facts intact.\n")
+                    git(case.project, "add", "AGENTS.md"); git(case.project, "commit", "-qm", "policy")
+                    case.base = case.candidate = git(case.project, "rev-parse", "HEAD")
+                    git(case.project, "update-ref", "refs/remotes/origin/target", case.base)
+                case.establish()
+                if phase == "pending":
+                    case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                current = deepcopy(case.current)
+                if kind in ("genuine-foreign", "outer-unsupported-foreign"):
+                    case.current.update(id="foreign-run")
+                def checkpoint(rows, **extra):
+                    return run("checkpoint", {"project":str(case.project), "objective":"closure-peer",
+                        "owner":os.environ["ORCA_TERMINAL_HANDLE"],
+                        "value":case.core(obligations=rows, governance={"base_ref":"refs/remotes/origin/target"}, **extra)})
+                # Two genuine writes establish immutable selected/retained receipts.
+                released = kind in ("genuine-071", "genuine-080", "released-050-shared")
+                if released:
+                    commit, version = {"genuine-071":("2f02be99f27e6a860c3115a9c62539b0812bc038", "0.7.1"),
+                                       "genuine-080":(BASELINE, "0.8.0"),
+                                       "released-050-shared":("9c8639a5d7406b708b67b96a5ab26677efae1581", "0.5.0")}[kind]
+                    case.released_peer(commit, version)
+                else:
+                    checkpoint([case.criterion("active" if kind == "genuine-history" else "satisfied",
+                        evidence=[case.proof("O1", reference="history-proof", status="FAILED" if kind == "genuine-history" else "PASS")])])
+                rows = [case.criterion("satisfied", evidence=[case.proof("O1", reference="selected-proof")])]
+                extra = {"close":True}
+                if kind.startswith("policy-") or kind == "genuine-policy":
+                    rows.append({"id":"P", "kind":"criterion", "provenance":"project_policy",
+                        "source":{"path":"AGENTS.md", "lines":"3"}, "check":"policy satisfied",
+                        "state":"satisfied", "evidence":[{"check":"policy satisfied", "command":"policy check",
+                            "result":"passed", "reference":"policy-proof"}]})
+                if kind.startswith("withdrawal-") or kind == "genuine-user-withdrawal":
+                    rows = [case.criterion("withdrawn", withdrawal={"by":"user_direct", "reason":"Owner withdrew this criterion"})]
+                    extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw the peer criterion"}
+                elif kind == "genuine-coordinator-withdrawal":
+                    rows.append(case.sub("S", "withdrawn", withdrawal={"by":"coordinator", "reason":"Subgoal no longer needed"}))
+                elif kind == "genuine-steering":
+                    rows.append({"id":"U", "kind":"steer", "provenance":"user_direct", "source":{"instruction":"Record steering", "ref":"owner-note"},
+                        "check":"steering recorded", "state":"withdrawn", "withdrawal":{"by":"user_direct", "reason":"Owner withdrew steering"}})
+                    extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Record then withdraw steering"}
+                elif kind in ("genuine-assurance-withdrawal", "assurance-findings-null", "assurance-finding-null"):
+                    rows.append({"id":"A", "kind":"assurance", "provenance":"coordinator", "parent":"O1",
+                        "check":"independent review", "scope":{"paths":["src"]}, "question":"correct?", "candidate":case.candidate,
+                        "existing_evidence":"tests", "insufficiency":"no review", "state":"withdrawn",
+                        "withdrawal":{"by":"user_direct", "reason":"Owner withdrew peer review"}})
+                    extra["revision_authority"] = {"provenance":"user_direct", "instruction":"Withdraw peer review"}
+                reviewed = kind.startswith(("consumed-report-", "accepted-review-")) or kind in ("genuine-reviewed-closed", "genuine-reviewed-withdrawn")
+                if reviewed: case.closed_review_peer(withdrawn=kind == "genuine-reviewed-withdrawn" or kind.startswith("accepted-review-"))
+                elif not released: checkpoint(rows, **extra)
+                case.current = current
+                peer = objective_root(case.project, "closure-peer") / "context.json"
+                raw = json.loads(peer.read_text()); cp = raw["checkpoint"]; ob = (cp.get("obligations") or [{}])[0]
+                selected = ob.get("evidence", [{}])[0] if ob.get("evidence") else {}
+                retained = (ob.get("receipts") or [{"evidence":{}}])[0]["evidence"]
+                if kind.startswith("selected-missing-"): selected.pop(kind.removeprefix("selected-missing-"))
+                elif kind.startswith("retained-missing-"): retained.pop(kind.removeprefix("retained-missing-"))
+                elif kind == "selected-null": ob["evidence"] = [None]
+                elif kind == "selected-string": ob["evidence"] = ["not evidence"]
+                elif kind == "selected-empty": ob["evidence"] = []
+                elif kind == "selected-extra": selected["unknown"] = True
+                elif kind == "selected-criterion": selected["criterion"] = "other"
+                elif kind == "selected-sources": selected["sources"] = [None]
+                elif kind == "selected-dependencies": selected["dependencies"] = None
+                elif kind == "selected-reference": selected["reference"] = "unrecorded"
+                elif kind == "retained-null": ob["receipts"][0]["evidence"] = None
+                elif kind == "missing-receipts": ob.pop("receipts")
+                elif kind == "null-receipts": ob["receipts"] = None
+                elif kind == "null-receipt": ob["receipts"] = [None]
+                elif kind == "duplicate-receipt": ob["receipts"].append(deepcopy(ob["receipts"][0]))
+                elif kind == "contradictory-receipt": ob["receipts"][-1]["evidence"]["candidate"] = "0" * 40
+                elif kind in ("receipt-negative", "receipt-zero", "receipt-boolean", "receipt-future"):
+                    ob["receipts"][-1]["accepted_seq"] = {"receipt-negative":-1, "receipt-zero":0, "receipt-boolean":True, "receipt-future":cp["seq"]+1}[kind]
+                elif kind == "receipt-unaccepted": ob["receipts"][-1].pop("accepted_seq")
+                elif kind == "receipt-reuse": ob["receipts"][-1]["reuse"] = {"from":"unrecorded"}
+                elif kind == "retained-negative": ob["receipts"][0]["accepted_seq"] = -1
+                elif kind == "history-overflow": ob["receipts"] *= 9
+                elif kind == "withdrawal-coordinator": ob["withdrawal"] = {"by":"coordinator", "reason":"discard objective criterion"}
+                elif kind == "withdrawal-nobody": ob["withdrawal"] = {"by":"nobody", "reason":""}
+                elif kind == "withdrawal-null": ob["withdrawal"] = None
+                elif kind.startswith("withdrawal-no-"): ob["withdrawal"].pop(kind.removeprefix("withdrawal-no-"))
+                elif kind == "withdrawal-empty-instruction": ob["withdrawal"]["instruction"] = ""
+                elif kind == "withdrawal-extra": ob["withdrawal"]["extra"] = True
+                elif kind == "criteria-missing": cp["criteria"] = []
+                elif kind == "criteria-extra": cp["criteria"].append("uncovered")
+                elif kind == "criteria-null": cp["criteria"] = None
+                elif kind == "obligations-empty": cp["obligations"] = []
+                elif kind == "duplicate-id": cp["obligations"].append(deepcopy(ob))
+                elif kind == "introduced-negative": ob["introduced_seq"] = -1
+                elif kind == "definition-invalid": ob["definition"] = "0" * 64
+                elif kind == "boundary-missing": ob.pop("boundary")
+                elif kind == "source-null": ob["source"] = None
+                elif kind == "governance-null": cp["governance_sources"] = [None]
+                elif kind == "checkpoint-missing-candidate": cp.pop("candidate")
+                elif kind == "checkpoint-invalid-verification": cp["verification"] = None
+                elif kind == "checkpoint-unknown-field": cp["unknown"] = True
+                elif kind.startswith("accepted-review-null-"):
+                    cp["obligations"][1]["receipts"][0]["evidence"][kind.removeprefix("accepted-review-null-")] = None
+                elif kind.startswith("consumed-report-"):
+                    admission = next(iter(raw["admissions"].values())); report = admission["report"]
+                    if kind.startswith("consumed-report-missing-"):
+                        report["observation"].pop(kind.removeprefix("consumed-report-missing-"))
+                    elif kind == "consumed-report-null": admission["report"] = None
+                    elif kind == "consumed-report-digest": report["observation_digest"] = "0" * 64
+                    elif kind == "consumed-report-attempt": report["attempt"] = "unobserved"
+                    elif kind == "consumed-report-observation": report["observation"]["checks"] = ["changed observation"]
+                    elif kind == "consumed-report-result": report["outcome"] = "failed"
+                    elif kind == "consumed-report-runtime": admission["runtime"] = "unknown-runtime"
+                elif kind.startswith("worktree-"):
+                    cp["worktree"] = {"worktree-list":[None], "worktree-string":"bad", "worktree-integer":1,
+                                      "worktree-boolean":True, "worktree-null":None}[kind]
+                elif kind == "checkpoint-null-policy": cp["policy_revision"] = None
+                elif kind in ("retained-reuse-conflict", "retained-reuse-definition"):
+                    ob["receipts"][0]["reuse"] = {"from":"unobserved" if kind.endswith("conflict") else retained["candidate"],
+                        "to":case.candidate, "delta":[], "definition":"0" * 64 if kind.endswith("definition") else retained["definition"]}
+                elif kind == "governance-header-base": cp["governance"]["base"] = "0" * 40
+                elif kind == "governance-header-selection": cp["governance"]["selection"] = "unsupported-selection"
+                elif kind == "governance-header-exclusion": cp["governance"]["exclude"] = ["AGENTS.md"]
+                elif kind.startswith("policy-"):
+                    policy = cp["obligations"][1]; source = policy["source"]
+                    changes = {"policy-line-reversed":("lines", "4-3"), "policy-line-outside":("lines", "9999"),
+                        "policy-quote":("quote_sha256", "0" * 64), "policy-revision":("revision", "sha256:" + "0" * 64),
+                        "policy-base":("base", "0" * 40), "policy-undeclared":("path", ".pod/config.yaml")}
+                    if kind in changes:
+                        field, value = changes[kind]; source[field] = value
+                    else:
+                        source["gone"] = True
+                        policy.update(state="withdrawn", withdrawal={"by":"project_policy", "reason":"policy supposedly gone"})
+                        cp["closure"]["report"]["satisfied"] = ["O1"]
+                        cp["closure"]["report"]["withdrawn"] = [{"obligation":"P", "provenance":"project_policy", **policy["withdrawal"]}]
+                elif kind == "governance-header-null": cp["governance"] = None
+                elif kind == "proposals-null": cp["proposals"] = None
+                elif kind == "proposal-null": cp["proposals"] = [None]
+                elif kind == "observations-null": cp["observations"] = None
+                elif kind == "observation-row-null": cp["observations"]["outstanding"] = [None]
+                elif kind == "reopened-null": cp["reopened"] = None
+                elif kind == "reopen-row-null": cp["reopened"] = [None]
+                elif kind == "quiescence-invalid": cp["quiescence"] = {"state":"unknown"}
+                elif kind == "slot-contradiction": cp["coordinator_slot"] = "O1"
+                elif kind == "assurance-findings-null": cp["obligations"][1]["findings"] = None
+                elif kind == "assurance-finding-null": cp["obligations"][1]["findings"] = [None]
+                elif kind.startswith("outer-unsupported"): raw["schema"] = "unsupported-future-context"
+                elif kind.startswith("outstanding-"):
+                    admission = deepcopy(case.admission); admission.update(objective="closure-peer", serves=["O1"], state=kind.removeprefix("outstanding-"))
+                    raw["admissions"][admission["admission_id"]] = admission
+                if kind.startswith("withdrawal-") and isinstance(ob["withdrawal"], dict):
+                    cp["closure"]["report"]["withdrawn"] = [{"obligation":ob["id"], "provenance":ob["provenance"], **ob["withdrawal"]}]
+                if not kind.startswith("genuine-") and not released:
+                    peer.write_text(json.dumps([] if kind == "outer-nonobject" else raw))
+                if phase == "fresh": case.lose()
+                before = case.snapshot(); own = deepcopy(case.state()); calls = len(case.mutations)
+                starts, workers = deepcopy(case.port.starts), deepcopy(case.port.workers)
+                verdict = case.status()["owner_handoff"]; text = case.status(text=True)
+                if kind.startswith("genuine-"):
+                    self.assertEqual(verdict["status"], "handoff_available")
+                    case.handoff(); self.assertEqual(case.entry()["state"], "done")
+                    self.assertEqual(len(case.mutations), 1)
+                    case.assert_only_handoff_changes(own, case.state(), completed=True)
+                else:
+                    expected = "scope_unreadable" if kind in ("outer-nonobject", "outer-unsupported-foreign") else "run_shared"
+                    self.assertEqual(verdict["condition"], expected); self.assertIn(expected, text)
+                    for supplied in ("owner", "next"):
+                        for boundary, call in case.boundary_calls(supplied).items():
+                            error = case.refused(call)
+                            self.assertEqual(error.detail["owner_handoff"]["condition"], expected)
+                    case.refused(lambda:case.handoff())
+                    self.assertEqual(len(case.mutations), calls)
+                    if phase == "pending" and expected == "run_shared":
+                        self.assertEqual(case.entry()["state"], "aborted")
+                        case.assert_only_handoff_changes(own, case.state(), completed=False)
+                    else: self.assertEqual(case.state(), own)
+                own_key = str((objective_root(case.project, "objective") / "context.json").relative_to(case.root / "state"))
+                self.assertEqual({key:value for key,value in case.snapshot().items() if key != own_key},
+                                 {key:value for key,value in before.items() if key != own_key})
+                self.assertEqual(case.port.starts, starts); self.assertEqual(case.port.workers, workers)
+        finally: case.doCleanups()
+
+    def test_selected_receipt_missing_identity_fields(self): self.rows()
+    def test_selected_receipt_missing_outcome_fields(self): self.rows()
+    def test_retained_receipt_missing_identity_fields(self): self.rows()
+    def test_retained_receipt_missing_outcome_fields(self): self.rows()
+    def test_selected_evidence_shapes(self): self.rows()
+    def test_receipt_list_shapes(self): self.rows()
+    def test_receipt_sequence_and_reuse_shapes(self): self.rows()
+    def test_withdrawal_shapes(self): self.rows()
+    def test_criteria_and_obligation_shapes(self): self.rows()
+    def test_checkpoint_field_shapes(self): self.rows()
+    def test_checkpoint_collection_shapes(self): self.rows()
+    def test_worktree_and_governance_header_shapes(self): self.rows()
+    def test_outer_record_and_outstanding_admissions(self): self.rows()
+    def test_genuine_current_writer_peers(self): self.rows()
+    def test_assurance_withdrawal_and_findings(self): self.rows()
+    def test_released_writer_peers(self): self.rows()
+    def test_project_policy_line_and_quote_citations(self): self.rows()
+    def test_project_policy_revision_base_and_declaration(self): self.rows()
+    def test_reviewed_peers_and_report_binding(self): self.rows()
+    def test_consumed_report_outcome_and_accepted_review_nulls(self): self.rows()
+    def test_consumed_report_missing_identity_fields(self): self.rows()
+    def test_consumed_report_missing_content_fields(self): self.rows()
+
+
+class RetainedReviewHistoryTableTests(GroupedTable):
+    PHASES = PHASES
+    GROUPS = {
+        "test_review_history_with_both_sequence_markers": _pick(REVIEW_HISTORY_CASES, *(((), kind) for kind in MARKER_KINDS)),
+        "test_review_history_without_accepted_seq": _pick(REVIEW_HISTORY_CASES, *((("accepted_seq",), kind) for kind in MARKER_KINDS)),
+        "test_review_history_without_reported_seq": _pick(REVIEW_HISTORY_CASES, *((("reported_seq",), kind) for kind in MARKER_KINDS)),
+        "test_review_history_without_either_sequence_marker": _pick(REVIEW_HISTORY_CASES, *((("accepted_seq", "reported_seq"), kind)
+                                                                                      for kind in MARKER_KINDS)),
+        "test_unknown_duplicate_and_misordered_review_history": _pick(REVIEW_HISTORY_CASES, ((), "unknown-genuine"), ((), "duplicate"),
+                                                                       ((), "reported-before-admitted")),
+        "test_reuse_history_target_delta_and_source": _pick(REVIEW_HISTORY_CASES, ((), "reuse-genuine"), ((), "reuse-unknown-target"),
+                                                             ((), "reuse-false-delta"), ((), "reuse-source")),
+        "test_reuse_history_definition_duplicate_unreadable_and_touched": _pick(REVIEW_HISTORY_CASES, ((), "reuse-definition"), ((), "reuse-duplicate"),
+                                                                                 ((), "reuse-unreadable"), ((), "reuse-touched-accurate")),
+    }
+
+    def row(self, phase, item):
+        markers, kind = item
+        case = HandoffCase(); case.setUp()
+        try:
+            with self.subTest(phase=phase, omitted=markers, kind=kind):
+                case.establish()
+                if phase == "pending":
+                    case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                if kind.startswith("reuse-"): case.reused_review_peer()
+                else: case.closed_review_peer(withdrawn=True, objective="history-peer", unknown=kind == "unknown-genuine")
+                peer = objective_root(case.project, "history-peer") / "context.json"
+                raw = json.loads(peer.read_text()); cp = raw["checkpoint"]
+                ob = cp["obligations"][1]; receipt = ob["receipts"][0]; evidence = receipt["evidence"]
+                admission = next(iter(raw["admissions"].values()))
+                for marker in markers: receipt.pop(marker)
+                if kind == "null-governance": evidence["governance"] = None
+                elif kind == "role": admission["role"] = "investigate"
+                elif kind == "serves": admission["serves"] = ["O1"]
+                elif kind == "duplicate": ob["receipts"].append(deepcopy(receipt))
+                elif kind == "reported-before-admitted": receipt["reported_seq"] = admission["admitted_seq"] - 1
+                elif kind == "reuse-unknown-target": receipt["reuse"]["to"] = "nonexistent-target"
+                elif kind == "reuse-false-delta": receipt["reuse"]["delta"] = []
+                elif kind == "reuse-source": receipt["reuse"]["from"] = "unknown-source"
+                elif kind == "reuse-definition": receipt["reuse"]["definition"] = "0" * 64
+                elif kind == "reuse-duplicate": receipt["reuse"]["delta"] *= 2
+                elif kind == "reuse-unreadable":
+                    receipt["reuse"]["to"] = "0" * 40
+                elif kind == "reuse-touched-accurate":
+                    from tests.kernel_support import git
+                    (case.project / "src/old.py").write_text("changed original reviewed scope\n")
+                    git(case.project, "add", "."); git(case.project, "commit", "-qm", "touch reviewed scope")
+                    target = git(case.project, "rev-parse", "HEAD")
+                    receipt["reuse"].update(to=target, delta=sorted(git(case.project, "diff", "--name-only", receipt["reuse"]["from"], target).split()))
+                if markers or kind not in ("genuine", "reuse-genuine", "unknown-genuine"):
+                    peer.write_text(json.dumps(raw))  # Defensive corrupt-record control, never writer/live proof.
+                if phase == "fresh": case.lose()
+                case.assert_peer_scope(peer, eligible=kind in ("genuine", "reuse-genuine", "unknown-genuine"), phase=phase)
+        finally: case.doCleanups()
+
+    def test_review_history_with_both_sequence_markers(self): self.rows()
+    def test_review_history_without_accepted_seq(self): self.rows()
+    def test_review_history_without_reported_seq(self): self.rows()
+    def test_review_history_without_either_sequence_marker(self): self.rows()
+    def test_unknown_duplicate_and_misordered_review_history(self): self.rows()
+    def test_reuse_history_target_delta_and_source(self): self.rows()
+    def test_reuse_history_definition_duplicate_unreadable_and_touched(self): self.rows()
+
+
+class FaithfulObservationTableTests(GroupedTable):
+    PHASES = PHASES
+    GROUPS = {
+        "test_noverif_succeeded_observation_peer": tuple(item for item in OBSERVATION_CASES if item[0] == "noverif-succeeded"),
+        "test_noverif_failed_observation_peer": tuple(item for item in OBSERVATION_CASES if item[0] == "noverif-failed"),
+        "test_implementation_observation_peer": tuple(item for item in OBSERVATION_CASES if item[0] == "implementation"),
+        "test_other_assurance_observation_peer": tuple(item for item in OBSERVATION_CASES if item[0] == "other-assurance"),
+    }
+
+    def row(self, phase, item):
+        kind, path = item
+        case = HandoffCase(); case.setUp()
+        try:
+            with self.subTest(phase=phase, kind=kind, path=path):
+                case.establish()
+                if phase == "pending":
+                    case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                checkpoint, admission = case.observation_peer(kind)
+                peer = objective_root(case.project, "observation-peer") / "context.json"
+                original = deepcopy(read(case.project, "observation-peer")["checkpoint"]["obligations"][1]["receipts"])
+                rows = deepcopy(read(case.project, "observation-peer")["checkpoint"]["obligations"])
+                if path in ("coordinator", "user"):
+                    for field in ("wait", "executor", "evidence"): rows[1].pop(field, None)
+                    rows[1].update(state="withdrawn", withdrawal={"by":"coordinator" if path == "coordinator" else "user_direct", "reason":"observation retained"})
+                authority = {"provenance":"user_direct", "instruction":"Withdraw the disposable assurance"}
+                checkpoint(None if path == "carry" else rows, **({"revision_authority":authority} if path == "user" else {}))
+                state = read(case.project, "observation-peer")
+                self.assertEqual(state["checkpoint"]["obligations"][1]["receipts"], original)
+                # Native settlement alone cannot promote an observation to proof.
+                from pod.ledger import kernel_view
+                from pod.assurance import evidence_valid
+                from pod.obligations import governance_digest
+                case.settle(admission)
+                case.closed_review_peer(objective="qualification-positive", unknown=True)
+                positive = read(case.project, "qualification-positive")
+                accepted = positive["checkpoint"]["obligations"][1]
+                positive_ctx = kernel_view(case.project, "qualification-positive", state=positive)["ctx"]
+                positive_gov = governance_digest(positive["checkpoint"]["governance_sources"])
+                self.assertFalse(positive_ctx["outstanding"])
+                self.assertTrue(evidence_valid(accepted, positive_ctx, positive_gov))
+                unknown = accepted["receipts"][0]["evidence"]
+                self.assertEqual(unknown["attempt"], "unobserved-review")
+                self.assertFalse(evidence_valid({**accepted, "evidence":[unknown]}, positive_ctx, positive_gov))
+                evidence = original[0]["evidence"]
+                ob = state["checkpoint"]["obligations"][1]
+                ctx = kernel_view(case.project, "observation-peer", state=state)["ctx"]
+                self.assertNotIn(admission["admission_id"], ctx["outstanding"])
+                self.assertFalse(evidence_valid({**ob, "evidence":[evidence]}, ctx, governance_digest(state["checkpoint"]["governance_sources"])))
+                if kind.startswith("noverif"):
+                    rows = deepcopy(state["checkpoint"]["obligations"])
+                    for row in rows:
+                        if row["state"] == "withdrawn": continue
+                        for field in ("wait", "executor", "evidence", "withdrawal"): row.pop(field, None)
+                        row.update(state="withdrawn", withdrawal={"by":"user_direct", "reason":"close observation-only peer"})
+                    checkpoint(rows, close=True, revision_authority=authority)
+                if phase == "fresh": case.lose()
+                case.assert_peer_scope(peer, eligible=kind.startswith("noverif"), phase=phase)
+        finally: case.doCleanups()
+
+    def test_noverif_succeeded_observation_peer(self): self.rows()
+    def test_noverif_failed_observation_peer(self): self.rows()
+    def test_implementation_observation_peer(self): self.rows()
+    def test_other_assurance_observation_peer(self): self.rows()
+
+
+class ContinuityRuntimeShapeTableTests(GroupedTable):
+    PHASES = PHASES
+    GROUPS = {
+        "test_from_runtime_shapes_refuse_before_fingerprint_collection": tuple(item for item in RUNTIME_SHAPE_CASES if item[0] == "from_runtime"),
+        "test_to_runtime_shapes_refuse_before_fingerprint_collection": tuple(item for item in RUNTIME_SHAPE_CASES if item[0] == "to_runtime"),
+        "test_history_row_shapes_refuse_before_fingerprint_collection": tuple(item for item in RUNTIME_SHAPE_CASES if item[0] == "row"),
+    }
+
+    def row(self, phase, item):
+        field, value = item
+        case = HandoffCase(); case.setUp()
+        try:
+            with self.subTest(phase=phase, field=field, shape=type(value).__name__):
+                case.establish()
+                if phase == "pending":
+                    case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
+                case.closed_review_peer(withdrawn=True, objective="runtime-peer")
+                peer = objective_root(case.project, "runtime-peer") / "context.json"
+                raw = json.loads(peer.read_text()); entry = {"from_runtime":"runtime", "to_runtime":"runtime",
+                    "at":"offline control", "provenance":"automatic", "verified":{}}
+                if field == "row": entry = value
+                elif value == "missing": entry.pop(field)
+                else: entry[field] = value
+                raw["checkpoint"]["continuity"]["history"].append(entry)
+                peer.write_text(json.dumps(raw))  # Defensive shape control, never writer/live proof.
+                before = case.snapshot()
+                error = case.refused(lambda:run("checkpoint", {"project":str(case.project), "objective":"runtime-peer",
+                    "owner":os.environ["ORCA_TERMINAL_HANDLE"], "value":case.core(reopen=True,
+                    revision_authority={"provenance":"user_direct", "instruction":"Reopen disposable peer"}, close=True)}))
+                self.assertTrue(error.code.startswith(("invalid_", "state_")))
+                self.assertIsInstance(case.status(objective="runtime-peer"), dict)
+                case.status(text=True, objective="runtime-peer")
+                self.assertEqual(before, case.snapshot())
+                if phase == "fresh": case.lose()
+                case.assert_peer_scope(peer, eligible=False, phase=phase)
+        finally: case.doCleanups()
+
+    def test_from_runtime_shapes_refuse_before_fingerprint_collection(self): self.rows()
+    def test_to_runtime_shapes_refuse_before_fingerprint_collection(self): self.rows()
+    def test_history_row_shapes_refuse_before_fingerprint_collection(self): self.rows()
+
+
+class SplitTableTests(unittest.TestCase):
+    def test_split_tables_run_every_original_row_once(self):
+        for table, cases, limit in ((ClosureContractTableTests, CLOSURE_KINDS, 16),
+                                    (RetainedReviewHistoryTableTests, REVIEW_HISTORY_CASES, 8),
+                                    (FaithfulObservationTableTests, OBSERVATION_CASES, 8),
+                                    (ContinuityRuntimeShapeTableTests, RUNTIME_SHAPE_CASES, 20)):
+            with self.subTest(table=table.__name__):
+                assert_grouped_table(self, table, cases, limit=limit)
 
 
 class TransitionTableTests(HandoffCase):

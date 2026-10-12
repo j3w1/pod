@@ -4,12 +4,45 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import unittest
 from unittest.mock import patch
 
 ORCA_VERSION = "1.4.209"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / f"orca-{ORCA_VERSION}"
 HOST_HOME = Path.home().resolve()
 HOST_POD_DATA = Path(os.environ.get("XDG_DATA_HOME", HOST_HOME / ".local/share")).resolve() / "pod"
+
+
+class GroupedTable(unittest.TestCase):
+    """One large table split into named group methods so suite lanes can spread its rows.
+
+    Each `test_*` method body is `self.rows()`; GROUPS maps that method's name to the original
+    rows it runs, in every phase of PHASES. `assert_grouped_table` proves the split is exact.
+    """
+    GROUPS: dict = {}
+    PHASES: tuple = ()
+
+    def rows(self):
+        group = self.GROUPS[self._testMethodName]
+        for phase in self.PHASES or (None,):
+            for item in group:
+                if phase is None:
+                    self.row(item)
+                else:
+                    self.row(phase, item)
+
+
+def assert_grouped_table(test: unittest.TestCase, table: type, cases, *, limit: int) -> None:
+    """Every original row runs in exactly one named group method of at most `limit` rows."""
+    groups = table.GROUPS
+    test.assertEqual(sorted(name for name in vars(table) if name.startswith("test_")), sorted(groups))
+    test.assertTrue(all(groups.values()), "every group method runs rows")
+    rows = [repr(item) for group in groups.values() for item in group]
+    test.assertEqual(len(rows), len(set(rows)), "no row runs twice")
+    test.assertEqual(sorted(rows), sorted(map(repr, cases)), "the groups are exactly the original table")
+    per_item = max(1, len(getattr(table, "PHASES", ())))
+    for name, group in groups.items():
+        test.assertLessEqual(per_item * len(group), limit, f"{name} exceeds {limit} rows; add a group method")
 
 
 def disposable_path(home: Path) -> str:
