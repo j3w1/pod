@@ -1,4 +1,5 @@
 import ast
+from functools import cache
 import json
 from pathlib import Path
 import re
@@ -50,18 +51,26 @@ def offline_test_references(value):
     return refs
 
 
+@cache
+def _class_methods(file: Path, stamp: tuple[int, int]) -> dict[str, frozenset[str]]:
+    """Each top-level class's own method names; one parse per file version."""
+    tree = ast.parse(file.read_text(), filename=str(file))
+    methods: dict[str, frozenset[str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            methods[node.name] = methods.get(node.name, frozenset()) | {
+                child.name for child in node.body if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    return methods
+
+
 def assert_test_reference_exists(root: Path, path: str) -> None:
     module, cls, method = path.rsplit(".", 2)
     file = root.joinpath(*module.split(".")).with_suffix(".py")
     if not file.is_file():
         raise ValueError(f"offline_test module does not exist: {path}")
-    tree = ast.parse(file.read_text(), filename=str(file))
+    status = file.stat()
     # The method must be defined in the named class itself, not merely somewhere in the module.
-    exists = any(isinstance(node, ast.ClassDef) and node.name == cls
-                 and any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method
-                         for child in node.body)
-                 for node in tree.body)
-    if not exists:
+    if method not in _class_methods(file.resolve(), (status.st_mtime_ns, status.st_size)).get(cls, ()):
         raise ValueError(f"offline_test case does not exist: {path}")
 
 
