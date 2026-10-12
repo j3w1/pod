@@ -1,9 +1,12 @@
+import ast
 from contextlib import contextmanager
+import inspect
 import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -43,6 +46,12 @@ def assert_grouped_table(test: unittest.TestCase, table: type, cases, *, limit: 
     per_item = max(1, len(getattr(table, "PHASES", ())))
     for name, group in groups.items():
         test.assertLessEqual(per_item * len(group), limit, f"{name} exceeds {limit} rows; add a group method")
+        # A group method only runs its group, so no body can quietly replace or skip the rows.
+        body = ast.parse(textwrap.dedent(inspect.getsource(getattr(table, name)))).body[0].body
+        call = body[0].value if len(body) == 1 and isinstance(body[0], ast.Expr) else None
+        test.assertTrue(isinstance(call, ast.Call) and not call.args and not call.keywords
+                        and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id == "self", f"{name} must only call its group runner")
 
 
 def disposable_path(home: Path) -> str:

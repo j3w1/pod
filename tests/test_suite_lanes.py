@@ -20,8 +20,8 @@ def manifest(**changes) -> dict:
     value = {"schema": sl.SCHEMA,
              "source": {"kind": "estimate"},
              "budgets": {"record_at_seconds": 1.0, "unrecorded_max_seconds": 2.0, "drift_ratio": 2.0,
-                         "drift_slack_seconds": 10, "test_max_seconds": 90, "fast_mean_seconds": 0.25,
-                         "max_parallel_shards": 6},
+                         "drift_slack_seconds": 10, "test_max_seconds": 90, "max_parallel_shards": 6},
+             "fast_mean_seconds": 0.25,
              "lanes": {"parallel": {"shards": 2, "workers": 2, "target_seconds": 180},
                        "serial": {"shards": 1, "workers": 1, "target_seconds": 180},
                        "installer": {"shards": 1, "workers": 2, "target_seconds": 180}},
@@ -44,6 +44,7 @@ class ManifestTests(unittest.TestCase):
             "reason": manifest(overrides={"tests.m.C": {"lane": "serial", "reason": " "}}),
             "duration": manifest(durations={"tests.m.C.test_a": 0}),
             "source": manifest(source={"kind": "guess"}),
+            "fast mean": manifest(fast_mean_seconds=0),
             "extra": dict(manifest(), tags=[]),
         }
         for name, value in broken.items():
@@ -86,6 +87,25 @@ SOURCES = {
 IDS = ["tests.test_pty.A.test_a", "tests.test_install.B.test_b", "tests.test_both.C.test_c",
        "tests.test_through_helper.D.test_d", "tests.test_plain.E.test_bounded", "tests.test_plain.E.test_unbounded",
        "tests.test_plain.F.test_inline", "tests.test_plain.F.test_value"]
+
+
+class GroupGuardTests(unittest.TestCase):
+    def test_a_group_method_may_only_run_its_group(self):
+        from tests.common import GroupedTable, assert_grouped_table
+
+        class Honest(GroupedTable):
+            GROUPS = {"test_first": ("a",), "test_second": ("b",)}
+            def test_first(self): self.rows()
+            def test_second(self): self.rows()
+
+        class Hollow(Honest):
+            GROUPS = Honest.GROUPS
+            def test_first(self): self.rows()
+            def test_second(self): pass
+
+        assert_grouped_table(self, Honest, ("a", "b"), limit=1)
+        with self.assertRaises(AssertionError):
+            assert_grouped_table(self, Hollow, ("a", "b"), limit=1)
 
 
 class ClassificationTests(unittest.TestCase):
@@ -201,6 +221,19 @@ class AccountingTests(unittest.TestCase):
         strict = self.account(ids, [fixture_error, fixture_skip], forbid_skips=True)
         self.assertTrue(any(item.startswith("SKIPPED 1 test(s)") for item in strict["problems"]))
 
+    def test_a_worker_must_finish_cleanly_after_its_last_test(self):
+        ids = ["tests.m.C.test_a"]
+        ran = [{"event": "start", "id": ids[0]}, {"event": "stop", "id": ids[0], "outcome": "success", "seconds": 0.1}]
+        clean = sl.account(ids, ran + [{"event": "done", "ok": True}], name="w", exit_note="exited 0",
+                           forbid_skips=True, exit_code=0)
+        self.assertEqual((clean["problems"], clean["ran"]), ([], 1))
+        for events_, code in ((ran, 1), (ran, 0), (ran + [{"event": "done", "ok": True}], -11)):
+            with self.subTest(code=code, done=len(events_) > 2):
+                problems = sl.account(ids, events_, name="w", exit_note=f"exited {code}", forbid_skips=True,
+                                      exit_code=code)["problems"]
+                self.assertEqual(len(problems), 1)
+                self.assertTrue(problems[0].startswith(f"WORKER w exited {code} without a clean finish"))
+
     def test_failed_outcomes_are_findings_and_passing_ones_are_not(self):
         ids = [f"tests.m.C.test_{outcome}" for outcome in ("failure", "error", "unexpected_success",
                                                              "expected_failure", "skip")]
@@ -241,8 +274,11 @@ class RefreshTests(unittest.TestCase):
         results = {f"tests.m.C.test_{index:03d}": {"outcome": "success", "seconds": 0.6} for index in range(230)}
         results["tests.m.C.test_recorded"] = {"outcome": "success", "seconds": 0.1}
         results["tests.m.C.test_fast"] = {"outcome": "success", "seconds": 0.2}
+        results["tests.m.C.test_failed_slow"] = {"outcome": "failure", "seconds": 9.0}
+        value["durations"]["tests.m.C.test_not_run"] = 4.0
+        results["tests.m.C.test_not_run"] = {"outcome": "error", "seconds": 0.0}
         lines = sl.timing_lines(lane="parallel", shard=1, of=2, workers=2, digest="d", results=results,
-                                manifest=value, wall=12.0, skips=0, fixture_errors=0)
+                                manifest=value, wall=12.0, skips=0, fixture_errors=0, ran=233)
         self.assertEqual(len(lines), 3)
         log = "\n".join(f"tests (parallel 1/2)\tRouted suite share\t2026-10-12T00:00:00.0Z {line}" for line in lines)
         bodies = sl.parse_timings(log + "\nnoise POD_TEST_TIMINGS {broken\n")
@@ -250,7 +286,9 @@ class RefreshTests(unittest.TestCase):
         merged = {key: item for body in bodies for key, item in body["seconds"].items()}
         self.assertEqual(len(merged), 231)
         self.assertNotIn("tests.m.C.test_fast", merged)
+        self.assertFalse({"tests.m.C.test_failed_slow", "tests.m.C.test_not_run"} & set(merged))
         self.assertEqual(bodies[0]["fast"], {"count": 1, "seconds": 0.2})
+        self.assertEqual((bodies[0]["planned"], bodies[0]["ran"]), (234, 233))
 
     def test_merge_records_slow_tests_drops_fast_ones_and_ignores_noise(self):
         value = manifest(lanes={"parallel": {"shards": 1, "workers": 2, "target_seconds": 180},
@@ -265,7 +303,8 @@ class RefreshTests(unittest.TestCase):
         updated, changes = sl.merge_timings(value, bodies)
         self.assertEqual(updated["durations"], {"tests.m.C.test_steady": 10.0, "tests.m.C.test_moved": 13.0,
                                                 "tests.m.C.test_new": 1.0, "tests.m.C.test_absent": 5.0})
-        self.assertEqual(updated["budgets"]["fast_mean_seconds"], 0.15)
+        self.assertEqual(updated["fast_mean_seconds"], 0.15)
+        self.assertEqual(updated["budgets"], value["budgets"])
         self.assertIn("- tests.m.C.test_now_fast 4.0 (now 0.50)", changes)
         self.assertEqual(value["durations"]["tests.m.C.test_now_fast"], 4.0)
 
@@ -350,12 +389,15 @@ class WorkerTests(unittest.TestCase):
             self.assertIn(expected, out)
         self.assertNotIn("test_expected", out.split("finding(s):")[1])
         body = sl.parse_timings(out)[0]
-        self.assertEqual((body["lane"], body["shard"], body["ran"], body["fixture_errors"]), ("parallel", 1, 10, 1))
+        self.assertEqual((body["lane"], body["shard"], body["planned"], body["ran"], body["fixture_errors"]),
+                         ("parallel", 1, 10, 9, 1))
         self.assertIn("tests.test_demo.Outcomes.test_slow", body["seconds"])
 
     def test_a_clean_share_passes_and_a_crash_names_the_test_in_flight(self):
         clean = "import unittest\nclass Fine(unittest.TestCase):\n    def test_one(self): pass\n"
         crash = clean + "class Crash(unittest.TestCase):\n    def test_exit(self):\n        import os; os._exit(3)\n"
+        teardown = clean + ("class Late(unittest.TestCase):\n    @classmethod\n    def tearDownClass(cls):\n"
+                            "        import os; os._exit(1)\n    def test_two(self): pass\n")
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
             synthetic_tree(root, {"tests/test_demo.py": clean}, ONE_SHARD)
@@ -363,13 +405,34 @@ class WorkerTests(unittest.TestCase):
                           "--forbid-skips")
             (root / "tests" / "test_demo.py").write_text(crash)
             crashing = cli(root, "run", "--lane", "parallel", "--shard", "1", "--of", "1")
+            (root / "tests" / "test_demo.py").write_text(teardown)
+            late = cli(root, "run", "--lane", "parallel", "--shard", "1", "--of", "1")
             mismatch = cli(root, "run", "--lane", "parallel", "--shard", "1", "--of", "2")
         self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
         self.assertIn("2 tests, 0 failed", passing.stdout)
         self.assertEqual(crashing.returncode, 1)
         self.assertIn("IN FLIGHT tests.test_demo.Crash.test_exit: worker parallel-1.", crashing.stdout)
+        self.assertEqual(late.returncode, 1, late.stdout)
+        self.assertIn("without a clean finish after its last test", late.stdout)
         self.assertEqual(mismatch.returncode, 2)
         self.assertIn("SHARDS --of 2", mismatch.stderr)
+
+    def test_an_interrupted_run_leaves_no_worker_behind(self):
+        slow = "import time, unittest\nclass Slow(unittest.TestCase):\n    def test_wait(self): time.sleep(60)\n"
+        spawned = []
+
+        def interrupted(root, pending, running, finished, directory, concurrency):
+            running.append(sl._spawn(root, ["tests.test_demo.Slow.test_wait"], directory, "parallel-1", 600))
+            spawned.extend(running)
+            raise KeyboardInterrupt
+
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as scratch:
+            synthetic_tree(Path(root), {"tests/test_demo.py": slow}, ONE_SHARD)
+            with patch.object(sl, "_drive", interrupted), self.assertRaises(KeyboardInterrupt):
+                sl.run_pool(Path(root), [], Path(scratch), 1)
+        self.assertIsNotNone(spawned[0]["process"].poll())
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(spawned[0]["process"].pid, 0)
 
     def test_usage_errors_exit_two(self):
         with tempfile.TemporaryDirectory() as root:

@@ -2,7 +2,6 @@
  "budgets": {
   "drift_ratio": 2.0,
   "drift_slack_seconds": 10,
-  "fast_mean_seconds": 0.23,
   "max_parallel_shards": 6,
   "record_at_seconds": 1.0,
   "test_max_seconds": 90,
@@ -156,6 +155,7 @@
   "tests.test_workspace_state.DeltaAuditRenderTests.test_title_overflow_keeps_the_count_and_placeholders_without_displacing_the_age": 1.3,
   "tests.test_workspace_state.TableTests.test_mixed_table_identity_invariant_across_snapshots_and_sibling_views": 9.8
  },
+ "fast_mean_seconds": 0.23,
  "lanes": {
   "installer": {
    "shards": 1,

@@ -43,10 +43,13 @@ LANES = ("parallel", "serial", "installer")
 HARNESS = {"tests.pty_harness": "serial", "tests.install_support": "installer"}
 PRECEDENCE = ("serial", "installer")
 BUDGETS = ("record_at_seconds", "unrecorded_max_seconds", "drift_ratio", "drift_slack_seconds",
-           "test_max_seconds", "fast_mean_seconds", "max_parallel_shards")
-CLOCKS = frozenset({"monotonic", "perf_counter", "monotonic_ns", "perf_counter_ns"})
+           "test_max_seconds", "max_parallel_shards")
+KEYS = {"schema", "budgets", "lanes", "overrides", "source", "durations", "fast_mean_seconds"}
+CLOCKS = frozenset({"monotonic", "perf_counter", "monotonic_ns", "perf_counter_ns", "time"})
 BOUNDS = frozenset({"assertLess", "assertLessEqual"})
 CHUNK = 100
+SOLO_LIMIT = 5
+PASSED = frozenset({"success", "expected_failure"})
 FAILED = frozenset({"failure", "error", "unexpected_success"})
 FIXTURE = re.compile(r"(setUpClass|tearDownClass|setUpModule|tearDownModule) \((.+)\)")
 
@@ -78,9 +81,10 @@ def manifest_problems(manifest: object) -> list[str]:
     if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
         return [f"schema must be {SCHEMA}"]
     problems = []
-    extra = set(manifest) - {"schema", "budgets", "lanes", "overrides", "source", "durations"}
-    if extra:
-        problems.append("unknown keys " + ", ".join(sorted(extra)))
+    if set(manifest) != KEYS:
+        problems.append("keys must be exactly " + ", ".join(sorted(KEYS)))
+    if not (_number(manifest.get("fast_mean_seconds")) and manifest["fast_mean_seconds"] > 0):
+        problems.append("fast_mean_seconds must be a positive number")
     budgets = manifest.get("budgets")
     if not isinstance(budgets, dict) or set(budgets) != set(BUDGETS):
         problems.append("budgets must name exactly " + ", ".join(BUDGETS))
@@ -278,7 +282,7 @@ def classify(root: Path, ids: list[str], manifest: dict, *, sources: dict[str, s
 # Planning ---------------------------------------------------------------------------------------
 
 def estimate(manifest: dict, test_id: str) -> float:
-    return float(manifest["durations"].get(test_id, manifest["budgets"]["fast_mean_seconds"]))
+    return float(manifest["durations"].get(test_id, manifest["fast_mean_seconds"]))
 
 
 def pack(ids: list[str], bins: int, seconds) -> list[list[str]]:
@@ -346,9 +350,9 @@ def check(root: Path, manifest: dict, ids: list[str], lanes: dict, unclassified:
             findings.append(f"CEILING {key} is recorded at {value} s > {limit} s: split it into named group "
                             "methods (tests.common.GroupedTable)")
     for test_id in unclassified:
-        findings.append(f"TIMING {test_id} asserts a wall-clock bound but would run in {lanes[test_id]}: add "
-                        "it to overrides in tests/suite_lanes.json with \"lane\": \"serial\" (or a reason the "
-                        "bound has wide headroom)")
+        findings.append(f"TIMING {test_id} asserts a wall-clock bound but would run in {lanes[test_id]}: add a "
+                        "\"serial\" override with a reason to tests/suite_lanes.json; keeping it out of serial "
+                        "needs an owner decision")
     for path in sorted((root / "tests" / "incidents").glob("test_*.py")):
         if not any(test_id.startswith(f"tests.incidents.{path.stem}.") for test_id in ids):
             findings.append(f"INCIDENTS tests/incidents/{path.name} yields no test: give it a TestCase")
@@ -483,9 +487,11 @@ def _covers(fixture_id: str, test_id: str) -> bool:
     return test_id == scope or test_id.startswith(scope + ".")
 
 
-def account(ids: list[str], events: list[dict], *, name: str, exit_note: str, forbid_skips: bool) -> dict:
-    """Exact-once accounting of one worker's events against the ids it was assigned."""
+def account(ids: list[str], events: list[dict], *, name: str, exit_note: str, forbid_skips: bool,
+            exit_code: int = 0) -> dict:
+    """Exact-once accounting of one worker's events, completion and exit against its assigned ids."""
     started, stopped, fixtures = {}, {}, []
+    done = next((event for event in events if event.get("event") == "done"), None)
     for event in events:
         if event.get("event") == "start":
             started[event["id"]] = started.get(event["id"], 0) + 1
@@ -526,7 +532,12 @@ def account(ids: list[str], events: list[dict], *, name: str, exit_note: str, fo
     for test_id, result in sorted(results.items()):
         if result["outcome"] in FAILED and test_id in stopped:
             problems.append(f"{result['outcome'].upper().replace('_', ' ')} {test_id}")
+    if not problems and (done is None or not done.get("ok") or exit_code != 0):
+        # Teardown, cleanup or interpreter exit can still fail after the last test stopped.
+        problems.append(f"WORKER {name} {exit_note} without a clean finish after its last test: a class or "
+                        "module teardown, cleanup or interpreter exit failed; see its log")
     return {"results": results, "problems": problems, "skips": len(skips),
+            "ran": sum(1 for test_id in ids if test_id in stopped),
             "fixture_errors": sum(1 for event in fixtures if event["outcome"] in FAILED)}
 
 
@@ -545,6 +556,20 @@ def _spawn(root: Path, ids: list[str], directory: Path, name: str, timeout: floa
 def run_pool(root: Path, jobs: list[tuple[str, list[str], float]], directory: Path, concurrency: int) -> list[dict]:
     """Run (name, ids, timeout) workers at most `concurrency` at a time; kill a worker past its timeout."""
     pending, running, finished = list(jobs), [], []
+    try:
+        _drive(root, pending, running, finished, directory, concurrency)
+    finally:
+        for item in running:  # Interrupted: no worker outlives this run.
+            try:
+                os.killpg(item["process"].pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            item["process"].wait()
+            item["log"].close()
+    return sorted(finished, key=lambda item: item["name"])
+
+
+def _drive(root: Path, pending: list, running: list, finished: list, directory: Path, concurrency: int) -> None:
     while pending or running:
         while pending and len(running) < concurrency:
             name, ids, timeout = pending.pop(0)
@@ -564,9 +589,9 @@ def run_pool(root: Path, jobs: list[tuple[str, list[str], float]], directory: Pa
                 item["wall"] = time.monotonic() - item["started"]
                 item["note"] = (f"timed out after {item['timeout']:.0f} s" if item.get("timed_out")
                                 else f"exited {code}")
+                item["code"] = code
                 running.remove(item)
                 finished.append(item)
-    return sorted(finished, key=lambda item: item["name"])
 
 
 def gate_candidates(results: dict, manifest: dict) -> list[tuple[str, str, float]]:
@@ -590,12 +615,12 @@ def violation(manifest: dict, test_id: str, seconds: float) -> str | None:
     return None
 
 
-def gate_message(kind: str, test_id: str, seconds: float, alone: float, manifest: dict) -> str:
+def gate_message(kind: str, test_id: str, seconds: float, alone: float | None, manifest: dict) -> str:
     budgets, recorded = manifest["budgets"], manifest["durations"].get(test_id)
     run = os.environ.get("GITHUB_RUN_ID")
     record = (f"python tools/suite_lanes.py refresh --run {run}" if run
               else "python tools/suite_lanes.py refresh --pr <N> after its CI run")
-    timing = f"took {seconds:.1f} s ({alone:.1f} s alone)"
+    timing = f"took {seconds:.1f} s" + ("" if alone is None else f" ({alone:.1f} s alone)")
     if kind == "CEILING":
         return (f"CEILING {test_id} {timing} > {budgets['test_max_seconds']} s: split it into named group "
                 "methods (tests.common.GroupedTable)")
@@ -607,20 +632,21 @@ def gate_message(kind: str, test_id: str, seconds: float, alone: float, manifest
 
 
 def timing_lines(*, lane: str, shard: int, of: int, workers: int, digest: str, results: dict, manifest: dict,
-                 wall: float, skips: int, fixture_errors: int) -> list[str]:
-    """Chunked log lines that `refresh` reads back; only durations near or above the record threshold."""
+                 wall: float, skips: int, fixture_errors: int, ran: int | None = None) -> list[str]:
+    """Chunked log lines that `refresh` reads back: passing durations near or above the record threshold."""
+    ran = len(results) if ran is None else ran
     threshold = manifest["budgets"]["record_at_seconds"] / 2
-    listed = sorted((test_id, result["seconds"]) for test_id, result in results.items()
-                    if result["seconds"] >= threshold or test_id in manifest["durations"])
+    passed = {test_id: result["seconds"] for test_id, result in results.items() if result["outcome"] in PASSED}
+    listed = sorted((test_id, seconds) for test_id, seconds in passed.items()
+                    if seconds >= threshold or test_id in manifest["durations"])
     names = {test_id for test_id, _ in listed}
-    fast = [result["seconds"] for test_id, result in results.items()
-            if test_id not in names and result["outcome"] not in FAILED]
+    fast = [seconds for test_id, seconds in passed.items() if test_id not in names]
     parts = max(1, math.ceil(len(listed) / CHUNK))
     lines = []
     for part in range(parts):
         body = {"schema": TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "workers": workers,
                 "cpus": os.cpu_count(), "sha": os.environ.get("GITHUB_SHA", ""), "plan": digest,
-                "part": part + 1, "parts": parts, "ran": len(results), "skips": skips,
+                "part": part + 1, "parts": parts, "planned": len(results), "ran": ran, "skips": skips,
                 "fixture_errors": fixture_errors, "wall": round(wall, 1),
                 "fast": {"count": len(fast), "seconds": round(sum(fast), 3)},
                 "seconds": dict(listed[part * CHUNK:(part + 1) * CHUNK])}
@@ -638,7 +664,7 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
             forbid_skips: bool, concurrency: int, target: float | None = None) -> dict:
     """Run stages of (worker name, ids) one after another, each through the worker pool."""
     started = time.monotonic()
-    outcome = {"results": {}, "problems": [], "warnings": [], "skips": 0, "fixture_errors": 0}
+    outcome = {"results": {}, "problems": [], "warnings": [], "skips": 0, "fixture_errors": 0, "ran": 0}
     with tempfile.TemporaryDirectory(prefix="suite-lanes-") as scratch:
         directory = Path(scratch)
         for stage in stages:
@@ -648,11 +674,12 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
                 sys.stdout.write(_group(f"{item['name']}: {len(item['ids'])} tests in {item['wall']:.1f} s",
                                         item["log_file"].read_text(encoding="utf-8", errors="replace")))
                 accounted = account(item["ids"], _read_events(item["events"]), name=item["name"],
-                                    exit_note=item["note"], forbid_skips=forbid_skips)
+                                    exit_note=item["note"], forbid_skips=forbid_skips, exit_code=item["code"])
                 outcome["results"].update(accounted["results"])
                 outcome["problems"] += accounted["problems"]
                 outcome["skips"] += accounted["skips"]
                 outcome["fixture_errors"] += accounted["fixture_errors"]
+                outcome["ran"] += accounted["ran"]
         lane_wall = time.monotonic() - started
         if target is not None and lane_wall > target:
             message = f"LANE share took {lane_wall:.0f} s, over its {target:.0f} s target"
@@ -661,8 +688,13 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
                                            "or split its slowest tests")
             else:
                 outcome["warnings"].append(message)
-        for test_id, kind, seconds in gate_candidates(outcome["results"], manifest):
-            alone_item = run_pool(root, [("solo", [test_id], 1800.0)], directory, 1)[0]
+        candidates = sorted(gate_candidates(outcome["results"], manifest), key=lambda item: -item[2])
+        for test_id, kind, seconds in candidates[SOLO_LIMIT:]:
+            outcome["warnings"].append(gate_message(kind, test_id, seconds, None, manifest)
+                                       + f" [not timed alone: only the {SOLO_LIMIT} slowest are]")
+        for test_id, kind, seconds in candidates[:SOLO_LIMIT]:
+            solo_timeout = min(300.0, 3 * seconds + 30)
+            alone_item = run_pool(root, [("solo", [test_id], solo_timeout)], directory, 1)[0]
             stops = [event for event in _read_events(alone_item["events"]) if event.get("event") == "stop"]
             alone = stops[-1]["seconds"] if stops else float("inf")
             message = gate_message(kind, test_id, seconds, alone, manifest)
@@ -728,7 +760,8 @@ def command_run(root: Path, args) -> int:
     if args.lane:
         for line in timing_lines(lane=args.lane, shard=args.shard, of=args.of, workers=plan[args.lane]["workers"],
                                  digest=digest, results=outcome["results"], manifest=manifest, wall=outcome["wall"],
-                                 skips=outcome["skips"], fixture_errors=outcome["fixture_errors"]):
+                                 skips=outcome["skips"], fixture_errors=outcome["fixture_errors"],
+                                 ran=outcome["ran"]):
             print(line)
     report = summary(title, outcome)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -799,9 +832,9 @@ def merge_timings(manifest: dict, bodies: list[dict]) -> tuple[dict, list[str]]:
     updated = dict(manifest, durations=durations)
     if fast_count:
         mean = round(fast_total / fast_count, 2)
-        if mean > 0 and abs(mean - budgets["fast_mean_seconds"]) >= 0.01:
-            changes.append(f"~ fast_mean_seconds {budgets['fast_mean_seconds']} -> {mean}")
-            updated["budgets"] = dict(budgets, fast_mean_seconds=mean)
+        if mean > 0 and abs(mean - manifest["fast_mean_seconds"]) >= 0.01:
+            changes.append(f"~ fast_mean_seconds {manifest['fast_mean_seconds']} -> {mean}")
+            updated["fast_mean_seconds"] = mean
     return updated, changes
 
 

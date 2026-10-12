@@ -47,8 +47,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install zsh for installer shell tests
-        if: matrix.lane == 'installer'
+      - name: Install zsh for shell and terminal tests
+        if: matrix.lane != 'parallel'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y zsh

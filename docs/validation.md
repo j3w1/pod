@@ -32,7 +32,7 @@ fabricate compatibility to make a result pass.
 | Check | Command or evidence | What it proves |
 | --- | --- | --- |
 | Unit and incident suite | `PYTHONPATH=skills python tools/suite_lanes.py run` | Current behavior in disposable fixtures; every discovered test once, in its lane. `python -m unittest discover -s tests -v` is the equivalent serial run. |
-| Suite lanes | `PYTHONPATH=skills python tools/suite_lanes.py check` | Each test has one lane, timing-sensitive tests are classified, recorded entries name real tests, incident modules yield tests and every lane fits its target. |
+| Suite lanes | `PYTHONPATH=skills python tools/suite_lanes.py check` | Each test has one lane, tests the timing heuristic flags are classified, recorded entries name real tests, incident modules yield tests and every lane fits its target. |
 | Explicit incidents | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident cases are discovered. |
 | Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check $(git hash-object -t tree /dev/null) HEAD` | Syntax and whole-candidate whitespace. |
 | Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Inventory, root VERSION link, frontmatter, descriptors, triggered links, launcher safety and printed budgets. |
@@ -66,23 +66,32 @@ installation proof remains separate, including endpoint lag after merge.
 `tools/suite_lanes.py` routes each discovered test to one lane. A test that imports the
 terminal harness (`tests/pty_harness.py`), directly or through a `tests` helper, runs in
 `serial`, alone on its runner; one that imports the installer harness runs in `installer`;
-every other test runs in `parallel`. A test whose source asserts a wall-clock bound must carry
-an override in `tests/suite_lanes.json`, normally `serial`, with a reason. Recorded CI
-durations of tests that take a second or more balance each lane's shards and workers
-longest-first; an unrecorded test is planned at the recorded fast mean. Every pull request and
-`main` push runs the full suite: lanes decide where a test runs, never whether it runs.
+every other test runs in `parallel`. A heuristic flags a test outside `serial` whose method,
+or whose class's helpers, reads `time.monotonic`, `time.perf_counter` or `time.time` and whose
+method calls `assertLess` or `assertLessEqual`; it misses other bounds, such as a timeout
+argument, so authors classify those themselves. A flagged test needs an override in
+`tests/suite_lanes.json` with a reason: `serial` needs no decision, and keeping it out of
+`serial` needs the owner. Recorded CI durations of tests that take a second or more balance
+each lane's shards and workers longest-first; an unrecorded test is planned at the measured
+fast mean. Class and module fixtures are not timed, and a lane may repeat a class's setUpClass
+in several workers, so keep them cheap. Every pull request and `main` push runs the full suite:
+lanes decide where a test runs, never whether it runs. Every share computes the same plan from
+the checkout, so test definitions must not depend on the runner; `refresh` refuses a run whose
+shares disagree on the plan digest.
 
-Each hosted lane share proves that every planned test ran exactly once and fails on any skip.
-Suite-health limits bound hosted CI time: a share fails for an unrecorded test over 2 s, any
-test over the 90 s ceiling, or a recorded test at more than twice its recorded duration and
-10 s over it, each confirmed by timing the test again alone; it also fails beyond twice its
-lane target. These limits govern the suite's own runtime, not product performance. Record a
+Each hosted lane share proves that every planned test ran exactly once and that each worker
+finished cleanly after its last test, and fails on any skip. Suite-health limits bound hosted
+CI time: a share fails for an unrecorded test over 2 s, any test over the 90 s ceiling, or a
+recorded test at more than twice its recorded duration and 10 s over it, once timing the test
+again alone confirms it (the five slowest per share are timed again; any others are warnings);
+it also fails beyond twice its lane target. These limits govern the suite's own runtime, not product performance. Record a
 necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`
 and commit the manifest; `refresh` reads only that run's log lines. Split a growing table into
 named group methods (`tests.common.GroupedTable`) before any method nears the ceiling. When
 `check` projects a lane over its target, raise that lane's shards in the manifest and add the
 matching `ci.yml` rows, up to `max_parallel_shards`. Budgets, lane targets,
-`max_parallel_shards` and overrides change only by owner decision.
+`max_parallel_shards` and any override that keeps a flagged test out of `serial` change only by
+owner decision.
 
 ## Evidence and review
 

@@ -74,7 +74,8 @@ Every pull request runs the full suite in the lanes of `tools/suite_lanes.py`. K
 test under its 2 s fast limit: build expensive fixtures once, never sleep for time to pass, and
 split a table into named group methods before any method nears the ceiling. Record a
 necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`.
-Budgets, lane targets and overrides change only by owner decision.
+Budgets, lane targets and any override that keeps a timing test out of `serial` change only by
+owner decision.
 
 Fixture execution uses disposable projects; existing host and ordinary project trials are
 read-only. No production or provider mutation, and no package or release publication.
