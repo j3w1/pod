@@ -14,6 +14,6 @@ Keep raw failure source, stage and time. Readiness timeout leaves cause unknown.
 
 For a recognized Codex software-update menu, require live native `terminal read --screen` readback with `source=screen` and displayed **Skip for now** option/control. Through supported `terminal send`, send only its displayed selector (shown number/key; Enter only if shown) once, verify readiness, then resume normal admission/recovery at the same model/effort. Unproven controls block; never guess input. Ambiguous transport requires exact native `--retry-request` recovery, never resend. No installation, other prompt automation, provider/settings/permission/safety changes, duplicate pending requests or retry/controller loop. Missing live opt-out proof stays NOT_RUN.
 
-Continuing a lost coordinator's objective: after the successor's first checkpoint and before any work, run `internal succession` naming the predecessor, then claim with a `user_direct` decision binding its facts.
+Continuing a lost coordinator's objective: claim it with `internal succession` after the successor's first checkpoint, before work, using a `user_direct` decision on its facts.
 
 Governor failures use `governor-classify`: code defect returns to correction, remote-only names bounded discriminating check/stop, transient follows bounded policy retry, external names dependency; unclassified failures defer.
