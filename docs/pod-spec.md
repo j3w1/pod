@@ -27,7 +27,7 @@ Maintain this requirement/scenario inventory as product authority. Explicitly re
 
 Type: B · Scenarios: [A01](#a01), [A39](#a39), [A94](#a94), [A250](spec/orca.md#a250)
 
-Keep the current conversation as coordinator, except the explicit Owner-authorized loss handoff in R105. Orca is the sole runtime authority for Runs, Tasks, Dispatches, requests, placement, messaging, terminals/resources and lifecycle; projects own governance. Pod is selection, admission and evidence only. The handoff alone may read exact terminal liveness and mutate the existing Run binding through run-use; helpers must not become a scheduler, competing native task/lifecycle database, autonomous controller or restart daemon.
+Keep the current conversation as coordinator, except the explicit Owner-authorized loss handoff in R105. A successor's claim (R110) ends a lost coordinator's write authority and gives it to no one; it replaces no coordinator. Orca is the sole runtime authority for Runs, Tasks, Dispatches, requests, placement, messaging, terminals/resources and lifecycle; projects own governance. Pod is selection, admission and evidence only. The handoff alone may read exact terminal liveness and mutate the existing Run binding through run-use; helpers must not become a scheduler, competing native task/lifecycle database, autonomous controller or restart daemon.
 
 ## Acceptance scenarios
 

@@ -18,6 +18,9 @@ MAX_OUTPUT = 2_000_000
 CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1"}
 AGENTS = ("codex", "claude")
+# R111: Orca advertises no send conditional on a Run's coordinator, and no sender identity for an
+# administrator without a terminal. Pod reports the form unavailable and names the Orca request.
+MESSAGE_ROUTE_DEPENDENCY = "https://github.com/stablyai/orca/issues/28190"
 PREFLIGHT_REFUSALS = ("task_not_found", "task_not_startable", "inject_rejected")
 WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:", "issue:")
 
@@ -52,6 +55,9 @@ def _read_allowed(argv: list[str]) -> bool:
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
+            and _argument(argv[3]) and argv[4] == "--json"):
+        return True
+    if (len(argv) == 5 and argv[:3] == ["orchestration", "run-show", "--id"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "request-show", "--request"]
@@ -344,6 +350,14 @@ def contract() -> dict:
     return snapshot
 
 
+def message_route(snapshot: dict) -> dict:
+    """Which delivery form reaches only a Run's current coordinator; Pod never borrows a sender."""
+    observed = snapshot.get("status") == "observed"
+    return {"conditional_send": "unavailable", "administrator_sender": "unavailable",
+            "basis": "no advertised Orca capability" if observed else "Orca capabilities are unread",
+            "dependency": MESSAGE_ROUTE_DEPENDENCY}
+
+
 def worker_rows(run: str) -> dict:
     """Read workers for one exact Run; unscoped fleet enumeration is forbidden."""
     if not _argument(run):
@@ -403,6 +417,22 @@ def current_run() -> dict:
     return {"runtime": response["runtime"], "run": {
             "id": run_id, "coordinator_handle": coordinator,
             "consumer_generation": generation}}
+
+
+def run_show(run: str) -> dict:
+    """Who coordinates one exact Run now; only its identity and generation leave this port."""
+    if not _argument(run):
+        raise PodError("orca_contract", "Exact Run identity is required for a Run read")
+    response = read_command(["orchestration", "run-show", "--id", run, "--json"])
+    row = response["result"].get("run") if isinstance(response["result"], dict) else None
+    coordinator = row.get("coordinator_handle") if isinstance(row, dict) else None
+    generation = row.get("consumer_generation") if isinstance(row, dict) else None
+    if (not isinstance(row, dict) or row.get("id") != run
+            or coordinator is not None and not _argument(coordinator, limit=256)
+            or type(generation) is not int or generation < 0):
+        raise PodError("orca_contract", "Run read does not prove the requested Run's coordinator")
+    return {"runtime": response["runtime"], "run": run, "coordinator_handle": coordinator,
+            "consumer_generation": generation}
 
 
 def worker_show(dispatch: str) -> dict:

@@ -1502,7 +1502,11 @@ finally: case.doCleanups()
         from pod.orca import _read_allowed, _mutate_allowed
         self.assertTrue(_read_allowed(["terminal", "show", "--terminal", "next", "--json"]))
         self.assertTrue(_mutate_allowed(["orchestration", "run-use", "--id", "run", "--json"]))
+        self.assertTrue(_read_allowed(["orchestration", "run-show", "--id", "run", "--json"]))
+        self.assertFalse(_mutate_allowed(["orchestration", "run-show", "--id", "run", "--json"]))
         for argv in (["terminal", "show", "--json"], ["terminal", "show", "--terminal", "-bad", "--json"],
+                     ["orchestration", "run-show", "--id", "-bad", "--json"], ["orchestration", "run-show", "--id", "run"],
+                     ["orchestration", "run-show", "--run", "run", "--json"],
                      ["terminal", "show", "--terminal", "next", "--preview", "--json"],
                      ["orchestration", "run-use", "--id", "run"], ["orchestration", "run-use", "--run", "run", "--json"],
                      ["orchestration", "run-use", "--id", "run", "--json", "--from", "next"],

@@ -533,7 +533,10 @@ def _observe_start(project: Path, objective: str, *, owner: str, admission_id: s
 
 def _start_observed(project: Path, objective: str, *, admission_id: str,
                     port: NativePort, **kwargs) -> dict:
-    admission = read(project, objective)["admissions"][admission_id]
+    from .succession import refuse_continued
+    state = read(project, objective)
+    refuse_continued(state)  # Recheck right before the native effect (R110).
+    admission = state["admissions"][admission_id]
     if len(_start_observations(project, objective, admission)) >= MAX_START_OBSERVATIONS:
         raise PodError("native_evidence_full", "Native start evidence limit reached before execution")
     owner, retry = kwargs["owner"], kwargs.get("retry_request")

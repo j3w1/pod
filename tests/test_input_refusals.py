@@ -47,6 +47,7 @@ REQUIRED = {
     "map": ("project", "objective"),
     "runtime-continuity": (*OWNED, "decision"),
     "owner-handoff": (*OWNED, "decision"),
+    "succession": (*OWNED, "predecessor"),
 }
 
 

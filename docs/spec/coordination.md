@@ -148,6 +148,12 @@ Optimize time to a verified result, not utilization or worker count. Re-evaluate
 
 Corrections use ordinary direct-work/delegation judgment and current eligible pool or pin. Their substantive briefs name the failed rule, alternate entrypoints, supported older records and status/wait consumers, with focused related-case regressions. Independent and delta review remain required.
 
+### R109 — Record the coordinator's judgement of outside results
+
+Type: B,H · Scenarios: [A258](#a258), [A259](#a259)
+
+An obligation row carries the coordinator's acceptance records, so a non-owner can tell which outside result an obligation took in. A checkpoint or report map write names them in a map-level `acceptances` list of `{obligation, source, verdict, candidate, evidence}`; `source` is the caller's opaque result id (1–128 printable characters without spaces), `verdict` is `accepted` or `rejected`, `candidate` and `evidence` are bounded text. Pod stamps each record with the writing map sequence and keeps at most 16 per obligation. Only map writes record them, so only the recorded coordinator with Run authority writes them. A recorded source is immutable: an identical restatement adds nothing and a different one refuses `acceptance_conflict`; a row cannot carry them (`acceptance_kernel_field`), and restatable rows omit them. Records survive later writes until the obligation reopens, meaning it leaves `satisfied` or its definition changes; then they clear. Status obligation rows and the map view show them for open and closed objectives; a closed objective records them in or before its closing write. They never enter an obligation's definition or the closure report.
+
 ## Acceptance scenarios
 
 - <a id="a02"></a>**A02** — Trivial mechanical work uses tools/current session with zero unnecessary workers or milestone ceremony.
@@ -279,3 +285,7 @@ Each refusal identifies the affected record and the next safe action.
 - <a id="a224"></a>**A224** — Checkpoint and report maps accept explicit reuse {from, ids}. Candidate movement gives one bounded complete invalidation refusal with classifications, read-only eligibility, corrections and remaining count. Valid REUSE carries proof without a new receipt and rechecks later deltas; absent, touched and unreadable scopes fail closed.
 
 - <a id="a228"></a>**A228** — brief uses checkpoint candidate, verification, current policy and read-only source facts at intake, writes nothing and reports missing candidate with satisfied obligation ids; project-bound brief follows the same full-id rule.
+
+- <a id="a258"></a>**A258** — One coordinator map write records an accepted and a rejected result from distinct sources on one obligation; each carries the writing sequence, status obligation rows and the map view show both for the open objective and after a closing write that recorded them, and the closure report omits them.
+
+- <a id="a259"></a>**A259** — Recorded acceptances survive later writes, including restatable rows that omit them; an identical restatement adds nothing, a different judgement for a recorded source refuses `acceptance_conflict`, a row-level record refuses `acceptance_kernel_field`, malformed or unknown-obligation requests refuse, a satisfied obligation returned to an open state clears its records, and a non-owner checkpoint refuses; every refusal writes nothing.
