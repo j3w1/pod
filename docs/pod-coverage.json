@@ -3058,7 +3058,8 @@
         "tests.test_succession.SiblingRefusalTableTests.test_predecessor_work_holds_the_claim",
         "tests.test_succession.SiblingRefusalTests.test_the_sibling_table_runs_every_row_once",
         "tests.test_succession.SiblingRefusalTests.test_a_reserved_start_without_dispatch_is_claimed_only_when_the_decision_names_it",
-        "tests.test_succession.SiblingRefusalTests.test_an_unreadable_predecessor_or_a_started_successor_cannot_claim"
+        "tests.test_succession.SiblingRefusalTests.test_an_unreadable_predecessor_or_a_started_successor_cannot_claim",
+        "tests.test_succession.ClosedCoordinatorTests.test_a_deliberately_closed_coordinator_is_gone_for_the_claim_but_not_for_handoff"
       ],
       "status": "NOT_RUN"
     },

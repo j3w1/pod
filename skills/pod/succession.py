@@ -205,7 +205,7 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
     if previous["state"] == "live":
         return fail("predecessor_live", "Orca reports the predecessor's coordinator live; the claim never steals.",
                     "Continue in the predecessor's own terminal, or close it first.")
-    if previous["state"] != "lost":
+    if previous["state"] != "lost" and not previous.get("exited"):
         return fail("predecessor_unverified", "Orca cannot prove the predecessor's coordinator gone ("
                     + (previous["code"] or previous["state"]) + ").")
     dispatches = {}
@@ -220,7 +220,7 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
             if other["state"] == "live":
                 return fail("predecessor_run_held", "Another live terminal coordinates a predecessor Run.",
                             "Continue on the successor's own Run; same-Run continuation is an owner handoff.")
-            if other["state"] != "lost":
+            if other["state"] != "lost" and not other.get("exited"):
                 return fail("predecessor_unverified", "A predecessor Run's coordinator is unverified.")
         try:
             fleet = worker_rows(run)
