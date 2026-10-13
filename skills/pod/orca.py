@@ -15,6 +15,7 @@ import sys
 from .errors import PodError
 
 MAX_OUTPUT = 2_000_000
+EXIT_KINDS = ("operator_close", "signaled", "exited")
 CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1"}
 AGENTS = ("codex", "claude")
@@ -454,8 +455,9 @@ def terminal_identity(handle: str) -> dict:
             and row.get("orphaned") is False)
     cause = row.get("exitCause") if isinstance(row, dict) else None
     # Orca keeps a closed terminal's record: not connected or writable, with the cause it exited.
+    # Only a confirmed exit counts; an `unknown` cause (a stop never confirmed) proves nothing.
     exited = (not live and isinstance(row, dict) and row.get("handle") == handle
               and row.get("connected") is False and row.get("writable") is False
-              and isinstance(cause, dict) and isinstance(cause.get("kind"), str) and bool(cause["kind"]))
+              and isinstance(cause, dict) and cause.get("kind") in EXIT_KINDS)
     return {"handle": handle, "runtime": shown["runtime"],
             "state": "live" if live else "unreadable", "code": None, "exited": exited}

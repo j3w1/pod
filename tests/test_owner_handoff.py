@@ -199,6 +199,10 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
 
     def native_read(self, argv, **kwargs):
         self.native_calls.append(list(argv))
+        if argv[:2] == ["terminal", "show"] and self.terminals.get(argv[3]) == "exited":
+            return {"runtime": self.port.runtime, "result": {"terminal": {
+                "handle": argv[3], "connected": False, "writable": False, "orphaned": False,
+                "exitCause": {"kind": "operator_close"}}}}
         if argv[:2] == ["terminal", "show"]:
             handle = argv[3]
             state = self.terminals.get(handle, "gone")
@@ -386,6 +390,8 @@ class DetectionTableTests(HandoffCase):
             ("owner live", lambda: self.terminals.update(owner="live"), "handoff_unavailable", "owner_not_lost"),
             ("owner unsupported", lambda: self.terminals.update(owner="unsupported"), "handoff_unavailable", "owner_not_lost"),
             ("owner unreadable", lambda: self.terminals.update(owner="unreadable"), "handoff_unavailable", "owner_not_lost"),
+            # An exited record ends a successor claim's wait (R110), never a handoff's.
+            ("owner exited", lambda: self.terminals.update(owner="exited"), "handoff_unavailable", "owner_not_lost"),
             ("caller lost", lambda: self.terminals.update(next="stale"), "handoff_unavailable", "caller_not_live"),
             ("caller unbound", lambda: setattr(self, "current", None), "handoff_unavailable", "caller_not_linked"),
             ("binding unreadable", lambda: setattr(self, "binding_failure", True), "handoff_unavailable", "binding_unreadable"),

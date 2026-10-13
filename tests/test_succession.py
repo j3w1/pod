@@ -19,11 +19,11 @@ class SuccessionCase(HandoffCase):
         self.run_holders = {}
 
     def native_read(self, argv, **kwargs):
-        if argv[:2] == ["terminal", "show"] and self.terminals.get(argv[3]) in ("exited", "disconnected"):
-            # Orca keeps a closed terminal's record; only an exit cause makes it definitive.
+        if argv[:2] == ["terminal", "show"] and self.terminals.get(argv[3]) in ("disconnected", "stop-unconfirmed"):
+            # Orca keeps a closed terminal's record; only a confirmed exit cause makes it definitive.
             row = {"handle": argv[3], "connected": False, "writable": False, "orphaned": False}
-            if self.terminals[argv[3]] == "exited":
-                row["exitCause"] = {"kind": "operator_close"}
+            if self.terminals[argv[3]] == "stop-unconfirmed":
+                row["exitCause"] = {"kind": "unknown", "reason": "stop_unverified"}
             return {"runtime": self.port.runtime, "result": {"terminal": row}}
         if argv[:2] == ["orchestration", "run-show"]:
             self.native_calls.append(list(argv))
@@ -187,9 +187,11 @@ class ClosedCoordinatorTests(SuccessionCase):
     def test_a_deliberately_closed_coordinator_is_gone_for_the_claim_but_not_for_handoff(self):
         from pod.orca import terminal_identity
         self.predecessor(); self.successor()
-        self.terminals.update(owner="disconnected")  # Not connected, and no exit cause: unproven.
-        self.assertEqual(self.claim()["condition"], "predecessor_unverified")
-        self.assertFalse(terminal_identity("owner")["exited"])
+        for state in ("disconnected", "stop-unconfirmed"):  # No cause, or a stop Orca never confirmed.
+            with self.subTest(state=state):
+                self.terminals.update(owner=state)
+                self.assertEqual(self.claim()["condition"], "predecessor_unverified")
+                self.assertFalse(terminal_identity("owner")["exited"])
         self.terminals.update(owner="exited", third="exited")
         self.run_holders["run"] = "third"  # The Run's later coordinator exited too.
         shown = terminal_identity("owner")
