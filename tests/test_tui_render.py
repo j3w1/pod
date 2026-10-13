@@ -9,6 +9,7 @@ from pod import tui_state as ts
 from pod.term import Capabilities, capabilities, display_width
 from datetime import timedelta
 
+from tests.common import assert_grouped_table
 from tests.test_workspace_state import T0, fixture_snapshot, prefs, press, state
 
 SIZES = ((160, 45), (100, 30), (80, 24), (60, 20), (40, 12))
@@ -37,17 +38,42 @@ def modes() -> dict[str, ts.State]:
             "read_only": state(dict(prefs(), status="invalid", errors=[{"code": "invalid_yaml", "message": "Bad"}]))}
 
 
-class FrameTests(unittest.TestCase):
-    def test_strict_sweep_has_no_overflow_from_40_to_200_columns(self):
+SWEEP_COLUMNS = range(40, 201)
+
+
+class StrictSweepTests(unittest.TestCase):
+    # The strict 40-200 column sweep, split into column bands so suite lanes can spread it.
+    RUNNER = "sweep"
+    GROUPS = {
+        "test_strict_sweep_has_no_overflow_from_40_to_79_columns": range(40, 80),
+        "test_strict_sweep_has_no_overflow_from_80_to_119_columns": range(80, 120),
+        "test_strict_sweep_has_no_overflow_from_120_to_159_columns": range(120, 160),
+        "test_strict_sweep_has_no_overflow_from_160_to_200_columns": range(160, 201),
+    }
+
+    def sweep(self):
+        columns = self.GROUPS[self._testMethodName]
         for name, current in modes().items():
             for caps in (UNICODE, ASCII):
-                for cols in range(40, 201):
+                for cols in columns:
                     for rows in ((12, 24, 45) if name in ("browse", "compare", "grouped") else (12, 30)):
                         try:
                             picture(current, (cols, rows), caps)
                         except ValueError as exc:  # pragma: no cover - the failure message is the point
                             self.fail(f"{name} {cols}x{rows} ascii={caps.ascii_only}: {exc}")
 
+    def test_strict_sweep_has_no_overflow_from_40_to_79_columns(self): self.sweep()
+    def test_strict_sweep_has_no_overflow_from_80_to_119_columns(self): self.sweep()
+    def test_strict_sweep_has_no_overflow_from_120_to_159_columns(self): self.sweep()
+    def test_strict_sweep_has_no_overflow_from_160_to_200_columns(self): self.sweep()
+
+
+class SplitTableTests(unittest.TestCase):
+    def test_split_tables_run_every_original_row_once(self):
+        assert_grouped_table(self, StrictSweepTests, SWEEP_COLUMNS, limit=41)
+
+
+class FrameTests(unittest.TestCase):
     def test_five_sizes_keep_a_full_width_bottom_dock_never_a_right_panel(self):
         for size in SIZES:
             with self.subTest(size=size):

@@ -23,7 +23,8 @@ def git(root: Path, *args: str, input_bytes: bytes | None = None) -> str:
 
 def commands(interpreter: str, empty_tree: str, root: Path) -> dict[str, list[str]]:
     return {
-        "unit": [interpreter, "-m", "unittest", "discover", "-s", "tests", "-v"],
+        "unit": [interpreter, "tools/suite_lanes.py", "run"],
+        "lanes": [interpreter, "tools/suite_lanes.py", "check"],
         "incidents": [interpreter, "-m", "unittest", "discover", "-s", "tests/incidents",
                       "-t", ".", "-v"],
         "pty": [interpreter, "-m", "unittest", "tests.test_tui_pty", "tests.test_workspace_pty",
@@ -50,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True,
                         help="directory for summary.json and gate logs")
     parser.add_argument("--gate", action="append",
-                        choices=("unit", "incidents", "pty", "installer", "compile",
+                        choices=("unit", "lanes", "incidents", "pty", "installer", "compile",
                                  "whitespace", "skill", "catalog", "source", "traces"),
                         help="run only this gate; repeat to select several")
     parser.add_argument("--sigint-ignored", action="store_true",

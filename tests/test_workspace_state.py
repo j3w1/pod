@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from functools import partial
+from functools import cache, partial
 import json
 import os
 from pathlib import Path
@@ -40,13 +41,18 @@ def growth_page() -> str:
     return captured.replace("</tbody>", synthetic + "</tbody>", 1)
 
 
+@cache
+def _parsed_page(source_id: str) -> dict:
+    # The fixture pages never change during a run, so each is parsed once; callers get a copy.
+    return sources.PARSERS[source_id](page(source_id))
+
+
 def fixture_snapshot(methodology: str | None = "Artificial Analysis Intelligence Index v4.3", *,
                      edit=None) -> dict:
     """A snapshot built from the sanitized fixture pages, independent of the bundled data."""
     blocks = {}
     for source in sources.SOURCES:
-        parsed = sources.PARSERS[source.id](page(source.id))
-        rows = parsed["rows"]
+        rows = deepcopy(_parsed_page(source.id)["rows"])
         if edit and source.id == sources.AA:
             rows = edit(rows)
         blocks[source.id] = {"url": source.url, "attribution": source.attribution, "required": source.required,

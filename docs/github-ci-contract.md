@@ -29,7 +29,9 @@ an unrelated change unless the required check is reported anyway. The safe shape
 cheap preparation job that always runs and gates the expensive jobs, or a job that always
 reports the required check and skips its expensive steps with a condition. Do not present a
 skipped required workflow as success; the governor reads a `skipped` conclusion as FAILED so
-it is never reused as proof.
+it is never reused as proof. This repository's required `linux` check is such an
+always-reporting job: it runs with `if: always()` after every test lane share and the `checks`
+job, and passes only when each of them passed.
 
 ## Merge queue
 

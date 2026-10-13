@@ -1,4 +1,5 @@
 import ast
+from functools import cache
 import json
 from pathlib import Path
 import re
@@ -50,18 +51,26 @@ def offline_test_references(value):
     return refs
 
 
+@cache
+def _class_methods(file: Path, stamp: tuple[int, int]) -> dict[str, frozenset[str]]:
+    """Each top-level class's own method names; one parse per file version."""
+    tree = ast.parse(file.read_text(), filename=str(file))
+    methods: dict[str, frozenset[str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            methods[node.name] = methods.get(node.name, frozenset()) | {
+                child.name for child in node.body if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    return methods
+
+
 def assert_test_reference_exists(root: Path, path: str) -> None:
     module, cls, method = path.rsplit(".", 2)
     file = root.joinpath(*module.split(".")).with_suffix(".py")
     if not file.is_file():
         raise ValueError(f"offline_test module does not exist: {path}")
-    tree = ast.parse(file.read_text(), filename=str(file))
+    status = file.stat()
     # The method must be defined in the named class itself, not merely somewhere in the module.
-    exists = any(isinstance(node, ast.ClassDef) and node.name == cls
-                 and any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method
-                         for child in node.body)
-                 for node in tree.body)
-    if not exists:
+    if method not in _class_methods(file.resolve(), (status.st_mtime_ns, status.st_size)).get(cls, ()):
         raise ValueError(f"offline_test case does not exist: {path}")
 
 
@@ -394,13 +403,32 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         triggers = workflow[True] if True in workflow else workflow["on"]
         self.assertEqual(set(triggers), {"pull_request", "push"})
         self.assertEqual(triggers["push"], {"branches": ["main"]})
+        # Every pull request runs the full suite; no path filter routes a change around it.
+        self.assertFalse(any({"paths", "paths-ignore"} & set(trigger or {}) for trigger in triggers.values()))
         self.assertEqual(workflow["permissions"], {"contents": "read"})
-        # `linux` is the status check the main branch ruleset requires.
-        self.assertEqual(list(workflow["jobs"]), ["linux"])
+        # `linux` is the status check the main branch ruleset requires. It always reports and
+        # passes only when every lane share and every check passed, so it is never skipped.
+        jobs = workflow["jobs"]
+        self.assertEqual(list(jobs), ["tests", "checks", "linux"])
+        linux = jobs["linux"]
+        self.assertEqual((linux["name"], linux["if"], set(linux["needs"])), ("linux", "always()", {"tests", "checks"}))
+        self.assertIn("all(.[]; .result == \"success\")", "\n".join(step.get("run", "") for step in linux["steps"]))
+        # The matrix runs exactly the lane shares the manifest plans, with CI's strict flags.
+        strategy = jobs["tests"]["strategy"]
+        self.assertIs(strategy["fail-fast"], False)
+        lanes = json.loads((self.root / "tests" / "suite_lanes.json").read_text())["lanes"]
+        self.assertEqual(sorted((row["lane"], row["shard"], row["of"]) for row in strategy["matrix"]["include"]),
+                         sorted((lane, shard, config["shards"]) for lane, config in lanes.items()
+                                for shard in range(1, config["shards"] + 1)))
+        share = next(step["run"] for step in jobs["tests"]["steps"] if "suite_lanes.py run" in step.get("run", ""))
+        for flag in ("--lane", "--shard", "--of", "--strict", "--forbid-skips"):
+            self.assertIn(flag, share)
+        self.assertNotIn("--ids", share)
         for forbidden in ("gh " + "release", "git " + "tag", "git push", "tags:", "contents: write",
                           "python -m build", "sha256sum", "upload-artifact", "twine"):
             self.assertNotIn(forbidden, text)
-        for required in ("unittest discover -s tests", "pod.skill_validation skills/pod",
+        for required in ("tools/suite_lanes.py run", "tools/suite_lanes.py check",
+                         "unittest discover -s tests/incidents -t .", "pod.skill_validation skills/pod",
                          "pod.catalog --check", "tools/source_audit.py", "--installed",
                          "POD_REQUIRE_PTY", "git archive", "POD_INSTALL_SOURCE=\"file://",
                          "raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh",
