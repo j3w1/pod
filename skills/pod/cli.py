@@ -70,6 +70,8 @@ def _edit(path: Path) -> dict:
         completed = subprocess.run([*argv, str(path)], check=False)
     except OSError as exc:
         raise PodError("editor_failed", "Editor could not start") from exc
+    from .github import forget_repository_reads
+    forget_repository_reads()  # The editor is an arbitrary program; read identity again after it.
     if completed.returncode:
         raise PodError("editor_failed", "Editor did not complete")
     try:

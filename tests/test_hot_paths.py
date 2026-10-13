@@ -10,9 +10,11 @@ import unicodedata
 import unittest
 from unittest.mock import patch
 
-from pod import cli, config, github, internal, orca, term
+from pod import cli, config, github, internal, operations, orca, term
 from pod.errors import PodError
 from tests.common import fixture
+from tests.issue41_support import ProductionCase
+from tests.kernel_support import git
 
 
 class RepositoryReadsTests(unittest.TestCase):
@@ -68,6 +70,45 @@ class RepositoryReadsTests(unittest.TestCase):
             self.assertEqual(github.repository_context(self.project)["worktree"], str(self.project.resolve()))
         self.assertEqual(len(calls), 4)
 
+    def test_the_binding_check_before_an_effect_reads_git_fresh(self):
+        with github.repository_reads():
+            bound = github.repository_context(self.project)
+            binding = {"repository": bound["repository"], "repo_key": bound["repo_key"],
+                       "path": bound["worktree"], "branch": bound["branch"]}
+            operations._check_worktree_binding(self.project, binding)
+            subprocess.run(["git", "-C", str(self.project), "switch", "-qc", "elsewhere"], check=True)
+            with self.assertRaises(PodError) as caught:
+                operations._check_worktree_binding(self.project, binding)
+            self.assertEqual(caught.exception.code, "worktree_binding_changed")
+            # The call's later reads agree with what the check saw.
+            self.assertEqual(github.repository_context(self.project)["branch"], "elsewhere")
+            operations._check_worktree_binding(self.project, None)
+        self.assertEqual(self.reads.call_count, 9)  # The first read and each binding check; no binding, no read.
+
+    def test_a_transient_remote_failure_is_not_kept(self):
+        subprocess.run(["git", "-C", str(self.project), "remote", "add", "origin",
+                        "https://github.com/acme/example.git"], check=True)
+        real, failed = github._local_git, []
+
+        def slow_remote(project, argv, **kwargs):
+            if argv[:2] == ["remote", "get-url"] and not failed:
+                failed.append(argv)
+                raise PodError("remote_read_failed", "The remote command gave no response")
+            return real(project, argv, **kwargs)
+
+        with patch("pod.github._local_git", side_effect=slow_remote), github.repository_reads():
+            self.assertIsNone(github.repository_context(self.project)["repository"])
+            self.assertEqual(github.repository_context(self.project)["repository"], "acme/example")
+            self.assertEqual(github.repository_context(self.project)["repository"], "acme/example")
+
+    def test_the_config_editor_runs_as_an_effect(self):
+        path = self.root / "config-home" / "pod" / "config.yaml"
+        with patch.dict("os.environ", {"VISUAL": "true", "EDITOR": "true"}), github.repository_reads():
+            github.repository_context(self.project)
+            cli._edit(path)
+            github.repository_context(self.project)
+        self.assertEqual(self.reads.call_count, 6)
+
     def test_native_and_remote_effects_forget_reads_but_remote_reads_do_not(self):
         with github.repository_reads():
             github.repository_context(self.project)
@@ -108,6 +149,29 @@ class RepositoryReadsTests(unittest.TestCase):
                 patch("pod.tui.run", side_effect=lambda project: workspace.append(github._IDENTITY.get()) or 0):
             self.assertEqual(cli.main([]), 0)
         self.assertEqual(workspace, [None])
+
+
+class BindingBeforeStartTests(ProductionCase):
+    def test_a_branch_switch_during_an_admission_still_refuses_the_start(self):
+        context = github.repository_context(self.project)
+        binding = {"repository": context["repository"], "repo_key": context["repo_key"],
+                   "path": context["worktree"], "branch": context["branch"]}
+        self.intake(self.sub("S"), worktree=binding)
+        recheck = operations._check_objective_source
+
+        def recheck_then_switch(*args, **kwargs):
+            # Another actor switches the branch while this helper call rechecks its issue source.
+            result = recheck(*args, **kwargs)
+            git(self.project, "switch", "-qc", "elsewhere")
+            return result
+
+        with patch("pod.operations._check_objective_source", side_effect=recheck_then_switch), \
+                self.assertRaises(PodError) as caught:
+            self.start("work", self.packet(["S"], worktree=binding))
+        self.assertEqual(caught.exception.code, "worktree_binding_changed")
+        self.assertEqual(self.port.starts, [])
+        git(self.project, "switch", "-q", context["branch"])
+        self.assertEqual(self.start("work", self.packet(["S"], worktree=binding))["status"], "bound")
 
 
 class DocumentReadsTests(unittest.TestCase):

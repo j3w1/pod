@@ -35,11 +35,13 @@ def _check_objective_source(project: Path, binding: dict | None, *, issue_port=N
                        "Execution Spec issue changed or closed; reconcile before another effect")
 
 
-def _check_worktree_binding(project: Path, binding: dict | None) -> None:
+def _check_worktree_binding(project: Path, binding: dict | None, current: dict | None = None) -> None:
+    """Bind the current repository, branch and worktree right before an effect, read fresh from Git."""
     if binding is None:
         return
-    from .github import repository_context
-    current = repository_context(project)
+    if current is None:
+        from .github import repository_context
+        current = repository_context(project, fresh=True)
     current_repository = current["repository"]
     expected_repository = binding.get("repository")
     repository_matches = (current_repository is None and expected_repository is None
@@ -984,9 +986,9 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                                       worktree=worktree, port=native_port, issue_port=issue_port)
         return {**recovered, "decision": recovered["admission"]["route_decision"]}
     _check_objective_source(project, body.get("objective_source"), issue_port=issue_port)
-    _check_worktree_binding(project, body.get("worktree"))
     from .github import repository_context
-    current_worktree = repository_context(project)
+    current_worktree = repository_context(project, fresh=True)  # Bound right before the start.
+    _check_worktree_binding(project, body.get("worktree"), current_worktree)
     default_binding = {"repository": current_worktree["repository"],
                        "repo_key": current_worktree["repo_key"],
                        "path": current_worktree["worktree"],

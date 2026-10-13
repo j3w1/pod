@@ -170,19 +170,27 @@ def forget_repository_reads() -> None:
         reads.clear()
 
 
-def repository_context(project: Path) -> dict:
-    """Resolve stable repository identity and this linked worktree through Git reads only."""
+def repository_context(project: Path, *, fresh: bool = False) -> dict:
+    """Resolve stable repository identity and this linked worktree through Git reads only.
+
+    `fresh` always reads Git, for a check that binds identity right before an effect, and the
+    call's later reads then agree with what that check saw.
+    """
     root = project.resolve()
     reads = _IDENTITY.get()
-    if reads is not None and str(root) in reads:
+    if reads is not None and not fresh and str(root) in reads:
         return deepcopy(reads[str(root)])
-    context = _read_repository_context(root)
+    context, complete = _read_repository_context(root)
     if reads is not None:
-        reads[str(root)] = deepcopy(context)  # A failed read raised above and is never kept.
+        if complete:
+            reads[str(root)] = deepcopy(context)
+        else:
+            reads.pop(str(root), None)  # A transient remote failure is never kept for the call.
     return context
 
 
-def _read_repository_context(root: Path) -> dict:
+def _read_repository_context(root: Path) -> tuple[dict, bool]:
+    """The identity, and whether every read answered (a failed read raises or is incomplete)."""
     try:
         lines = _local_git(root, ["rev-parse", "--path-format=absolute", "--show-toplevel",
                                   "--git-common-dir"]).splitlines()
@@ -191,7 +199,7 @@ def _read_repository_context(root: Path) -> dict:
             raise
         return {"repository": None, "repo_key": None, "worktree": str(root),
                 "main_worktree": str(root), "branch": None, "dirty": None,
-                "linked_worktrees": [str(root)]}
+                "linked_worktrees": [str(root)]}, True
     if len(lines) != 2:
         raise PodError("git_contract", "Git repository identity is incomplete")
     worktree = Path(lines[0]).resolve()
@@ -211,16 +219,18 @@ def _read_repository_context(root: Path) -> dict:
                               "detached": bool(fields.get("detached"))})
     if not worktrees or not any(row["path"] == str(worktree) for row in worktrees):
         raise PodError("git_contract", "Current worktree is absent from Git's worktree inventory")
+    complete = True
     try:
         remote = _local_git(worktree, ["remote", "get-url", "origin"]).strip()
-    except PodError:
+    except PodError as exc:
         remote = ""
+        complete = exc.code == "repository_identity_unavailable"  # No origin answers; a timeout does not.
     repository = _github_repository(remote)
     current = next(row for row in worktrees if row["path"] == str(worktree))
     return {"repository": repository, "repo_key": hashlib.sha256(str(common).encode()).hexdigest(),
             "worktree": str(worktree), "main_worktree": worktrees[0]["path"],
             "branch": current["branch"], "dirty": None,
-            "linked_worktrees": [row["path"] for row in worktrees]}
+            "linked_worktrees": [row["path"] for row in worktrees]}, complete
 
 
 def parse_issue_locator(locator: object) -> dict:
