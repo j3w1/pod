@@ -60,7 +60,9 @@ class AcceptanceTests(AcceptanceCase):
         rows = self.stored()
         rows[0]["acceptances"] = [{**ACCEPTED, "seq": 99}]
         self.refused("obligation_invalid", "acceptance_kernel_field", self.write, rows)
-        fresh = {**self.sub("S1"), "acceptances": [{**ACCEPTED, "seq": 1}]}
+        rows[0]["acceptances"] = [dict(REJECTED)]  # Without a sequence, the natural caller mistake.
+        self.refused("obligation_invalid", "acceptance_kernel_field", self.write, rows)
+        fresh = {**self.sub("S1"), "acceptances": [dict(ACCEPTED)]}
         self.refused("obligation_invalid", "acceptance_kernel_field", self.write, [*self.stored(), fresh])
         for bad in ({**REJECTED, "source": "has space"}, {**REJECTED, "verdict": "maybe"},
                     {**REJECTED, "evidence": ""}, {**REJECTED, "extra": "x"}):

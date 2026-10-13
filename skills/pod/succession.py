@@ -20,7 +20,7 @@ DECISION = {"provenance", "instruction", "predecessor", "predecessor_owner", "su
             "successor_owner", "runs", "ambiguity"}
 FACTS = DECISION - {"provenance", "instruction"}
 CONTINUED = {"objective", "record", "owner", "runs", "at", "instruction", "unfinished", "unreported",
-             "orca_claim"}
+             "ambiguity", "orca_claim"}
 CONTINUES = {"objective", "record", "at"}
 MAX_CHAIN = 8
 MAX_LISTED = 64
@@ -37,10 +37,11 @@ def validate_link(name: str, value: object) -> None:
     fields = CONTINUED if name == "continued_by" else CONTINUES
     if (not isinstance(value, dict) or set(value) != fields
             or any(not isinstance(value[key], str) or not value[key] or len(value[key]) > 1024
-                   for key in fields - {"runs", "unfinished", "unreported"})
+                   for key in fields - {"runs", "unfinished", "unreported", "ambiguity"})
             or name == "continued_by" and (value["orca_claim"] != "unavailable"
                                            or not all(_texts(value[key], limit=256)
-                                                      for key in ("runs", "unfinished", "unreported")))):
+                                                      for key in ("runs", "unfinished", "unreported"))
+                                           or not _texts(value["ambiguity"], limit=512))):
         raise PodError("state_unsupported", f"Objective {name.replace('_', ' ')} record is malformed")
 
 
@@ -320,6 +321,10 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                            {"code": exc.code, "next_action": "only a readable current record can be continued"}) from exc
         verdict = _predecessor_facts(project, objective, predecessor, state, prior, owner, port=port)
         if verdict["status"] == "claimed":
+            back = state.get("continues")
+            if isinstance(back, dict) and back.get("objective") != predecessor:
+                raise PodError("successor_started", f"This successor already continues objective {back['objective']}",
+                               {"next_action": "a successor continues exactly one predecessor"})
             if not verdict["complete"]:
                 if decision is None:  # Detection never writes, even to finish an interrupted claim.
                     return {**verdict, "next_action": "rerun internal succession with the claim's decision "
@@ -342,7 +347,8 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
         prior["continued_by"] = {"objective": objective, "record": own.parent.name, "owner": owner,
                                  "runs": list(verdict["facts"]["runs"]), "at": at,
                                  "instruction": decision["instruction"], "unfinished": verdict["unfinished"],
-                                 "unreported": verdict["unreported"], "orca_claim": "unavailable"}
+                                 "unreported": verdict["unreported"],
+                                 "ambiguity": list(verdict["facts"]["ambiguity"]), "orca_claim": "unavailable"}
         _write_succession(other, prior)
         state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at}
         _write(own, state)

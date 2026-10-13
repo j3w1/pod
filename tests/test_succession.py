@@ -138,6 +138,95 @@ class ClaimTests(SuccessionCase):
         self.assertEqual(verdict["condition"], "successor_started")
 
 
+def _raw(case, objective):
+    path = objective_root(case.project, objective) / "context.json"
+    return path, json.loads(path.read_text())
+
+
+def _admission_state(state):
+    def arrange(case):
+        path, raw = _raw(case, "objective")
+        row = raw["admissions"][case.admission["admission_id"]]
+        row.update(state=state, native_binding=None)
+        path.write_text(json.dumps(raw))
+    return arrange
+
+
+def _differing_identity(case):
+    path, raw = _raw(case, "objective")
+    raw["admissions"][case.admission["admission_id"]]["native_binding"]["worktreeId"] = "another-worktree"
+    path.write_text(json.dumps(raw))
+
+
+def _closed(case):
+    path, raw = _raw(case, "objective")
+    checkpoint = raw["checkpoint"]
+    checkpoint["closure"] = {"seq": checkpoint["seq"], "revision": checkpoint["revision"], "report": {}}
+    path.write_text(json.dumps(raw))
+
+
+# kind: (arrange before detection, expected condition, patch target or None)
+SIBLINGS = {
+    "predecessor-closed": (_closed, "predecessor_closed", None),
+    "handoff-pending": (None, "predecessor_handoff_pending", ("pod.handoff.unfinished", {"state": "pending"})),
+    "effect-pending": (None, "predecessor_effect_pending", ("pod.ledger._governor_pending", True)),
+    "admission-unresolved": (_admission_state("unresolved"), "predecessor_work_unsettled", None),
+    "reserved-with-dispatch": (_admission_state("reserved"), "predecessor_work_unsettled", None),
+    "differing-identity": (_differing_identity, "predecessor_unverified", None),
+}
+
+
+class SiblingRefusalTests(SuccessionCase):
+    def test_each_unproven_predecessor_fact_holds_the_claim_and_writes_nothing(self):
+        for kind, (arrange, condition, target) in SIBLINGS.items():
+            case = SuccessionCase(); case.setUp()
+            try:
+                with self.subTest(kind=kind):
+                    case.predecessor(); case.successor()
+                    if arrange is not None:
+                        arrange(case)
+                    patcher = patch(target[0], return_value=target[1]) if target else None
+                    if patcher:
+                        patcher.start()
+                    try:
+                        before = case.snapshot()
+                        verdict = case.claim()
+                        self.assertEqual(verdict["condition"], condition, verdict.get("message"))
+                        decision = {"provenance": "user_direct", "instruction": "Continue it", **verdict["facts"]}
+                        case.refused(lambda: case.claim(decision), code=condition)
+                        self.assertEqual(before, case.snapshot())
+                    finally:
+                        if patcher:
+                            patcher.stop()
+            finally:
+                case.doCleanups()
+
+    def test_a_reserved_start_without_dispatch_is_claimed_only_when_the_decision_names_it(self):
+        self.predecessor(); self.successor()
+        _admission_state("reserved")(self)
+        self.port.find_rows = []
+        verdict = self.claim()
+        self.assertEqual(verdict["status"], "claim_available")
+        entry = f"reserved admission {self.admission['admission_id']}: no Dispatch found"
+        self.assertEqual(verdict["facts"]["ambiguity"], [entry])
+        self.refused(lambda: self.claim(self.decide(ambiguity=[])), code="succession_decision_mismatch")
+        self.claim(self.decide())
+        self.assertEqual(read(self.project, "objective")["continued_by"]["ambiguity"], [entry])
+        self.assertEqual(self.status()["assignments"]["settled"][0]["settlement"], "claim_no_dispatch")
+
+    def test_an_unreadable_predecessor_or_a_started_successor_cannot_claim(self):
+        self.predecessor(); self.successor()
+        path, raw = _raw(self, "objective")
+        original = path.read_text()
+        path.write_text("truncated{")
+        self.refused(lambda: self.claim(), code="predecessor_unverified")
+        path.write_text(original)
+        run("checkpoint", {"project": str(self.project), "objective": "successor", "owner": "next",
+                           "value": self.core(obligations=[self.criterion("satisfied", evidence=[
+                               AfterClaimTests.proof_for(self, "successor")])])})
+        self.assertEqual(self.claim()["condition"], "successor_started")
+
+
 class AfterClaimTests(SuccessionCase):
     def claimed(self):
         self.predecessor(); self.successor()
@@ -156,6 +245,18 @@ class AfterClaimTests(SuccessionCase):
                 error = self.refused(call, code="objective_continued")
                 self.assertEqual(error.detail["successor"], "successor")
                 self.assertIn("pod status --objective successor", error.detail["next_action"])
+        for name, call in self.boundary_calls("third").items():  # The session back in a new terminal.
+            with self.subTest(boundary=name, caller="third"):
+                os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+                self.refused(call, code="objective_continued")
+        os.environ["ORCA_TERMINAL_HANDLE"] = "owner"
+        from pod.operations import _start_observed
+        starts = list(self.port.starts)
+        self.refused(lambda: _start_observed(self.project, "objective", admission_id=self.admission["admission_id"],
+                                             port=self.port, owner="owner", run="run", task="task-9",
+                                             route={"agent": "claude", "model": "m", "effort": "high"}),
+                     code="objective_continued")
+        self.assertEqual(self.port.starts, starts)
         os.environ["ORCA_TERMINAL_HANDLE"] = "third"
         self.terminals["owner"] = "stale"
         error = self.refused(lambda: self.handoff(decision={"provenance": "user_direct", "instruction": "x",
@@ -171,6 +272,13 @@ class AfterClaimTests(SuccessionCase):
         self.claimed()
         status = self.status()
         self.assertEqual(status["blocker"], "objective_continued")
+        # lose() changed the runtime, as an Orca restart does; the claim's proof still settles them.
+        self.assertEqual(status["native_settlement"], "unverified")
+        self.assertEqual(status["assignments"]["unverified"], [])
+        self.assertEqual([(row["admission"], row["settlement"]) for row in status["assignments"]["settled"]],
+                         [(self.admission["admission_id"], "claim")])
+        self.assertFalse(any("settlement unverified" in line for line in status["progress"]))
+        self.assertIn("Settled by the successor claim: 1 assignment(s)", self.status(text=True))
         self.assertEqual((status["succession"]["continued_by"], status["succession"]["state"]),
                          ("successor", "successor_open"))
         self.assertIn("Continued by successor objective successor", self.status(text=True))
@@ -234,6 +342,21 @@ class AfterClaimTests(SuccessionCase):
         self.assertEqual(read(self.project, "successor")["continues"]["objective"], "objective")
         self.assertEqual(self.status()["succession"]["state"], "successor_open")
         self.assertEqual(self.status(objective="successor")["succession"]["state"], "claimed")
+
+    def test_a_replay_never_moves_a_successor_that_continues_another_objective(self):
+        self.predecessor(); self.successor()
+        decision = self.decide()
+        from pod import ledger
+        original = ledger._write
+        with patch("pod.ledger._write", side_effect=lambda path, value: (_ for _ in ()).throw(PodError("unsafe_state", "x"))
+                   if path.parent.name == objective_root(self.project, "successor").name else original(path, value)):
+            self.refused(lambda: self.claim(decision), code="unsafe_state")
+        path, raw = _raw(self, "successor")
+        raw["continues"] = {"objective": "another", "record": "0" * 64, "at": "2026-01-01T00:00:00+00:00"}
+        path.write_text(json.dumps(raw))
+        before = self.snapshot()
+        self.refused(lambda: self.claim(decision), code="successor_started")
+        self.assertEqual(before, self.snapshot())
 
     def test_cleanup_of_the_predecessor_protects_the_successor_worktree(self):
         self.claimed()

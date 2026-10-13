@@ -81,7 +81,8 @@ def _schema(raw: dict) -> str:
     from .installer import superseded_schemas
     from .ledger import _validate_context
     if superseded_schemas(raw):
-        return "superseded"
+        from .handoff import _older_schema
+        return "superseded" if _older_schema(raw) else "unsupported"
     try:
         _validate_context(raw)
     except PodError:

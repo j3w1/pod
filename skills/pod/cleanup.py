@@ -205,25 +205,34 @@ def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple
 
 
 def _successor_paths(project: Path, state: dict) -> tuple[str | None, set[str] | None]:
-    """The worktrees a continued objective's successor records; None when they cannot be read."""
+    """Worktrees the successors of a continued objective record (at most eight); None when unreadable."""
     link = state.get("continued_by")
     if not isinstance(link, dict):
         return None, set()
-    try:
-        later = read(project, link["objective"])
-    except PodError:
-        later = None
-    if later is None:
-        return link["objective"], None
-    paths = set()
-    bound = (later.get("checkpoint") or {}).get("worktree")
-    if isinstance(bound, dict) and isinstance(bound.get("path"), str):
-        paths.add(bound["path"])
-    for admission in later["admissions"].values():
-        placement = (admission.get("recovery") or {}).get("placement_binding")
-        if isinstance(placement, dict) and isinstance(placement.get("path"), str):
-            paths.add(placement["path"])
-    return link["objective"], paths
+    paths, seen, current = set(), set(), state
+    for _ in range(8):
+        link = current.get("continued_by")
+        if not isinstance(link, dict):
+            return state["continued_by"]["objective"], paths
+        if link["objective"] in seen:
+            return state["continued_by"]["objective"], None
+        seen.add(link["objective"])
+        try:
+            current = read(project, link["objective"])
+        except PodError:
+            current = None
+        if current is None:
+            return state["continued_by"]["objective"], None
+        bound = (current.get("checkpoint") or {}).get("worktree")
+        if isinstance(bound, dict) and isinstance(bound.get("path"), str):
+            paths.add(bound["path"])
+        else:
+            return state["continued_by"]["objective"], None  # An unplaced successor may work anywhere.
+        for admission in current["admissions"].values():
+            placement = (admission.get("recovery") or {}).get("placement_binding")
+            if isinstance(placement, dict) and isinstance(placement.get("path"), str):
+                paths.add(placement["path"])
+    return state["continued_by"]["objective"], None
 
 
 def plan(project: Path, objective: str, *, expect: object = None, archives: object = None,

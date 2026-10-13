@@ -87,6 +87,10 @@ class ListingTests(ListingCase):
             "checkpoint": {"schema": "pod-checkpoint/v2", "objective": "earlier",
                            "native_refs": [{"runId": "run05", "runtime": "rt"}]},
             "interventions": {}, "source_rejections": {}, "constraints": []})
+        self.raw(objective_root(self.project, "later"), {
+            "schema": "pod-context/v4", "revision": 1, "owner": "newer", "admissions": {},
+            "checkpoint": {"schema": "pod-checkpoint/v9", "objective": "later"},
+            "interventions": {}, "source_rejections": {}, "constraints": []})
         before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
         result = self.listed()
         self.assertFalse(result["complete"])
@@ -95,6 +99,7 @@ class ListingTests(ListingCase):
         rows = {row["objective"]: row for row in result["objectives"]}
         self.assertEqual((rows["earlier"]["schema"], rows["earlier"]["phase"], rows["earlier"]["runs"]),
                          ("superseded", "open", ["run05"]))
+        self.assertEqual(rows["later"]["schema"], "unsupported")  # A future version is not the 0.6.0 cutover.
         self.assertEqual(before, {path: path.read_bytes() for path in root.rglob("*") if path.is_file()})
 
     def test_unenumerable_root_and_truncation_are_explicit(self):

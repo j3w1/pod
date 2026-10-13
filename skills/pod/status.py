@@ -71,6 +71,7 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
     native_rows = {row.get("dispatchId"): row for row in workers.get("workers", [])
                    if isinstance(row, dict) and isinstance(row.get("dispatchId"), str)}
     closure = map_state.get("closure") if isinstance(map_state, dict) else None
+    continued = state.get("continued_by") if isinstance(state.get("continued_by"), dict) else None
     for key, row in state["admissions"].items():
         binding = row.get("native_binding") or {}
         item = {"admission": key, "role": row["role"], "serves": list(row["serves"]),
@@ -80,6 +81,12 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
             # Closure was accepted only with no outstanding assignment, judged from an exact read,
             # so its record proves these settled even when today's read cannot repeat it.
             settled.append({**item, "settlement": "closure", "closure_seq": closure.get("seq")})
+            continue
+        if continued is not None and row["state"] not in ("closed", "deferred"):
+            # The claim read every bound Dispatch settled, and a reserved row without a Dispatch
+            # was named in the owner's decision; the record accepts no later write (R110).
+            settled.append({**item, "settlement": "claim" if row["state"] == "bound" else "claim_no_dispatch",
+                            "claimed_at": continued["at"]})
             continue
         if failure is not None and row["state"] not in ("closed", "deferred"):
             # Presentation only: without exact native evidence an open row is neither active nor settled.
@@ -430,12 +437,14 @@ def render(result: dict) -> None:
             print(f"Assignments: {len(assignments['active'])} active, {len(assignments['settled'])} settled"
                   + (f", {len(assignments['unverified'])} unverified" if "unverified" in assignments else ""))
             failure = result.get("native_settlement_failure")
-            by_closure = [item for item in assignments["settled"] if item.get("settlement") == "closure"]
+            by_closure = [item for item in assignments["settled"] if item.get("settlement") in
+                          ("closure", "claim", "claim_no_dispatch")]
             if failure and assignments.get("unverified"):
                 print(f"Native settlement unverified: {failure['code']}; bound runtime "
                       f"{failure['bound_runtime']}, current runtime {failure['current_runtime']}")
             elif failure and by_closure:
-                print(f"Settled by closure: {len(by_closure)} assignment(s); the exact native read is "
+                print(f"Settled by {'closure' if by_closure[0]['settlement'] == 'closure' else 'the successor claim'}: "
+                      f"{len(by_closure)} assignment(s); the exact native read is "
                       f"unavailable ({failure['code']}; bound runtime {failure['bound_runtime']}, "
                       f"current runtime {failure['current_runtime']})")
             for item in assignments.get("unverified", []):

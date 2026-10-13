@@ -3053,7 +3053,10 @@
       "offline_test": [
         "tests.test_succession.ClaimTests.test_never_steals_and_holds_on_unproven_facts",
         "tests.test_succession.ClaimTests.test_stale_or_indirect_decisions_and_unknown_predecessors_write_nothing",
-        "tests.test_succession.ClaimTests.test_a_successor_that_started_work_cannot_claim"
+        "tests.test_succession.ClaimTests.test_a_successor_that_started_work_cannot_claim",
+        "tests.test_succession.SiblingRefusalTests.test_each_unproven_predecessor_fact_holds_the_claim_and_writes_nothing",
+        "tests.test_succession.SiblingRefusalTests.test_a_reserved_start_without_dispatch_is_claimed_only_when_the_decision_names_it",
+        "tests.test_succession.SiblingRefusalTests.test_an_unreadable_predecessor_or_a_started_successor_cannot_claim"
       ],
       "status": "NOT_RUN"
     },
@@ -3069,7 +3072,8 @@
         "tests.test_succession.AfterClaimTests.test_status_and_list_name_the_successor_until_it_closes",
         "tests.test_succession.AfterClaimTests.test_a_second_claim_is_refused_and_a_replay_writes_nothing",
         "tests.test_succession.AfterClaimTests.test_a_claim_interrupted_after_the_predecessor_write_completes_on_replay",
-        "tests.test_succession.AfterClaimTests.test_cleanup_of_the_predecessor_protects_the_successor_worktree"
+        "tests.test_succession.AfterClaimTests.test_cleanup_of_the_predecessor_protects_the_successor_worktree",
+        "tests.test_succession.AfterClaimTests.test_a_replay_never_moves_a_successor_that_continues_another_objective"
       ],
       "status": "NOT_RUN"
     },

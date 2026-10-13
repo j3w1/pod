@@ -334,6 +334,8 @@ def nonowner_detection(project: Path, objective: str, state: dict | None, owner:
 
 
 def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: str, *, code="native_authority_unverified", port=None, current=None) -> None:
+    from .succession import refuse_continued
+    refuse_continued(state)  # Any caller, owner or not, is told the objective was continued (R110).
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)
     if verdict is not None:
         raise PodError(code, "Caller is not the recorded owner. " + verdict["message"],
