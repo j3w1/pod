@@ -81,7 +81,7 @@ shares disagree on the plan digest.
 
 Each hosted lane share proves that every planned test ran exactly once and that each worker
 finished cleanly after its last test, and fails on any skip. Suite-health limits bound hosted
-CI time: a share fails for an unrecorded test over 2 s, any test over the 90 s ceiling, or a
+CI time: a share fails for an unrecorded test over 2 s, any test over the 60 s ceiling, or a
 recorded test at more than twice its recorded duration and 10 s over it, once timing the test
 again alone confirms it (up to five per share, ceiling breaches and new slow tests first; past
 that, those two fail unconfirmed and drift only warns);
