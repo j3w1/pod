@@ -538,11 +538,13 @@ def run(operation: str, request: dict) -> dict:
     handler = _OPERATIONS.get(operation)
     if handler is None:
         raise PodError("unknown_operation", "Unsupported private helper operation")
+    from .github import repository_reads
     from .ledger import continuity_events
     events = continuity_events()
     token = events.set([])
     try:
-        result = handler(request)
+        with repository_reads():
+            result = handler(request)
         rebinds = events.get()
     except FieldRefusal as exc:
         # exact() cannot know the operation; the entry names it beside the record and fields.

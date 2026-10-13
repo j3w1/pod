@@ -347,7 +347,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"pod: {exc.code}: {exc}", file=sys.stderr)
             return 1
     try:
-        result = execute(args, Path.cwd())
+        from .github import repository_reads
+        with repository_reads():  # One command; the long-running workspace above reads Git afresh.
+            result = execute(args, Path.cwd())
     except PodError as exc:
         result = {"schema": "pod-cli/v5", "status": "blocked",
                   "error": {"code": exc.code, "message": str(exc)}}

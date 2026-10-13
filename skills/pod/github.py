@@ -7,6 +7,9 @@ rewrites a workflow, changes branch protection, or infers what a repository requ
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 import json
 import hashlib
 import os
@@ -142,9 +145,44 @@ def _github_repository(remote: str) -> str | None:
     return None
 
 
+# One helper call or one-shot command reads each repository's identity once. A native effect
+# forgets what was read, so identity read after an effect is fresh; unscoped calls always read Git.
+_IDENTITY: ContextVar[dict | None] = ContextVar("pod_repository_identity", default=None)
+
+
+@contextmanager
+def repository_reads():
+    """Share repository identity reads within one helper call or one-shot command."""
+    if _IDENTITY.get() is not None:
+        yield
+        return
+    token = _IDENTITY.set({})
+    try:
+        yield
+    finally:
+        _IDENTITY.reset(token)
+
+
+def forget_repository_reads() -> None:
+    """After a native effect, read repository identity again."""
+    reads = _IDENTITY.get()
+    if reads is not None:
+        reads.clear()
+
+
 def repository_context(project: Path) -> dict:
     """Resolve stable repository identity and this linked worktree through Git reads only."""
     root = project.resolve()
+    reads = _IDENTITY.get()
+    if reads is not None and str(root) in reads:
+        return deepcopy(reads[str(root)])
+    context = _read_repository_context(root)
+    if reads is not None:
+        reads[str(root)] = deepcopy(context)  # A failed read raised above and is never kept.
+    return context
+
+
+def _read_repository_context(root: Path) -> dict:
     try:
         lines = _local_git(root, ["rev-parse", "--path-format=absolute", "--show-toplevel",
                                   "--git-common-dir"]).splitlines()
@@ -378,6 +416,9 @@ def _run(command: list[str], *, cwd: Path, timeout: int, mutation: bool) -> subp
     except (OSError, subprocess.TimeoutExpired) as exc:
         code = "remote_effect_uncertain" if mutation else "remote_read_failed"
         raise PodError(code, "The remote command gave no response") from exc
+    finally:
+        if mutation:
+            forget_repository_reads()
 
 
 def _normalise_run(row: dict) -> dict:
