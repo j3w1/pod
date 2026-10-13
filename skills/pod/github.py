@@ -340,7 +340,7 @@ def _refuse_requirements(row: dict, locator: str) -> None:
 def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
                  amendments: list[str] | None = None) -> dict:
     parsed = parse_issue_locator(locator)
-    context = repository_context(project)
+    context = repository_context(project, fresh=True)  # A100 binds the target now
     if context["repository"] is None or context["repository"].casefold() != parsed["repository"].casefold():
         raise PodError("repository_mismatch", "Issue target differs from the actual checkout repository")
     reader = port or GhPort(project)
@@ -387,7 +387,7 @@ def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
 
 def issue_recheck(project: Path, binding: dict, *, port: "GhPort | None" = None) -> dict:
     source = validate_issue_binding(binding)
-    context = repository_context(project)
+    context = repository_context(project, fresh=True)  # A100 binds the target now
     if context["repository"] is None or context["repository"].casefold() != source["repository"].casefold():
         raise PodError("repository_mismatch", "Bound issue target differs from the actual checkout")
     row = (port or GhPort(project)).issue(repository=source["repository"], number=source["number"])

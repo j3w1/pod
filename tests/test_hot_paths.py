@@ -85,6 +85,22 @@ class RepositoryReadsTests(unittest.TestCase):
             operations._check_worktree_binding(self.project, None)
         self.assertEqual(self.reads.call_count, 9)  # The first read and each binding check; no binding, no read.
 
+    def test_issue_target_checks_read_the_remote_fresh(self):
+        subprocess.run(["git", "-C", str(self.project), "remote", "add", "origin",
+                        "https://github.com/acme/example.git"], check=True)
+        with github.repository_reads():
+            github.repository_context(self.project)
+            subprocess.run(["git", "-C", str(self.project), "remote", "set-url", "origin",
+                            "https://github.com/other/elsewhere.git"], check=True)
+            for check in (lambda: github.issue_intake(self.project, "https://github.com/acme/example/issues/7"),
+                          lambda: github.issue_recheck(self.project, {
+                              "schema": "pod-issue-source/v1", "locator": "https://github.com/acme/example/issues/7",
+                              "repository": "acme/example", "number": 7, "body_sha256": "0" * 64,
+                              "amendments": []})):
+                with self.subTest(check=check), self.assertRaises(PodError) as caught:
+                    check()
+                self.assertEqual(caught.exception.code, "repository_mismatch")
+
     def test_a_transient_remote_failure_is_not_kept(self):
         subprocess.run(["git", "-C", str(self.project), "remote", "add", "origin",
                         "https://github.com/acme/example.git"], check=True)
