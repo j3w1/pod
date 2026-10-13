@@ -204,6 +204,28 @@ def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple
     return plan_hash, fingerprints
 
 
+def _successor_paths(project: Path, state: dict) -> tuple[str | None, set[str] | None]:
+    """The worktrees a continued objective's successor records; None when they cannot be read."""
+    link = state.get("continued_by")
+    if not isinstance(link, dict):
+        return None, set()
+    try:
+        later = read(project, link["objective"])
+    except PodError:
+        later = None
+    if later is None:
+        return link["objective"], None
+    paths = set()
+    bound = (later.get("checkpoint") or {}).get("worktree")
+    if isinstance(bound, dict) and isinstance(bound.get("path"), str):
+        paths.add(bound["path"])
+    for admission in later["admissions"].values():
+        placement = (admission.get("recovery") or {}).get("placement_binding")
+        if isinstance(placement, dict) and isinstance(placement.get("path"), str):
+            paths.add(placement["path"])
+    return link["objective"], paths
+
+
 def plan(project: Path, objective: str, *, expect: object = None, archives: object = None,
          orca_reader=read_command, native_port=None) -> dict:
     """Observe only resources named by this objective; return guarded argv, never execute it."""
@@ -260,6 +282,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         merged.add(delivered["candidate"])
     resources, covered_branches = [], set()
     port = native_port or OrcaPort(project)
+    successor, successor_paths = _successor_paths(project, state)
     for path_text in sorted(paths):
         path = Path(path_text)
         terminals = []
@@ -272,6 +295,8 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         reasons, classification = [], "integrated"
         if not path.is_absolute() or path.is_symlink() or row is None or not path.is_dir():
             classification, reasons = "protected", ["worktree binding is unavailable or foreign"]
+        elif successor is not None and (successor_paths is None or path_text in successor_paths):
+            classification, reasons = "protected", [f"recorded by successor objective {successor}"]
         elif path_text == main_path or branch in ("main", default_branch) or branch_ref in target_branches:
             classification, reasons = "protected", ["main checkout, or the default or target branch"]
         elif expected_branches.get(path_text) and expected_branches[path_text] != {branch}:

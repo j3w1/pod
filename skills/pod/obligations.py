@@ -46,6 +46,8 @@ MAX_PROPOSALS = 64
 MAX_SERVES = 16
 MAX_EVIDENCE = 16
 MAX_FINDINGS = 32
+MAX_ACCEPTANCES = 16
+VERDICTS = ("accepted", "rejected")
 MAX_CITED_LINES = 64
 MAX_GOVERNANCE_TEXT = 1_048_576
 CHURN_THRESHOLD = 3
@@ -54,6 +56,8 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _SURFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 _LINES = re.compile(r"([1-9][0-9]{0,6})(?:-([1-9][0-9]{0,6}))?\Z")
 _COMMIT = OBJECT_ID
+_SOURCE = re.compile(r"[!-~]{1,128}\Z")
+_ACCEPTANCE_FIELDS = {"source", "verdict", "candidate", "evidence"}
 
 NEXT_ACTIONS = {
     "unbound_assignment": "admit only a packet that serves unsatisfied obligations of the current map revision",
@@ -70,7 +74,8 @@ NEXT_ACTIONS = {
 
 # Proposed map fields a caller may send; everything else in a stored map is stamped here.
 MAP_INPUT = {"seq", "obligations", "proposals", "governance", "governance_refresh",
-             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery", "update", "reuse"}
+             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery", "update", "reuse",
+             "acceptances"}
 MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "governance_sources",
               "coordinator_slot", "quiescence", "closure", "observations", "reopened",
               "governance_history", "delivery"}
@@ -314,7 +319,7 @@ _OBLIGATION_FIELDS = {"id", "kind", "provenance", "introduced_seq", "parent", "c
                       "stop_condition", "boundary", "source", "state", "executor", "wait", "external",
                       "evidence", "withdrawal", "adopts", "reuse", "scope", "question", "candidate",
                       "existing_evidence", "insufficiency", "uncovered_risk", "findings", "finding",
-                      "definition", "receipts", "proof_scope"}
+                      "definition", "receipts", "proof_scope", "acceptances"}
 _DEFINITION = ("check", "resolves", "stop_condition", "scope", "question", "insufficiency",
                "existing_evidence", "uncovered_risk", "proof_scope")
 _STATE_FIELDS = {"active": "executor", "waiting": "wait", "blocked_external": "external",
@@ -392,7 +397,77 @@ def _structure(raw: Any) -> dict:
     evidence = ob.get("evidence", [])
     if not isinstance(evidence, list) or len(evidence) > MAX_EVIDENCE:
         raise refuse("obligation_invalid", "malformed", "evidence is a bounded list", obligation=ob["id"])
+    if "acceptances" in ob:
+        ob["acceptances"] = _acceptance_records(ob["acceptances"], obligation=ob["id"])
     return ob
+
+
+def _acceptance(raw: Any, fields: set[str], *, obligation: str | None) -> dict:
+    """One coordinator judgement of an outside result; the source is the caller's opaque id."""
+    row = _exact(raw, fields, fields, "acceptance", obligation=obligation)
+    if not isinstance(row["source"], str) or not _SOURCE.fullmatch(row["source"]):
+        raise refuse("obligation_invalid", "malformed",
+                     "an acceptance source is 1-128 printable characters without spaces",
+                     field="source", **({"obligation": obligation} if obligation is not None else {}))
+    if row["verdict"] not in VERDICTS:
+        raise refuse("obligation_invalid", "malformed", "verdict allowed: " + ", ".join(VERDICTS),
+                     field="verdict", **({"obligation": obligation} if obligation is not None else {}))
+    _text(row["candidate"], "candidate", limit=128, obligation=obligation)
+    _text(row["evidence"], "evidence", limit=1024, obligation=obligation)
+    return dict(row)
+
+
+def _acceptance_records(raw: Any, *, obligation: str) -> list[dict]:
+    """The stored acceptance records of one obligation, each stamped with the sequence that wrote it."""
+    if not isinstance(raw, list) or not raw or len(raw) > MAX_ACCEPTANCES:
+        raise refuse("obligation_invalid", "malformed", "acceptances are a bounded nonempty list",
+                     obligation=obligation, field="acceptances")
+    rows = []
+    for item in raw:
+        row = _acceptance(item, _ACCEPTANCE_FIELDS | {"seq"}, obligation=obligation)
+        if type(row["seq"]) is not int or row["seq"] < 1:
+            raise refuse("obligation_invalid", "malformed", "an acceptance retains its writing sequence",
+                         obligation=obligation, field="seq")
+        rows.append(row)
+    if len({row["source"] for row in rows}) != len(rows):
+        raise refuse("obligation_invalid", "malformed", "one acceptance per source", obligation=obligation)
+    return rows
+
+
+def _write_acceptances(rows: dict[str, dict], prior_rows: dict[str, dict], requests: Any, seq: int) -> None:
+    """Carry recorded judgements, clear them on reopen, and append this write's new ones."""
+    for ob in rows.values():
+        earlier = prior_rows.get(ob["id"])
+        if earlier is None or not earlier.get("acceptances"):
+            continue
+        if (earlier["state"] == "satisfied" and ob["state"] != "satisfied"
+                or earlier.get("definition") != ob.get("definition")):
+            continue  # Reopened: its earlier judgements no longer describe it.
+        ob["acceptances"] = deepcopy(earlier["acceptances"])
+    if requests is None:
+        return
+    if not isinstance(requests, list) or len(requests) > MAX_ACCEPTANCES:
+        raise refuse("obligation_invalid", "malformed", "acceptances are a bounded list of requests",
+                     record="acceptances")
+    for raw in requests:
+        key = raw.get("obligation") if isinstance(raw, dict) else None
+        if not isinstance(key, str) or key not in rows:
+            raise refuse("obligation_invalid", "malformed", "an acceptance names an obligation in the map",
+                         record="acceptances")
+        ob = rows[key]
+        request = _acceptance({name: item for name, item in raw.items() if name != "obligation"},
+                              _ACCEPTANCE_FIELDS, obligation=key)
+        recorded = {row["source"]: row for row in ob.get("acceptances", [])}
+        if request["source"] in recorded:
+            if {name: recorded[request["source"]][name] for name in _ACCEPTANCE_FIELDS} != request:
+                raise refuse("obligation_invalid", "acceptance_conflict",
+                             "a recorded acceptance is immutable; record a new result under a new source",
+                             obligation=key, field="source")
+            continue
+        if len(recorded) >= MAX_ACCEPTANCES:
+            raise refuse("obligation_invalid", "malformed", "an obligation keeps at most 16 acceptances",
+                         obligation=key, field="acceptances")
+        ob["acceptances"] = [*ob.get("acceptances", []), {**request, "seq": seq}]
 
 
 def _proposal(raw: Any) -> dict:
@@ -626,6 +701,11 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
             if earlier.get("adopts") != ob.get("adopts"):
                 raise refuse("obligation_invalid", "redefinition_unauthorized", "adoption is recorded once",
                              obligation=ob["id"])
+            if "acceptances" in ob and ob["acceptances"] != earlier.get("acceptances"):
+                raise refuse("obligation_invalid", "acceptance_kernel_field",
+                             "acceptances are recorded through the map-level acceptances list",
+                             obligation=ob["id"], field="acceptances")
+            ob.pop("acceptances", None)
             ob.pop("finding", None)
             if earlier.get("finding") is not None:
                 ob["finding"] = earlier["finding"]
@@ -637,6 +717,10 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
         if ob["id"] not in triaged and ("finding" in ob or "findings" in ob):
             raise refuse("obligation_invalid", "malformed", "review findings are recorded only by triage",
                          obligation=ob["id"])
+        if "acceptances" in ob:
+            raise refuse("obligation_invalid", "acceptance_kernel_field",
+                         "acceptances are recorded through the map-level acceptances list",
+                         obligation=ob["id"], field="acceptances")
         if ob.get("introduced_seq") not in (None, seq):
             raise refuse("obligation_invalid", "malformed", "a new obligation is introduced at this write",
                          obligation=ob["id"], seq=seq)
@@ -766,7 +850,7 @@ def restatable_rows(state: dict) -> list[dict]:
     rows = []
     for stored in state["obligations"]:
         row = {key: deepcopy(value) for key, value in stored.items()
-               if key not in ("introduced_seq", "definition", "receipts", "findings", "finding")}
+               if key not in ("introduced_seq", "definition", "receipts", "findings", "finding", "acceptances")}
         if row.get("provenance") == "project_policy" and isinstance(row.get("source"), dict):
             row["source"] = {key: row["source"][key] for key in ("path", "lines") if key in row["source"]}
         if row.get("kind") == "assurance":
@@ -856,6 +940,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
                          "every original criterion needs an objective obligation", criterion=criterion)
 
     reuse_failures = _write_evidence(rows, prior_rows, rebind, triaged, ctx, gov, user, authority, seq)
+    _write_acceptances(rows, prior_rows, value.get("acceptances"), seq)
 
     state = {"seq": seq, "revision": revision, "governance": governance, "governance_sources": sources,
              "obligations": [rows[key] for key in [row["id"] for row in raw_obligations]],
@@ -1972,7 +2057,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                     "observations": state.get("observations"), "label": label,
                     "obligations": [{"id": ob["id"], "state": ob["state"],
                                      "referent": ob.get("executor") or ob.get("wait") or ob.get("external")
-                                     or ob.get("withdrawal")} for ob in rows]},
+                                     or ob.get("withdrawal"),
+                                     **({"acceptances": deepcopy(ob["acceptances"])} if ob.get("acceptances") else {})}
+                                    for ob in rows]},
             "lines": lines}
 
 

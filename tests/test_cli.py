@@ -162,6 +162,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(report['installation'],'not installed by the one-shot installer')
         native.assert_not_called()
 
+    def test_doctor_reports_the_message_route_and_its_orca_dependency(self):
+        from pod.orca import MESSAGE_ROUTE_DEPENDENCY
+        for snapshot, basis in (({'status': 'observed', 'capabilities': {}}, 'no advertised Orca capability'),
+                                ({'status': 'unavailable', 'reason': 'orca_unavailable'}, 'Orca capabilities are unread')):
+            with self.subTest(status=snapshot['status']), patch('pod.cli.contract', return_value=snapshot), \
+                    patch('pod.orca.read_command') as native:
+                doctor = execute(parser().parse_args(['doctor', '--json']), self.project)
+                native.assert_not_called()
+            self.assertEqual(doctor['message_route'], {
+                'conditional_send': 'unavailable', 'administrator_sender': 'unavailable',
+                'basis': basis, 'dependency': MESSAGE_ROUTE_DEPENDENCY})
+        self.assertTrue(MESSAGE_ROUTE_DEPENDENCY.startswith('https://github.com/stablyai/orca/issues/'))
+
     def test_config_status_and_doctor_expose_valid_and_invalid_pins_passively(self):
         from pod.config import defaults
         import yaml

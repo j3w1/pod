@@ -17,7 +17,7 @@ from .catalog import SCHEMA as CATALOG_SCHEMA, format_latency, format_usd, load 
 from .config import load as load_config, personal_path, read_yaml, write_defaults
 from .errors import PodError
 from .ledger import context_root_for_run, state_inventory
-from .orca import contract, current_run, worker_rows
+from .orca import contract, current_run, message_route, worker_rows
 from .placement import inspect as inspect_placements, skills_cli_entry
 from .selection import active_constraints
 from .term import clean
@@ -35,6 +35,11 @@ def parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="read-only objective and native work status")
     status.add_argument("--objective")
     status.add_argument("--run")
+    status.add_argument("--list", action="store_true", dest="list_objectives",
+                        help="list the objectives recorded for a repository or worktree")
+    scope = status.add_mutually_exclusive_group()
+    scope.add_argument("--repository", metavar="PATH", help="with --list: this repository (default: here)")
+    scope.add_argument("--worktree", metavar="PATH", help="with --list: objectives that touch this worktree")
     status.add_argument("--json", action="store_true")
     sub.add_parser("update", help="update the installed bundle")
     models = sub.add_parser("models", help="model routes and cached public observations")
@@ -187,6 +192,7 @@ def _doctor(project: Path) -> dict:
             "orca": {"status": snapshot.get("status"), "capabilities": snapshot.get("capabilities", {}),
                      "runtime_state": snapshot.get("runtime_state"),
                      "reason": snapshot.get("reason")},
+            "message_route": message_route(snapshot),
             "state": state, "native_probe": "not_run"}
 
 
@@ -242,6 +248,9 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
                        eligible_only=getattr(args, "eligible_only", False))
     if args.command == "doctor":
         return _doctor(project)
+    if args.command == "status" and getattr(args, "list_objectives", False):
+        from .listing import objective_list
+        return objective_list(project, repository=args.repository, worktree=args.worktree)
     if args.command == "status":
         return _status(project, args.run, objective=args.objective,
                        current_run_fn=current_run, worker_rows_fn=worker_rows)
@@ -328,7 +337,7 @@ def _exit_code(args: argparse.Namespace, result: dict) -> int:
     if "projection" in result:
         # The route view succeeds as a read; its exit code still reports preference validity.
         return 0 if result["projection"]["preferences"]["status"] == "valid" else 1
-    return 0 if result["status"] in ("valid", "observed", "promoted", "checked") else 1
+    return 0 if result["status"] in ("valid", "observed", "promoted", "checked", "listed", "absent") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -336,6 +345,10 @@ def main(argv: list[str] | None = None) -> int:
     args = command_parser.parse_args(argv)
     if getattr(args, "eligible_only", False) and (not args.json or args.models_command is not None):
         command_parser.error("--eligible-only requires models --json without a subcommand")
+    if args.command == "status" and args.list_objectives and (args.objective or args.run):
+        command_parser.error("--list reads every objective; it takes --repository or --worktree, not --objective or --run")
+    if args.command == "status" and not args.list_objectives and (args.repository or args.worktree):
+        command_parser.error("--repository and --worktree select the scope of --list")
     if args.command == "update":
         from .installer import main as installer_main
         return installer_main(["--update"])
@@ -414,9 +427,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Model observations: {seen.get('origin') or seen['status']}"
               + (" (stale)" if seen.get("stale") else ""))
         print(f"Orca: {result['orca']['status']}")
+        route = result["message_route"]
+        print(f"Message route to a Run's coordinator: conditional send {route['conditional_send']}, "
+              f"administrator sender {route['administrator_sender']} ({route['basis']}; {route['dependency']})")
         for row in result["state"].get("superseded", []):
             print(f"Superseded objective {row['objective'] or row['record']}: "
                   f"{', '.join(row['schemas'])} (blocked, not converted)")
+    elif args.command == "status" and args.list_objectives:
+        from .listing import render as render_list
+        render_list(result)
     elif args.command == "status":
         render_status(result)
     else:

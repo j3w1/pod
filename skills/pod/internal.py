@@ -489,6 +489,14 @@ def _op_owner_handoff(request: dict) -> dict:
                          decision=request["decision"], port=OrcaPort(project))
 
 
+def _op_succession(request: dict) -> dict:
+    exact(request, {"project", "objective", "owner", "predecessor", "decision"},
+          {"project", "objective", "owner", "predecessor"}, name="request")
+    from .succession import succession
+    return succession(Path(request["project"]), request["objective"], owner=request["owner"],
+                      predecessor=request["predecessor"], decision=request.get("decision"))
+
+
 def _op_cleanup_plan(request: dict) -> dict:
     exact(request, {"project", "objective", "expect", "archives"}, {"project", "objective"}, name="request")
     from .cleanup import plan
@@ -529,6 +537,7 @@ _OPERATIONS = {
     'admission': _op_admission,
     'runtime-continuity': _op_runtime_continuity,
     'owner-handoff': _op_owner_handoff,
+    'succession': _op_succession,
     'cleanup-plan': _op_cleanup_plan,
     'map': _op_map,
 }

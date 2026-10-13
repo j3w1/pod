@@ -155,6 +155,46 @@ class UnverifiedStatusTests(UnverifiedStatusCase):
         self.assertEqual(len(view["ctx"]["outstanding"]), 3)
 
 
+class ClosedSettlementTests(UnverifiedStatusCase):
+    """A closed objective's assignments were settled when its closure was accepted (amendment gap 2)."""
+
+    def close(self, admissions):
+        rows = self.stored()
+        for row in rows:
+            row.pop("executor", None); row.pop("wait", None)
+            row.update(state="satisfied", evidence=[self.proof(row["id"])])
+        self.write(rows, close=True, dispositions=[
+            {"admission": row["admission_id"], "discarded": True, "reason": "folded into O1"}
+            for row in admissions])
+
+    def test_closed_objective_reads_closure_settlement_after_a_runtime_change(self):
+        admissions = self.finished(2, 2)
+        self.close(admissions)
+        path = objective_root(self.project, "objective") / "context.json"
+        before = path.read_bytes()
+        self.port.runtime = "runtime-2"
+        result, rendered = self.observe(runtime="runtime-2")
+        self.assertEqual(result["native_settlement"], "unverified")
+        self.assertEqual(result["assignments"]["unverified"], [])
+        closure_seq = read(self.project, "objective")["checkpoint"]["closure"]["seq"]
+        self.assertEqual({(row["admission"], row["settlement"], row["closure_seq"])
+                          for row in result["assignments"]["settled"]},
+                         {(row["admission_id"], "closure", closure_seq) for row in admissions})
+        self.assertEqual(result["next_action"], "objective closed")
+        self.assertIn("Assignments: 0 active, 2 settled, 0 unverified", rendered)
+        self.assertIn("Settled by closure: 2 assignment(s)", rendered)
+        self.assertNotIn("Native settlement unverified", rendered)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_open_objective_still_lists_unverified_rows(self):
+        admissions = self.finished(2, 2)
+        self.port.runtime = "runtime-2"
+        result, _ = self.observe(runtime="runtime-2")
+        self.assertEqual({row["admission"] for row in result["assignments"]["unverified"]},
+                         {row["admission_id"] for row in admissions})
+        self.assertFalse(any("settlement" in row for row in result["assignments"]["settled"]))
+
+
 class RecordedGenerationStatusTests(continuity.ContinuityCase):
     """A production-shaped checkpoint: the real authority join records the consumer generation."""
 

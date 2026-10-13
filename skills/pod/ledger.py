@@ -25,6 +25,8 @@ CONTEXT_LIMIT = 4 * MAX_RECORD
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
                    "interventions", "source_rejections", "constraints"}
+# Optional succession links (R110); a record without them keeps its exact earlier shape.
+_SUCCESSION_FIELDS = {"continued_by", "continues"}
 
 def state_root(project: Path | None = None) -> Path:
     override = explicit_home("POD_STATE_HOME")
@@ -51,11 +53,14 @@ def _record_exists(path: Path) -> bool:
 
 def objective_root(project: Path, objective: str) -> Path:
     from .github import repository_context
-    root = state_root(project)
-    context = repository_context(project)
+    return state_root(project) / record_name(project, repository_context(project), objective)
+
+
+def record_name(project: Path, context: dict, objective: str) -> str:
+    """The state directory name that binds one objective to its repository (or plain directory)."""
     if context["repo_key"] is None:
-        return root / digest({"project": str(project.resolve()), "objective": objective})
-    return root / digest({"repository": context["repo_key"], "objective": objective})
+        return digest({"project": str(project.resolve()), "objective": objective})
+    return digest({"repository": context["repo_key"], "objective": objective})
 
 
 def _path(project: Path, objective: str) -> Path:
@@ -183,7 +188,10 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS, _CONTEXT_FIELDS, name="context")
+    from .succession import validate_link
+    for name in _SUCCESSION_FIELDS & set(state):
+        validate_link(name, state[name])
     if type(state["revision"]) is not int or state["revision"] < 0:
         raise PodError("state_unsupported", "State revision is malformed")
     if state["owner"] is not None and (not isinstance(state["owner"], str) or not state["owner"]):
@@ -228,6 +236,15 @@ def read(project: Path, objective: str) -> dict | None:
 
 
 def _write(path: Path, value: dict) -> None:
+    from .succession import refuse_continued
+    refuse_continued(value)  # Backstop: a continued record is written only by the claim itself.
+    value["revision"] += 1
+    _validate_context(value)
+    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+
+
+def _write_succession(path: Path, value: dict) -> None:
+    """The claim's single write of a predecessor record, under that record's lock."""
     value["revision"] += 1
     _validate_context(value)
     atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
@@ -269,6 +286,8 @@ def require_authority(project: Path, objective: str, *, owner: str,
     from .orca import current_run
     locked = state is not None
     state = _read(_path(project, objective)) if state is None else state
+    from .succession import refuse_continued
+    refuse_continued(state)
     from .handoff import refuse_nonowner
     refuse_nonowner(project, objective, state, owner, port=native_port)
     if state["owner"] not in (None, owner):
@@ -589,6 +608,8 @@ def continuity_locked(project: Path, objective: str, *, owner: str, port,
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
+        from .succession import refuse_continued
+        refuse_continued(state)
         if state["owner"] != owner or state.get("checkpoint") is None:
             return None
         return _continuity_step(project, objective, state, owner=owner, port=port, current=current)
@@ -1025,12 +1046,16 @@ def map_read(project: Path, objective: str) -> dict:
             "revision": map_state["revision"], "candidate": state["checkpoint"].get("candidate"),
             "governance": map_state["governance"], "delivery": map_state.get("delivery"),
             "closure": map_state.get("closure"), "obligations": restatable_rows(map_state),
+            "acceptances": {ob["id"]: ob["acceptances"] for ob in map_state["obligations"]
+                            if ob.get("acceptances")},
             "outstanding": outstanding, "settled_attempts": settled_attempts,
             "undispositioned": pending, "review_eligibility": eligibility,
             "next_actions": actions[:MAX_RECORD // 128], "native_settlement": view["settlement"]}
 
 
 def _require_open(state: dict) -> None:
+    from .succession import refuse_continued
+    refuse_continued(state)
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
         from .obligations import refuse

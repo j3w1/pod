@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+import re
 from pathlib import Path
 
 from .errors import PodError
@@ -44,6 +45,37 @@ def unfinished(state: dict) -> dict | None:
     if len(rows) > 1:
         raise PodError("state_unsupported", "More than one unfinished owner handoff")
     return rows[0] if rows else None
+
+
+_SCHEMA_VERSION = re.compile(r"(pod-(?:context|checkpoint|admission))/v([0-9]{1,4})")
+
+
+def _older_schema(raw: dict) -> bool:
+    """Every non-current schema the record carries is an earlier version of a current family."""
+    from .installer import STATE_SCHEMAS, superseded_schemas
+    current = {}
+    for name in STATE_SCHEMAS.values():
+        match = _SCHEMA_VERSION.fullmatch(name)
+        current[match.group(1)] = int(match.group(2))
+    found = superseded_schemas(raw)
+    for name in found:
+        match = _SCHEMA_VERSION.fullmatch(name)
+        if match is None or int(match.group(2)) >= current[match.group(1)]:
+            return False
+    return bool(found)
+
+
+def _mentions(value: object, text: str, depth: int = 0) -> bool:
+    """Whether a key equals `text` or a string value contains it; an over-deep record counts as mentioning it."""
+    if depth > 64:
+        return True
+    if isinstance(value, str):
+        return text in value
+    if isinstance(value, dict):
+        return any(key == text or _mentions(item, text, depth + 1) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_mentions(item, text, depth + 1) for item in value)
+    return False
 
 
 def run_scope(project: Path, objective: str, run_id: str) -> dict:
@@ -135,8 +167,9 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                     continue
             name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
             others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
-        elif not readable or not supported:
-            # Only documented reference layouts can prove non-membership.
+        elif not readable or not supported and not (_older_schema(raw) and not _mentions(raw, run_id)):
+            # Only documented reference layouts can prove non-membership; an older-schema record
+            # proves it only when its Run id appears nowhere in the record.
             unknown += 1
     return {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
 
@@ -164,6 +197,11 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                       next_action=action or "Continue from the original pane, or start a successor objective. Do not run orca orchestration run-use by hand.")
         return result
 
+    link = state.get("continued_by")
+    if isinstance(link, dict):
+        from .succession import ACTION
+        return fail("objective_continued", f"The objective was continued by successor objective {link['objective']}.",
+                    definitive=True, action=ACTION.format(link["objective"]))
     if caller == owner:
         return fail("recorded_owner", "This caller is the recorded owner; use the ordinary authority and runtime-continuity checks.")
     if facts["recorded_runtime"] is None:

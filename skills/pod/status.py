@@ -70,11 +70,17 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
     active, settled, retained, unverified = [], [], [], []
     native_rows = {row.get("dispatchId"): row for row in workers.get("workers", [])
                    if isinstance(row, dict) and isinstance(row.get("dispatchId"), str)}
+    closure = map_state.get("closure") if isinstance(map_state, dict) else None
     for key, row in state["admissions"].items():
         binding = row.get("native_binding") or {}
         item = {"admission": key, "role": row["role"], "serves": list(row["serves"]),
                 "route": row["route_decision"], "dispatch": binding.get("dispatchId"),
                 "state": row["state"]}
+        if failure is not None and closure is not None and row["state"] not in ("closed", "deferred"):
+            # Closure was accepted only with no outstanding assignment, judged from an exact read,
+            # so its record proves these settled even when today's read cannot repeat it.
+            settled.append({**item, "settlement": "closure", "closure_seq": closure.get("seq")})
+            continue
         if failure is not None and row["state"] not in ("closed", "deferred"):
             # Presentation only: without exact native evidence an open row is neither active nor settled.
             item["orca_attention"] = _attention(native_rows.get(binding.get("dispatchId")))
@@ -138,7 +144,7 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
             progress.append("remaining gate: " + str(gate)[:160])
     if authority:
         next_action = "obtain authority for " + authority[0]["obligation"]
-    elif failure is not None:
+    elif failure is not None and unverified:
         next_action = (f"native settlement is unverified ({failure['code']}; bound runtime "
                        f"{failure['bound_runtime']}, current runtime {failure['current_runtime']}): "
                        f"{len(unverified)} open admission(s) stay unverified until an exact native read succeeds")
@@ -324,6 +330,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 result["next_safe_action"] = checkpoint["quiescence"]["interim_report"]
         except PodError as exc:
             result["obligations"] = {"error": exc.code}
+            # Recorded judgements stay readable when the map cannot be projected (R109).
+            recorded = {ob.get("id"): ob["acceptances"] for ob in checkpoint.get("obligations") or []
+                        if isinstance(ob, dict) and isinstance(ob.get("acceptances"), list)}
+            if recorded:
+                result["obligations"]["acceptances"] = recorded
     continuity = checkpoint.get("continuity") if isinstance(checkpoint, dict) else None
     if isinstance(continuity, dict) and continuity.get("history"):
         # The objective's runtime rebind history only, read-only; status never rebinds (A2).
@@ -354,7 +365,33 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         if handoff is not None:
             result.update(owner_handoff=handoff, blocker=handoff["status"],
                           next_safe_action=handoff["next_action"], next_action=handoff["next_action"])
+    if state is not None:
+        from .succession import ACTION, status_block
+        block = status_block(project, state)
+        if block is not None:
+            result["succession"] = block
+        if block is not None and "continued_by" in block:
+            # A continued record is read, never written: its successor holds the remaining work.
+            result.update(blocker="objective_continued", next_safe_action=ACTION.format(block["continued_by"]),
+                          next_action=ACTION.format(block["continued_by"]))
+        elif block is not None and block.get("continues") and not _claim_recorded(project, state):
+            result["succession"]["state"] = "claim_incomplete"
+            result.update(next_safe_action="rerun the same internal succession claim to complete it",
+                          next_action="rerun the same internal succession claim to complete it")
+        elif block is not None:
+            result["succession"]["state"] = "claimed"
     return result
+
+
+def _claim_recorded(project: Path, state: dict) -> bool:
+    """The predecessor names this objective as its successor."""
+    from .ledger import read
+    objective = (state.get("checkpoint") or {}).get("objective")
+    try:
+        prior = read(project, state["continues"]["objective"])
+    except PodError:
+        return False
+    return ((prior or {}).get("continued_by") or {}).get("objective") == objective
 
 
 def project_for_state(checkpoint: dict, project: Path) -> Path:
@@ -393,12 +430,24 @@ def render(result: dict) -> None:
             print(f"Assignments: {len(assignments['active'])} active, {len(assignments['settled'])} settled"
                   + (f", {len(assignments['unverified'])} unverified" if "unverified" in assignments else ""))
             failure = result.get("native_settlement_failure")
-            if failure:
+            by_closure = [item for item in assignments["settled"] if item.get("settlement") == "closure"]
+            if failure and assignments.get("unverified"):
                 print(f"Native settlement unverified: {failure['code']}; bound runtime "
                       f"{failure['bound_runtime']}, current runtime {failure['current_runtime']}")
+            elif failure and by_closure:
+                print(f"Settled by closure: {len(by_closure)} assignment(s); the exact native read is "
+                      f"unavailable ({failure['code']}; bound runtime {failure['bound_runtime']}, "
+                      f"current runtime {failure['current_runtime']})")
             for item in assignments.get("unverified", []):
                 print(f"  Unverified {item['role']} (dispatch {item['dispatch'] or 'pending'}): "
                       + _orca_attention_label(item["orca_attention"]))
+        succession = result.get("succession")
+        if isinstance(succession, dict) and succession.get("continued_by"):
+            print(f"Continued by successor objective {clean(succession['continued_by'])} "
+                  f"({succession['state'].replace('_', ' ')}); this record accepts no writes")
+        if isinstance(succession, dict) and succession.get("continues"):
+            print(f"Continues objective {clean(succession['continues'])}"
+                  + ("; the claim is incomplete" if succession.get("state") == "claim_incomplete" else ""))
         handoff = result.get("owner_handoff")
         if isinstance(handoff, dict):
             print(f"Owner handoff: {clean(handoff['condition'])}; {clean(handoff['message'])}")

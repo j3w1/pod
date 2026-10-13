@@ -2977,6 +2977,137 @@
         "tests.test_authoring.AuthoringTests.test_templates_and_filled_examples_have_distinct_responsibilities"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A256",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_listing.ListingTests.test_complete_list_names_phase_runs_and_locations_for_this_repository_only",
+        "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A257",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_listing.ListingTests.test_absent_state_root_is_distinct_from_an_empty_list",
+        "tests.test_listing.ListingTests.test_unreadable_unattributed_and_superseded_records_are_reported_not_hidden",
+        "tests.test_listing.ListingTests.test_unenumerable_root_and_truncation_are_explicit",
+        "tests.test_listing.ListingTests.test_worktree_scope_matches_recorded_locations_and_holds_unplaced_work",
+        "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A258",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_acceptances.AcceptanceTests.test_accepted_and_rejected_sources_are_recorded_with_their_sequence",
+        "tests.test_acceptances.AcceptanceTests.test_closed_objective_keeps_records_written_with_its_closure"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A259",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_acceptances.AcceptanceTests.test_records_survive_later_writes_and_identical_restatement",
+        "tests.test_acceptances.AcceptanceTests.test_a_recorded_source_is_immutable_and_rows_cannot_forge_records",
+        "tests.test_acceptances.AcceptanceTests.test_reopening_a_satisfied_obligation_clears_its_records",
+        "tests.test_acceptances.AcceptanceTests.test_only_the_recorded_coordinator_writes_records"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A260",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_succession.ClaimTests.test_detection_writes_nothing_and_a_matching_decision_claims"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A261",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_succession.ClaimTests.test_never_steals_and_holds_on_unproven_facts",
+        "tests.test_succession.ClaimTests.test_stale_or_indirect_decisions_and_unknown_predecessors_write_nothing",
+        "tests.test_succession.ClaimTests.test_a_successor_that_started_work_cannot_claim"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A262",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_succession.AfterClaimTests.test_every_write_of_the_returning_coordinator_is_refused_by_name",
+        "tests.test_succession.AfterClaimTests.test_status_and_list_name_the_successor_until_it_closes",
+        "tests.test_succession.AfterClaimTests.test_a_second_claim_is_refused_and_a_replay_writes_nothing",
+        "tests.test_succession.AfterClaimTests.test_a_claim_interrupted_after_the_predecessor_write_completes_on_replay",
+        "tests.test_succession.AfterClaimTests.test_cleanup_of_the_predecessor_protects_the_successor_worktree"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A263",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_cli.CliTests.test_doctor_reports_the_message_route_and_its_orca_dependency"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A264",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_scope.OlderSchemaScopeTests.test_older_schema_records_prove_nonmembership_only_without_the_run"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A265",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_status_unverified.ClosedSettlementTests.test_closed_objective_reads_closure_settlement_after_a_runtime_change",
+        "tests.test_status_unverified.ClosedSettlementTests.test_open_objective_still_lists_unverified_rows"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

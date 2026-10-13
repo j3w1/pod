@@ -4,9 +4,9 @@
 
 ### R03 — Expose pod, pod models, pod status, pod doctor
 
-Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119), [A216](#a216), [A252](#a252)
+Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119), [A216](#a216), [A252](#a252), [A256](#a256)
 
-Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status`, `pod doctor`, `pod update`, `pod config`/`config edit`, and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output; the model read optionally restricts its rows with `--eligible-only`. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
+Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status` with `--list [--repository PATH | --worktree PATH]`, `pod doctor`, `pod update`, `pod config`/`config edit`, and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output; the model read optionally restricts its rows with `--eligible-only`. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
 
 ### R04 — Maintain one canonical trigger-led skill router
 
@@ -138,9 +138,9 @@ The one-shot installer and explicit update use a staged checked bundle, isolated
 
 ### R97 — Status separates unverified settlement from active work
 
-Type: B · Scenarios: [A192](#a192), [A193](#a193), [A194](#a194)
+Type: B · Scenarios: [A192](#a192), [A193](#a193), [A194](#a194), [A265](#a265)
 
-When status's exact native settlement read fails, every open admission is listed under `assignments.unverified`, not active, and the human summary counts it separately. Status names the failed read's code and the objective's bound and current runtime, or unknown, labels Orca's attention for those rows as Orca's and claims no wait for their delivery; the next action names the unverified settlement. The shared envelope is now `pod-cli/v5`: the genuine 0.6.6 comparison asserts its old v4 marker and the new v5 marker separately, with exact equality of every other comparable projection field and the rendering. This is presentation only: the kernel's outstanding set, settlement rules, logical slots and fail-closed mutation are unchanged, and existing verified fields retain their meanings. Current resource/stage facts are additive under R48; older missing facts stay empty or absent and preserve rendering.
+When status's exact native settlement read fails, every open admission is listed under `assignments.unverified`, not active, and the human summary counts it separately. Status names the failed read's code and the objective's bound and current runtime, or unknown, labels Orca's attention for those rows as Orca's and claims no wait for their delivery; the next action names the unverified settlement. The shared envelope is now `pod-cli/v5`: the genuine 0.6.6 comparison asserts its old v4 marker and the new v5 marker separately, with exact equality of every other comparable projection field and the rendering. This is presentation only: the kernel's outstanding set, settlement rules, logical slots and fail-closed mutation are unchanged, and existing verified fields retain their meanings. Current resource/stage facts are additive under R48; older missing facts stay empty or absent and preserve rendering. A closed objective's open admissions are an exception: its closure was accepted only with no outstanding assignment, judged from an exact read, so when today's read fails status lists them under `assignments.settled` with `settlement: closure` and the closure sequence, and none as unverified. This reads no Orca and changes no kernel rule.
 
 ### R99 — Input refusals name their fields
 
@@ -159,6 +159,12 @@ Type: B,I · Scenarios: [A251](#a251)
 Type: B · Scenarios: [A254](#a254)
 
 A child PES identifies its parent and selected requirements/Limits without copying it or retargeting execution. Retain locator, observed body/amendment digests and selected requirement versions in existing references, checkpoint verification dependencies and evidence. Read parents through authorized issue access (for example, `gh issue view`), rather than primary executable intake; this adds no helper parent-fetch interface. Read required parents at intake, continuation and affected verification. A relevant source change requires scoped reconciliation before affected work; inaccessible required sources name an external dependency. Bind proof to its relevant dependencies so unrelated coverage/status changes preserve applicable evidence. No parent registry, recursive crawler, automatic issue publisher or parent runtime is added; source observations confer no execution authority.
+
+### R108 — List the objectives that touch a repository or worktree
+
+Type: B · Scenarios: [A256](#a256), [A257](#a257)
+
+`pod status --list [--repository PATH | --worktree PATH] --json` is a read-only public list for a non-owner such as an administrator outside Orca. It reads only Pod's state directory and Git identity: no Orca, preference or provider read, and no write, lock, conversion or repair. A record belongs to the repository when its state directory is the key of that repository and the objective it names; paths never decide membership. Each row names the objective and record, its phase (`open`, `closed`, or `continued` under R110), its schema (`current`, `superseded` for the 0.6.0 cutover, or `unsupported`), the recorded worktree locations of its coordinator and assignments, whether every location is recorded, its Run identities and its succession links. `--worktree` lists exact location matches and, marked `repository`, members whose recorded work lacks a location. The answer is `listed`, `absent` when no state root exists, or `unreadable` when the root cannot be enumerated. Unreadable and unattributed records are listed apart and make the list incomplete; more rows or directories than its bounds set `truncated` with the total.
 
 ## Acceptance scenarios
 
@@ -228,6 +234,9 @@ A child PES identifies its parent and selected requirements/Limits without copyi
 - <a id="a253"></a>**A253** — Exact SEAL title/first-line forms refuse primary executable intake; conflicting identity stays restrictive. Role changes, changed bodies/amendments and inaccessible reads block affected forward Governor decisions/effects without new worker/provider effects. Cancellation remains available through the same authority/candidate gates after such changes or closure. Closure alone permits already authorized Governor finalization, while new admission retains its intake reconciliation boundary. Provider readback and outcome recording remain usable. Quoted/code/later markers, linked requirements and scoped analysis remain supported.
 - <a id="a254"></a>**A254** — Same-repository and cross-repository parents supply selected requirements/Limits while the child retains its target. Existing checkpoint/evidence dependencies reopen affected proof for relevant changes, preserve proof for unchanged requirements and record a scoped external wait for inaccessible required sources. Unrelated parent coverage/status edits do not invalidate proof.
 - <a id="a255"></a>**A255** — Representative single-system and cross-system SEALs, standalone and child PESs and a no-change EEL preserve their section responsibilities, first-line declarations, external titles and optionality. Observed agent reading distinguishes authoring from ordinary execution; static links/counts alone do not certify reading behavior.
+- <a id="a256"></a>**A256** — `pod status --list --json`, with or without `--repository PATH`, lists every recorded objective of the repository by its state key, with record, phase, schema, recorded worktrees, Runs and succession links, and excludes other repositories' records; it reads no Orca, preference or provider state and writes nothing.
+- <a id="a257"></a>**A257** — A missing state root answers `absent` and an unenumerable or redirected one `unreadable`; unreadable and unattributed records are listed apart and make the list incomplete, an older-schema record reads `superseded`, and more rows than the bound set `truncated` with the total. `--worktree` lists exact location matches and, as `repository`, members whose work lacks a location; `--list` with `--objective` or `--run`, or a scope flag without `--list`, is a usage error.
+- <a id="a265"></a>**A265** — For a closed objective whose exact native read fails, every open admission is listed under `assignments.settled` with `settlement: closure` and the closure sequence, none is unverified, the render says it was settled by closure and the next action is `objective closed`; an open objective keeps the unverified projection of A192.
 
 ## Public interfaces
 
@@ -241,8 +250,9 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod models status [--json]` | Offline source, cache, mapping and automatic-refresh diagnostics. |
 | `pod config [--json]` | Read the personal path, byte revision, preference status and any setup action, eligible routes, every supported route's state, Preferred and Pin, worker ceiling, refresh setting, bounded diagnostics and the registry's guide profiles. Reads no observations. |
 | `pod config edit` | Opens the personal YAML in `$VISUAL` or `$EDITOR`, validates afterward, retains invalid edits and reports them. |
-| `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments (active, settled, or unverified when the exact native read fails), runtime rebinds, gates, progress, blockers and next action. Shared Runs require explicit selection. |
-| `pod doctor [--json]` | Read-only installation, registry, preference, route summary, observation cache, runtime capability and version diagnostics. |
+| `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments (active, settled, or unverified when the exact native read fails), runtime rebinds, succession, gates, progress, blockers and next action. Shared Runs require explicit selection. |
+| `pod status --list [--repository PATH \| --worktree PATH] [--json]` | List every objective recorded for a repository or worktree (R108) from Pod's own state, without Orca. Exit 0 for `listed` or `absent`. |
+| `pod doctor [--json]` | Read-only installation, registry, preference, route summary, observation cache, runtime capability, message route (R111) and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
 | `pod --version` | Reports the installed root `VERSION` before dependency checks. |
 | `pod internal <op> --input FILE` or `--input -` | Hidden structured operation for the skill; bounded JSON from a regular file or stdin, with no public command tree. A refusal is a blocked envelope with its code, message and detail; an input-shape refusal names the operation, record and fields, never values. An unexpected failure is the blocked code `internal_error`, with the traceback only on stderr. |
