@@ -447,10 +447,15 @@ def terminal_identity(handle: str) -> dict:
         code = (exc.detail or {}).get("native_code")
         return {"handle": handle, "runtime": None, "state": "lost" if code in
                 ("terminal_handle_stale", "terminal_not_found", "terminal_handle_gone") else "unreadable",
-                "code": code or exc.code}
+                "code": code or exc.code, "exited": False}
     row = shown["result"].get("terminal")
     live = (isinstance(row, dict) and row.get("handle") == handle
             and row.get("connected") is True and row.get("writable") is True
             and row.get("orphaned") is False)
+    cause = row.get("exitCause") if isinstance(row, dict) else None
+    # Orca keeps a closed terminal's record: not connected or writable, with the cause it exited.
+    exited = (not live and isinstance(row, dict) and row.get("handle") == handle
+              and row.get("connected") is False and row.get("writable") is False
+              and isinstance(cause, dict) and isinstance(cause.get("kind"), str) and bool(cause["kind"]))
     return {"handle": handle, "runtime": shown["runtime"],
-            "state": "live" if live else "unreadable", "code": None}
+            "state": "live" if live else "unreadable", "code": None, "exited": exited}
