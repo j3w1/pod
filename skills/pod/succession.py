@@ -113,7 +113,8 @@ def status_block(project: Path, state: dict) -> dict | None:
         chain = chain_state(project, state)
         block.update(continued_by=link["objective"], at=link["at"], state=chain["state"],
                      chain_end=chain.get("objective"), unfinished_at_claim=list(link["unfinished"]),
-                     unreported=list(link["unreported"]), orca_claim=link["orca_claim"])
+                     unreported=list(link["unreported"]), ambiguity=list(link["ambiguity"]),
+                     orca_claim=link["orca_claim"])
         if chain.get("reason"):
             block["reason"] = chain["reason"]
     if isinstance(back, dict):
@@ -325,6 +326,13 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
             if isinstance(back, dict) and back.get("objective") != predecessor:
                 raise PodError("successor_started", f"This successor already continues objective {back['objective']}",
                                {"next_action": "a successor continues exactly one predecessor"})
+            link = prior["continued_by"]
+            recorded = {"predecessor": predecessor, "predecessor_owner": prior["owner"], "successor": objective,
+                        "successor_owner": link["owner"], "runs": link["runs"], "ambiguity": link["ambiguity"]}
+            if decision is not None and any(decision[key] != recorded[key] for key in FACTS):
+                raise PodError("succession_decision_mismatch",
+                               "The decision differs from the recorded claim. Nothing was written.",
+                               {"next_action": "rerun with the decision that made the claim"})
             if not verdict["complete"]:
                 if decision is None:  # Detection never writes, even to finish an interrupted claim.
                     return {**verdict, "next_action": "rerun internal succession with the claim's decision "

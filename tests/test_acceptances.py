@@ -62,6 +62,8 @@ class AcceptanceTests(AcceptanceCase):
         self.refused("obligation_invalid", "acceptance_kernel_field", self.write, rows)
         rows[0]["acceptances"] = [dict(REJECTED)]  # Without a sequence, the natural caller mistake.
         self.refused("obligation_invalid", "acceptance_kernel_field", self.write, rows)
+        self.refused("obligation_invalid", None, self.write,  # A non-string id is refused, never a crash.
+                     [*self.stored(), {**self.sub("S9"), "id": ["S9"], "acceptances": [dict(ACCEPTED)]}])
         fresh = {**self.sub("S1"), "acceptances": [dict(ACCEPTED)]}
         self.refused("obligation_invalid", "acceptance_kernel_field", self.write, [*self.stored(), fresh])
         for bad in ({**REJECTED, "source": "has space"}, {**REJECTED, "verdict": "maybe"},

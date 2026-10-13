@@ -662,8 +662,8 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
     prior_rows = {row["id"]: row for row in (prior_map or {}).get("obligations", [])}
     rows: dict[str, dict] = {}
     for raw in raw_obligations:
-        if isinstance(raw, dict) and "acceptances" in raw and (
-                raw.get("id") not in prior_rows or raw["acceptances"] != prior_rows[raw["id"]].get("acceptances")):
+        if isinstance(raw, dict) and "acceptances" in raw and isinstance(raw.get("id"), str) and (
+                raw["id"] not in prior_rows or raw["acceptances"] != prior_rows[raw["id"]].get("acceptances")):
             raise refuse("obligation_invalid", "acceptance_kernel_field",
                          "acceptances are recorded through the map-level acceptances list",
                          field="acceptances", **({"obligation": raw["id"]} if isinstance(raw.get("id"), str) else {}))

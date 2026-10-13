@@ -9,6 +9,7 @@ from pod.errors import PodError
 from pod.github import repository_context
 from pod.internal import run
 from pod.ledger import objective_root, read
+from tests.common import GroupedTable, assert_grouped_table
 from tests.test_owner_handoff import HandoffCase
 
 
@@ -176,30 +177,46 @@ SIBLINGS = {
 }
 
 
-class SiblingRefusalTests(SuccessionCase):
-    def test_each_unproven_predecessor_fact_holds_the_claim_and_writes_nothing(self):
-        for kind, (arrange, condition, target) in SIBLINGS.items():
-            case = SuccessionCase(); case.setUp()
-            try:
-                with self.subTest(kind=kind):
-                    case.predecessor(); case.successor()
-                    if arrange is not None:
-                        arrange(case)
-                    patcher = patch(target[0], return_value=target[1]) if target else None
+class SiblingRefusalTableTests(GroupedTable):
+    """Each unproven predecessor fact holds the claim and writes nothing."""
+    GROUPS = {"test_predecessor_record_holds_the_claim": ["predecessor-closed", "handoff-pending", "effect-pending"],
+              "test_predecessor_work_holds_the_claim": ["admission-unresolved", "reserved-with-dispatch",
+                                                        "differing-identity"]}
+
+    def row(self, kind):
+        arrange, condition, target = SIBLINGS[kind]
+        case = SuccessionCase(); case.setUp()
+        try:
+            with self.subTest(kind=kind):
+                case.predecessor(); case.successor()
+                if arrange is not None:
+                    arrange(case)
+                patcher = patch(target[0], return_value=target[1]) if target else None
+                if patcher:
+                    patcher.start()
+                try:
+                    before = case.snapshot()
+                    verdict = case.claim()
+                    self.assertEqual(verdict["condition"], condition, verdict.get("message"))
+                    decision = {"provenance": "user_direct", "instruction": "Continue it", **verdict["facts"]}
+                    case.refused(lambda: case.claim(decision), code=condition)
+                    self.assertEqual(before, case.snapshot())
+                finally:
                     if patcher:
-                        patcher.start()
-                    try:
-                        before = case.snapshot()
-                        verdict = case.claim()
-                        self.assertEqual(verdict["condition"], condition, verdict.get("message"))
-                        decision = {"provenance": "user_direct", "instruction": "Continue it", **verdict["facts"]}
-                        case.refused(lambda: case.claim(decision), code=condition)
-                        self.assertEqual(before, case.snapshot())
-                    finally:
-                        if patcher:
-                            patcher.stop()
-            finally:
-                case.doCleanups()
+                        patcher.stop()
+        finally:
+            case.doCleanups()
+
+    def test_predecessor_record_holds_the_claim(self):
+        self.rows()
+
+    def test_predecessor_work_holds_the_claim(self):
+        self.rows()
+
+
+class SiblingRefusalTests(SuccessionCase):
+    def test_the_sibling_table_runs_every_row_once(self):
+        assert_grouped_table(self, SiblingRefusalTableTests, list(SIBLINGS), limit=3)
 
     def test_a_reserved_start_without_dispatch_is_claimed_only_when_the_decision_names_it(self):
         self.predecessor(); self.successor()
@@ -212,7 +229,11 @@ class SiblingRefusalTests(SuccessionCase):
         self.refused(lambda: self.claim(self.decide(ambiguity=[])), code="succession_decision_mismatch")
         self.claim(self.decide())
         self.assertEqual(read(self.project, "objective")["continued_by"]["ambiguity"], [entry])
-        self.assertEqual(self.status()["assignments"]["settled"][0]["settlement"], "claim_no_dispatch")
+        status = self.status()
+        self.assertEqual(status["assignments"]["settled"][0]["settlement"], "claim_no_dispatch")
+        self.assertIn("no Dispatch was found at the claim", status["assignments"]["settled"][0]["basis"])
+        self.assertEqual(status["succession"]["ambiguity"], [entry])
+        self.assertIn("Claimed without a Dispatch: 1 reserved assignment(s)", self.status(text=True))
 
     def test_an_unreadable_predecessor_or_a_started_successor_cannot_claim(self):
         self.predecessor(); self.successor()
@@ -308,6 +329,11 @@ class AfterClaimTests(SuccessionCase):
                              "runs": ["run"], "ambiguity": []})
         self.assertEqual((replay["status"], replay["replayed"]), ("claimed", True))
         self.assertEqual(before, self.snapshot())
+        self.refused(lambda: self.claim({"provenance": "user_direct", "instruction": "again", "predecessor": "objective",
+                                         "predecessor_owner": "someone", "successor": "successor",
+                                         "successor_owner": "next", "runs": ["unrelated-run"], "ambiguity": []}),
+                     code="succession_decision_mismatch")
+        self.assertEqual(before, self.snapshot())
         self.successor(name="second", caller="third", run_id="run-t")
         self.terminals["third"] = "live"
         verdict = self.claim(name="second", caller="third")
@@ -357,6 +383,28 @@ class AfterClaimTests(SuccessionCase):
         before = self.snapshot()
         self.refused(lambda: self.claim(decision), code="successor_started")
         self.assertEqual(before, self.snapshot())
+
+    def test_cleanup_protection_follows_the_successor_chain_and_holds_on_unknown_locations(self):
+        from pod import cleanup
+
+        def record(path=None, successor=None, placement=None):
+            value = {"checkpoint": {"worktree": {"path": path}} if path else {}, "admissions": {}}
+            if placement:
+                value["admissions"]["a"] = {"recovery": {"placement_binding": {"path": placement}}}
+            if successor:
+                value["continued_by"] = {"objective": successor}
+            return value
+        cases = {
+            "chain": ({"s1": record("/w/s1", "s2"), "s2": record("/w/s2", placement="/w/s2-child")},
+                      {"/w/s1", "/w/s2", "/w/s2-child"}),
+            "unrecorded": ({"s1": record(None, "s2"), "s2": record("/w/s2")}, None),
+            "unreadable": ({"s1": record("/w/s1", "s2")}, None),
+            "loop": ({"s1": record("/w/s1", "s2"), "s2": record("/w/s2", "s1")}, None),
+        }
+        for kind, (records, expected) in cases.items():
+            with self.subTest(kind=kind), patch("pod.cleanup.read",
+                                                side_effect=lambda _project, name: records.get(name)):
+                self.assertEqual(cleanup._successor_paths(self.project, record(successor="s1")), ("s1", expected))
 
     def test_cleanup_of_the_predecessor_protects_the_successor_worktree(self):
         self.claimed()

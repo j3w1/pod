@@ -86,7 +86,9 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
             # The claim read every bound Dispatch settled, and a reserved row without a Dispatch
             # was named in the owner's decision; the record accepts no later write (R110).
             settled.append({**item, "settlement": "claim" if row["state"] == "bound" else "claim_no_dispatch",
-                            "claimed_at": continued["at"]})
+                            "claimed_at": continued["at"],
+                            **({} if row["state"] == "bound" else
+                               {"basis": "no Dispatch was found at the claim; the owner's decision accepted it"})})
             continue
         if failure is not None and row["state"] not in ("closed", "deferred"):
             # Presentation only: without exact native evidence an open row is neither active nor settled.
@@ -439,6 +441,10 @@ def render(result: dict) -> None:
             failure = result.get("native_settlement_failure")
             by_closure = [item for item in assignments["settled"] if item.get("settlement") in
                           ("closure", "claim", "claim_no_dispatch")]
+            unproven = [item for item in assignments["settled"] if item.get("settlement") == "claim_no_dispatch"]
+            if unproven:
+                print(f"Claimed without a Dispatch: {len(unproven)} reserved assignment(s) the owner accepted "
+                      "at the claim; no native settlement proves them")
             if failure and assignments.get("unverified"):
                 print(f"Native settlement unverified: {failure['code']}; bound runtime "
                       f"{failure['bound_runtime']}, current runtime {failure['current_runtime']}")
