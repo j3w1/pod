@@ -35,6 +35,8 @@ def capabilities(env: dict[str, str] | None = None, *, has_colors: bool = False)
 def clean(value: object) -> str:
     """Strip controls, ESC, DEL, bidi formatting and every other format character."""
     text = str(value) if value is not None else ""
+    if text.isascii() and text.isprintable():
+        return text  # Printable ASCII has no control, format or surrogate character.
     return "".join(character for character in text
                    if unicodedata.category(character) not in ("Cc", "Cf", "Cs"))
 
@@ -63,8 +65,11 @@ def glyph(caps: Capabilities, name: str) -> str:
 
 
 def display_width(value: object) -> int:
+    text = clean(value)
+    if text.isascii():
+        return len(text)  # Cleaned ASCII is printable, never combining and one column wide.
     width = 0
-    for character in clean(value):
+    for character in text:
         if unicodedata.combining(character):
             continue
         width += 2 if unicodedata.east_asian_width(character) in ("F", "W") else 1

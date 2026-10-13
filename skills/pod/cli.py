@@ -70,6 +70,8 @@ def _edit(path: Path) -> dict:
         completed = subprocess.run([*argv, str(path)], check=False)
     except OSError as exc:
         raise PodError("editor_failed", "Editor could not start") from exc
+    from .github import forget_repository_reads
+    forget_repository_reads()  # The editor is an arbitrary program; read identity again after it.
     if completed.returncode:
         raise PodError("editor_failed", "Editor did not complete")
     try:
@@ -347,7 +349,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"pod: {exc.code}: {exc}", file=sys.stderr)
             return 1
     try:
-        result = execute(args, Path.cwd())
+        from .github import repository_reads
+        with repository_reads():  # One command; the long-running workspace above reads Git afresh.
+            result = execute(args, Path.cwd())
     except PodError as exc:
         result = {"schema": "pod-cli/v5", "status": "blocked",
                   "error": {"code": exc.code, "message": str(exc)}}

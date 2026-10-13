@@ -7,6 +7,9 @@ rewrites a workflow, changes branch protection, or infers what a repository requ
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 import json
 import hashlib
 import os
@@ -142,9 +145,52 @@ def _github_repository(remote: str) -> str | None:
     return None
 
 
-def repository_context(project: Path) -> dict:
-    """Resolve stable repository identity and this linked worktree through Git reads only."""
+# One helper call or one-shot command reads each repository's identity once. A native effect
+# forgets what was read, so identity read after an effect is fresh; unscoped calls always read Git.
+_IDENTITY: ContextVar[dict | None] = ContextVar("pod_repository_identity", default=None)
+
+
+@contextmanager
+def repository_reads():
+    """Share repository identity reads within one helper call or one-shot command."""
+    if _IDENTITY.get() is not None:
+        yield
+        return
+    token = _IDENTITY.set({})
+    try:
+        yield
+    finally:
+        _IDENTITY.reset(token)
+
+
+def forget_repository_reads() -> None:
+    """After a native effect, read repository identity again."""
+    reads = _IDENTITY.get()
+    if reads is not None:
+        reads.clear()
+
+
+def repository_context(project: Path, *, fresh: bool = False) -> dict:
+    """Resolve stable repository identity and this linked worktree through Git reads only.
+
+    `fresh` always reads Git, for a check that binds identity right before an effect, and the
+    call's later reads then agree with what that check saw.
+    """
     root = project.resolve()
+    reads = _IDENTITY.get()
+    if reads is not None and not fresh and str(root) in reads:
+        return deepcopy(reads[str(root)])
+    context, complete = _read_repository_context(root)
+    if reads is not None:
+        if complete:
+            reads[str(root)] = deepcopy(context)
+        else:
+            reads.pop(str(root), None)  # A transient remote failure is never kept for the call.
+    return context
+
+
+def _read_repository_context(root: Path) -> tuple[dict, bool]:
+    """The identity, and whether every read answered (a failed read raises or is incomplete)."""
     try:
         lines = _local_git(root, ["rev-parse", "--path-format=absolute", "--show-toplevel",
                                   "--git-common-dir"]).splitlines()
@@ -153,7 +199,7 @@ def repository_context(project: Path) -> dict:
             raise
         return {"repository": None, "repo_key": None, "worktree": str(root),
                 "main_worktree": str(root), "branch": None, "dirty": None,
-                "linked_worktrees": [str(root)]}
+                "linked_worktrees": [str(root)]}, True
     if len(lines) != 2:
         raise PodError("git_contract", "Git repository identity is incomplete")
     worktree = Path(lines[0]).resolve()
@@ -173,16 +219,18 @@ def repository_context(project: Path) -> dict:
                               "detached": bool(fields.get("detached"))})
     if not worktrees or not any(row["path"] == str(worktree) for row in worktrees):
         raise PodError("git_contract", "Current worktree is absent from Git's worktree inventory")
+    complete = True
     try:
         remote = _local_git(worktree, ["remote", "get-url", "origin"]).strip()
-    except PodError:
+    except PodError as exc:
         remote = ""
+        complete = exc.code == "repository_identity_unavailable"  # No origin answers; a timeout does not.
     repository = _github_repository(remote)
     current = next(row for row in worktrees if row["path"] == str(worktree))
     return {"repository": repository, "repo_key": hashlib.sha256(str(common).encode()).hexdigest(),
             "worktree": str(worktree), "main_worktree": worktrees[0]["path"],
             "branch": current["branch"], "dirty": None,
-            "linked_worktrees": [row["path"] for row in worktrees]}
+            "linked_worktrees": [row["path"] for row in worktrees]}, complete
 
 
 def parse_issue_locator(locator: object) -> dict:
@@ -292,7 +340,7 @@ def _refuse_requirements(row: dict, locator: str) -> None:
 def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
                  amendments: list[str] | None = None) -> dict:
     parsed = parse_issue_locator(locator)
-    context = repository_context(project)
+    context = repository_context(project, fresh=True)  # A100 binds the target now
     if context["repository"] is None or context["repository"].casefold() != parsed["repository"].casefold():
         raise PodError("repository_mismatch", "Issue target differs from the actual checkout repository")
     reader = port or GhPort(project)
@@ -339,7 +387,7 @@ def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
 
 def issue_recheck(project: Path, binding: dict, *, port: "GhPort | None" = None) -> dict:
     source = validate_issue_binding(binding)
-    context = repository_context(project)
+    context = repository_context(project, fresh=True)  # A100 binds the target now
     if context["repository"] is None or context["repository"].casefold() != source["repository"].casefold():
         raise PodError("repository_mismatch", "Bound issue target differs from the actual checkout")
     row = (port or GhPort(project)).issue(repository=source["repository"], number=source["number"])
@@ -378,6 +426,9 @@ def _run(command: list[str], *, cwd: Path, timeout: int, mutation: bool) -> subp
     except (OSError, subprocess.TimeoutExpired) as exc:
         code = "remote_effect_uncertain" if mutation else "remote_read_failed"
         raise PodError(code, "The remote command gave no response") from exc
+    finally:
+        if mutation:
+            forget_repository_reads()
 
 
 def _normalise_run(row: dict) -> dict:

@@ -288,6 +288,10 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
         stdout, stderr, transport = exc.stdout, exc.stderr, "timeout"
     except OSError as exc:
         transport = type(exc).__name__
+    finally:
+        # The effect may have created or moved worktrees; identity read after it is fresh.
+        from .github import forget_repository_reads
+        forget_repository_reads()
     observation = {"argv": command, "transport": transport, "exit": returncode,
                    "stdout": _captured_output(stdout), "stderr": _captured_output(stderr)}
     try:

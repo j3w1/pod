@@ -6,6 +6,7 @@ from unittest.mock import patch
 import yaml
 from pod.config import (defaults, edit, load, set_pin, set_preferred, set_route, set_routes, validate,
                         write_defaults)
+from pod import config as config_module
 from pod.errors import PodError
 from pod.selection import failure_active, validate_choice
 from tests.common import POD_067, earlier_validate, fixture
@@ -115,6 +116,7 @@ class PinTests(unittest.TestCase):
                     document['routes'][SOL] = 'disabled'
                     self.path.write_text(yaml.safe_dump(document))
                     original = self.path.read_bytes()
+                    config_module._decoded.cache_clear()  # Count the parse even if these bytes were seen before.
                     with patch('pod.config.yaml.load', wraps=yaml.load) as parse:
                         snapshot = self.snapshot()
                     self.assertEqual(parse.call_count, 1)
@@ -132,6 +134,7 @@ class PinTests(unittest.TestCase):
         for raw in ('pinned: unknown\nroutes: [\n', 'pinned: unknown\npinned: codex/gpt-6.1-sol/high\n',
                     'pinned: &pin unknown\nroutes: *pin\n'):
             self.path.write_text(raw)
+            config_module._decoded.cache_clear()
             with patch('pod.config.yaml.load', wraps=yaml.load) as parse:
                 snapshot = self.snapshot()
             self.assertEqual(parse.call_count, 1)

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 import fcntl
+from functools import lru_cache
 import hashlib
 import os
 from pathlib import Path
@@ -131,6 +132,12 @@ def _diagnostic(value: Any, name: str) -> str | None:
 
 
 def _decode(data: bytes) -> Any:
+    # The same bytes always decode to the same document; each caller gets its own copy.
+    return deepcopy(_decoded(data))
+
+
+@lru_cache(maxsize=32)
+def _decoded(data: bytes) -> Any:
     try:
         value = yaml.load(data.decode("utf-8"), Loader=_StrictLoader)
     except PodError:
