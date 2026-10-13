@@ -363,7 +363,10 @@ class AfterClaimTests(SuccessionCase):
         verdict = self.claim()  # Detection reports the gap and still writes nothing.
         self.assertEqual((verdict["status"], verdict["complete"]), ("claimed", False))
         self.assertEqual(before, self.snapshot())
-        result = self.claim(decision)
+        self.assertEqual(verdict["facts"], {key: decision[key] for key in verdict["facts"]})
+        # A decision rebuilt from those facts completes the link, as R110 asks.
+        result = self.claim({"provenance": "user_direct", "instruction": "Finish the interrupted claim",
+                             **verdict["facts"]})
         self.assertEqual((result["status"], result["replayed"]), ("claimed", True))
         self.assertEqual(read(self.project, "successor")["continues"]["objective"], "objective")
         self.assertEqual(self.status()["succession"]["state"], "successor_open")

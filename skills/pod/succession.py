@@ -170,6 +170,9 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
     link = prior.get("continued_by")
     if isinstance(link, dict):
         if link["objective"] == objective:
+            # The facts of the recorded claim, so its own decision can complete an interrupted link.
+            facts.update(predecessor_owner=prior.get("owner"), successor_owner=link["owner"],
+                         runs=list(link["runs"]), ambiguity=list(link["ambiguity"]))
             back = state.get("continues")
             verdict.update(status="claimed", condition="claimed_by_this_successor", record=record,
                            complete=isinstance(back, dict) and back.get("objective") == predecessor,
