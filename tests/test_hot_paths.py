@@ -88,15 +88,17 @@ class RepositoryReadsTests(unittest.TestCase):
     def test_issue_target_checks_read_the_remote_fresh(self):
         subprocess.run(["git", "-C", str(self.project), "remote", "add", "origin",
                         "https://github.com/acme/example.git"], check=True)
+        offline = SimpleNamespace(issue=lambda **kwargs: self.fail("the target check must refuse before GitHub"))
         with github.repository_reads():
             github.repository_context(self.project)
             subprocess.run(["git", "-C", str(self.project), "remote", "set-url", "origin",
                             "https://github.com/other/elsewhere.git"], check=True)
-            for check in (lambda: github.issue_intake(self.project, "https://github.com/acme/example/issues/7"),
+            for check in (lambda: github.issue_intake(self.project, "https://github.com/acme/example/issues/7",
+                                                      port=offline),
                           lambda: github.issue_recheck(self.project, {
                               "schema": "pod-issue-source/v1", "locator": "https://github.com/acme/example/issues/7",
                               "repository": "acme/example", "number": 7, "body_sha256": "0" * 64,
-                              "amendments": []})):
+                              "amendments": []}, port=offline)):
                 with self.subTest(check=check), self.assertRaises(PodError) as caught:
                     check()
                 self.assertEqual(caught.exception.code, "repository_mismatch")
