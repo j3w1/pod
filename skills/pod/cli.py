@@ -430,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
         route = result["message_route"]
         print(f"Message route to a Run's coordinator: conditional send {route['conditional_send']}, "
               f"administrator sender {route['administrator_sender']} ({route['basis']}; {route['dependency']})")
+        print(f"Administrator relay: {route['administrator_relay']} through {route['relay_address']} from "
+              f"{route['relay_sender']} ({route['relay_basis']})")
         for row in result["state"].get("superseded", []):
             print(f"Superseded objective {row['objective'] or row['record']}: "
                   f"{', '.join(row['schemas'])} (blocked, not converted)")

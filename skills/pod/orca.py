@@ -352,9 +352,19 @@ def contract() -> dict:
 
 
 def message_route(snapshot: dict) -> dict:
-    """Which delivery form reaches only a Run's current coordinator; Pod never borrows a sender."""
+    """Which delivery form reaches only a Run's current coordinator; Pod never borrows a sender.
+
+    The relay form needs no new Orca capability: a terminal bound to no Run may send to
+    `run:<id>`, and only the coordinator bound to that Run when it checks reads the message.
+    """
     observed = snapshot.get("status") == "observed"
+    contract = observed and snapshot.get("capabilities", {}).get("contract_v1") is True
     return {"conditional_send": "unavailable", "administrator_sender": "unavailable",
+            "administrator_relay": "available" if contract else "unavailable",
+            "relay_address": "run:<run id>",
+            "relay_sender": "the administrator's own Orca terminal, bound to no Run",
+            "relay_basis": ("Orca advertises its orchestration contract; probed on Orca 1.4.224" if contract
+                            else "Orca's orchestration contract is not advertised or unread"),
             "basis": "no advertised Orca capability" if observed else "Orca capabilities are unread",
             "dependency": MESSAGE_ROUTE_DEPENDENCY}
 

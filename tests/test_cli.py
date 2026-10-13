@@ -164,15 +164,30 @@ class CliTests(unittest.TestCase):
 
     def test_doctor_reports_the_message_route_and_its_orca_dependency(self):
         from pod.orca import MESSAGE_ROUTE_DEPENDENCY
-        for snapshot, basis in (({'status': 'observed', 'capabilities': {}}, 'no advertised Orca capability'),
-                                ({'status': 'unavailable', 'reason': 'orca_unavailable'}, 'Orca capabilities are unread')):
+        for snapshot, basis, relay in (
+                ({'status': 'observed', 'capabilities': {'contract_v1': True}}, 'no advertised Orca capability', 'available'),
+                ({'status': 'observed', 'capabilities': {}}, 'no advertised Orca capability', 'unavailable'),
+                ({'status': 'unavailable', 'reason': 'orca_unavailable'}, 'Orca capabilities are unread', 'unavailable')):
             with self.subTest(status=snapshot['status']), patch('pod.cli.contract', return_value=snapshot), \
                     patch('pod.orca.read_command') as native:
                 doctor = execute(parser().parse_args(['doctor', '--json']), self.project)
                 native.assert_not_called()
-            self.assertEqual(doctor['message_route'], {
+            route = doctor['message_route']
+            self.assertEqual({k: route[k] for k in ('conditional_send', 'administrator_sender', 'administrator_relay',
+                                                     'relay_address', 'basis', 'dependency')}, {
                 'conditional_send': 'unavailable', 'administrator_sender': 'unavailable',
+                'administrator_relay': relay, 'relay_address': 'run:<run id>',
                 'basis': basis, 'dependency': MESSAGE_ROUTE_DEPENDENCY})
+            self.assertIn('bound to no Run', route['relay_sender'])
+            self.assertEqual('1.4.224' in route['relay_basis'], relay == 'available')
+        from contextlib import redirect_stdout
+        from io import StringIO
+        out = StringIO()
+        with patch('pod.cli.contract', return_value={'status': 'observed', 'capabilities': {'contract_v1': True}}), \
+                patch('pod.orca.read_command'), redirect_stdout(out):
+            from pod.cli import main
+            main(['doctor'])
+        self.assertIn('Administrator relay: available through run:<run id> from the administrator', out.getvalue())
         self.assertTrue(MESSAGE_ROUTE_DEPENDENCY.startswith('https://github.com/stablyai/orca/issues/'))
 
     def test_config_status_and_doctor_expose_valid_and_invalid_pins_passively(self):
