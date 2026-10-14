@@ -1651,7 +1651,9 @@ def _close(state: dict, ctx: dict) -> dict:
                      "closure waits for settled admissions and dispositions", record='closure')
     if ctx.get("governor_pending"):
         raise refuse("obligation_unaccounted", "closure_unfinished",
-                     "closure waits for pending governed effects to settle", record='closure')
+                     "closure waits for pending governed effects to settle", record='closure',
+                     next_action="settle each pending or UNKNOWN Governor row from Pod's readback with "
+                                 "governor-reconcile, or record its outcome with the evidence it needs, then close")
     closure = {"seq": state["seq"], "revision": state["revision"]}
     return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
 

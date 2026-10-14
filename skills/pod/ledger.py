@@ -1056,6 +1056,11 @@ def map_read(project: Path, objective: str) -> dict:
             actions.append(f"resolve {ob['id']} wait: {ob['wait']['class']} on {ob['wait']['referent']}")
         elif ob["state"] == "blocked_external":
             actions.append(f"wait for {ob['external']['party']}: {ob['external']['need']}")
+    from .governor import _read_journal, _record_path, finalization
+    try:
+        remaining = finalization(state, _read_journal(_record_path(project, objective)))
+    except PodError:
+        remaining = None
     return {"schema": "pod-map-view/v1", "seq": map_state["seq"], "next_seq": map_state["seq"] + 1,
             "revision": map_state["revision"], "candidate": state["checkpoint"].get("candidate"),
             "governance": map_state["governance"], "delivery": map_state.get("delivery"),
@@ -1064,7 +1069,8 @@ def map_read(project: Path, objective: str) -> dict:
                             if ob.get("acceptances")},
             "outstanding": outstanding, "settled_attempts": settled_attempts,
             "undispositioned": pending, "review_eligibility": eligibility,
-            "next_actions": actions[:MAX_RECORD // 128], "native_settlement": view["settlement"]}
+            "next_actions": actions[:MAX_RECORD // 128], "native_settlement": view["settlement"],
+            "finalization": remaining}
 
 
 def _require_open(state: dict) -> None:

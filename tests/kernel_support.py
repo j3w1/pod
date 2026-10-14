@@ -148,6 +148,9 @@ class GovernorFakePort:
 
     def dispatch(self, *, workflow, ref, inputs):
         self.calls.append(("dispatch", workflow, ref, dict(inputs)))
+        if "dispatch" in self.rejected:
+            # gh exits non-zero when GitHub refuses the dispatch, e.g. a workflow without that trigger.
+            raise PodError("remote_effect_uncertain", "gh workflow run did not confirm the dispatch")
         if self.delay:
             time.sleep(self.delay)
         self._start(workflow, self.heads.get(f"origin/{ref}"), event="workflow_dispatch")

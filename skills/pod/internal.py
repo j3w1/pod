@@ -346,14 +346,15 @@ def _op_governor(request: dict) -> dict:
 def _op_governor_outcome(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "record_id", "outcome", "provider", "evidence", "detail"},
           {"project", "objective", "owner", "record_id", "outcome"}, name="request")
-    from .governor import record_outcome
+    from .governor import objective_finalization, record_outcome
     project = Path(request["project"])
     _governor_projection(project, request["objective"], request["owner"],
                          mutating=True, version_exempt=True)
-    return record_outcome(project, request["objective"], owner=request["owner"],
-                          record_id=request["record_id"], outcome=request["outcome"],
-                          provider=request.get("provider"), evidence=request.get("evidence"),
-                          detail=request.get("detail"))
+    result = record_outcome(project, request["objective"], owner=request["owner"],
+                            record_id=request["record_id"], outcome=request["outcome"],
+                            provider=request.get("provider"), evidence=request.get("evidence"),
+                            detail=request.get("detail"))
+    return {**result, "finalization": objective_finalization(project, request["objective"])}
 
 
 def _op_governor_prepare(request: dict) -> dict:
@@ -415,25 +416,27 @@ def _op_governor_correct(request: dict) -> dict:
 def _op_governor_execute(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "action", "exception", "pull_request"},
           {"project", "objective", "owner", "action"}, name="request")
-    from .governor import execute
+    from .governor import execute, objective_finalization
     project = Path(request["project"])
     projection = _governor_projection(project, request["objective"], request["owner"],
                                       mutating=True, forward_action=request["action"])
     # The production port is the installed gh and git; request JSON cannot supply one.
-    return execute(project, request["objective"], owner=request["owner"],
-                   action=request["action"], exception=request.get("exception"),
-                   pull_request=request.get("pull_request"), native_projection=projection)
+    result = execute(project, request["objective"], owner=request["owner"],
+                     action=request["action"], exception=request.get("exception"),
+                     pull_request=request.get("pull_request"), native_projection=projection)
+    return {**result, "finalization": objective_finalization(project, request["objective"])}
 
 
 def _op_governor_reconcile(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "record_id"},
           {"project", "objective", "owner", "record_id"}, name="request")
-    from .governor import reconcile
+    from .governor import objective_finalization, reconcile
     project = Path(request["project"])
     _governor_projection(project, request["objective"], request["owner"],
                          mutating=True, version_exempt=True)
-    return reconcile(project, request["objective"], owner=request["owner"],
-                     record_id=request["record_id"])
+    result = reconcile(project, request["objective"], owner=request["owner"],
+                       record_id=request["record_id"])
+    return {**result, "finalization": objective_finalization(project, request["objective"])}
 
 
 def _op_governor_status(request: dict) -> dict:
@@ -551,6 +554,19 @@ _OPERATIONS = {
 }
 
 
+_FINALIZATION_OPERATIONS = {"checkpoint", "report", "governor", "governor-outcome", "governor-execute",
+                            "governor-reconcile"}
+_FINALIZATION_REFUSALS = {"objective_closed", "outcome_evidence_required", "outcome_conflict",
+                          "delivery_unverified", "delivery_recorded"}
+
+
+def _finalization_refusal(operation: str, exc: PodError) -> bool:
+    """A refusal on the path to finishing names what remains, in recording order (R2)."""
+    detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else None
+    return (operation in _FINALIZATION_OPERATIONS
+            and (exc.code in _FINALIZATION_REFUSALS or detail == "closure_unfinished"))
+
+
 def run(operation: str, request: dict) -> dict:
     handler = _OPERATIONS.get(operation)
     if handler is None:
@@ -572,6 +588,16 @@ def run(operation: str, request: dict) -> dict:
         if isinstance(exc.detail, dict) and isinstance(exc.detail.get("referent"), dict):
             exc.args = (f"internal {operation}: {exc}",)
             exc.detail = {**exc.detail, "operation": operation}
+        if (_finalization_refusal(operation, exc) and isinstance(request, dict)
+                and isinstance(request.get("project"), str) and isinstance(request.get("objective"), str)
+                and (exc.detail is None or isinstance(exc.detail, dict))):
+            from .governor import objective_finalization
+            try:
+                remaining = objective_finalization(Path(request["project"]), request["objective"])
+            except Exception:
+                remaining = None  # The refusal stands; only its finalization view is unavailable.
+            if remaining is not None:
+                exc.detail = {**(exc.detail or {}), "finalization": remaining}
         if operation == "admission" and isinstance(request, dict) and request.get("project") and request.get("objective") and request.get("task"):
             from .ledger import read
             state = read(Path(request["project"]), request["objective"])
@@ -691,6 +717,14 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
         if "next_safe_action" in checkpoint:
             acknowledgement["next_safe_action"] = checkpoint["next_safe_action"]
     acknowledgement["objective"] = request["objective"]
+    if operation in ("checkpoint", "report"):
+        from .governor import objective_finalization
+        try:
+            remaining = objective_finalization(Path(request["project"]), request["objective"])
+        except Exception:
+            remaining = None  # A recorded write is never refused because its finalization view failed.
+        if remaining is not None:
+            acknowledgement["finalization"] = remaining
     if "runtime_continuity" in result and operation != "runtime-continuity":
         acknowledgement["runtime_continuity"] = result["runtime_continuity"]
     for key in ("warnings", "invalidations", "source_rejections"):

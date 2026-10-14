@@ -1382,13 +1382,15 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
             row = _find_row(journal, record_id)
             if row["decision"] != "ALLOW":
                 raise PodError("invalid_outcome", "Only an admitted action carries an outcome")
-            if row["outcome"] == outcome and _restated(row, provider_record, references, detail):
-                break
+            if row["outcome"] == outcome:
+                if _restated(row, provider_record, references, detail):
+                    break
+                raise _outcome_refusal("receipt_recorded", f"{outcome} is already recorded with another receipt, "
+                                       "and a recorded receipt is not restated",
+                                       "restate it exactly, or settle an UNKNOWN row with governor-reconcile",
+                                       record_id)
             if row["outcome"] not in ("pending", "UNKNOWN"):
                 raise PodError("outcome_conflict", "A different outcome was already recorded")
-            if row["outcome"] == "UNKNOWN" and outcome == "UNKNOWN":
-                raise _outcome_refusal("receipt_recorded", "An UNKNOWN outcome's receipt is not restated",
-                                       "settle it from provider readback with governor-reconcile", record_id)
             needs = _check_outcome(project, state, journal, row, outcome, provider=provider_record,
                                    evidence=references, detail=detail)
             if needs is None:
@@ -1960,6 +1962,15 @@ def finalization(state: dict | None, journal: dict) -> dict:
     return {"schema": "pod-finalization/v1", "remaining": remaining,
             "records": {name: records[name] for name in remaining}, "finished": not remaining,
             "next_action": next_action}
+
+
+def objective_finalization(project: Path, objective: str) -> dict | None:
+    """The finalization projection of this objective's local records, or None when they cannot be read."""
+    from .ledger import read
+    try:
+        return finalization(read(project, objective), _read_journal(_record_path(project, objective)))
+    except PodError:
+        return None
 
 
 def status_at(root: Path, *, project: Path | None = None,
