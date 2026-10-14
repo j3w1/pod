@@ -111,7 +111,7 @@ class RepositoryReadsTests(unittest.TestCase):
         def slow_remote(project, argv, **kwargs):
             if argv[:2] == ["remote", "get-url"] and not failed:
                 failed.append(argv)
-                raise PodError("remote_read_failed", "The remote command gave no response")
+                raise PodError("git_unavailable", "Git did not answer the repository discovery read")
             return real(project, argv, **kwargs)
 
         with patch("pod.github._local_git", side_effect=slow_remote), github.repository_reads():
