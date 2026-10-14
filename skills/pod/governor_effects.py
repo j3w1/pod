@@ -73,6 +73,13 @@ def _stamp(value: object) -> datetime | None:
     return stamp if stamp is not None and stamp.tzinfo is not None else None
 
 
+def _created_since(run: dict, since: str) -> bool:
+    """Whether the run reports a creation at or after the submission; GitHub reports it to the second."""
+    floor = _stamp(since)
+    stamp = _stamp(run.get("created_at"))
+    return floor is not None and stamp is not None and stamp >= floor.replace(microsecond=0)
+
+
 def _pick_run(runs: list[dict], *, since: str, events: tuple[str, ...] | None = None,
               commit: str | None = None) -> dict | None:
     """The newest run created at or after the submission, of one of the events and on the exact commit.
@@ -80,20 +87,15 @@ def _pick_run(runs: list[dict], *, since: str, events: tuple[str, ...] | None = 
     A run that does not report its creation time, or with an event or commit asked for, does not report
     that event or commit, cannot be shown to match and is not a candidate.
     """
-    floor = _stamp(since)
-    if floor is not None:
-        # GitHub reports run creation to the second; the floor must not be finer.
-        floor = floor.replace(microsecond=0)
     candidates = []
     for run in runs:
         if events is not None and run.get("event") not in events:
             continue
         if commit is not None and run.get("head_sha") != commit:
             continue
-        stamp = _stamp(run.get("created_at"))
-        if stamp is None or floor is None or stamp < floor:
+        if not _created_since(run, since):
             continue
-        candidates.append((stamp, run))
+        candidates.append((_stamp(run.get("created_at")), run))
     if not candidates:
         return None
     return max(candidates, key=lambda item: item[0])[1]
@@ -112,10 +114,13 @@ def _history(port: GitHubPort, *, workflow: str, commit: str) -> tuple[list[dict
 def _unlisted(read: dict, *, events: tuple[str, ...] | None, since: str, outcome: str) -> str:
     """Why a lookup bound nothing: missing or partial history is never a failure or a proof of no effect."""
     wanted = " or ".join(events) if events else "any event"
-    reason = (f"no {wanted} run created at or after {since} is among the listed {read['scope']} "
-              f"({read['listed']} listed, limit {read['limit']})")
     if read["truncated"]:
-        reason += "; the list was truncated, so an older matching run may be hidden"
+        # A truncated list may hide the row's own run, so even a visible match is not bound from it.
+        reason = (f"the listed {read['scope']} were truncated at {read['limit']}, so the {wanted} run created at or "
+                  f"after {since} that is this row's own cannot be told from the runs it hides")
+    else:
+        reason = (f"no {wanted} run created at or after {since} is among the listed {read['scope']} "
+                  f"({read['listed']} listed, limit {read['limit']})")
     return f"{reason}; {RETENTION}; the row stays {outcome}"
 
 
@@ -192,7 +197,9 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
         # A requested dispatch binds only a workflow_dispatch run of its exact commit, never a push or
         # pull-request run that happens to sit on the same commit, and only the attempt it started.
         try:
-            runs, _ = _history(port, workflow=workflow, commit=commit)
+            runs, read = _history(port, workflow=workflow, commit=commit)
+            if read["truncated"]:
+                return "pending", lookup, "dispatched; the run list was truncated, so its run is not bound yet"
             run = _pick_run(runs, since=row["receipt"]["started_at"], events=_row_events(row), commit=commit)
             run = _original_attempt(port, run) if run is not None else None
         except PodError as exc:
@@ -211,13 +218,24 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict,
         if not failed:
             raise PodError("rerun_unbound", "No failed run with a provider identity binds this candidate and workflow")
         run_id = str(failed[-1]["receipt"]["provider"]["run_id"])
+        # The rerun starts the attempt after the run's latest one: read that before submitting, so the row
+        # names its own attempt and never takes another actor's later one.
+        try:
+            latest = port.run(run_id=run_id).get("attempt")
+        except PodError as exc:
+            raise PodError("rerun_attempt_unread", "The run's latest attempt could not be read, so the rerun's own "
+                           "attempt cannot be named; nothing was rerun") from exc
+        if type(latest) is not int or latest < 1:
+            raise PodError("rerun_attempt_unread", "The run reports no attempt, so the rerun's own attempt cannot be "
+                           "named; nothing was rerun")
+        own = {"run_id": run_id, "rerun": True, "attempt": latest + 1}
         try:
             port.rerun(run_id=run_id, failed_only=True)
         except PodError as exc:
             if _uncertain(exc):
-                return "UNKNOWN", {"run_id": run_id}, "rerun response was lost"
+                return "UNKNOWN", own, "rerun response was lost"
             raise
-        return "pending", {"run_id": run_id, "rerun": True}, None
+        return "pending", own, None
     if kind == "cancel_validation":
         target = _find_row(journal, row["action"]["target"])
         run_id = _bound_run_id(target)
@@ -255,8 +273,10 @@ def _triggered_runs(port: GitHubPort, row: dict, commit: str, *, unread: list | 
             continue
         workflow = effect[len("workflow:"):]
         try:
-            runs, _ = _history(port, workflow=workflow, commit=commit)
-            run = _pick_run(runs, since=row["receipt"]["started_at"], events=PUBLICATION_EVENTS, commit=commit)
+            runs, read = _history(port, workflow=workflow, commit=commit)
+            # A truncated list may hide the publication's own run; the derived row then binds by readback.
+            run = None if read["truncated"] else _pick_run(runs, since=row["receipt"]["started_at"],
+                                                           events=PUBLICATION_EVENTS, commit=commit)
             run = _original_attempt(port, run) if run is not None else None
         except PodError as exc:
             if not _uncertain(exc) and unread is not None:
@@ -296,6 +316,8 @@ def _reject_run(project: Path, objective: str, *, owner: str, record_id: str, re
 
 
 def _rejected_reason(rejected: dict, events: tuple[str, ...] | None) -> str:
+    if rejected.get("reason"):
+        return f"run {rejected['run_id']} {rejected['reason']}; it is not this row's run"
     if "head_sha" in rejected:
         return (f"run {rejected['run_id']} ran on commit {str(rejected['head_sha'])[:12]}, not this row's commit; "
                 "it is not this row's run")
@@ -427,12 +449,29 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
     return result
 
 
-def _rerun_floor(row: dict, journal: dict, run_id: str) -> int:
-    """The newest attempt any other row of this run bound; a rerun binds only an attempt after it."""
-    attempts = [(other["receipt"].get("provider") or {}).get("attempt") or 1 for other in journal["actions"]
-                if other["record_id"] != row["record_id"]
-                and str((other["receipt"].get("provider") or {}).get("run_id")) == run_id]
-    return max([int(value) for value in attempts if type(value) is int] or [1])
+def _rerun_attempt(row: dict, journal: dict, run_id: str) -> int | None:
+    """The one attempt a rerun row reads: the attempt it recorded when it ran.
+
+    A row from before that record reads the attempt after the newest one the earlier rows of its run bound, but
+    only when each of those is known exactly (a dispatch or publication's run starts at its first attempt);
+    otherwise None, and the row stays pending rather than take any newer attempt.
+    """
+    recorded = (row["receipt"].get("provider") or {}).get("attempt")
+    if type(recorded) is int and recorded > 1:
+        return recorded
+    attempts = []
+    for other in journal["actions"]:
+        if other["record_id"] == row["record_id"]:
+            break
+        if str(_bound_run_id(other)) != run_id:
+            continue
+        attempt = (other["receipt"].get("provider") or {}).get("attempt")
+        if type(attempt) is not int:
+            if other["action"]["kind"] not in ("workflow_dispatch", "remote_diagnostic"):
+                return None
+            attempt = 1
+        attempts.append(attempt)
+    return max(attempts) + 1 if attempts else None
 
 
 def _rerun_source(row: dict, journal: dict) -> str | None:
@@ -488,15 +527,21 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
             if run_id is None:
                 answer["hold"] = "no failed run with a provider identity binds this rerun"
                 return answer
-            bound = provider.get("attempt")
-            floor = _rerun_floor(row, journal, run_id)
-            run = port.run(run_id=run_id, attempt=bound) if bound else port.run(run_id=run_id)
-            attempt = run.get("attempt")
-            if attempt != bound if bound else type(attempt) is not int or attempt <= floor:
-                answer["hold"] = (f"run {run_id} shows attempt {attempt}; this rerun binds "
-                                  + (f"attempt {bound}" if bound else f"an attempt after {floor}"))
+            own = _rerun_attempt(row, journal, run_id)
+            if own is None:
+                answer["hold"] = (f"the attempt this rerun of run {run_id} started cannot be named from the recorded "
+                                  "runs, so no attempt binds it; the row stays " + row["outcome"])
+                return answer
+            try:
+                run = port.run(run_id=run_id, attempt=own)
+            except PodError as exc:
+                answer["hold"] = f"attempt {own} of run {run_id} is not readable yet ({exc.code})"
+                return answer
+            if run.get("attempt") != own or str(run.get("id")) != run_id:
+                answer["hold"] = f"run {run_id} did not answer for attempt {own}, the one this rerun started"
                 return answer
         elif run_id:
+            # A bound run is verified exactly as a newly selected one, whoever bound it (R115).
             run = port.run(run_id=str(run_id), attempt=1)
             event = run.get("event") if isinstance(run.get("event"), str) else None
             if events is not None and event not in events:
@@ -505,9 +550,27 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
                 head = run.get("head_sha")
                 answer["reject"] = {"run_id": str(run_id), "event": event,
                                     "head_sha": head if isinstance(head, str) else None}
+            elif not _created_since(run, since):
+                answer["reject"] = {"run_id": str(run_id), "event": event,
+                                    "reason": f"was not created at or after the submission at {since}"}
             elif run.get("attempt") != 1:
                 answer["hold"] = f"run {run_id} did not answer for its first attempt"
                 return answer
+            elif lookup is None:
+                answer["hold"] = f"run {run_id}'s workflow cannot be verified: the row names no commit to list"
+                return answer
+            else:
+                # The view names only a display name; exact workflow identity is membership in the list GitHub
+                # filters by workflow file and commit.
+                runs, read = _history(port, workflow=row["action"]["target"], commit=lookup)
+                answer["provider_read"] = read
+                if not any(str(item.get("id")) == str(run_id) for item in runs):
+                    if read["truncated"]:
+                        answer["hold"] = (f"run {run_id} is not among the truncated listed {read['scope']}, so its "
+                                          f"workflow cannot be verified; the row stays {row['outcome']}")
+                        return answer
+                    answer["reject"] = {"run_id": str(run_id), "event": event,
+                                        "reason": f"is not among the listed {read['scope']}"}
             if answer["reject"] is not None:
                 rejected, run = answer["reject"], None
         if run is None:
@@ -516,6 +579,9 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
                 return answer
             runs, read = _history(port, workflow=row["action"]["target"], commit=lookup)
             answer["provider_read"] = read
+            if read["truncated"]:
+                answer["hold"] = _unlisted(read, events=events, since=since, outcome=row["outcome"])
+                return answer
             run = _pick_run(runs, since=since, events=events, commit=lookup)
             if run is not None:
                 run = _original_attempt(port, run)

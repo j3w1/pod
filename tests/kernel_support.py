@@ -169,6 +169,8 @@ class GovernorFakePort:
         current = self.run_status[run_id]
         if attempt is None or attempt == current["attempt"]:
             return dict(current)
+        if attempt not in self.attempts[run_id]:
+            raise PodError("remote_read_failed", "gh read did not succeed")  # GitHub answers 404.
         return dict(self.attempts[run_id][attempt])
 
     def rerun(self, *, run_id, failed_only):
