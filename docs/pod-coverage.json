@@ -3257,7 +3257,8 @@
         "tests.test_retirement_absent.PathRefusalTableTests.test_an_unlocated_terminal_row_refuses_an_existing_path",
         "tests.test_retirement_absent.PathRefusalTableTests.test_an_unencodable_location_makes_the_inventory_unusable_for_an_absent_path",
         "tests.test_retirement_absent.PathRefusalTableTests.test_an_unencodable_location_makes_the_inventory_unusable_for_an_existing_path",
-        "tests.test_retirement_absent.UnprovenFilesystemTests.test_an_exited_terminal_listed_twice_counts_once"
+        "tests.test_retirement_absent.UnprovenFilesystemTests.test_an_exited_terminal_listed_twice_counts_once",
+        "tests.test_retirement_absent.UnprovenFilesystemTests.test_a_recorded_spelling_that_is_not_canonical_is_never_proven"
       ],
       "status": "NOT_RUN"
     },

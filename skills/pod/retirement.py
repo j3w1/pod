@@ -60,7 +60,7 @@ def _texts(value: object, bound: int, limit: int) -> bool:
 
 def _path_text(value: object) -> bool:
     return (_text(value, 4096) and value.startswith("/") and os.path.normpath(value) == value
-            and ".." not in Path(value).parts)
+            and ".." not in Path(value).parts and "\x00" not in value)
 
 
 def _record_row(row: object) -> bool:
@@ -484,12 +484,17 @@ def _moved(located: list[dict]) -> bool:
 
 
 _UNPROVEN = {"linked": "A link or file stands in this path or its ancestry, so where it leads stays unproven.",
-             "inaccessible": "This host cannot read the path or one of its parent directories."}
+             "inaccessible": "This host cannot read the path or one of its parent directories.",
+             "noncanonical": "The recorded spelling is not this host's canonical form of the path (such as a `//` "
+                             "root), so Git's and Orca's entries cannot be matched to it exactly."}
 
 
 def _locate(path: str, repository: str, host: _Host, entries: set[str]) -> dict:
     """One released path: existing, proven absent, foreign, or unknown with the reason absence stays unproven."""
     shown = _filesystem(path)
+    if shown in ("directory", "absent") and os.path.realpath(path) != path:
+        # Inventories are compared after resolving links, so only a canonical spelling can match them (R113).
+        shown = "noncanonical"
     if shown == "directory":
         return _existing(path, repository, entries, host)
     if shown == "absent":
@@ -747,6 +752,9 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
         question += (" An absent path is gone from this host's filesystem, from the repository's Git worktree "
                      "registry and from Orca's complete worktree and terminal inventories; its missing directory "
                      "does not prove that work stopped, which the coordinator, Run and Dispatch checks prove.")
+    if any(item["disposition"] == "existing" for row in eligible + later for item in row["facts"]["locations"]):
+        question += (" An existing worktree is one of this repository that stands at the recorded path now; Pod "
+                     "cannot prove it is the one the work used.")
     question += "".join(_effects(row) for row in eligible)
     held = sum(tally.values())
     question += (f" Retirement does not close or complete {'it' if len(names) == 1 else 'them'}: {held} pending, "

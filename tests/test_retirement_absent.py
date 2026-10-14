@@ -66,7 +66,8 @@ class DetectionTests(AbsentCase):
         question = found["question"]
         for words in (self.gone + " (absent)", self.kept + " (existing worktree)",
                       "keeps holding its recorded worktree(s) it does not release: " + self.where(),
-                      "its missing directory does not prove that work stopped"):
+                      "its missing directory does not prove that work stopped",
+                      "An existing worktree is one of this repository that stands at the recorded path now"):
             self.assertIn(words, question)
         self.assertNotIn("every task worktree of this repository", question)
         self.assertIn("locations, retained, unrecorded_locations", found["next_action"])
@@ -433,6 +434,25 @@ class UnprovenFilesystemTests(AbsentCase):
         verdict = self.retire(objectives=self.request(self.kept))["objectives"][0]
         self.assertEqual((verdict["status"], verdict["native"]["exited_terminals"]), ("eligible", 1),
                          verdict.get("message"))
+
+    def test_a_recorded_spelling_that_is_not_canonical_is_never_proven(self):
+        # Final audit F1: "//root/x" names the same directory as "/root/x"; Git and Orca list the canonical form, so a
+        # stale registration, a listing and a live terminal there must not vanish behind the spelling.
+        self.placed()
+        git(self.project, "worktree", "add", "-q", "-b", "again", self.gone)
+        os.rename(self.gone, self.gone + "-moved")  # Git keeps a prunable registration of the canonical path.
+        self.inventory["worktrees"] = [{"path": self.gone, "git": {"path": self.gone}}]
+        self.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                        "worktreePath": self.gone}]
+        for spelled, shown in (("/" + self.gone, "noncanonical"), ("/" + self.kept, "noncanonical")):
+            with self.subTest(spelled=spelled):
+                self.coordinator_at(spelled)
+                found = self.retire(objectives=self.request(spelled))
+                row = self.located(found)[spelled]
+                self.assertEqual((found["status"], row["disposition"], row["condition"], row["evidence"]),
+                                 ("retirement_unavailable", "unknown", "path_unverified", {"filesystem": shown}))
+        with self.assertRaises(PodError):
+            self.retire(objectives=self.request(self.kept + "\x00x"))
 
     def test_a_matching_recorded_repository_entry_passes(self):
         self.placed()
