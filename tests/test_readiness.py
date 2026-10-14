@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from pod import orca, readiness, status as current_status
-from pod.governor import _read_journal, _record_path, _write_journal
+from pod.governor import _read_journal, _record_path, _write_journal, finalization
 from pod.internal import run
 from pod.ledger import objective_root, read
 from tests.kernel_support import git
@@ -80,7 +80,7 @@ class StateTests(ReadinessCase):
         self.assertEqual(readiness["coordinator"], {"handle": "owner", "run": "run", "runs": ["run"],
                                                     "generation": 1, "runtime": "runtime", "liveness": "live",
                                                     "code": None})
-        self.assertEqual(readiness["remaining"], [])
+        self.assertEqual(readiness["finalization"]["remaining"], ["report_consumption", "closure"])
         self.assertNotIn("successor_claim", owner)  # The recorded coordinator needs no successor view.
         for caller in ("next", None):
             with self.subTest(caller=caller):
@@ -116,14 +116,18 @@ class StateTests(ReadinessCase):
         before = self.snapshot()
         readiness = self.readiness("owner")
         self.assertEqual((readiness["state"], readiness["coordinator_needed"]), ("finalizing", True))
-        self.assertEqual([(row["record"], row["referent"]) for row in readiness["remaining"]],
-                         [("validation_readback", derived["record_id"]), ("delivery_record", "merge-1"),
-                          ("report_consumption", self.admission["admission_id"]), ("closure", "objective")])
-        self.assertEqual(readiness["remaining"][0]["outcome"], "pending")
-        self.assertEqual(readiness["remaining"][2]["need"], "report")
-        self.assertEqual(readiness["remaining"][3]["blocked_by"], ["O1", "S1", "S2"])
-        self.assertTrue(readiness["summary"].startswith("Delivered but finalizing: Pod still needs a readback "
-                                                        "of workflow_dispatch"))
+        pending = readiness["finalization"]
+        # One list of what remains: the Governor's finalization projection, embedded unchanged.
+        self.assertEqual(pending, finalization(self.state(), _read_journal(_record_path(self.project, "objective"))))
+        self.assertEqual(pending["remaining"], ["delivery_record", "validation_readback", "report_consumption",
+                                                "closure"])
+        self.assertEqual([(row["record"], row["kind"], row["state"]) for name in pending["remaining"]
+                          for row in pending["records"][name]],
+                         [("merge-1", "merge", "PASS"), (derived["record_id"], "workflow_dispatch", "pending"),
+                          (self.admission["admission_id"], "implement", "bound")])
+        self.assertEqual(pending["records"]["validation_readback"][0]["derived_from"], published["record_id"])
+        self.assertTrue(readiness["summary"].startswith("Delivered but finalizing: Pod still needs the delivery "
+                                                        "record of merge merge-1, the workflow_dispatch readback"))
         self.assertIn("not safe to close", readiness["summary"])
         self.assertEqual(self.readiness("next"), readiness)
         self.assertEqual(before, self.snapshot())
@@ -133,15 +137,18 @@ class StateTests(ReadinessCase):
         self.rows(self.row("merge-1", "merge", "UNKNOWN"))
         readiness = self.readiness("owner")
         self.assertEqual(readiness["state"], "finalizing")
-        self.assertEqual([(row["record"], row["referent"], row.get("outcome")) for row in readiness["remaining"]],
-                         [("merge_outcome", "merge-1", "UNKNOWN"), ("closure", "objective", None)])
+        self.assertEqual(readiness["finalization"]["remaining"], ["merge_outcome", "closure"])
+        self.assertEqual(readiness["finalization"]["records"]["merge_outcome"],
+                         [{"record": "merge-1", "kind": "merge", "state": "UNKNOWN", "derived_from": None}])
+        self.assertIn("the merge outcome (merge-1) and closure", readiness["summary"])
 
-    def test_closed_reads_retirable_after_main_advances_and_a_late_effect_reopens_finalizing(self):
+    def test_closed_reads_closed_after_main_advances(self):
         self.prepare()
         self.closed()
         readiness = self.readiness("owner")
         self.assertEqual((readiness["state"], readiness["coordinator_needed"], readiness["acts_next"],
-                          readiness["remaining"]), ("closed", False, "none", []))
+                          readiness["finalization"]["remaining"], readiness["finalization"]["finished"]),
+                         ("closed", False, "none", [], True))
         self.assertEqual(readiness["summary"], "Closed: Pod needs nothing more; its coordinator may close.")
         self.assertEqual(readiness["coordinator"]["liveness"], "not_read")
         other = self.read_as("next")
@@ -151,10 +158,6 @@ class StateTests(ReadinessCase):
         git(self.project, "commit", "-qam", "later work on main")
         git(self.project, "update-ref", "refs/remotes/origin/target", git(self.project, "rev-parse", "HEAD"))
         self.assertEqual(self.readiness("owner"), readiness)
-        self.rows(self.row("late-1", "validation_rerun", "UNKNOWN"))
-        late = self.readiness("owner")
-        self.assertEqual((late["state"], late["coordinator_needed"]), ("finalizing", True))
-        self.assertEqual([row["record"] for row in late["remaining"]], ["validation_readback"])
 
     def test_closed_with_external_work_names_each_gate_and_who_acts(self):
         self.prepare()
@@ -229,9 +232,10 @@ class LostCoordinatorTests(ReadinessCase):
                                   "successor_claim": ("blocked", "predecessor_effect_pending")})
         self.assertIn("recovery blocked: successor claim refused (predecessor_effect_pending: The predecessor has "
                       "a Governor effect whose outcome is pending.)", readiness["summary"])
-        derived = [row for row in readiness["remaining"] if row["record"] == "validation_readback"]
-        self.assertEqual([(row["kind"], row["outcome"]) for row in derived], [("workflow_dispatch", "pending")])
-        self.assertNotEqual(derived[0]["referent"], published["record_id"])
+        derived = readiness["finalization"]["records"]["validation_readback"]
+        self.assertEqual([(row["kind"], row["state"], row["derived_from"]) for row in derived],
+                         [("workflow_dispatch", "pending", published["record_id"])])
+        self.assertIn("Pod still needs the workflow_dispatch readback", readiness["summary"])
         self.assertEqual(self.read_as(None)["readiness"], readiness)
 
 
@@ -314,8 +318,8 @@ class ProjectionTests(unittest.TestCase):
             {"obligation": "O1", "via": "O1", "class": "authority", "referent": "merge consent"},
             {"obligation": "O2", "via": "O2", "class": "input_unavailable", "referent": "fixture data"},
             {"obligation": "O3", "via": "O1", "class": "authority", "referent": "merge consent"}]}
-        block = readiness.base("o", self.state([{"id": "O1", "state": "waiting"}], quiescence=quiescence), [],
-                               outstanding=set(), undispositioned=set())
+        block = readiness.base(self.state([{"id": "O1", "state": "waiting"}], quiescence=quiescence),
+                               {"actions": []}, outstanding=set())
         self.assertEqual((block["state"], block["acts_next"]), ("waiting", "owner"))
         self.assertEqual([(row["obligation"], row["party"]) for row in block["waiting_on"]],
                          [("O1", "owner"), ("O2", None)])
@@ -324,15 +328,23 @@ class ProjectionTests(unittest.TestCase):
         block["waiting_on"] = block["waiting_on"][1:]
         self.assertEqual(readiness._summary(block), "Waiting for: input_unavailable fixture data (O2); not finished.")
 
-    def test_remaining_is_bounded_and_keeps_closure(self):
-        rows = [ReadinessCase.row(f"v{index}", "validation_rerun", "pending") for index in range(40)]
-        rows.append(ReadinessCase.row("m", "merge", "PASS"))
-        block = readiness.base("o", self.state([{"id": "O1", "state": "satisfied"}]), rows,
-                               outstanding=set(), undispositioned=set())
-        self.assertEqual(len(block["remaining"]), readiness.MAX_LISTED)
-        self.assertEqual((block["remaining"][-1]["record"], block["remaining_omitted"]), ("closure", 10))
-        self.assertIn("38 more record(s) and closure", readiness._summary(block))
-        self.assertTrue({row["record"] for row in block["remaining"]} <= set(readiness.RECORDS))
+    def test_delivery_under_way_finalizes_and_the_line_stays_short(self):
+        rows = [ReadinessCase.row(f"v{index}", "validation_rerun", "pending") for index in range(6)]
+        for obligations, actions, expected in (
+                ([{"id": "O1", "state": "active", "executor": "coordinator"}], rows, "working"),
+                ([{"id": "O1", "state": "satisfied"}], [], "finalizing"),
+                ([{"id": "O1", "state": "active", "executor": "coordinator"}],
+                 [ReadinessCase.row("m", "merge", "pending")], "finalizing"),
+                ([{"id": "O1", "state": "satisfied"}], rows + [ReadinessCase.row("m", "merge", "PASS")], "finalizing")):
+            with self.subTest(expected=expected, actions=len(actions)):
+                block = readiness.base(self.state(obligations), {"actions": actions}, outstanding=set())
+                self.assertEqual(block["state"], expected)
+                self.assertEqual(block["finalization"], finalization(self.state(obligations), {"actions": actions}))
+        self.assertIn("readback (v1), 4 more record(s) and closure", readiness._summary(block))
+        mapless = readiness.base({"checkpoint": {"objective": "o"}, "admissions": {}}, {"actions": rows},
+                                 outstanding=set())
+        self.assertEqual((mapless["state"], mapless["finalization"]["remaining"]), ("working", ["validation_readback"]))
+        self.assertIn("no obligation map is recorded", readiness._summary(mapless))
 
     def test_gate_parties_decide_who_acts_after_closure(self):
         closure = {"seq": 1, "revision": 1, "report": {}}
@@ -340,9 +352,8 @@ class ProjectionTests(unittest.TestCase):
                             ([{"kind": "x", "party": "third_party"}, {"party": "third_party"}], "third_party"),
                             ([{"kind": "hosted_ci"}, "notes"], "owner"), (["notes"], "owner")):
             with self.subTest(gates=gates):
-                block = readiness.base("o", self.state([{"id": "O1", "state": "satisfied"}], closure=closure,
-                                                       remaining_gates=gates), [], outstanding=set(),
-                                       undispositioned=set())
+                block = readiness.base(self.state([{"id": "O1", "state": "satisfied"}], closure=closure,
+                                                  remaining_gates=gates), {"actions": []}, outstanding=set())
                 self.assertEqual((block["state"], block["acts_next"], block["coordinator_needed"]),
                                  ("closed_external" if gates else "closed", acts, False))
                 self.assertIn(block["state"], readiness.STATES)

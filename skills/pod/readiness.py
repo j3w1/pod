@@ -17,69 +17,22 @@ from .term import clean
 CONTRACT = "pod-readiness/v1"
 STATES = ("working", "waiting", "finalizing", "closed", "closed_external", "coordinator_lost",
           "retired", "continued", "unavailable")
-# The fixed names of Pod's own finalization records, shared with helper acknowledgements.
-RECORDS = ("merge_outcome", "delivery_record", "validation_readback", "report_consumption", "closure")
-UNSETTLED = ("pending", "UNKNOWN")
 # Who an external wait class names when its row carries no party of its own.
 WAIT_PARTIES = {"authority": "owner", "user_hold": "user"}
 MAX_LISTED = 32
-_PHRASES = {"merge_outcome": "the merge outcome", "delivery_record": "the delivery record",
-            "validation_readback": "a readback", "report_consumption": "a worker report",
-            "closure": "closure"}
 
 
 def unavailable(reason: str, message: str) -> dict:
     """Status cannot answer for this objective; nothing is inferred from what it could not read."""
     return {"contract": CONTRACT, "state": "unavailable", "summary": f"Unavailable: {message}.",
-            "acts_next": "unknown", "coordinator_needed": None, "coordinator": None, "remaining": [],
+            "acts_next": "unknown", "coordinator_needed": None, "coordinator": None, "finalization": None,
             "reason": {"code": reason, "message": message}}
 
 
-def journal_rows(root: Path) -> list[dict]:
-    """The allowed rows of one objective's Governor journal; an unreadable journal raises."""
+def journal(root: Path) -> dict:
+    """One objective's Governor journal through its own reader; an unreadable journal raises."""
     from .governor import _read_journal
-    return [row for row in _read_journal(root / "governor.json")["actions"] if row["decision"] == "ALLOW"]
-
-
-def records(objective: str, state: dict, rows: list[dict], *, outstanding: set[str],
-            undispositioned: set[str]) -> tuple[list[dict], bool]:
-    """Pod's own unfinished records in the fixed vocabulary, and whether delivery happened or is under way.
-
-    Delivery is under way once a merge is decided (its outcome pending, UNKNOWN or PASS) or recorded, or
-    when every obligation of the map is satisfied or withdrawn. `closure` is remaining only then.
-    """
-    from .ledger import map_of
-    from .obligations import TERMINAL
-    map_state = map_of(state)
-    closed = bool((map_state or {}).get("closure"))
-    remaining = []
-    for row in rows:
-        if row["outcome"] in UNSETTLED:
-            kind = row["action"]["kind"]
-            remaining.append({"record": "merge_outcome" if kind == "merge" else "validation_readback",
-                              "referent": row["record_id"], "kind": kind, "outcome": row["outcome"]})
-    merges = [row for row in rows if row["action"]["kind"] == "merge"]
-    delivery = (map_state or {}).get("delivery")
-    merged = [row for row in merges if row["outcome"] == "PASS"]
-    if merged and delivery is None:
-        remaining.append({"record": "delivery_record", "referent": merged[-1]["record_id"], "kind": "merge",
-                          "outcome": "PASS"})
-    for key, row in sorted(state["admissions"].items()):
-        # A closure was accepted only with every admission settled, judged from an exact read.
-        if row["state"] != "bound" or key in outstanding and not closed:
-            continue
-        need = "report" if row.get("report") is None else "disposition" if key in undispositioned else None
-        if need is not None:
-            remaining.append({"record": "report_consumption", "referent": key,
-                              "dispatch": (row.get("native_binding") or {}).get("dispatchId"), "need": need})
-    obligations = (map_state or {}).get("obligations") or []
-    delivered = (delivery is not None or any(row["outcome"] in (*UNSETTLED, "PASS") for row in merges)
-                 or bool(obligations) and all(ob["state"] in TERMINAL for ob in obligations))
-    if delivered and not closed:
-        waits = [ob["id"] for ob in obligations if ob["state"] not in TERMINAL]
-        waits += sorted(key for key in outstanding if key in state["admissions"])
-        remaining.append({"record": "closure", "referent": objective, "blocked_by": waits[:MAX_LISTED]})
-    return remaining, delivered
+    return _read_journal(root / "governor.json")
 
 
 def _waiting(map_state: dict | None) -> list[dict]:
@@ -110,46 +63,52 @@ def _gates(checkpoint: dict) -> list[dict]:
     return rows[:MAX_LISTED]
 
 
-def base(objective: str, state: dict, rows: list[dict], *, outstanding: set[str],
-         undispositioned: set[str]) -> dict:
-    """The record-derived readiness, before any coordinator read: never coordinator_lost."""
+def base(state: dict, journal: dict, *, outstanding: set[str]) -> dict:
+    """The record-derived readiness, before any coordinator read: never coordinator_lost.
+
+    What remains to record is the Governor's one finalization projection; this only decides the state.
+    Delivery is under way once a merge is decided or recorded, or every obligation is satisfied or
+    withdrawn: until closure the objective is then finalizing, however idle its coordinator looks.
+    """
+    from .governor import finalization
     from .ledger import map_of
+    from .obligations import TERMINAL
     map_state = map_of(state)
-    checkpoint = state["checkpoint"]
-    remaining, delivered = records(objective, state, rows, outstanding=outstanding,
-                                   undispositioned=undispositioned)
+    pending = finalization(state, journal)
+    names = pending["remaining"]
+    obligations = (map_state or {}).get("obligations") or []
+    delivered = ((map_state or {}).get("delivery") is not None or "merge_outcome" in names
+                 or "delivery_record" in names
+                 or bool(obligations) and all(ob["state"] in TERMINAL for ob in obligations))
     block = {"contract": CONTRACT, "state": "working", "acts_next": "coordinator",
-             "coordinator_needed": True, "coordinator": None, "remaining": remaining}
-    if len(remaining) > MAX_LISTED:  # Closure, always last, stays named.
-        block["remaining"] = remaining[:MAX_LISTED - 1] + remaining[-1:]
-        block["remaining_omitted"] = len(remaining) - MAX_LISTED
+             "coordinator_needed": True, "coordinator": None, "finalization": pending}
     waiting = _waiting(map_state)
     if waiting:
         block["waiting_on"] = waiting
-    if (map_state or {}).get("closure") and not remaining:
-        gates = _gates(checkpoint)
+    if (map_state or {}).get("closure"):
+        gates = _gates(state["checkpoint"])
         parties = {row["party"] for row in gates}
         # One named party acts on every gate; otherwise the owner decides who does the outside work.
         acts = "none" if not gates else parties.pop() if len(parties) == 1 and None not in parties else "owner"
         block.update(state="closed_external" if gates else "closed", coordinator_needed=False, acts_next=acts)
         if gates:
             block["external"] = gates
-    elif (map_state or {}).get("closure") or delivered:
+    elif delivered:
         block["state"] = "finalizing"
-        if waiting and [row["record"] for row in remaining] == ["closure"]:
+        if waiting and names == ["closure"]:
             block["acts_next"] = waiting[0]["party"] or "unknown"
     elif waiting:
         block.update(state="waiting", acts_next=waiting[0]["party"] or "unknown")
     elif outstanding and not any(ob["state"] == "active" and ob.get("executor") == "coordinator"
-                                 for ob in (map_state or {}).get("obligations") or []):
+                                 for ob in obligations):
         block["acts_next"] = "worker"
     return block
 
 
-def label(root: Path, state: dict, objective: str) -> str:
+def label(root: Path, state: dict) -> str:
     """The list's compact readiness from Pod's records alone (R108): no Orca read, so never coordinator_lost.
 
-    Without a native read no open admission is proven settled; a closure proves its admissions settled.
+    Without a native read no open admission is proven settled.
     """
     if isinstance(state.get("continued_by"), dict):
         return "continued"
@@ -158,11 +117,11 @@ def label(root: Path, state: dict, objective: str) -> str:
     if not isinstance(state.get("checkpoint"), dict):
         return "unavailable"
     try:
-        rows = journal_rows(root)
+        recorded = journal(root)
     except PodError:
         return "unavailable"
     outstanding = {key for key, row in state["admissions"].items() if row["state"] not in ("closed", "deferred")}
-    return base(objective, state, rows, outstanding=outstanding, undispositioned=set())["state"]
+    return base(state, recorded, outstanding=outstanding)["state"]
 
 
 def coordinator(state: dict) -> dict:
@@ -239,35 +198,34 @@ def _claim_route(claim: dict | None) -> dict:
     return {**route, "status": "blocked", "condition": claim["condition"], "message": claim["message"]}
 
 
-def _phrase(remaining: list[dict], omitted: int = 0) -> str:
+def _phrase(pending: dict) -> str:
     parts = []
-    for row in remaining:
-        text = _PHRASES[row["record"]]
-        if row["record"] == "validation_readback":
-            text += f" of {row['kind']}"
-        if row["record"] == "report_consumption" and row["need"] == "disposition":
-            text = "a result disposition"
-        if row["record"] != "closure":
-            text += f" ({clean(row['referent'])[:24]})"
-        elif row["blocked_by"]:
-            text += " (waits for " + ", ".join(clean(item)[:24] for item in row["blocked_by"][:4]) + ")"
-        parts.append(text)
-    if len(parts) > 4 or omitted:
-        parts = parts[:3] + [f"{len(parts) - 4 + omitted} more record(s)", parts[-1]]
+    for name in pending["remaining"]:
+        if name == "closure":
+            parts.append("closure")
+            continue
+        for entry in pending["records"][name]:
+            referent = clean(entry["record"])[:12]
+            parts.append({"merge_outcome": f"the merge outcome ({referent})",
+                          "delivery_record": f"the delivery record of merge {referent}",
+                          "validation_readback": f"the {clean(entry['kind'])} readback ({referent})",
+                          "report_consumption": f"a result disposition ({referent})"
+                          if entry["state"] == "undispositioned" else f"a worker report ({referent})"}[name])
+    if len(parts) > 4:
+        parts = parts[:3] + [f"{len(parts) - 4} more record(s)", parts[-1]]
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
 def _summary(block: dict) -> str:
     state = block["state"]
-    remaining, omitted = block["remaining"], block.get("remaining_omitted", 0)
+    pending = block["finalization"]
     if state == "closed":
         return "Closed: Pod needs nothing more; its coordinator may close."
     if state == "closed_external":
         return (f"Closed with external work: {len(block['external'])} remaining gate(s) outside the objective, "
                 f"for the {block['acts_next']}; Pod needs nothing more and its coordinator may close.")
     if state == "finalizing":
-        return (f"Delivered but finalizing: Pod still needs {_phrase(remaining, omitted)}; not safe to close the "
-                "coordinator.")
+        return f"Delivered but finalizing: Pod still needs {_phrase(pending)}; not safe to close the coordinator."
     if state == "waiting":
         row = block["waiting_on"][0]
         need = row.get("need") or f"{row['class']} {row['referent']}"
@@ -283,12 +241,15 @@ def _summary(block: dict) -> str:
         else:
             claim = next(row for row in recovery["routes"] if row["route"] == "successor_claim")
             text += f"; recovery blocked: successor claim refused ({claim['condition']}: {claim['message']})"
-        if remaining:
-            text += f"; Pod still needs {_phrase(remaining, omitted)}"
+        if pending and pending["remaining"]:
+            text += f"; Pod still needs {_phrase(pending)}"
         return text + "."
     if state == "working" and block.get("unverified"):
         return (f"Working: {block['unverified']['admissions']} assignment(s) cannot be verified "
                 f"({block['unverified']['code']}); not finished.")
+    if state == "working" and pending is not None and "closure" not in pending["remaining"]:
+        return ("Working: no obligation map is recorded, so Pod tracks no closure; the coordinator decides when "
+                "it is finished.")
     if state == "working" and block["acts_next"] == "worker":
         return "Working: worker assignments are in progress; not finished."
     return "Working: the coordinator acts next; not finished."
@@ -301,7 +262,6 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
     `root` is the record's state directory. Only a reader other than the recorded coordinator reads that
     coordinator's terminal: the recorded coordinator's own terminal is live while it reads.
     """
-    from .obligations import undispositioned
     out = {}
     identity = None
     if isinstance(state.get("continued_by"), dict):
@@ -309,7 +269,7 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
         link = state["continued_by"]
         chain = chain_state(project, state)
         block = {"contract": CONTRACT, "state": "continued", "acts_next": "successor",
-                 "coordinator_needed": False, "coordinator": coordinator(state), "remaining": [],
+                 "coordinator_needed": False, "coordinator": coordinator(state), "finalization": None,
                  "reason": {"successor": link["objective"], "succession_state": chain["state"]},
                  "summary": f"Continued by successor objective {clean(link['objective'])[:64]} "
                             f"({chain['state'].replace('_', ' ')}); read that objective, as this record "
@@ -317,7 +277,7 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
     elif isinstance(state.get("historical_retirement"), dict):
         entry = state["historical_retirement"]
         block = {"contract": CONTRACT, "state": "retired", "acts_next": "none", "coordinator_needed": False,
-                 "coordinator": coordinator(state), "remaining": [],
+                 "coordinator": coordinator(state), "finalization": None,
                  "reason": {"retired_at": entry["at"], "reason": entry["reason"]},
                  "summary": "Ended by the owner's historical retirement: not completed or closed, and its "
                             "record accepts no writes."}
@@ -325,17 +285,16 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
         block = unavailable(map_error, f"the objective map cannot be projected ({map_error})")
     else:
         try:
-            rows = journal_rows(root)
+            recorded = journal(root)
         except PodError as exc:
-            rows = None
+            recorded = None
             block = unavailable("governor_unreadable", f"the Governor journal cannot be read ({exc.code}); "
                                 "a pending effect cannot be ruled out")
-        if rows is not None:
+        if recorded is not None:
             outstanding = (set(view["ctx"]["outstanding"]) if isinstance(view, dict)
                            else {key for key, row in state["admissions"].items()
                                  if row["state"] not in ("closed", "deferred")})
-            settled = set(undispositioned(view["ctx"])) if isinstance(view, dict) else set()
-            block = base(objective, state, rows, outstanding=outstanding, undispositioned=settled)
+            block = base(state, recorded, outstanding=outstanding)
             block["coordinator"] = facts = coordinator(state)
             if failure is not None and block["state"] == "working":
                 block["unverified"] = {"code": failure["code"], "admissions": len(outstanding)}
