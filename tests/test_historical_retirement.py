@@ -550,8 +550,8 @@ class WriteTests(RetirementCase):
         found = self.retire(objectives=both)
         self.assertEqual([row["status"] for row in found["objectives"]], ["eligible", "refused"])
         self.assertIn("a decision that also names it retires it once its condition clears and its facts still "
-                      "match: reconcile releasing " + context["worktree"] + " (existing worktree) (path_in_use)",
-                      found["question"])
+                      "match: reconcile releasing " + context["worktree"] + " (existing worktree) (path_in_use; 0 "
+                      "pending, unknown, failed or unreported record(s) of it would stay as recorded)", found["question"])
         self.assertIn("only the objectives the owner's answer names", found["next_action"])
         decision = self.decide(objectives=both)
         first = {row["objective"]: row["status"] for row in self.retire(decision, objectives=both)["objectives"]}

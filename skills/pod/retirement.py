@@ -236,10 +236,14 @@ def _claimants(project: Path, objective: str) -> list[str] | None:
 
 
 def _within(candidate: object, path: str) -> bool:
-    """Whether a location another inventory names is the path or lies beneath it, links resolved."""
+    """Whether a location another inventory names is the path or lies beneath it, links resolved. A location that
+    cannot be resolved could be anywhere, so it counts as a match."""
     if not isinstance(candidate, str) or not candidate.startswith("/"):
         return False
-    resolved = os.path.realpath(candidate)
+    try:
+        resolved = os.path.realpath(candidate)
+    except (OSError, ValueError):
+        return True
     return resolved == path or resolved.startswith(path + "/")
 
 
@@ -287,7 +291,8 @@ def _places(row: dict, kind: str) -> list[str] | None:
         found = [] if row.get("worktreePath") is None else [row["worktreePath"]]
         if row.get("worktreeId") is not None:
             found.append(named(row["worktreeId"]))
-    if not found or any(not isinstance(place, str) or not place.startswith("/") for place in found):
+    if not found or any(not isinstance(place, str) or not place.startswith("/") or "\x00" in place
+                        for place in found):
         return None
     return found
 
@@ -412,14 +417,15 @@ def _existing(path: str, repository: str, entries: set[str], host: _Host) -> dic
         return _location(path, "unknown", "path_unverified", "Orca's terminal inventory is unreadable, partial, "
                          "misses an execution host or has a row without a readable location, so terminals beneath "
                          "this path stay unverified.", filesystem="directory", git="this_repository", orca="resolved")
-    # The exact list and the host inventory overlap; a terminal counts once, by handle where it has one.
-    terminals = {row.get("handle") if isinstance(row.get("handle"), str) else ("row", index, source): row
-                 for source, group in (("exact", rows), ("beneath", beneath)) for index, row in enumerate(group)}
-    live = [row for row in terminals.values() if not _exited(row)]
+    # Any row, from either list, that does not prove its terminal exited holds the path; the lists overlap, so
+    # exited terminals are counted once by handle where they have one.
+    listed = [*rows, *beneath]
+    live = [row for row in listed if not _exited(row)]
+    exited = {row["handle"] if isinstance(row.get("handle"), str) else ("row", index)
+              for index, row in enumerate(listed) if _exited(row)}
     row = _location(path, "existing", "path_in_use" if live else None,
                     "An Orca terminal that is not proven exited is in or beneath this path." if live else None,
-                    filesystem="directory", git="this_repository", orca="resolved",
-                    exited_terminals=len(terminals) - len(live))
+                    filesystem="directory", git="this_repository", orca="resolved", exited_terminals=len(exited))
     row["worktree"] = key
     return row
 
@@ -739,8 +745,10 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
     if later:
         question += (" Not retirable now, but a decision that also names it retires it once its condition clears "
                      "and its facts still match: " + "; ".join(
-                         f"{row['objective']} releasing {_released(row['facts']['locations'])} ({row['condition']})"
-                         for row in later) + "." + "".join(_effects(row) for row in later))
+                         f"{row['objective']} releasing {_released(row['facts']['locations'])} ({row['condition']}; "
+                         f"{sum(counts(row['facts']['records']).values())} pending, unknown, failed or unreported "
+                         "record(s) of it would stay as recorded)" for row in later) + "."
+                     + "".join(_effects(row) for row in later))
     if never:
         question += (" Not retirable by a decision on these facts: " + "; ".join(
             f"{row['objective']} ({row['condition']})" for row in never) + ".")
@@ -815,7 +823,8 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             if _moved(verdict["locations"]):
                 results.append({**verdict, "status": "refused", "condition": "retirement_decision_mismatch",
                                 "changed": ["locations"],
-                                "message": "A released path changed after Pod read its facts. Nothing was written.",
+                                "message": "A released path changed, or could not be read again, after Pod read "
+                                           "its facts. Nothing was written.",
                                 "next_action": "detect again and confirm the changed facts with the owner"})
                 continue
             entry = {"at": datetime.now(timezone.utc).isoformat(), "decision": digest(decision),

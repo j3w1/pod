@@ -136,6 +136,30 @@ def _terminal_named_by_id(case):
                                     "worktreeId": "repo::" + case.gone}]
 
 
+def _exact_live_inventory_exited(case):
+    """Review 2 G1: the exact list shows a terminal live while the host inventory shows the same handle exited."""
+    case.path_terminals[case.kept] = [{"handle": "h", "connected": True, "writable": True, "orphaned": False,
+                                       "worktreePath": case.kept}]
+    case.inventory["terminals"] = [{"handle": "h", "connected": False, "writable": False, "orphaned": False,
+                                    "exitCause": {"kind": "exited"}, "worktreePath": case.kept}]
+
+
+def _same_handle_live_and_exited(case):
+    case.inventory["terminals"] = [
+        {"handle": "h", "connected": True, "writable": True, "orphaned": False, "worktreePath": case.kept + "/n"},
+        {"handle": "h", "connected": False, "writable": False, "orphaned": False, "exitCause": {"kind": "exited"},
+         "worktreePath": case.kept + "/n"}]
+
+
+def _nul_location(case):
+    case.inventory["terminals"] = [{"handle": "user", "connected": False, "writable": False, "orphaned": False,
+                                    "exitCause": {"kind": "exited"}, "worktreePath": "/elsewhere\x00/x"}]
+
+
+def _git_row_without_path(case):
+    case.inventory["worktrees"] = [{"path": "/elsewhere", "git": {}}]
+
+
 def _live_terminal_beneath_existing(case):
     case.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
                                     "worktreePath": case.kept + "/nested"}]
@@ -171,7 +195,7 @@ def _reused_entry(case):
     _recorded_entry(case, "repo-recorded")  # Orca now registers the path under its entry "repo".
 
 
-# kind: (arrange after the owner decided, released path, expected condition, expected disposition)
+# kind: (arrange after the owner decided, released path, expected condition, expected disposition[, released set])
 PATH_REFUSALS = {
     "stale-registration": (_stale_registration, "gone", "path_unverified", "unknown"),
     "orca-lists-it": (_orca_lists, "gone", "path_unverified", "unknown"),
@@ -196,6 +220,16 @@ PATH_REFUSALS = {
                                       "kept", "path_unverified", "unknown"),
     "exact-list-without-host-scope": (_exact_shape({"hostScope": None}), "kept", "path_unverified", "unknown"),
     "live-terminal-beneath-existing": (_live_terminal_beneath_existing, "kept", "path_in_use", "existing"),
+    "exact-live-inventory-exited": (_exact_live_inventory_exited, "kept", "path_in_use", "existing"),
+    "same-handle-live-and-exited": (_same_handle_live_and_exited, "kept", "path_in_use", "existing"),
+    "nul-location-absent": (_nul_location, "gone", "path_unverified", "unknown"),
+    "nul-location-existing": (_nul_location, "kept", "path_unverified", "unknown", ("kept",)),
+    "git-row-without-path": (_git_row_without_path, "gone", "path_unverified", "unknown"),
+    "existing-terminals-unreadable": (_shape("terminals", "unreadable"), "kept", "path_unverified", "unknown",
+                                      ("kept",)),
+    "existing-terminals-truncated": (_shape("terminals", {"truncated": True}), "kept", "path_unverified", "unknown",
+                                     ("kept",)),
+    "existing-unlocated-terminal": (_unlocated_terminal, "kept", "path_unverified", "unknown", ("kept",)),
 }
 
 
@@ -222,16 +256,24 @@ class PathRefusalTableTests(GroupedTable):
         "test_a_miscounted_exact_terminal_list_refuses": ["exact-list-miscounted"],
         "test_an_exact_terminal_list_without_this_host_refuses": ["exact-list-without-local-host"],
         "test_an_exact_terminal_list_without_host_scope_refuses": ["exact-list-without-host-scope"],
-        "test_a_live_terminal_beneath_an_existing_path_refuses": ["live-terminal-beneath-existing"]}
+        "test_a_live_terminal_beneath_an_existing_path_refuses": ["live-terminal-beneath-existing"],
+        "test_an_exited_inventory_row_never_hides_a_live_exact_row": ["exact-live-inventory-exited"],
+        "test_a_live_row_holds_whatever_rows_share_its_handle": ["same-handle-live-and-exited"],
+        "test_a_nul_location_makes_the_inventory_unusable_for_an_absent_path": ["nul-location-absent"],
+        "test_a_nul_location_makes_the_inventory_unusable_for_an_existing_path": ["nul-location-existing"],
+        "test_a_git_entry_without_a_path_refuses": ["git-row-without-path"],
+        "test_an_unreadable_terminal_inventory_refuses_an_existing_path": ["existing-terminals-unreadable"],
+        "test_a_truncated_terminal_inventory_refuses_an_existing_path": ["existing-terminals-truncated"],
+        "test_an_unlocated_terminal_row_refuses_an_existing_path": ["existing-unlocated-terminal"]}
 
     def row(self, kind):
-        arrange, which, condition, disposition = PATH_REFUSALS[kind]
+        arrange, which, condition, disposition, *released = PATH_REFUSALS[kind]
         case = AbsentCase(); case.setUp()
         try:
             with self.subTest(kind=kind):
                 case.placed()
                 case.instances[case.kept] = "wt2:local:kept"
-                release = case.request(case.gone, case.kept)
+                release = case.request(*(getattr(case, name) for name in (released[0] if released else ("gone", "kept"))))
                 decision = case.decide(objectives=release)
                 arrange(case)
                 path = getattr(case, which)
@@ -309,6 +351,30 @@ class PathRefusalTableTests(GroupedTable):
         self.rows()
 
     def test_a_live_terminal_beneath_an_existing_path_refuses(self):
+        self.rows()
+
+    def test_an_exited_inventory_row_never_hides_a_live_exact_row(self):
+        self.rows()
+
+    def test_a_live_row_holds_whatever_rows_share_its_handle(self):
+        self.rows()
+
+    def test_a_nul_location_makes_the_inventory_unusable_for_an_absent_path(self):
+        self.rows()
+
+    def test_a_nul_location_makes_the_inventory_unusable_for_an_existing_path(self):
+        self.rows()
+
+    def test_a_git_entry_without_a_path_refuses(self):
+        self.rows()
+
+    def test_an_unreadable_terminal_inventory_refuses_an_existing_path(self):
+        self.rows()
+
+    def test_a_truncated_terminal_inventory_refuses_an_existing_path(self):
+        self.rows()
+
+    def test_an_unlocated_terminal_row_refuses_an_existing_path(self):
         self.rows()
 
 
@@ -451,7 +517,9 @@ class ConcurrencyTests(AbsentCase):
         before, detect = self.snapshot(), retirement._detect
         for change, undo in ((lambda: os.mkdir(self.gone), lambda: os.rmdir(self.gone)),
                              (lambda: self.instances.update({self.kept: "wt2:local:recreated"}),
-                              lambda: self.instances.update({self.kept: "wt2:local:kept"}))):
+                              lambda: self.instances.update({self.kept: "wt2:local:kept"})),
+                             (lambda: os.rename(self.kept, self.kept + "-moved"),
+                              lambda: os.rename(self.kept + "-moved", self.kept))):
             def racing(*args, **kwargs):
                 verdict = detect(*args, **kwargs)
                 change()
@@ -484,7 +552,8 @@ class ConcurrencyTests(AbsentCase):
         found = self.retire(objectives=self.request(self.gone) + [{"objective": "reconcile",
                                                                      "release": [self.where()]}])
         question = found["question"]
-        for words in ("objective releasing " + self.gone + " (absent) (path_in_use)",
+        for words in ("objective releasing " + self.gone + " (absent) (path_in_use; 2 pending, unknown, failed or "
+                      "unreported record(s) of it would stay as recorded)",
                       "its missing directory does not prove that work stopped",
                       "Objective objective keeps holding its recorded worktree(s) it does not release: " + self.kept,
                       "Objective objective's record does not list every location its work used"):
