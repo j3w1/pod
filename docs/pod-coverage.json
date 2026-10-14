@@ -444,7 +444,10 @@
       "offline_test": [
         "tests.test_orca_adapter.OrcaAdapterTests.test_read_allowlist_refuses_native_mutations_and_account_reads",
         "tests.test_orca_adapter.OrcaAdapterTests.test_output_that_is_not_utf8_is_no_evidence_and_a_cut_preview_is_harmless",
-        "tests.test_retirement_absent.NativeTextTests.test_git_output_that_is_not_utf8_refuses"
+        "tests.test_retirement_absent.NativeTextTests.test_git_output_that_is_not_utf8_refuses",
+        "tests.test_orca_adapter.OrcaAdapterTests.test_an_identity_that_cannot_pass_exactly_never_reaches_orca",
+        "tests.test_orca_adapter.OrcaAdapterTests.test_orca_identities_pod_records_or_passes_back_must_pass_exactly",
+        "tests.test_retirement_absent.NativeTextTests.test_a_remote_read_or_effect_keeps_its_remote_contract"
       ],
       "status": "NOT_RUN"
     },
@@ -3156,7 +3159,9 @@
         "tests.test_historical_retirement.RefusalTableTests.test_path_identity_refuses",
         "tests.test_historical_retirement.RefusalTableShapeTests.test_the_refusal_table_runs_every_row_once",
         "tests.test_historical_retirement.DetectionTests.test_requests_and_decisions_are_exact",
-        "tests.test_historical_retirement.DetectionTests.test_an_unknown_objective_or_an_unrecorded_path_refuses_alone"
+        "tests.test_historical_retirement.DetectionTests.test_an_unknown_objective_or_an_unrecorded_path_refuses_alone",
+        "tests.test_retirement_absent.NativeIdentityTests.test_a_worker_dispatch_that_cannot_be_encoded_refuses",
+        "tests.test_retirement_absent.NativeIdentityTests.test_a_runtime_pod_cannot_record_refuses_before_the_write"
       ],
       "status": "NOT_RUN"
     },
@@ -3174,7 +3179,8 @@
         "tests.test_historical_retirement.WriteTests.test_a_multi_objective_decision_has_independent_results",
         "tests.test_historical_retirement.WriteTests.test_an_objective_detection_already_refused_never_blocks_the_others",
         "tests.test_historical_retirement.WriteTests.test_the_question_names_a_late_refused_objective_a_decision_could_retire_later",
-        "tests.test_historical_retirement.WriteTests.test_an_early_refusal_is_named_as_never_retired_by_these_facts"
+        "tests.test_historical_retirement.WriteTests.test_an_early_refusal_is_named_as_never_retired_by_these_facts",
+        "tests.test_retirement_absent.NativeIdentityTests.test_a_decided_batch_retires_the_others_and_refuses_that_objective_alone"
       ],
       "status": "NOT_RUN"
     },
@@ -3293,7 +3299,8 @@
         "tests.test_retirement_absent.ConcurrencyTests.test_each_objective_reads_the_host_afresh",
         "tests.test_retirement_absent.ConcurrencyTests.test_the_question_explains_what_a_late_refused_objective_would_end",
         "tests.test_retirement_absent.DecisionTests.test_a_held_location_no_read_could_release_is_echoed_and_retires",
-        "tests.test_retirement_absent.DecisionTests.test_text_that_cannot_be_encoded_refuses_the_whole_request"
+        "tests.test_retirement_absent.DecisionTests.test_text_that_cannot_be_encoded_refuses_the_whole_request",
+        "tests.test_retirement_absent.WalkCountTests.test_one_host_walks_each_location_once_and_a_new_host_walks_afresh"
       ],
       "status": "NOT_RUN"
     },

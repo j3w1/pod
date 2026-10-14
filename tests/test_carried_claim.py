@@ -1141,9 +1141,10 @@ class ChainTableShapeTests(unittest.TestCase):
 
 
 # Every on-disk shape an interrupted claim leaves, by the writer that left it and where it stopped, crossed with the
-# route that recovers it (R110, R118): Pod 0.13.1 linked the predecessor and then completed the successor, and so did
-# 0.10.0 to 0.13.0; the earlier PR-B candidate 2b613c8 copied rows in between; this version reserves the successor
-# first. The earlier writers are their genuine succession routines from Git objects, over the current records.
+# route that recovers it (R110, R118): Pod 0.13.1 linked the predecessor and then completed the successor, as 0.10.0
+# to 0.13.0 did and 0.13.2 does with the same routine; the earlier PR-B candidate 2b613c8 copied rows in between; this
+# version reserves the successor first. The earlier writers are their genuine succession routines from Git objects,
+# over the current records.
 EARLIER_WRITERS = {"pod-0.13.1": "13f63a1ccb58d3bb74f53efbaeeec7a7df35fcef",
                    "candidate-2b613c8": "2b613c8fe4be566de28ed4149c8998c97d6c160c"}
 SHAPE_STOPS = {"pod-0.13.1": ("after_link",), "candidate-2b613c8": ("after_link", "after_rows"),
@@ -1315,10 +1316,10 @@ class ShapeTableShapeTests(unittest.TestCase):
 
 
 class EarlierReaderTests(CarriedCase):
-    """R6 — the oldest and newest earlier versions, 0.12.0 and main's 0.13.1, read carried rows as recorded."""
+    """R6 — the oldest and newest earlier versions, 0.12.0 and main's 0.13.2, read carried rows as recorded."""
 
     RELEASED = {"0.12.0": "5f7298bab47c4a3263496dc2a7fe50ecfcda0530",
-                "0.13.1": "13f63a1ccb58d3bb74f53efbaeeec7a7df35fcef"}
+                "0.13.2": "1705da5ab84de38f6e6f1f7f745d6e46939643a2"}
 
     def test_earlier_pods_load_the_carried_journal_and_the_continued_record_unchanged(self):
         self.lost_with(self.publications)

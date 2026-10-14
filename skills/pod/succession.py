@@ -97,7 +97,7 @@ def incoming_claim(project: Path, objective: str, state: dict | None, *, full: b
     """The incomplete claim that names this objective as its successor, from any writer, or None (R110, R118).
 
     The one predicate for every shape an interrupted claim leaves. This version reserves the successor first, so its
-    own `continues` names the predecessor with `state: claiming`. Pod 0.10.0 to 0.13.1 linked the predecessor and
+    own `continues` names the predecessor with `state: claiming`. Pod 0.10.0 to 0.13.2 linked the predecessor and
     then wrote the successor's `continues`, and the earlier PR-B candidate copied rows in between; a claim of theirs
     interrupted after the link shows only as a predecessor's `continued_by` naming this objective while its own
     `continues` is missing, which retirement's claimant scan of the repository's records finds.
@@ -771,7 +771,7 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
         size = len(encoded(value, compact=True))
         if size <= limit:
             continue
-        route = ("no supported route completes a claim linked before this check: only unreleased 0.13.2 candidates "
+        route = ("no supported route completes a claim linked before this check: only unreleased candidates of it "
                  "could link one" if linked else
                  "settle the predecessor's unsettled rows by readback first, through an owner handoff of the "
                  "predecessor (R105) to a live coordinator, or end delivered work by historical retirement (R112)")

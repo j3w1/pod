@@ -138,7 +138,14 @@ def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
     )
     if not allowed:
         raise PodError("unsupported_git_operation", "Project discovery accepts only bounded Git reads")
-    completed = _run([str(git_executable()), *argv], cwd=project, timeout=timeout, mutation=False)
+    # Discovery reads this host's Git only, so its failures are local, never a remote contract (`_run`).
+    try:
+        completed = subprocess.run([str(git_executable()), *argv], capture_output=True, text=True, timeout=timeout,
+                                   check=False, cwd=str(project))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PodError("git_unavailable", "Git did not answer the repository discovery read") from exc
+    except UnicodeDecodeError:
+        raise PodError("git_contract", "Git discovery output is not valid UTF-8") from None
     if completed.returncode:
         raise PodError("repository_identity_unavailable", "Git repository identity could not be read")
     if len(completed.stdout) > MAX_OUTPUT:
