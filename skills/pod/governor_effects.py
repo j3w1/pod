@@ -453,7 +453,7 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
     The answer carries an outcome, or a hold with its reason; `seen` says whether the provider shows the
     row's effect at all, and `reject` names a bound run that turned out not to be the row's own.
     """
-    from .governor import DISPATCH_KINDS, PUBLICATION_KINDS, _find_row, pushed_branch
+    from .governor import DISPATCH_KINDS, PUBLICATION_KINDS, pushed_branch
     commit = row.get("commit")
     kind = row["action"]["kind"]
     provider = row["receipt"].get("provider") or {}
@@ -536,8 +536,9 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
         run_id = provider.get("run_id")
         if not run_id:
             # A reserved cancellation names the run it would cancel through its target row.
-            target = _find_row(journal, row["action"]["target"])
-            run_id = _bound_run_id(target)
+            target = next((other for other in journal["actions"] if other["record_id"] == row["action"]["target"]),
+                          None)
+            run_id = _bound_run_id(target) if target is not None else None
         if not run_id:
             answer["hold"] = "no run identity binds this cancellation"
             return answer

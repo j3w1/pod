@@ -208,25 +208,25 @@ def verify_merge_result(project: Path, row: dict, unit: dict | None, governance:
 MAX_RESULT_SCAN = 512
 
 
-def target_contains_result(project: Path, row: dict, unit: dict | None, governance: dict) -> bool | None:
-    """Whether the merge row's target holds the candidate's result, as the local tracking ref shows it.
+def target_contains_result(project: Path, row: dict, governance: dict) -> bool | None:
+    """Whether the merge row's target holds its candidate's result, as the local tracking ref shows it.
 
-    True when the candidate commit is reachable from the target, or a commit after the bound base carries
-    the candidate's tree (a squash); False only when neither holds within a bounded walk from the base;
-    None when the target, the base's ancestry or the walk cannot be observed. Fetch first: the answer is
-    only as fresh as the tracking ref.
+    True when the row's candidate commit is reachable from the target, or a commit after the bound base
+    carries that commit's tree (a squash); False only when neither holds within a bounded walk from the
+    base; None when the target, the candidate, the base's ancestry or the walk cannot be observed. Fetch
+    first: the answer is only as fresh as the tracking ref.
     """
-    candidate = unit.get("candidate") if isinstance(unit, dict) else None
+    from . import gitio
     admitted = row.get("target_binding")
     head, base = row.get("commit"), governance.get("base") if isinstance(governance, dict) else None
-    if (not isinstance(candidate, dict) or candidate.get("commit") != head or not isinstance(admitted, dict)
-            or not isinstance(head, str) or not _OBJECT.fullmatch(head)
-            or not isinstance(candidate.get("tree"), str) or not isinstance(base, str) or not _OBJECT.fullmatch(base)):
+    if (not isinstance(admitted, dict) or not isinstance(head, str) or not _OBJECT.fullmatch(head)
+            or not isinstance(base, str) or not _OBJECT.fullmatch(base)):
         return None
     current = _resolve_commit(project, admitted.get("ref"))
-    if current is None:
+    tree = _git(project, ["rev-parse", "--verify", "--quiet", head + "^{tree}"])
+    tree = tree.stdout.strip() if tree is not None and tree.returncode == 0 else ""
+    if current is None or not _OBJECT.fullmatch(tree):
         return None
-    from . import gitio
     if gitio.is_ancestor(project, head, current, resolve=_resolve_commit) is True:
         return True
     if gitio.is_ancestor(project, base, current, resolve=_resolve_commit) is not True:
@@ -234,10 +234,10 @@ def target_contains_result(project: Path, row: dict, unit: dict | None, governan
     walk = _git(project, ["log", "--format=%H %T", f"--max-count={MAX_RESULT_SCAN + 1}", f"{base}..{current}"])
     if walk is None or walk.returncode != 0:
         return None
-    lines = walk.stdout.split()
-    if len(lines) % 2 or len(lines) // 2 > MAX_RESULT_SCAN:
+    words = walk.stdout.split()
+    if len(words) % 2 or len(words) // 2 > MAX_RESULT_SCAN:
         return None
-    return any(tree == candidate["tree"] for tree in lines[1::2])
+    return tree in words[1::2]
 
 
 def _resolve_commit(root: Path, ref: str) -> str | None:

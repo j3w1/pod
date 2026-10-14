@@ -343,10 +343,19 @@ def _op_governor(request: dict) -> dict:
                   native_projection=projection, pull_request=request.get("pull_request"))
 
 
+def _finalization_view(request: dict) -> dict | None:
+    """What remains before finishing (R2), from local records only; it never turns a result into a refusal."""
+    from .governor import objective_finalization
+    try:
+        return objective_finalization(Path(request["project"]), request["objective"])
+    except Exception:
+        return None
+
+
 def _op_governor_outcome(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "record_id", "outcome", "provider", "evidence", "detail"},
           {"project", "objective", "owner", "record_id", "outcome"}, name="request")
-    from .governor import objective_finalization, record_outcome
+    from .governor import record_outcome
     project = Path(request["project"])
     _governor_projection(project, request["objective"], request["owner"],
                          mutating=True, version_exempt=True)
@@ -354,7 +363,7 @@ def _op_governor_outcome(request: dict) -> dict:
                             record_id=request["record_id"], outcome=request["outcome"],
                             provider=request.get("provider"), evidence=request.get("evidence"),
                             detail=request.get("detail"))
-    return {**result, "finalization": objective_finalization(project, request["objective"])}
+    return {**result, "finalization": _finalization_view(request)}
 
 
 def _op_governor_prepare(request: dict) -> dict:
@@ -416,7 +425,7 @@ def _op_governor_correct(request: dict) -> dict:
 def _op_governor_execute(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "action", "exception", "pull_request"},
           {"project", "objective", "owner", "action"}, name="request")
-    from .governor import execute, objective_finalization
+    from .governor import execute
     project = Path(request["project"])
     projection = _governor_projection(project, request["objective"], request["owner"],
                                       mutating=True, forward_action=request["action"])
@@ -424,19 +433,19 @@ def _op_governor_execute(request: dict) -> dict:
     result = execute(project, request["objective"], owner=request["owner"],
                      action=request["action"], exception=request.get("exception"),
                      pull_request=request.get("pull_request"), native_projection=projection)
-    return {**result, "finalization": objective_finalization(project, request["objective"])}
+    return {**result, "finalization": _finalization_view(request)}
 
 
 def _op_governor_reconcile(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "record_id"},
           {"project", "objective", "owner", "record_id"}, name="request")
-    from .governor import objective_finalization, reconcile
+    from .governor import reconcile
     project = Path(request["project"])
     _governor_projection(project, request["objective"], request["owner"],
                          mutating=True, version_exempt=True)
     result = reconcile(project, request["objective"], owner=request["owner"],
                        record_id=request["record_id"])
-    return {**result, "finalization": objective_finalization(project, request["objective"])}
+    return {**result, "finalization": _finalization_view(request)}
 
 
 def _op_governor_status(request: dict) -> dict:
@@ -591,11 +600,7 @@ def run(operation: str, request: dict) -> dict:
         if (_finalization_refusal(operation, exc) and isinstance(request, dict)
                 and isinstance(request.get("project"), str) and isinstance(request.get("objective"), str)
                 and (exc.detail is None or isinstance(exc.detail, dict))):
-            from .governor import objective_finalization
-            try:
-                remaining = objective_finalization(Path(request["project"]), request["objective"])
-            except Exception:
-                remaining = None  # The refusal stands; only its finalization view is unavailable.
+            remaining = _finalization_view(request)
             if remaining is not None:
                 exc.detail = {**(exc.detail or {}), "finalization": remaining}
         if operation == "admission" and isinstance(request, dict) and request.get("project") and request.get("objective") and request.get("task"):
@@ -718,13 +723,7 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
             acknowledgement["next_safe_action"] = checkpoint["next_safe_action"]
     acknowledgement["objective"] = request["objective"]
     if operation in ("checkpoint", "report"):
-        from .governor import objective_finalization
-        try:
-            remaining = objective_finalization(Path(request["project"]), request["objective"])
-        except Exception:
-            remaining = None  # A recorded write is never refused because its finalization view failed.
-        if remaining is not None:
-            acknowledgement["finalization"] = remaining
+        acknowledgement["finalization"] = _finalization_view(request)
     if "runtime_continuity" in result and operation != "runtime-continuity":
         acknowledgement["runtime_continuity"] = result["runtime_continuity"]
     for key in ("warnings", "invalidations", "source_rejections"):

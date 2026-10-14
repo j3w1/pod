@@ -1196,8 +1196,8 @@ def cancel_refusal(row: dict, journal: dict) -> str | None:
 
     CANCELED says the reserved action never ran. Only a pending decision reservation with no recorded sign
     of execution may say so, and only Pod's readback then confirms that no effect is visible. This is the
-    one predicate both the outcome and the "cancel, then execute" offer use; a carried row joins its
-    refusals here.
+    one predicate both the outcome and the "cancel, then execute" offer use, so any other row that must
+    never be canceled is refused here.
     """
     if row.get("decision_reserved") is not True:
         return "only a decision reservation for the caller to perform is canceled"
@@ -1296,8 +1296,8 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
     if map_state is None:
         raise _outcome_refusal("map_missing", "A merge outcome is checked against the bound target and base of the "
                                "objective map", "checkpoint the objective map first", record_id)
-    unit = journal["units"].get(row["action"]["unit"])
     if outcome == "PASS":
+        unit = journal["units"].get(row["action"]["unit"])
         merged = {**(row["receipt"].get("provider") or {}), **(provider or {})}
         if not merged.get("merge_commit"):
             raise _outcome_refusal("merge_commit_missing", "A merge PASS keeps the provider merge_commit",
@@ -1314,7 +1314,7 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
     if provider is not None and provider.get("merge_commit"):
         raise _outcome_refusal("merge_commit_conflict", f"A merge {outcome} names no merge_commit",
                                "record PASS for a merge that landed", record_id)
-    contained = target_contains_result(project, row, unit, map_state["governance"])
+    contained = target_contains_result(project, row, map_state["governance"])
     if contained is None:
         raise _outcome_refusal("target_unobservable", "Git cannot show whether the target holds the candidate's "
                                "result", _fetch_first(row) + ", then record the outcome again", record_id)
@@ -1957,8 +1957,8 @@ def finalization(state: dict | None, journal: dict) -> dict:
         next_action = ("Finished: closure is recorded and Pod needs nothing more; the coordinator may say the "
                        "objective is finished and is safe to retire.")
     else:
-        next_action = ("Finished: nothing remains to record and this objective has no obligation map to close; "
-                       "the coordinator may say the work is finished.")
+        next_action = ("Finished recording: nothing remains to record, and this objective has no obligation map "
+                       "to close.")
     return {"schema": "pod-finalization/v1", "remaining": remaining,
             "records": {name: records[name] for name in remaining}, "finished": not remaining,
             "next_action": next_action}
