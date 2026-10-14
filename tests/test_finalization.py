@@ -10,8 +10,9 @@ from pod.errors import PodError
 from pod.governor import (FINALIZATION_RECORDS, _read_journal, _record_path, finalization, observe_candidate,
                           prepare_candidate)
 from pod.internal import acknowledge, run as internal_run
-from pod.ledger import closed_snapshot_context, map_of, objective_root, read
+from pod.ledger import closed_snapshot_context, kernel_context, map_of, objective_root, read
 from pod.obligations import validate_closed_snapshot
+from tests.common import fake_native
 from tests.kernel_support import KernelCase, GovernorFakePort as FakePort, action, authorization, git
 
 
@@ -44,6 +45,8 @@ class FinalizationTests(unittest.TestCase):
             "impl-1": admission("implement", "bound", report={"status": "validated_observation"}),
             "impl-2": admission("implement", "closed"),
             "impl-3": admission("implement", "deferred"),
+            # An implementation result settles by its disposition, with or without a report.
+            "impl-4": admission("implement", "bound", disposition={"kind": "discarded"}),
         })
         result = finalization(state, journal)
         self.assertEqual(result["remaining"], list(FINALIZATION_RECORDS))
@@ -231,10 +234,25 @@ class ResumeTests(KernelCase):
         git(self.project, "update-ref", "refs/remotes/origin/target", result)
         self.op("governor-outcome", record_id=decided["record_id"], outcome="PASS",
                 provider={"merge_commit": result})
-        self.checkpoint(delivery={"record": decided["record_id"]})
         rows = self.stored()
         rows[0].pop("executor")
         rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        # Closure is the last record. The merged target already holds map writes for the delivery record, and
+        # the refusal names it; with a tracking ref that lags the merge, the closure check itself names it.
+        moved = self.refusal("checkpoint", value=self.core(obligations=rows, close=True))
+        self.assertEqual((moved.code, moved.detail["finalization"]["remaining"]),
+                         ("governance_changed", ["delivery_record", "closure"]))
+        git(self.project, "update-ref", "refs/remotes/origin/target", self.base)
+        early = self.refusal("checkpoint", value=self.core(obligations=rows, close=True))
+        self.assertEqual((early.code, early.detail["detail"]), ("obligation_unaccounted", "closure_unfinished"))
+        self.assertTrue(early.detail["next_action"].startswith(
+            "record delivery_record in that order before closure. Next: write a checkpoint with delivery"))
+        git(self.project, "update-ref", "refs/remotes/origin/target", result)
+        # The delivery record comes in its own earlier write: a closing write's report would not include it.
+        shared = self.refusal("checkpoint", value=self.core(obligations=rows, close=True,
+                                                            delivery={"record": decided["record_id"]}))
+        self.assertEqual(shared.detail["detail"], "closure_unfinished")
+        self.checkpoint(delivery={"record": decided["record_id"]})
         self.op("checkpoint", value=self.core(obligations=rows, close=True))
         root = objective_root(self.project, "objective")
         before = {name: (root / name).read_bytes() for name in ("context.json", "governor.json")}
@@ -266,6 +284,61 @@ class ResumeTests(KernelCase):
         self.assertEqual(settled["status"], "PASS")
         self.assertFalse(settled["finalization"]["finished"])
         self.assertEqual(len([call for call in self.remote.calls if call[0] == "push"]), 1)
+
+
+class ClosureOrderTests(KernelCase):
+    """R117 — a new closure is the last record; a closure already recorded re-validates unchanged."""
+
+    def close(self, rows=None, **fields):
+        rows = [dict(row) for row in (rows or self.stored())]
+        for row in rows:
+            row.pop("executor", None)
+            row.pop("wait", None)
+            row.update(state="satisfied", evidence=[self.proof(row["id"])])
+        return self.write(rows, close=True, **fields)
+
+    def worker(self, role, **fields):
+        self.intake(self.sub("S"))
+        frozen = self.packet(["S"], role=role, **fields)
+        admission = self.start("worker", frozen)["admission"]
+        self.settle(admission)
+        return frozen, admission
+
+    def test_a_settled_worker_without_a_consumed_report_holds_a_new_closure(self):
+        frozen, admission = self.worker("investigate", resolves="one question", stop_condition="one answer")
+        refused = self.refused("obligation_unaccounted", "closure_unfinished", self.close)
+        self.assertIn("record report_consumption in that order before closure", refused.detail["next_action"])
+        self.assertIn("a worker that produced none is reported failed or uncertain", refused.detail["next_action"])
+        self.assertIsNone(read(self.project, "objective")["checkpoint"]["closure"])
+        # The worker produced no report: the existing report route records that, and closure follows.
+        rows = self.stored()
+        rows[1].pop("executor")
+        rows[1].update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        self.report(admission, frozen, outcome="failed", map={"obligations": rows})
+        self.assertIsNotNone(self.close()["checkpoint"]["closure"])
+
+    def test_an_implementation_result_closes_by_its_disposition_without_a_report(self):
+        _, admission = self.worker("implement")
+        self.refused("obligation_unaccounted", None, self.close)
+        rows = self.stored()
+        for row in rows:
+            row.pop("executor", None)
+            row.pop("wait", None)
+            row.update(state="satisfied", evidence=[self.proof(row["id"])])
+        closed = self.write(rows, close=True, dispositions=[{"admission": admission["admission_id"],
+                                                              "discarded": True, "reason": "superseded"}])
+        self.assertIsNotNone(closed["checkpoint"]["closure"])
+
+    def test_a_closure_recorded_before_this_rule_still_validates(self):
+        """Synthetic control: a closure written without the new check, as 0.12.0 could write it."""
+        self.worker("investigate", resolves="one question", stop_condition="one answer")
+        with patch("pod.ledger._closure_unrecorded", return_value=None):
+            closed = self.close()["checkpoint"]
+        state = read(self.project, "objective")
+        settled = kernel_context(self.project, "objective", state, fake_native(self.port, state, owner="owner"))
+        self.assertEqual(validate_closed_snapshot(map_of(state), settled), ())
+        self.assertTrue(finalization(state, {"actions": []})["finished"])
+        self.assertEqual(state["checkpoint"]["closure"], closed["closure"])
 
 
 if __name__ == "__main__":

@@ -1901,10 +1901,18 @@ _FINALIZATION_STEPS = {
     "delivery_record": "write a checkpoint with delivery: {{record: {ids}}}",
     "validation_readback": "settle {ids} from Pod's own readback with governor-reconcile, or record a release "
                            "or deploy outcome with its receipt or evidence reference; nothing is resubmitted",
-    "report_consumption": "consume the worker report of admission {ids} with internal report, or record "
-                          "its result's disposition in a checkpoint",
+    "report_consumption": "consume the worker report of admission {ids} with internal report (a worker "
+                          "that produced none is reported failed or uncertain), or record an implementation "
+                          "result's disposition in a checkpoint",
     "closure": "write a checkpoint with close: true",
 }
+
+
+def finalization_step(name: str, entries: list[dict]) -> str:
+    """The step that records one remaining finalization record, naming its records' short ids."""
+    ids = [entry["record"][:12] for entry in entries]
+    shown = ", ".join(ids[:4]) + (f" and {len(ids) - 4} more" if len(ids) > 4 else "")
+    return _FINALIZATION_STEPS[name].format(ids=shown)
 
 
 def _finalization_entry(record: str, kind: str, state: str, derived_from: str | None = None) -> dict:
@@ -1940,19 +1948,20 @@ def finalization(state: dict | None, journal: dict) -> dict:
             if not isinstance(admission, dict) or admission.get("state") in ("closed", "deferred"):
                 continue
             role = str(admission.get("role"))
+            # An implementation result settles by its disposition, which needs no report; other roles by
+            # their consumed report.
+            if role == "implement" and admission.get("disposition") is not None:
+                continue
             if admission.get("report") is None:
                 records["report_consumption"].append(_finalization_entry(key, role, str(admission.get("state"))))
-            elif role == "implement" and admission.get("disposition") is None:
+            elif role == "implement":
                 records["report_consumption"].append(_finalization_entry(key, role, "undispositioned"))
     remaining = [name for name in FINALIZATION_RECORDS
                  if records[name] or (name == "closure" and map_state is not None and not closed)]
     if remaining:
-        first = remaining[0]
-        ids = [entry["record"][:12] for entry in records[first]]
-        shown = ", ".join(ids[:4]) + (f" and {len(ids) - 4} more" if len(ids) > 4 else "")
         next_action = ("Not finished: record " + ", ".join(remaining) + " in that order before saying the "
                        "objective is finished or the coordinator safe to retire. Next: "
-                       + _FINALIZATION_STEPS[first].format(ids=shown))
+                       + finalization_step(remaining[0], records[remaining[0]]))
     elif closed:
         next_action = ("Finished: closure is recorded and Pod needs nothing more; the coordinator may say the "
                        "objective is finished and is safe to retire.")

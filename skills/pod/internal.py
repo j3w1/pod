@@ -566,7 +566,7 @@ _OPERATIONS = {
 _FINALIZATION_OPERATIONS = {"checkpoint", "report", "governor", "governor-outcome", "governor-execute",
                             "governor-reconcile"}
 _FINALIZATION_REFUSALS = {"objective_closed", "outcome_evidence_required", "outcome_conflict",
-                          "delivery_unverified", "delivery_recorded"}
+                          "delivery_unverified", "delivery_recorded", "governance_changed"}
 
 
 def _finalization_refusal(operation: str, exc: PodError) -> bool:

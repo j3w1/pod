@@ -1009,7 +1009,15 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     state["observations"] = observations(prior_map, state, ctx)
     _persisted_rows(state, ctx)
     if value.get("close") is True:
-        state["closure"] = _close(state, ctx)
+        closure = _close(state, ctx)
+        # Closure is the last record (R117). Only a new closure write checks this; a recorded closure is
+        # re-validated by _close alone, so it stays valid whatever was recorded around it.
+        unrecorded = ctx.get("closure_unrecorded")
+        if unrecorded:
+            raise refuse("obligation_unaccounted", "closure_unfinished",
+                         "closure is the last record; " + ", ".join(unrecorded["remaining"]) + " come first",
+                         record="closure", next_action=unrecorded["next_action"])
+        state["closure"] = closure
     elif "close" in value:
         raise refuse("obligation_invalid", "malformed", "close is true when present", record='obligation map')
     return state
