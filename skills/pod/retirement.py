@@ -19,6 +19,7 @@ import hashlib
 import os
 from pathlib import Path
 import stat
+import unicodedata
 
 from .errors import PodError
 from .util import bounded_text, digest, exact
@@ -50,8 +51,18 @@ ACTION = ("Read it with pod status --objective {}; the owner's historical retire
           "it is not completed, and its record accepts no writes.")
 
 
+def _encodable(value: str) -> bool:
+    """Whether text can be written as UTF-8, as every record and decision digest is; a lone surrogate, which JSON can
+    carry, cannot."""
+    try:
+        value.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _text(value: object, limit: int) -> bool:
-    return isinstance(value, str) and 0 < len(value) <= limit
+    return isinstance(value, str) and 0 < len(value) <= limit and _encodable(value)
 
 
 def _texts(value: object, bound: int, limit: int) -> bool:
@@ -59,8 +70,10 @@ def _texts(value: object, bound: int, limit: int) -> bool:
 
 
 def _path_text(value: object) -> bool:
+    """A recorded worktree's text. A path to release must also name nothing a filesystem read cannot (`_requested`);
+    a recorded one retirement keeps held needs no such read, so it stays echoable as recorded (R113)."""
     return (_text(value, 4096) and value.startswith("/") and os.path.normpath(value) == value
-            and ".." not in Path(value).parts and "\x00" not in value)
+            and ".." not in Path(value).parts)
 
 
 def _record_row(row: object) -> bool:
@@ -246,16 +259,44 @@ def _readable(place: object) -> bool:
     return "\x00" not in place
 
 
+def _folded(name: str) -> str:
+    """A name as a case-insensitive directory may match it: canonical caseless form."""
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", name).casefold())
+
+
+def _standing(place: str) -> list[tuple[tuple[int, int], tuple[str, ...]]]:
+    """Each directory this host shows on the way to a location, as its device and inode, with the folded names
+    below it. Links are followed, so a link, a bind mount or a case-insensitive directory reads as the directory it
+    is; the walk ends where nothing more can be read, missing or not."""
+    parts = Path(place).parts
+    found = []
+    for depth in range(1, len(parts) + 1):
+        try:
+            shown = os.stat(Path(*parts[:depth]))
+        except OSError:
+            break
+        if not stat.S_ISDIR(shown.st_mode):
+            break
+        found.append(((shown.st_dev, shown.st_ino), tuple(_folded(part) for part in parts[depth:])))
+    return found
+
+
 def _within(candidate: object, path: str) -> bool:
-    """Whether a location another inventory names is the path or lies beneath it, links resolved. Inventories admit
-    only readable locations; should resolution still fail, the location could be anywhere and counts as a match."""
+    """Whether a location the registry or another inventory names is the path or lies beneath it on this host. The
+    path is placed at its deepest existing directory; the location matches when its own walk, as spelled or with its
+    links resolved, passes through that directory, by device and inode, with the same folded names below it. So a
+    link, even one left dangling by the path's removal, a bind mount or a case-insensitive directory cannot hide a
+    match; over-matching only leaves the path unknown. Inventories admit only readable locations; should one still
+    not resolve, it could be anywhere and counts as a match (R113)."""
     if not isinstance(candidate, str) or not candidate.startswith("/"):
         return False
     try:
-        resolved = os.path.realpath(candidate)
-    except (OSError, ValueError):
+        anchor, below = _standing(path)[-1]
+        return any(key == anchor and names[:len(below)] == below
+                   for place in dict.fromkeys((candidate, os.path.realpath(candidate)))
+                   for key, names in _standing(place))
+    except (OSError, ValueError, IndexError):
         return True
-    return resolved == path or resolved.startswith(path + "/")
 
 
 def _filesystem(path: str) -> str:
@@ -684,8 +725,10 @@ def _requested(value: object) -> list[dict]:
     for item in value:
         row = exact(item, REQUEST, REQUEST, name="retirement_objective")
         bounded_text(row["objective"], name="objective", limit=256)
+        if not _encodable(row["objective"]):
+            raise PodError("invalid_request", "objective must be text that can be encoded as UTF-8")
         if (not isinstance(row["release"], list) or not 0 < len(row["release"]) <= MAX_PATHS
-                or not all(_path_text(path) for path in row["release"])
+                or not all(_path_text(path) and "\x00" not in path for path in row["release"])
                 or len(set(row["release"])) != len(row["release"])):
             raise PodError("invalid_request", f"release names 1 to {MAX_PATHS} distinct absolute normalized paths")
         rows.append({"objective": row["objective"], "release": list(row["release"])})
@@ -698,6 +741,11 @@ def _decision(value: object, requested: list[dict], repository: str) -> dict:
     decision = exact(value, DECISION, DECISION, name="retirement_decision")
     bounded_text(decision["instruction"], name="instruction", limit=1024)
     bounded_text(decision["reason"], name="reason", limit=1024)
+    try:
+        digest(decision)
+    except (UnicodeEncodeError, TypeError, ValueError):
+        raise PodError("invalid_request", "The decision must be JSON text that can be encoded as UTF-8; nothing was "
+                       "written") from None
     mismatch = PodError("retirement_decision_mismatch", "Only the owner's direct instruction for exactly the "
                         "requested objectives and paths permits retirement. Nothing was written.",
                         {"next_action": "detect again without a decision and confirm its facts with the owner"})

@@ -154,7 +154,7 @@ def _archive_verified(project: Path, value: dict) -> bool:
         try:
             return subprocess.run(["git", "--no-optional-locks", *argv], cwd=cwd, stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, timeout=30, check=False)
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
             return None
     verified = run(["bundle", "verify", str(path)], cwd=project)
     listed = run(["bundle", "list-heads", str(path)], cwd=project)

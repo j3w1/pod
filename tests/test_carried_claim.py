@@ -781,10 +781,10 @@ class MergeTests(CarriedCase):
 
 
 class EarlierReaderTests(CarriedCase):
-    """R6 — released 0.12.0 and the PR-A version read a successor journal with carried rows as recorded."""
+    """R6 — the oldest and newest earlier versions, 0.12.0 and main's 0.13.1, read carried rows as recorded."""
 
     RELEASED = {"0.12.0": "5f7298bab47c4a3263496dc2a7fe50ecfcda0530",
-                "0.13.0": "db095e8876d2b4dc7443ee237a0f923dcf5a6c03"}
+                "0.13.1": "13f63a1ccb58d3bb74f53efbaeeec7a7df35fcef"}
 
     def test_earlier_pods_load_the_carried_journal_and_the_continued_record_unchanged(self):
         self.lost_with(self.publications)

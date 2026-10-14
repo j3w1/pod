@@ -17,7 +17,7 @@ def read(root: Path, argv: list[str], *, binary: bool = False,
         return subprocess.run(["git", "--no-optional-locks", "-C", str(root), *argv],
                               capture_output=True, text=not binary, timeout=timeout,
                               check=False, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):  # Output that is not UTF-8 is no answer.
         return None
 
 

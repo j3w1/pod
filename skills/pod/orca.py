@@ -86,6 +86,8 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PodError("orca_unavailable", "Orca read failed") from exc
+    except UnicodeDecodeError:
+        raise PodError("orca_contract", "Orca read output is not valid UTF-8") from None
     if proc.returncode:
         detail = {}
         if len(proc.stdout) <= MAX_OUTPUT:
