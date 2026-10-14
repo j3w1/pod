@@ -48,6 +48,7 @@ REQUIRED = {
     "runtime-continuity": (*OWNED, "decision"),
     "owner-handoff": (*OWNED, "decision"),
     "succession": (*OWNED, "predecessor"),
+    "historical-retirement": ("project", "objectives"),
 }
 
 

@@ -497,6 +497,13 @@ def _op_succession(request: dict) -> dict:
                       predecessor=request["predecessor"], decision=request.get("decision"))
 
 
+def _op_historical_retirement(request: dict) -> dict:
+    exact(request, {"project", "objectives", "decision"}, {"project", "objectives"}, name="request")
+    from .retirement import historical_retirement
+    return historical_retirement(Path(request["project"]), request["objectives"],
+                                 decision=request.get("decision"))
+
+
 def _op_cleanup_plan(request: dict) -> dict:
     exact(request, {"project", "objective", "expect", "archives"}, {"project", "objective"}, name="request")
     from .cleanup import plan
@@ -538,6 +545,7 @@ _OPERATIONS = {
     'runtime-continuity': _op_runtime_continuity,
     'owner-handoff': _op_owner_handoff,
     'succession': _op_succession,
+    'historical-retirement': _op_historical_retirement,
     'cleanup-plan': _op_cleanup_plan,
     'map': _op_map,
 }

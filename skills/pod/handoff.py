@@ -202,6 +202,10 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         from .succession import ACTION
         return fail("objective_continued", f"The objective was continued by successor objective {link['objective']}.",
                     definitive=True, action=ACTION.format(link["objective"]))
+    if isinstance(state.get("historical_retirement"), dict):
+        from .retirement import ACTION as RETIREMENT
+        return fail("objective_retired", "The owner's historical retirement ended this objective's coordination; "
+                    "it accepts no coordinator.", definitive=True, action=RETIREMENT.format(objective))
     if caller == owner:
         return fail("recorded_owner", "This caller is the recorded owner; use the ordinary authority and runtime-continuity checks.")
     if facts["recorded_runtime"] is None:

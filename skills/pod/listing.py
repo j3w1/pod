@@ -73,6 +73,8 @@ def _facts(raw: dict) -> dict:
 def _phase(raw: dict) -> str:
     if isinstance(raw.get("continued_by"), dict):
         return "continued"
+    if isinstance(raw.get("historical_retirement"), dict):
+        return "retired"  # Released by the owner; never closed or completed (R112).
     checkpoint = raw.get("checkpoint")
     return "closed" if isinstance(checkpoint, dict) and checkpoint.get("closure") else "open"
 
@@ -154,6 +156,9 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
                **facts}
         from .succession import links
         row.update(links(target, raw))
+        if row["phase"] == "retired" and row["schema"] == "current":
+            from .retirement import status_block
+            row["retirement"] = status_block(raw)
         if worktree is not None:
             if context["worktree"] in facts["worktrees"]:
                 row["match"] = "worktree"

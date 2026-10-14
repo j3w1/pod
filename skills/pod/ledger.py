@@ -25,8 +25,10 @@ CONTEXT_LIMIT = 4 * MAX_RECORD
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
                    "interventions", "source_rejections", "constraints"}
-# Optional succession links (R110); a record without them keeps its exact earlier shape.
+# Optional succession links (R110) and historical retirement (R112); a record without them
+# keeps its exact earlier shape.
 _SUCCESSION_FIELDS = {"continued_by", "continues"}
+_RETIREMENT_FIELD = "historical_retirement"
 
 def state_root(project: Path | None = None) -> Path:
     override = explicit_home("POD_STATE_HOME")
@@ -188,10 +190,15 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD}, _CONTEXT_FIELDS, name="context")
     from .succession import validate_link
     for name in _SUCCESSION_FIELDS & set(state):
         validate_link(name, state[name])
+    if _RETIREMENT_FIELD in state:
+        from .retirement import validate_entry
+        validate_entry(state[_RETIREMENT_FIELD])
+        if "continued_by" in state:
+            raise PodError("state_unsupported", "A continued record cannot also carry a historical retirement")
     if type(state["revision"]) is not int or state["revision"] < 0:
         raise PodError("state_unsupported", "State revision is malformed")
     if state["owner"] is not None and (not isinstance(state["owner"], str) or not state["owner"]):
@@ -237,7 +244,7 @@ def read(project: Path, objective: str) -> dict | None:
 
 def _write(path: Path, value: dict) -> None:
     from .succession import refuse_continued
-    refuse_continued(value)  # Backstop: a continued record is written only by the claim itself.
+    refuse_continued(value)  # Backstop: only its own transition writes a continued record or a historical retirement.
     value["revision"] += 1
     _validate_context(value)
     atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
@@ -245,6 +252,13 @@ def _write(path: Path, value: dict) -> None:
 
 def _write_succession(path: Path, value: dict) -> None:
     """The claim's single write of a predecessor record, under that record's lock."""
+    value["revision"] += 1
+    _validate_context(value)
+    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+
+
+def _write_retirement(path: Path, value: dict) -> None:
+    """The owner's historical retirement: its single write of the record, under that record's lock."""
     value["revision"] += 1
     _validate_context(value)
     atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)

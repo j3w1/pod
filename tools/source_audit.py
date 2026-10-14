@@ -34,9 +34,12 @@ MECHANISM = (
         rb"|quota_fresh|pod-quota|config approve|pod-context/v3")),
 )
 # Wording that describes an earlier Pod rather than this one. Orca's captures may use these
-# words for their own reasons, so sanitized fixtures are exempt from this table only.
+# words for their own reasons, so sanitized fixtures are exempt from this table only. The owner's
+# historical retirement (R112) is current vocabulary: its name and the phase `retired` quoted on
+# both sides pass, while the bare or half-quoted words still describe an earlier Pod.
 WORDING = (
-    ("trail wording", re.compile(rb"\b(?:retired|legacy|historical|baseline commit)\b", re.I)),
+    ("trail wording", re.compile(rb"\b(?:legacy|baseline commit)\b|\bhistorical\b(?![- ]retirement\b)"
+                                 rb"|(?<![\"'`])\bretired\b|\bretired\b(?![\"'`])", re.I)),
 )
 # Count-centred concurrency guidance that 0.6 replaced with obligation-centred records: a
 # worker count is a ceiling, never a target, and a free reservation admits nothing. Normative

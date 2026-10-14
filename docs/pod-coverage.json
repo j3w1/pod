@@ -3116,6 +3116,91 @@
         "tests.test_status_unverified.ClosedSettlementTests.test_open_objective_still_lists_unverified_rows"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A266",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_historical_retirement.DetectionTests.test_eligible_facts_preserve_unknown_and_pending_records_and_write_nothing",
+        "tests.test_historical_retirement.DetectionTests.test_an_exited_terminal_in_the_path_and_an_exited_coordinator_do_not_hold"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A267",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_historical_retirement.RefusalTableTests.test_lifecycle_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_unreadable_records_refuse",
+        "tests.test_historical_retirement.RefusalTableTests.test_scope_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_handoff_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_other_records_refuse",
+        "tests.test_historical_retirement.RefusalTableTests.test_claims_refuse",
+        "tests.test_historical_retirement.RefusalTableTests.test_coordinator_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_run_binding_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_workers_refuse",
+        "tests.test_historical_retirement.RefusalTableTests.test_dispatches_refuse",
+        "tests.test_historical_retirement.RefusalTableTests.test_requests_refuse",
+        "tests.test_historical_retirement.RefusalTableTests.test_paths_refuse",
+        "tests.test_historical_retirement.RefusalTableTests.test_path_identity_refuses",
+        "tests.test_historical_retirement.RefusalTableShapeTests.test_the_refusal_table_runs_every_row_once",
+        "tests.test_historical_retirement.DetectionTests.test_requests_and_decisions_are_exact",
+        "tests.test_historical_retirement.DetectionTests.test_an_unknown_objective_or_an_unrecorded_path_refuses_alone"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A268",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_historical_retirement.WriteTests.test_the_entry_is_appended_and_nothing_else_changes",
+        "tests.test_historical_retirement.WriteTests.test_replay_is_idempotent_and_changed_facts_refuse",
+        "tests.test_historical_retirement.WriteTests.test_facts_another_writer_changed_after_the_decision_refuse",
+        "tests.test_historical_retirement.WriteTests.test_a_multi_objective_decision_has_independent_results",
+        "tests.test_historical_retirement.WriteTests.test_an_objective_detection_already_refused_never_blocks_the_others",
+        "tests.test_historical_retirement.WriteTests.test_the_question_names_a_late_refused_objective_a_decision_could_retire_later",
+        "tests.test_historical_retirement.WriteTests.test_an_early_refusal_is_named_as_never_retired_by_these_facts"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A269",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_historical_retirement.AfterRetirementTests.test_every_write_of_the_returning_coordinator_is_refused_by_name",
+        "tests.test_historical_retirement.AfterRetirementTests.test_handoff_and_a_successor_claim_refuse_a_retired_objective"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A270",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_historical_retirement.AfterRetirementTests.test_status_and_list_show_retired_never_closed_qualified_or_continued",
+        "tests.test_historical_retirement.AfterRetirementTests.test_a_bound_start_whose_report_pod_validated_is_not_unreported",
+        "tests.test_historical_retirement.RecordShapeTests.test_counts_name_failed_and_unknown_records_apart",
+        "tests.test_historical_retirement.RecordShapeTests.test_a_malformed_entry_makes_the_record_unsupported"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }
