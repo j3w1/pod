@@ -48,15 +48,17 @@ started: one of its events, its exact head commit, created at or after the submi
 attempt (R115). A push or pull-request update starts `push` runs and, on a branch with an open pull
 request, `pull_request` or `pull_request_target` runs, so a row derived from a publication binds
 only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. Every row
-binds its run's first attempt, except a rerun, which binds the attempt it started: the governor reads
-the run's latest attempt just before rerunning it and records the next one. A run already bound to a
-row is checked the same way, and its workflow by appearing in the workflow-filtered list, because
-`gh run view` names only the workflow's display name.
+binds its run's first attempt, except a rerun. Before rerunning, the governor records the run, its
+latest attempt and the submission start; it binds the rerun's attempt only when exactly one new
+attempt exists and its `startedAt` is at or after that start, and otherwise holds the row, since
+GitHub names no requester per attempt. A run already bound to a row is checked the same way as a new
+one, and its workflow by appearing in the workflow-filtered list, because `gh run view` names only the
+workflow's display name.
 It reads runs with `gh run list --workflow FILE --commit SHA --json …,attempt --limit 21`:
 GitHub filters by workflow and commit, and the extra run tells the governor that the newest 20 were
 not all of them. GitHub lists only the runs it still retains. A missing run or a truncated list
-leaves the row pending with that reason, even when a visible run matches; it is never read as a
-failure or as proof that nothing ran.
+leaves the row pending with that reason, even when a visible run matches or is the row's own bound
+run; it is never read as a failure or as proof that nothing ran.
 
 ## What the governor consumes
 

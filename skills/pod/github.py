@@ -28,7 +28,7 @@ _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
 _RUN_ID = re.compile(r"[0-9]{1,20}\Z")
 _ATTEMPT = re.compile(r"[1-9][0-9]{0,3}\Z")
 _INPUT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}=[^\n\r\x00]{0,512}\Z")
-RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName,attempt"
+RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName,attempt,startedAt"
 # A run list asks for one more run than it reads, so a full list says whether it was cut short.
 RUN_LIST_LIMIT = 20
 PR_FIELDS = "number,url,headRefOid,state,isDraft"
@@ -442,7 +442,7 @@ def _normalise_run(row: dict) -> dict:
     return {"id": str(row.get("databaseId")), "status": row.get("status"), "conclusion": row.get("conclusion"),
             "created_at": row.get("createdAt"), "updated_at": row.get("updatedAt"),
             "head_sha": row.get("headSha"), "url": row.get("url"), "event": row.get("event"),
-            "workflow": row.get("workflowName"),
+            "workflow": row.get("workflowName"), "started_at": row.get("startedAt"),
             "attempt": attempt if type(attempt) is int and attempt >= 1 else None}
 
 

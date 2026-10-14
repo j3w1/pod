@@ -124,9 +124,12 @@ class SameRunRerunTests(ProofCase):
         classify_failure(self.project, "objective", owner="owner", record_id=run["record_id"], now=NOW,
                          classification={"class": "transient", "reason": "runner lost"})
         rerun = self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
-        # The rerun records the attempt it starts: the one after the run's latest, read just before (R115).
-        self.assertEqual((rerun["decision"], rerun["receipt"]["provider"]),
-                         ("ALLOW", {"run_id": run_id, "rerun": True, "attempt": 2}))
+        # The rerun records its provenance before submitting, then binds the one new attempt that started after
+        # its submission (R115).
+        provider = rerun["receipt"]["provider"]
+        self.assertEqual((rerun["decision"], provider["run_id"], provider["rerun"], provider["before_attempt"],
+                          provider["submitted_at"], provider["attempt"]),
+                         ("ALLOW", run_id, True, 1, NOW.isoformat(), 2))
         self.assertEqual(port.calls[-1], ("rerun", run_id, True))
         attached = self.decide(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]))
         self.assertEqual((attached["decision"], attached["reuse"]["kind"]), ("REUSE", "attach"))

@@ -104,6 +104,8 @@ class GovernorFakePort:
         self.run_status = {}
         # Earlier attempts of a rerun run, as `gh run view --attempt` would show them.
         self.attempts = {}
+        # When the attempt a rerun starts begins, as `startedAt` reports it.
+        self.rerun_stamp = "2026-09-21T00:00:01+00:00"
         self.next_run = 100
         self.lost = set(lost)
         self.rejected = set(rejected)
@@ -127,7 +129,7 @@ class GovernorFakePort:
     def _start(self, workflow, commit, *, event, created_at="2026-09-21T00:00:01+00:00"):
         run = {"id": str(self.next_run), "status": "in_progress", "conclusion": None,
                "created_at": created_at, "url": "https://example.invalid/run",
-               "event": event, "head_sha": commit, "attempt": 1}
+               "event": event, "head_sha": commit, "attempt": 1, "started_at": created_at}
         self.next_run += 1
         self.runs_by.setdefault((workflow, commit), []).append(run)
         self.run_status[run["id"]] = run
@@ -177,7 +179,8 @@ class GovernorFakePort:
         self.calls.append(("rerun", run_id, failed_only))
         current = self.run_status[run_id]
         self.attempts[run_id][current["attempt"]] = dict(current)
-        current.update({"status": "in_progress", "conclusion": None, "attempt": current["attempt"] + 1})
+        current.update({"status": "in_progress", "conclusion": None, "attempt": current["attempt"] + 1,
+                        "started_at": self.rerun_stamp})
         return {"status": "rerun_requested"}
 
     def cancel(self, *, run_id):

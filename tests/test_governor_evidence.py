@@ -166,8 +166,8 @@ class ProviderEventTests(EvidenceCase):
         settled = self.reconcile(derived, port)
         self.assertEqual((settled["status"], self.row(derived)["receipt"]["provider"]["attempt"]), ("FAILED", 1))
 
-    def test_a_rerun_binds_only_the_attempt_after_the_failed_one(self):
-        port = FakePort()
+    def failed_dispatch(self, port):
+        """A requested dispatch whose run failed, read back and classified: the run a rerun reruns."""
         self.published(port)
         first = self.execute(dispatch(candidate=self.binding["id"], target=RELEASE), port)
         run_id = first["receipt"]["provider"]["run_id"]
@@ -175,14 +175,23 @@ class ProviderEventTests(EvidenceCase):
         self.assertEqual(self.reconcile(first["record_id"], port)["status"], "FAILED")
         classify_failure(self.project, "objective", owner="owner", record_id=first["record_id"], now=NOW,
                          classification={"class": "transient", "reason": "runner lost"})
+        return first, run_id
+
+    def rerun_row(self):
+        return next(row for row in _read_journal(self.journal)["actions"]
+                    if row["action"]["kind"] == "validation_rerun")
+
+    def test_a_rerun_reservation_has_no_provenance_and_holds(self):
+        """A caller-performed rerun has no pre-read or submission start, so no attempt can be proved its own."""
+        port = FakePort()
+        first, run_id = self.failed_dispatch(port)
         rerun = self.decide(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]))
-        waiting = self.reconcile(rerun["record_id"], port)
-        self.assertEqual((waiting["status"], waiting["action"]), ("pending", "hold"))
-        self.assertIn("attempt 2 of run", waiting["reason"])
-        port.rerun(run_id=run_id, failed_only=True)
-        port.complete(run_id, "success")
-        self.assertEqual(self.reconcile(rerun["record_id"], port)["status"], "PASS")
-        self.assertEqual(self.row(rerun["record_id"])["receipt"]["provider"]["attempt"], 2)
+        for _ in range(2):
+            waiting = self.reconcile(rerun["record_id"], port)
+            self.assertEqual((waiting["status"], waiting["action"]), ("pending", "hold"))
+            self.assertIn("no recorded pre-submission attempt and start", waiting["reason"])
+            port.rerun(run_id=run_id, failed_only=True)
+            port.complete(run_id, "success")
         self.assertEqual(self.row(first["record_id"])["outcome"], "FAILED")
 
     def test_a_rerun_reads_its_own_attempt_and_never_a_later_one(self):
@@ -220,28 +229,109 @@ class ProviderEventTests(EvidenceCase):
         self.assertEqual([(row["outcome"], row["receipt"]["detail"]) for row in rerun], [("FAILED", "rerun_attempt_unread")])
         self.assertFalse([call for call in port.calls if call[0] == "rerun"])
 
-    def test_a_rerun_row_without_its_attempt_reads_only_the_exact_next_one(self):
-        """FA-A-03: an earlier row's rerun binds the attempt after its run's known ones, or holds."""
+    def test_a_rerun_row_without_provenance_holds_rather_than_infer(self):
+        """A rerun row recorded before its provenance was kept reads as recorded and never infers an attempt."""
         port = FakePort()
-        self.published(port)
-        first = self.execute(dispatch(candidate=self.binding["id"], target=RELEASE), port)
-        run_id = first["receipt"]["provider"]["run_id"]
-        port.complete(run_id, "failure")
-        self.reconcile(first["record_id"], port)
-        classify_failure(self.project, "objective", owner="owner", record_id=first["record_id"], now=NOW,
-                         classification={"class": "transient", "reason": "runner lost"})
+        _, run_id = self.failed_dispatch(port)
         rerun = self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
-        # Synthetic control: the row as a writer before this correction left it, without its attempt.
+        # Synthetic control: the receipt a writer before this correction left, the run and nothing else.
         journal = _read_journal(self.journal)
         row = next(item for item in journal["actions"] if item["record_id"] == rerun["record_id"])
-        row["receipt"]["provider"].pop("attempt")
+        row["receipt"]["provider"] = {"run_id": run_id, "rerun": True}
+        row["run_event"] = None
         from pod.governor import _write_journal
         _write_journal(self.journal, journal)
+        before = self.journal.read_bytes()
         port.complete(run_id, "failure")
-        port.rerun(run_id=run_id, failed_only=True)
+        held = self.reconcile(rerun["record_id"], port)
+        self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+        self.assertIn("cannot be told from another actor's", held["reason"])
+        self.assertEqual(self.row(rerun["record_id"])["receipt"]["provider"], {"run_id": run_id, "rerun": True})
+        self.assertNotEqual(self.journal.read_bytes(), before)  # Only the readback note is added.
+
+    def interrupted_rerun(self, port, *, after=None):
+        """Pod submits its rerun and is interrupted before the result write (the probe's boundary)."""
+        from unittest.mock import patch
+        original = port.rerun
+
+        def submit(*, run_id, failed_only):
+            answer = original(run_id=run_id, failed_only=failed_only)
+            if after is not None:
+                after(original, run_id)
+            return answer
+        port.rerun = submit
+        with patch("pod.governor_effects._record_execution", side_effect=RuntimeError("interrupted")):
+            with self.assertRaises(RuntimeError):
+                self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
+        port.rerun = original
+        row = self.rerun_row()
+        self.assertEqual(row["outcome"], "pending")
+        self.assertEqual(set(row["receipt"]["provider"]), {"run_id", "rerun", "before_attempt", "submitted_at"})
+        return row
+
+    def test_an_interrupted_rerun_resumes_from_its_recorded_provenance(self):
+        """DA-A-01: provenance written before the effect survives the interruption; resume binds the own attempt."""
+        port = FakePort()
+        _, run_id = self.failed_dispatch(port)
+        port.rerun(run_id=run_id, failed_only=True)  # Another actor's attempt 2 fails before Pod's pre-read.
+        port.complete(run_id, "failure")
+        row = self.interrupted_rerun(port)
+        self.assertEqual(row["receipt"]["provider"]["before_attempt"], 2)
         port.complete(run_id, "success")
-        self.assertEqual(self.reconcile(rerun["record_id"], port)["status"], "FAILED")
-        self.assertEqual(self.row(rerun["record_id"])["receipt"]["provider"]["attempt"], 2)
+        settled = self.reconcile(row["record_id"], port)
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["attempt"]), ("PASS", 3))
+        self.assertEqual(len([call for call in port.calls if call[0] == "rerun"]), 2)
+
+    def test_an_interrupted_rerun_with_a_later_actor_holds(self):
+        port = FakePort()
+        _, run_id = self.failed_dispatch(port)
+
+        def later_actor(rerun, run_id):
+            port.complete(run_id, "failure")
+            rerun(run_id=run_id, failed_only=True)  # Another actor's attempt 3, after Pod's attempt 2.
+            port.complete(run_id, "success")
+        row = self.interrupted_rerun(port, after=later_actor)
+        held = self.reconcile(row["record_id"], port)
+        self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+        self.assertIn("more than one new attempt", held["reason"])
+        self.assertEqual(len([call for call in port.calls if call[0] == "rerun"]), 2)  # Pod's one, the actor's one.
+
+    def test_an_actor_between_the_pre_read_and_the_submission_never_binds(self):
+        """DA-A-01: the pre-read race, with Pod's own attempt landing or its reply lost."""
+        port = FakePort()
+        _, run_id = self.failed_dispatch(port)
+        original = port.rerun
+
+        def raced(*, run_id, failed_only):
+            original(run_id=run_id, failed_only=failed_only)  # Another actor's attempt 2 fails first.
+            port.complete(run_id, "failure")
+            return original(run_id=run_id, failed_only=failed_only)
+        port.rerun = raced
+        rerun = self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
+        port.rerun = original
+        self.assertNotIn("attempt", rerun["receipt"]["provider"])
+        port.complete(run_id, "success")
+        held = self.reconcile(rerun["record_id"], port)
+        self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+        self.assertIn("more than one new attempt", held["reason"])
+
+    def test_one_new_attempt_that_started_before_the_submission_never_binds(self):
+        port = FakePort()
+        _, run_id = self.failed_dispatch(port)
+        original = port.rerun
+
+        def lost(*, run_id, failed_only):
+            port.rerun_stamp = "2026-09-20T23:59:59+00:00"
+            original(run_id=run_id, failed_only=failed_only)  # Another actor's attempt, before the submission.
+            raise PodError("remote_effect_uncertain", "The remote command gave no response")
+        port.rerun = lost
+        rerun = self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
+        port.rerun = original
+        self.assertEqual(rerun["outcome"], "UNKNOWN")
+        port.complete(run_id, "success")
+        held = self.reconcile(rerun["record_id"], port)
+        self.assertEqual((held["status"], held["action"]), ("UNKNOWN", "hold"))
+        self.assertIn("Pod cannot prove which is its own", held["reason"])
 
     def test_truncated_history_never_settles_even_a_visible_match(self):
         """FA-A-02: partial history holds on readback, publication binding and reservation readback."""
@@ -271,6 +361,38 @@ class ProviderEventTests(EvidenceCase):
         for second in range(21):
             port.complete(timed(port._start(RELEASE, COMMIT, event="workflow_dispatch"), second + 1)["id"], "success")
         self.refused("readback_disagrees", reserved["record_id"], "PASS", port)
+
+    def test_a_bound_run_visible_in_a_truncated_list_never_settles(self):
+        """FA-A-02 (continued): the partial-history hold follows every history read, a bound run's too."""
+        for conclusion in ("failure", "success"):
+            with self.subTest(conclusion=conclusion):
+                port = FakePort(auto_ci=("ci.yml",))
+                for _ in range(19):
+                    port._start("ci.yml", COMMIT, event="push", created_at="2026-09-20T23:59:00+00:00")
+                _, derived = self.published(port, kind="push")
+                run_id = self.row(derived)["receipt"]["provider"]["run_id"]
+                port.complete(run_id, conclusion)
+                port._start("ci.yml", COMMIT, event="workflow_dispatch")  # A 21st run truncates the list.
+                held = self.reconcile(derived, port)
+                self.assertEqual((held["status"], held["action"], held["provider_read"]["truncated"]),
+                                 ("pending", "hold", True))
+                self.assertIn("truncated at 20", held["reason"])
+                self.assertEqual((self.row(derived)["outcome"], self.row(derived).get("rejected_run")), ("pending", None))
+                self.journal.unlink()
+                self.binding = self.prepared()["candidate"]
+                self.preflight(self.binding["id"])
+
+    def test_a_reservation_bound_to_a_visible_run_is_held_by_a_truncated_list(self):
+        port = FakePort()
+        self.published(port)
+        reserved = self.decide(dispatch(candidate=self.binding["id"], target=RELEASE))
+        run = port._start(RELEASE, COMMIT, event="workflow_dispatch")
+        self.assertEqual(self.reconcile(reserved["record_id"], port)["receipt"]["provider"]["run_id"], run["id"])
+        port.complete(run["id"], "success")
+        for _ in range(20):
+            port._start(RELEASE, COMMIT, event="workflow_dispatch")
+        refused = self.refused("readback_disagrees", reserved["record_id"], "PASS", port)
+        self.assertIn("truncated", str(refused))
 
     def test_a_bound_run_is_verified_like_a_newly_selected_one(self):
         """FA-A-01: a run the genuine 0.12.0 writer bound is held to the creation floor and workflow identity."""
@@ -490,6 +612,32 @@ class MergeOutcomeTests(KernelCase):
         git(self.project, "update-ref", "refs/remotes/origin/target", self.base)
         self.refused("merge_commit_conflict", decided, "FAILED", provider={"merge_commit": result})
         self.assertEqual(self.outcome(decided, "FAILED")["outcome"], "FAILED")
+
+    def test_the_merge_pass_sweep_is_held_by_a_truncated_list(self):
+        """FA-A-02 (continued): the merge PASS readback sweep reads through the same partial-history guard."""
+        consent = authorization(candidate=self.observed["commit"], tree=self.observed["tree"], scope=("publish",))
+        pushed = decide(self.project, "objective", owner="owner", native_projection={"outstanding": []},
+                        action=action(kind="push", candidate=self.observed["commit"], target="origin/candidate",
+                                      unit="delivery", effects=["workflow:ci.yml"], authorization=consent))
+        port = FakePort()
+        port.heads["origin/candidate"] = self.candidate
+        bound = port._start("ci.yml", self.candidate, event="push", created_at="2099-01-01T00:00:00+00:00")
+        record_outcome(self.project, "objective", owner="owner", record_id=pushed["record_id"], outcome="PASS",
+                       port=port)
+        derived = next(row for row in _read_journal(self.journal)["actions"]
+                       if row.get("derived_from") == pushed["record_id"])
+        self.assertEqual(derived["receipt"]["provider"]["run_id"], bound["id"])
+        port.complete(bound["id"], "failure")
+        for _ in range(20):
+            port._start("ci.yml", self.candidate, event="workflow_dispatch")
+        decided = self.merge_decision()["record_id"]
+        result = self.merged()
+        recorded = record_outcome(self.project, "objective", owner="owner", record_id=decided, outcome="PASS",
+                                  provider={"merge_commit": result}, port=port)
+        self.assertEqual(recorded["readback"], [{"record_id": derived["record_id"], "status": "pending",
+                                                 "action": "hold"}])
+        self.assertEqual(next(row for row in _read_journal(self.journal)["actions"]
+                              if row["record_id"] == derived["record_id"])["outcome"], "pending")
 
     def test_a_squash_result_counts_as_contained(self):
         decided = self.merge_decision()["record_id"]
