@@ -2,6 +2,10 @@
 from copy import deepcopy
 import json
 import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -40,6 +44,12 @@ class AbsentCase(RetirementCase):
 
     def request(self, *paths):
         return [{"objective": "objective", "release": list(paths)}]
+
+    def coordinator_at(self, location):
+        """The coordinator's recorded location, as an earlier checkpoint named it."""
+        path, raw = _raw(self, "objective")
+        raw["checkpoint"]["worktree"]["path"] = location
+        path.write_text(json.dumps(raw))
 
     def located(self, found):
         return {row["path"]: row for row in found["objectives"][0]["locations"]}
@@ -86,6 +96,18 @@ class DetectionTests(AbsentCase):
         self.assertEqual(self.retire(decision)["status"], "retired")
         block = self.status()["retirement"]
         self.assertEqual((block["unrecorded_locations"], block["retained"]), ("hold_ends", []))
+
+    def test_a_sibling_whose_name_only_begins_with_the_path_holds_nothing(self):
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        git(self.project, "worktree", "add", "-q", "-b", "sibling", self.gone + "-2")
+        os.rename(self.gone + "-2", self.gone + "-2-moved")  # A stale registration of the sibling only.
+        live = {"connected": True, "writable": True, "orphaned": False}
+        self.inventory["worktrees"] = [{"path": self.gone + "-2", "git": {"path": self.gone + "-2"}}]
+        self.inventory["terminals"] = [{**live, "handle": "one", "worktreePath": self.gone + "-2"},
+                                       {**live, "handle": "two", "worktreePath": self.kept + "-2/nested"}]
+        verdict = self.retire(objectives=self.request(self.gone, self.kept))["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
 
     def test_the_inventory_reads_are_exact(self):
         from pod.orca import _read_allowed
@@ -202,6 +224,66 @@ def _reused_entry(case):
     _recorded_entry(case, "repo-recorded")  # Orca now registers the path under its entry "repo".
 
 
+def _shown_as(case, alias, target):
+    """`alias` shows the directory `target` is, as a bind mount does: the same device and inode, and no link a
+    resolver could follow. Only stat reads see it, as they would see a mount."""
+    real = os.stat
+
+    def shown(place, *args, **kwargs):
+        text = place if isinstance(place, str) else os.fspath(place) if isinstance(place, os.PathLike) else None
+        if isinstance(text, str) and (text == alias or text.startswith(alias + "/")):
+            place = target + text[len(alias):]
+        return real(place, *args, **kwargs)
+    patcher = patch.object(os, "stat", shown)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
+def _bind_mount(case):
+    alias = str(case.root / "alias")
+    os.makedirs(alias, exist_ok=True)
+    _shown_as(case, alias, str(case.root))
+    return alias
+
+
+def _bind_mounted_registration(case):
+    """Git keeps a stale registration of the released directory, reached through a bind mount of its parent."""
+    alias = str(case.root / "alias")
+    os.mkdir(alias)
+    git(case.project, "worktree", "add", "-q", "-b", "again", alias + "/task-gone")
+    os.rename(alias + "/task-gone", alias + "/moved")
+    _shown_as(case, alias, str(case.root))
+
+
+def _bind_mounted_listing(case):
+    alias = _bind_mount(case)
+    case.inventory["worktrees"] = [{"path": alias + "/task-gone", "git": {"path": alias + "/task-gone"}}]
+
+
+def _bind_mounted_terminal_in_existing(case):
+    alias = _bind_mount(case)
+    case.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                    "worktreePath": alias + "/task-kept/nested"}]
+
+
+def _other_case(case):
+    return str(case.root / "TASK-GONE")  # The released task-gone, as a case-insensitive directory spells it.
+
+
+def _other_case_registration(case):
+    git(case.project, "worktree", "add", "-q", "-b", "again", _other_case(case))
+    os.rename(_other_case(case), _other_case(case) + "-moved")
+
+
+def _other_case_terminal(case):
+    case.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                    "worktreePath": _other_case(case) + "/nested"}]
+
+
+def _unencodable_identity(case):
+    case.instances[case.kept] = "wt2:local:\ud800"  # JSON can carry a lone surrogate that no record can.
+
+
 # kind: (arrange after the owner decided, released path, expected condition, expected disposition[, released set])
 PATH_REFUSALS = {
     "stale-registration": (_stale_registration, "gone", "path_unverified", "unknown"),
@@ -239,6 +321,12 @@ PATH_REFUSALS = {
     "existing-terminals-truncated": (_shape("terminals", {"truncated": True}), "kept", "path_unverified", "unknown",
                                      ("kept",)),
     "existing-unlocated-terminal": (_unlocated_terminal, "kept", "path_unverified", "unknown", ("kept",)),
+    "bind-mounted-registration": (_bind_mounted_registration, "gone", "path_unverified", "unknown"),
+    "bind-mounted-listing": (_bind_mounted_listing, "gone", "path_unverified", "unknown"),
+    "bind-mounted-terminal-in-existing": (_bind_mounted_terminal_in_existing, "kept", "path_in_use", "existing"),
+    "other-case-registration": (_other_case_registration, "gone", "path_unverified", "unknown"),
+    "other-case-terminal": (_other_case_terminal, "gone", "path_in_use", "absent"),
+    "unencodable-identity": (_unencodable_identity, "kept", "path_unverified", "unknown", ("kept",)),
 }
 
 
@@ -276,7 +364,13 @@ class PathRefusalTableTests(GroupedTable):
             ["unencodable-location-existing"],
         "test_an_unreadable_terminal_inventory_refuses_an_existing_path": ["existing-terminals-unreadable"],
         "test_a_truncated_terminal_inventory_refuses_an_existing_path": ["existing-terminals-truncated"],
-        "test_an_unlocated_terminal_row_refuses_an_existing_path": ["existing-unlocated-terminal"]}
+        "test_an_unlocated_terminal_row_refuses_an_existing_path": ["existing-unlocated-terminal"],
+        "test_a_registration_through_a_bind_mount_refuses": ["bind-mounted-registration"],
+        "test_an_orca_listing_through_a_bind_mount_refuses": ["bind-mounted-listing"],
+        "test_a_live_terminal_through_a_bind_mount_holds_an_existing_path": ["bind-mounted-terminal-in-existing"],
+        "test_a_registration_spelled_in_other_letter_case_refuses": ["other-case-registration"],
+        "test_a_live_terminal_spelled_in_other_letter_case_holds_the_path": ["other-case-terminal"],
+        "test_an_identity_that_cannot_be_encoded_refuses": ["unencodable-identity"]}
 
     def row(self, kind):
         arrange, which, condition, disposition, *released = PATH_REFUSALS[kind]
@@ -395,6 +489,24 @@ class PathRefusalTableTests(GroupedTable):
     def test_an_unlocated_terminal_row_refuses_an_existing_path(self):
         self.rows()
 
+    def test_a_registration_through_a_bind_mount_refuses(self):
+        self.rows()
+
+    def test_an_orca_listing_through_a_bind_mount_refuses(self):
+        self.rows()
+
+    def test_a_live_terminal_through_a_bind_mount_holds_an_existing_path(self):
+        self.rows()
+
+    def test_a_registration_spelled_in_other_letter_case_refuses(self):
+        self.rows()
+
+    def test_a_live_terminal_spelled_in_other_letter_case_holds_the_path(self):
+        self.rows()
+
+    def test_an_identity_that_cannot_be_encoded_refuses(self):
+        self.rows()
+
 
 class PathRefusalTableShapeTests(unittest.TestCase):
     def test_the_path_refusal_table_runs_every_row_once(self):
@@ -402,12 +514,6 @@ class PathRefusalTableShapeTests(unittest.TestCase):
 
 
 class UnprovenFilesystemTests(AbsentCase):
-    def coordinator_at(self, location):
-        """The coordinator's recorded location, as an earlier checkpoint named it."""
-        path, raw = _raw(self, "objective")
-        raw["checkpoint"]["worktree"]["path"] = location
-        path.write_text(json.dumps(raw))
-
     def test_an_unreadable_parent_or_a_linked_ancestor_keeps_absence_unproven(self):
         self.placed()
         locked, target = self.root / "locked", self.root / "target"
@@ -512,6 +618,32 @@ class DecisionTests(AbsentCase):
             self.retire({**decision, "objectives": [{**block, "release": [self.gone, self.kept, self.where()]}]},
                         objectives=self.release)
         self.assertEqual(caught.exception.code, "retirement_decision_mismatch")
+
+    def test_a_held_location_no_read_could_release_is_echoed_and_retires(self):
+        # Final audit 2 K1: detection and the decision agree on a recorded location kept held, whatever its text.
+        self.placed()
+        held = str(self.root / "coord\x00x")
+        self.coordinator_at(held)
+        release = self.request(self.gone)
+        self.assertEqual(self.retire(objectives=release)["objectives"][0]["facts"]["retained"],
+                         sorted([held, self.kept]))
+        decision = self.decide(objectives=release)
+        self.assertEqual(self.retire(decision, objectives=release)["status"], "retired")
+        self.assertEqual(self.status()["retirement"]["retained"], sorted([held, self.kept]))
+
+    def test_text_that_cannot_be_encoded_refuses_the_whole_request(self):
+        # Review 4 J1: a lone surrogate JSON can carry never reaches a digest or a record; nor does a NUL release.
+        decision = self.decided()
+        block, before = decision["objectives"][0], self.snapshot()
+        for request, objectives in (({**decision, "reason": "delivered \ud800"}, self.release),
+                                    ({**decision, "objectives": [{**block, "delivery": ["PR \ud800"]}]}, self.release),
+                                    (None, [{"objective": "objective\ud800", "release": [self.gone]}]),
+                                    (None, self.request(self.gone + "\x00x"))):
+            with self.subTest(objectives=ascii(objectives)), self.assertRaises(PodError) as caught:
+                self.retire(request, objectives=objectives)
+            self.assertEqual(caught.exception.code, "invalid_request")
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
 
     def test_a_record_another_writer_widened_refuses(self):
         decision = self.decided()
@@ -647,6 +779,56 @@ class PreservationTests(AbsentCase):
                          (None, [self.where()], [], "hold_ends"))
         self.assertEqual(self.listed()["objective"]["retirement"], block)
         self.assertEqual(self.retire()["objectives"][0]["facts"]["locations"], None)
+
+
+class WithinTests(unittest.TestCase):
+    """Final audit 2 K2: a location matches the path it is or lies beneath by directory identity, and below the
+    deepest directory this host shows, by folded name."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        (self.root / "real" / "kept").mkdir(parents=True)
+        (self.root / "locked" / "sub").mkdir(parents=True)
+        os.symlink(self.root / "real", self.root / "link")
+
+    def test_locations_match_by_identity_and_folded_names(self):
+        from pod.retirement import _within
+        at = lambda *parts: str(self.root.joinpath(*parts))
+        kept, gone = at("real", "kept"), at("real", "gone")
+        _shown_as(self, at("alias"), at("real"))
+        os.chmod(self.root / "locked", 0)
+        self.addCleanup(os.chmod, self.root / "locked", 0o700)
+        for candidate, path, matches in (
+                (kept, kept, True), (at("real", "kept", "n", "m"), kept, True), (at("link", "kept", "n"), kept, True),
+                (at("alias", "kept", "n"), kept, True), (at("real"), kept, False), (at("real", "kept-2"), kept, False),
+                (at("real", "gone", "x"), gone, True), (at("link", "gone"), gone, True), (at("alias", "gone"), gone, True),
+                (at("real", "GONE", "x"), gone, True), (at("real", "Gone\u0301"), at("real", "gon\u00e9"), True),
+                (at("real", "gone-2"), gone, False), (at("real", "kept", "gone"), gone, False),
+                (at("locked", "sub", "x"), at("locked"), True), (at("locked", "sub"), kept, False),
+                (at("real", "kept\x00x"), kept, True), ("relative/kept", kept, False), (None, kept, False)):
+            with self.subTest(candidate=ascii(candidate), path=path):
+                self.assertIs(_within(candidate, path), matches)
+
+
+class NativeTextTests(AbsentCase):
+    """Review 3 H3 and final audit F4: native output that is not UTF-8 refuses with a diagnosis, never raising."""
+
+    def test_git_output_that_is_not_utf8_refuses(self):
+        from pod.cleanup import _worktrees
+        from pod.gitio import read as git_read
+        self.placed()
+        subprocess.run(["git", "-C", str(self.project), "worktree", "add", "-q", "-b", "odd",
+                        os.fsencode(str(self.root)) + b"/task-\xff"], check=True, capture_output=True)
+        self.assertIsNone(git_read(self.project, ["worktree", "list", "--porcelain", "-z"]))
+        with self.assertRaises(PodError) as caught:
+            _worktrees(self.project)
+        self.assertEqual(caught.exception.code, "cleanup_unavailable")
+        before = self.snapshot()
+        with self.assertRaises(PodError) as caught:
+            self.retire(objectives=self.request(self.gone))
+        self.assertEqual(caught.exception.code, "remote_read_failed")
+        self.assertEqual(before, self.snapshot())
 
 
 class LocatedEntryShapeTests(unittest.TestCase):

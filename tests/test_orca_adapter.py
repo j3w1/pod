@@ -64,6 +64,24 @@ class OrcaAdapterTests(unittest.TestCase):
             read_command(['--version'])
             self.assertNotIn('env',runner.call_args.kwargs)
 
+    def test_output_that_is_not_utf8_or_carries_a_lone_surrogate_is_no_evidence(self):
+        # Review 3 H3 and review 4 J1: decoded by the real subprocess path, refused as a contract failure.
+        import tempfile
+        body=lambda path:{'ok':True,'result':{'worktrees':[{'path':path}]},'_meta':{'runtimeId':'r'}}
+        with tempfile.TemporaryDirectory() as temporary:
+            def answering(name,payload):
+                out=Path(temporary)/(name+'.out'); out.write_bytes(payload)
+                tool=Path(temporary)/name; tool.write_text(f'#!/bin/sh\ncat "{out}"\n'); tool.chmod(0o755)
+                return patch('pod.orca.executable',return_value=tool)
+            for name,payload in (('bytes',json.dumps(body('/w/x')).encode().replace(b'/w/x',b'/w/\xff')),
+                                 ('surrogate',json.dumps(body('/w/\ud800')).encode())):
+                with self.subTest(name=name),answering(name,payload),self.assertRaises(PodError) as caught:
+                    read_command(['worktree','list','--json'])
+                self.assertEqual(caught.exception.code,'orca_contract')
+            with answering('pair',json.dumps(body('/w/\U0001F600')).encode()):  # An escaped pair is one character.
+                self.assertEqual(read_command(['worktree','list','--json'])['result']['worktrees'][0]['path'],
+                                 '/w/\U0001F600')
+
     def test_read_allowlist_refuses_native_mutations_and_account_reads(self):
         with patch('pod.orca.subprocess.run') as runner:
             for argv in (['account','list','--json'],['host','list','--json'],

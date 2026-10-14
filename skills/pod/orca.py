@@ -86,6 +86,8 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PodError("orca_unavailable", "Orca read failed") from exc
+    except UnicodeDecodeError:
+        raise PodError("orca_contract", "Orca read output is not valid UTF-8") from None
     if proc.returncode:
         detail = {}
         if len(proc.stdout) <= MAX_OUTPUT:
@@ -114,6 +116,11 @@ def _envelope(stdout: str) -> dict:
         raise PodError("orca_contract", "Orca returned invalid JSON") from exc
     if not isinstance(value, dict) or not value.get("ok") or not isinstance(value.get("result"), dict):
         raise PodError("orca_contract", "Orca returned an unsupported result")
+    try:
+        json.dumps(value, ensure_ascii=False).encode()
+    except UnicodeEncodeError:
+        # JSON can escape a lone surrogate that no record, digest or path can carry; it is never native evidence.
+        raise PodError("orca_contract", "Orca returned text that cannot be encoded as UTF-8") from None
     meta = value.get("_meta")
     runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
     if not isinstance(runtime, str) or not runtime:
