@@ -492,48 +492,70 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
 
 
 def _own_rerun_attempt(port: GitHubPort, provenance: dict, now: datetime | None = None) -> dict:
-    """What provider facts prove about a rerun's own attempt: `run` when one is proved, else `reason`, and
-    `absent` when the rerun is proved not to have taken effect.
+    """The one rule that attributes a rerun's attempt (R115), on every path that reads one: execution's
+    immediate read, readback (reconcile, a reservation's outcome, the merge PASS sweep) and a carried row's.
 
-    The proof needs Pod's own submission confirmed accepted, the run's latest attempt exactly one after the
-    attempt read before submission, and that attempt started at or after the recorded submission start; then no
-    other actor's attempt can be it. Without the confirmation a single new attempt may be another actor's; two
-    or more new attempts, or one that started earlier, may be too. Pod's own rows are never taken as the complete
-    history of a run. When the exact run view shows no attempt after the pre-read once the call's time limit and
-    the absence margin have passed, an unconfirmed rerun did not take effect.
+    `run` is the attempt once proved this rerun's own; otherwise `reason` says why the row holds, and `absent`
+    says an unconfirmed rerun is proved never to have taken effect. The proof needs all of: the provenance
+    recorded before submission (the run, the attempt read then, and the submission start at full precision);
+    the acceptance recorded right after GitHub accepted the call; exactly one attempt after the pre-read; and
+    that attempt's start after the recorded submission start, compared exactly and outside its whole second,
+    since GitHub reports whole seconds and a start within that second cannot be ordered against it. Pod's own
+    rows are never taken as a run's history, so an attempt bound without this provenance holds. A proved
+    attempt is bound by number and read again by number, so a later actor's attempt never displaces it.
     """
+    def held(reason: str) -> dict:
+        return {"run": None, "absent": False, "reason": reason}
     run_id = provenance["run_id"]
     before = provenance.get("before_attempt")
     submitted = _stamp(provenance.get("submitted_at"))
+    bound = provenance.get("attempt")
     if type(before) is not int or submitted is None:
-        return {"run": None, "absent": False,
-                "reason": "this rerun has no recorded pre-submission attempt and start, so its own attempt cannot be "
-                          "told from another actor's"}
+        what = f"attempt {bound} was bound to this rerun" if type(bound) is int else "this rerun was recorded"
+        return held(f"{what} without the attempt read and start recorded before submission, so its own attempt "
+                    "cannot be told from another actor's")
     accepted = provenance.get("accepted") is True
-    latest = port.run(run_id=run_id)
-    attempt = latest.get("attempt")
-    started = _stamp(latest.get("started_at"))
-    if attempt == before:
-        floor = absent_after(submitted)
-        if not accepted and str(latest.get("id")) == run_id and (now or datetime.now(timezone.utc)) >= floor:
-            return {"run": None, "absent": True,
-                    "reason": f"run {run_id} still shows attempt {before}, read before the rerun was submitted, after "
-                              f"{floor.isoformat()}: the unconfirmed rerun did not take effect"}
-        return {"run": None, "absent": False,
-                "reason": f"run {run_id} shows no attempt after attempt {before}, read before the rerun was submitted"}
-    single = attempt == before + 1 and str(latest.get("id")) == run_id
-    if single and started is not None and started >= submitted.replace(microsecond=0) and accepted:
-        return {"run": latest, "absent": False, "reason": None}
-    if single and not accepted and started is not None and started >= submitted.replace(microsecond=0):
-        why = ("Pod's submission was never confirmed accepted, so that attempt may be another actor's while Pod's "
-               "own never landed")
-    elif single:
-        why = "it started before the rerun was submitted, so it may be another actor's"
+    own = before + 1
+    if type(bound) is int:
+        if bound != own or not accepted:
+            return held(f"attempt {bound} was bound to this rerun without its recorded acceptance and the single "
+                        f"attempt after attempt {before}, so it cannot be proved its own")
+        view = port.run(run_id=run_id, attempt=own)
+        if view.get("attempt") != own or str(view.get("id")) != run_id:
+            return held(f"run {run_id} did not answer for attempt {own}, the one this rerun started")
     else:
-        why = "more than one new attempt exists, and any of them may be another actor's"
-    return {"run": None, "absent": False,
-            "reason": f"run {run_id} shows attempt {attempt} after attempt {before} read before the rerun was "
-                      f"submitted; {why}; Pod cannot prove which is its own, so none binds"}
+        view = port.run(run_id=run_id)
+        attempt = view.get("attempt")
+        if str(view.get("id")) != run_id or type(attempt) is not int or attempt < before:
+            return held(f"run {run_id} did not answer with an attempt at or after attempt {before}, read before the "
+                        "rerun was submitted")
+        if attempt == before:
+            if accepted:
+                return held(f"Pod recorded GitHub's acceptance of this rerun, yet run {run_id} still shows no attempt "
+                            f"after attempt {before}; the two contradict, so no outcome is recorded")
+            floor = absent_after(submitted)
+            if (now or datetime.now(timezone.utc)) >= floor:
+                return {"run": None, "absent": True,
+                        "reason": f"run {run_id} still shows attempt {before}, read before the rerun was submitted, "
+                                  f"after {floor.isoformat()}: the unconfirmed rerun did not take effect"}
+            return held(f"run {run_id} shows no attempt after attempt {before}, read before the rerun was submitted")
+        if attempt != own:
+            return held(f"run {run_id} shows attempt {attempt}: more than one new attempt after attempt {before}, read "
+                        "before the rerun was submitted, and any of them may be another actor's, so none binds")
+        if not accepted:
+            return held(f"run {run_id} shows attempt {own}, but Pod's submission was never confirmed accepted, so that "
+                        "attempt may be another actor's while Pod's own never landed; none binds")
+    started = _stamp(view.get("started_at"))
+    if started is None:
+        return held(f"GitHub reports no start for attempt {own} of run {run_id}, so it cannot be ordered after the "
+                    "rerun's submission")
+    if started < submitted:
+        return held(f"attempt {own} of run {run_id} started at {started.isoformat()}, before the rerun was submitted at "
+                    f"{submitted.isoformat()}, so it may be another actor's; none binds")
+    if started.replace(microsecond=0) == submitted.replace(microsecond=0):
+        return held(f"attempt {own} of run {run_id} started within the second the rerun was submitted "
+                    f"({submitted.isoformat()}); GitHub reports whole seconds, so their order is unknown and none binds")
+    return {"run": view, "absent": False, "reason": None}
 
 
 def _rerun_source(row: dict, journal: dict) -> str | None:
@@ -589,30 +611,18 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict, *, now: dat
             if run_id is None:
                 answer["hold"] = "no failed run with a provider identity binds this rerun"
                 return answer
-            if row.get("run_event") is not None and type(provider.get("attempt")) is int:
-                # Pod's own readback bound this attempt; it reads exactly that one again.
-                own = provider["attempt"]
-                try:
-                    run = port.run(run_id=run_id, attempt=own)
-                except PodError as exc:
-                    answer["hold"] = f"attempt {own} of run {run_id} is not readable ({exc.code})"
-                    return answer
-                if run.get("attempt") != own or str(run.get("id")) != run_id:
-                    answer["hold"] = f"run {run_id} did not answer for attempt {own}, the one this rerun started"
-                    return answer
-            else:
-                try:
-                    proof = _own_rerun_attempt(port, {**provider, "run_id": run_id}, now)
-                except PodError as exc:
-                    proof = {"run": None, "absent": False, "reason": f"run {run_id} is not readable ({exc.code})"}
-                if proof["absent"]:
-                    # Recorded as the effect's failure to take place, never as no effect (R116).
-                    answer.update(outcome="FAILED", detail=proof["reason"])
-                    return answer
-                if proof["run"] is None:
-                    answer["hold"] = f"{proof['reason']}; the row stays {row['outcome']}"
-                    return answer
-                run = proof["run"]
+            try:
+                proof = _own_rerun_attempt(port, {**provider, "run_id": run_id}, now)
+            except PodError as exc:
+                proof = {"run": None, "absent": False, "reason": f"run {run_id} is not readable ({exc.code})"}
+            if proof["absent"]:
+                # Recorded as the effect's failure to take place, never as no effect (R116).
+                answer.update(outcome="FAILED", detail=proof["reason"])
+                return answer
+            if proof["run"] is None:
+                answer["hold"] = f"{proof['reason']}; the row stays {row['outcome']}"
+                return answer
+            run = proof["run"]
         elif run_id:
             # A bound run is verified exactly as a newly selected one, whoever bound it (R115).
             run = port.run(run_id=str(run_id), attempt=1)

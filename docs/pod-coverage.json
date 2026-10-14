@@ -3480,7 +3480,8 @@
         "tests.test_governor_evidence.ProviderEventTests.test_one_new_attempt_that_started_before_the_submission_never_binds",
         "tests.test_governor_evidence.ProviderEventTests.test_a_bound_run_is_verified_like_a_newly_selected_one",
         "tests.test_governor_evidence.ProviderEventTests.test_a_rerun_interrupted_inside_its_call_never_binds_an_unconfirmed_attempt",
-        "tests.test_governor_evidence.ProviderEventTests.test_an_unconfirmed_rerun_is_failed_only_once_proved_absent"
+        "tests.test_governor_evidence.ProviderEventTests.test_an_unconfirmed_rerun_is_failed_only_once_proved_absent",
+        "tests.test_governor_evidence.RerunAttributionTableTests.test_every_rerun_attribution_state_binds_or_holds_by_the_one_rule"
       ],
       "status": "NOT_RUN"
     },

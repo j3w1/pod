@@ -5,6 +5,7 @@ repository for the merge target. A row edited to look like an earlier writer's i
 synthetic control; the genuine earlier reader is the released 0.12.0 source from Git objects.
 """
 
+from datetime import timedelta
 import json
 import os
 from pathlib import Path
@@ -14,8 +15,8 @@ import tarfile
 import unittest
 
 from pod.errors import PodError
-from pod.governor import (_read_journal, _record_execution, _record_path, classify_failure, decide, execute,
-                          prepare_candidate, reconcile, record_outcome)
+from pod.governor import (_read_journal, _record_execution, _record_path, _write_journal, classify_failure, decide,
+                          execute, prepare_candidate, reconcile, record_outcome)
 from pod.ledger import objective_root
 from tests.kernel_support import (COMMIT, NOW, RELEASE, KernelCase, action, authorization, dispatch,
                                   GovernorFakePort as FakePort, git)
@@ -189,7 +190,7 @@ class ProviderEventTests(EvidenceCase):
         for _ in range(2):
             waiting = self.reconcile(rerun["record_id"], port)
             self.assertEqual((waiting["status"], waiting["action"]), ("pending", "hold"))
-            self.assertIn("no recorded pre-submission attempt and start", waiting["reason"])
+            self.assertIn("without the attempt read and start recorded before submission", waiting["reason"])
             port.rerun(run_id=run_id, failed_only=True)
             port.complete(run_id, "success")
         self.assertEqual(self.row(first["record_id"])["outcome"], "FAILED")
@@ -387,7 +388,9 @@ class ProviderEventTests(EvidenceCase):
         port.complete(run_id, "success")
         held = self.reconcile(rerun["record_id"], port)
         self.assertEqual((held["status"], held["action"]), ("UNKNOWN", "hold"))
-        self.assertIn("Pod cannot prove which is its own", held["reason"])
+        # Unconfirmed as well as early: the first unmet condition is named, and none binds.
+        self.assertIn("never confirmed accepted", held["reason"])
+        self.assertIn("none binds", held["reason"])
 
     def test_truncated_history_never_settles_even_a_visible_match(self):
         """FA-A-02: partial history holds on readback, publication binding and reservation readback."""
@@ -502,6 +505,130 @@ class ProviderEventTests(EvidenceCase):
         stray["head_sha"] = "9" * 40
         held = self.reconcile(requested["record_id"], port)
         self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+
+
+# R115's one rerun attribution rule, every sibling state. Times are seconds after NOW; the failed attempt 1
+# started before NOW. Shapes: "new" is the provenance execution records (run, attempt read before, submission
+# start), "+accepted" adds the acceptance recorded after GitHub accepted the call, "+bound" adds the attempt a
+# proof bound; "5209eca" is a pending row as that earlier writer bound it (its provider receipt captured by the
+# delta review probe), "run only" a rerun recorded with just its run, and "reservation" no provider receipt.
+RERUN_STATES = (
+    # name, shape, submitted, bound attempt, new attempts (start, conclusion), readback at, outcome, reason
+    ("accepted single attempt the next second passes", "new+accepted", 0, None, [(1, "success")], 0, "PASS", None),
+    ("accepted single attempt the next second fails", "new+accepted", 0, None, [(1, "failure")], 0, "FAILED", None),
+    ("a bound own attempt is read by number past a later actor's", "new+accepted+bound", 0, 2,
+     [(1, "failure"), (5, "success")], 0, "FAILED", None),
+    ("5209eca pending bound shape", "5209eca", None, 2, [(1, "success")], 0, "hold",
+     "attempt 2 was bound to this rerun without the attempt read and start recorded before submission"),
+    ("run only", "run only", None, None, [(1, "success")], 0, "hold",
+     "this rerun was recorded without the attempt read and start recorded before submission"),
+    ("caller-performed reservation", "reservation", None, None, [(1, "success")], 0, "hold",
+     "this rerun was recorded without the attempt read and start recorded before submission"),
+    ("unaccepted single attempt", "new", 0, None, [(1, "success")], 0, "hold", "never confirmed accepted"),
+    ("more than one new attempt", "new+accepted", 0, None, [(1, "failure"), (5, "success")], 0, "hold",
+     "more than one new attempt"),
+    ("a start before the submission", "new+accepted", 0, None, [(-1, "success")], 0, "hold",
+     "before the rerun was submitted"),
+    ("a whole-second start earlier than a fractional submission", "new+accepted", 1.8, None, [(1, "success")], 0,
+     "hold", "before the rerun was submitted"),
+    ("a start in the submission's own second", "new+accepted", 1, None, [(1, "success")], 0, "hold",
+     "started within the second the rerun was submitted"),
+    ("a fractional submission and a start the next second", "new+accepted", 0.8, None, [(1, "success")], 0, "PASS",
+     None),
+    ("no start reported", "new+accepted", 0, None, [(None, "success")], 0, "hold", "reports no start"),
+    ("accepted with no new attempt past the floor", "new+accepted", 0, None, [], 721, "hold", "the two contradict"),
+    ("unaccepted with no new attempt before the floor", "new", 0, None, [], 300, "hold",
+     "shows no attempt after attempt 1"),
+    ("unaccepted with no new attempt past the floor", "new", 0, None, [], 721, "FAILED",
+     "the unconfirmed rerun did not take effect"),
+    ("a bound attempt without acceptance", "new+bound", 0, 2, [(1, "success")], 0, "hold",
+     "without its recorded acceptance"),
+    ("a bound attempt that is not the next one", "new+accepted+bound", 0, 3, [(1, "failure"), (5, "success")], 0,
+     "hold", "without its recorded acceptance and the single attempt after attempt 1"),
+    ("a bound attempt that started before a fractional submission", "new+accepted+bound", 1.8, 2, [(1, "success")],
+     0, "hold", "before the rerun was submitted"),
+)
+
+
+class RerunAttributionTableTests(EvidenceCase):
+    """R115/A290 — one rule attributes a rerun's attempt; every state it does not prove holds by name."""
+
+    RUN_ID = "100"
+
+    def view(self, attempt, start, conclusion):
+        started = None if start is None else (NOW + timedelta(seconds=start)).isoformat()
+        return {"id": self.RUN_ID, "status": "in_progress" if conclusion is None else "completed",
+                "conclusion": conclusion, "created_at": "2026-09-20T23:50:00+00:00", "url": "https://example.invalid/run",
+                "event": "workflow_dispatch", "head_sha": COMMIT, "attempt": attempt, "started_at": started}
+
+    def provider(self, shape, submitted, bound, latest):
+        if shape == "reservation":
+            return None
+        if shape == "run only":
+            return {"run_id": self.RUN_ID, "rerun": True}
+        if shape == "5209eca":
+            return {"attempt": bound, "conclusion": None, "created_at": "2026-09-21T00:00:01+00:00",
+                    "event": "workflow_dispatch", "ref_commit": COMMIT, "rerun": True, "run_id": self.RUN_ID,
+                    "status": "in_progress", "url": "https://example.invalid/run"}
+        provider = {"run_id": self.RUN_ID, "rerun": True, "before_attempt": 1,
+                    "submitted_at": (NOW + timedelta(seconds=submitted)).isoformat()}
+        if "accepted" in shape:
+            provider["accepted"] = True
+        if "bound" in shape:
+            provider.update({key: value for key, value in latest.items() if key != "id"}, attempt=bound)
+        return provider
+
+    def readback(self, base, state):
+        name, shape, submitted, bound, attempts, at, outcome, reason = state
+        views = [self.view(1, -600, "failure")] + [self.view(number, start, conclusion) for number, (start, conclusion)
+                                                   in enumerate(attempts, start=2)]
+        port = FakePort()
+        port.run_status[self.RUN_ID] = views[-1]
+        port.attempts[self.RUN_ID] = {view["attempt"]: view for view in views[:-1]}
+        journal = json.loads(base)
+        row = next(row for row in journal["actions"] if row["action"]["kind"] == "validation_rerun")
+        row["receipt"]["provider"] = self.provider(shape, submitted, bound, views[min(bound or 1, len(views)) - 1])
+        row["run_event"] = "workflow_dispatch" if bound else None
+        _write_journal(self.journal, journal)
+        return reconcile(self.project, "objective", owner="owner", record_id=row["record_id"], port=port,
+                         now=NOW + timedelta(seconds=at))
+
+    def executed(self, submitted, start):
+        """Execution's own attribution read: Pod's accepted rerun whose attempt GitHub reports at `start`."""
+        self.journal.unlink()
+        self.binding = self.prepared()["candidate"]
+        self.preflight(self.binding["id"])
+        port = FakePort()
+        first, run_id = ProviderEventTests.failed_dispatch(self, port)
+        port.rerun_stamp = (NOW + timedelta(seconds=start)).isoformat()
+        rerun = execute(self.project, "objective", owner="owner", port=port, now=NOW + timedelta(seconds=submitted),
+                        action=self.with_publish_authorization(action(kind="validation_rerun", target=RELEASE,
+                                                                     candidate=self.binding["id"])))
+        port.complete(run_id, "success")
+        return rerun["receipt"]["provider"], self.reconcile(rerun["record_id"], port)
+
+    def test_every_rerun_attribution_state_binds_or_holds_by_the_one_rule(self):
+        port = FakePort()
+        ProviderEventTests.failed_dispatch(self, port)
+        self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
+        base = self.journal.read_text()
+        for state in RERUN_STATES:
+            name, outcome, reason = state[0], state[6], state[7]
+            with self.subTest(state=name):
+                result = self.readback(base, state)
+                if outcome == "hold":
+                    self.assertEqual(result["action"], "hold", result)
+                    self.assertIn(reason, result["reason"])
+                else:
+                    self.assertEqual(result["status"], outcome, result)
+                    if reason:
+                        self.assertIn(reason, result["receipt"]["detail"])
+        # Execution reads its own attempt by the same rule: a start within the submission's second never binds.
+        for submitted, start, bound, outcome in ((1.8, 1, None, "hold"), (0.8, 1, 2, "PASS")):
+            with self.subTest(execution=submitted):
+                provider, result = self.executed(submitted, start)
+                self.assertEqual((provider.get("attempt"), provider["accepted"]), (bound, True))
+                self.assertEqual(result["action"] if outcome == "hold" else result["status"], outcome, result)
 
 
 class OutcomeEvidenceTests(EvidenceCase):
