@@ -16,7 +16,7 @@ from pod.ledger import objective_root, read
 from pod.operations import OrcaPort
 from pod.retirement import counts, validate_entry
 from tests.common import GroupedTable, assert_grouped_table
-from tests.kernel_support import REQUEST
+from tests.kernel_support import REQUEST, git
 from tests.test_owner_handoff import SENTINEL
 from tests.test_succession import SuccessionCase, _closed, _differing_identity, _raw
 
@@ -155,6 +155,9 @@ class DetectionTests(RetirementCase):
 
     def test_an_exited_terminal_in_the_path_and_an_exited_coordinator_do_not_hold(self):
         self.delivered()
+        stray = objective_root(self.project, "objective").parent / "stray"
+        stray.mkdir()
+        (stray / "governor.json").write_text("{}")  # Pod files without a record carry no claim.
         self.terminals["owner"] = "exited"
         self.path_terminals[self.where()] = [{"handle": "old", "connected": False, "writable": False,
                                               "orphaned": False, "exitCause": {"kind": "operator_close"},
@@ -267,10 +270,10 @@ def _claimed_by_another(case):
     path.write_text(json.dumps(raw))
 
 
-def _list_incomplete(case):
+def _record_unreadable_elsewhere(case):
     stray = objective_root(case.project, "objective").parent / "stray"
     stray.mkdir()
-    (stray / "governor.json").write_text("{}")  # Pod files without the record that names them.
+    (stray / "context.json").write_text("{")  # A record that could hold a claim naming this objective.
 
 
 def _no_run(case):
@@ -304,7 +307,7 @@ REFUSALS = {
     "continued": (_continued, "objective_continued"),
     "continues": (_continues, "objective_continues"),
     "claimed-by-another": (_claimed_by_another, "objective_continues"),
-    "list-incomplete": (_list_incomplete, "scope_unreadable"),
+    "record-unreadable-elsewhere": (_record_unreadable_elsewhere, "scope_unreadable"),
     "owner-live": (lambda case: case.terminals.update(owner="live"), "owner_not_lost"),
     "owner-unreadable": (lambda case: case.terminals.update(owner="unreadable"), "owner_not_lost"),
     "owner-stop-unconfirmed": (lambda case: case.terminals.update(owner="stop-unconfirmed"), "owner_not_lost"),
@@ -334,7 +337,7 @@ class RefusalTableTests(GroupedTable):
     """Each unproven fact refuses detection and the owner's earlier decision, and writes nothing."""
     GROUPS = {"test_lifecycle_refuses": ["closed", "continued", "continues"],
               "test_unreadable_records_refuse": ["handoff-pending", "record-unsupported", "journal-unreadable"],
-              "test_scope_refuses": ["no-run", "too-many-records", "list-incomplete"],
+              "test_scope_refuses": ["no-run", "too-many-records", "record-unreadable-elsewhere"],
               "test_claims_refuse": ["claimed-by-another"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
               "test_run_binding_refuses": ["run-rebound", "generation-changed"],
@@ -485,25 +488,47 @@ class WriteTests(RetirementCase):
                          ["objective", "reconcile"])
 
     def test_the_question_names_a_late_refused_objective_a_decision_could_retire_later(self):
-        # Review 2 F10: a decision naming an objective refused late carries its complete facts and retires it once
-        # the condition clears, so the owner's question names it, its path and its condition.
+        # Review 2 F10, review 3 F12: a late refusal keeps complete facts, so a decision naming it retires it once
+        # the condition clears; the question names it, its path and condition, and says so.
+        self.delivered()
+        second = self.root / "second"
+        git(self.project, "worktree", "add", "-q", "-b", "second", str(second))
+        context = repository_context(second)
+        os.environ["ORCA_TERMINAL_HANDLE"] = "next"
+        self.current = {"id": "run-s", "coordinator_handle": "next", "consumer_generation": 1}
+        run("checkpoint", {"project": str(self.project), "objective": "reconcile", "owner": "next",
+                           "value": self.core(obligations=[self.criterion()],
+                                              governance={"base_ref": "refs/remotes/origin/target"},
+                                              worktree={"repository": context["repository"],
+                                                        "repo_key": context["repo_key"],
+                                                        "path": context["worktree"], "branch": "second"})})
+        self.run_holders["run-s"] = "next"
+        self.terminals["next"] = "stale"
+        both = [{"objective": "objective", "release": [self.where()]},
+                {"objective": "reconcile", "release": [context["worktree"]]}]
+        self.path_terminals[context["worktree"]] = [{"handle": "user", "connected": True, "writable": True,
+                                                     "orphaned": False, "worktreePath": context["worktree"]}]
+        found = self.retire(objectives=both)
+        self.assertEqual([row["status"] for row in found["objectives"]], ["eligible", "refused"])
+        self.assertIn("a decision that also names it retires it once its condition clears and its facts still "
+                      "match: reconcile releasing " + context["worktree"] + " (path_in_use)", found["question"])
+        self.assertIn("only the objectives the owner's answer names", found["next_action"])
+        decision = self.decide(objectives=both)
+        first = {row["objective"]: row["status"] for row in self.retire(decision, objectives=both)["objectives"]}
+        self.assertEqual(first, {"objective": "retired", "reconcile": "refused"})
+        self.path_terminals.clear()
+        later = {row["objective"]: row["status"] for row in self.retire(decision, objectives=both)["objectives"]}
+        self.assertEqual(later, {"objective": "replayed", "reconcile": "retired"})
+
+    def test_an_early_refusal_is_named_as_never_retired_by_these_facts(self):
         self.delivered()
         self.claim_only()
+        self.terminals["next"] = "live"
         both = [{"objective": "objective", "release": [self.where()]},
                 {"objective": "reconcile", "release": [self.where()]}]
-        decision = self.decide(objectives=both)
-        self.path_terminals[self.where()] = [{"handle": "user", "connected": True, "writable": True,
-                                              "orphaned": False, "worktreePath": self.where()}]
-        found = self.retire(objectives=both[1:] + both[:1])
-        self.assertEqual(found["status"], "retirement_unavailable")
-        self.path_terminals.clear()
-        self.terminals["next"] = "live"
         found = self.retire(objectives=both)
-        self.assertTrue(found["question"].startswith("May Pod retire objective objective as delivered history"))
-        self.assertIn("Not retirable now: reconcile", found["question"])
-        self.assertIn("A decision that also names one of these retires it later", found["question"])
-        self.assertIn("only the objectives the owner's answer names", found["next_action"])
-        self.assertEqual(self.retire(decision, objectives=both)["status"], "partially_retired")
+        self.assertIn("Not retirable by a decision on these facts: reconcile (owner_not_lost).", found["question"])
+        self.assertNotIn("retires it once its condition clears", found["question"])
 
     def test_an_objective_detection_already_refused_never_blocks_the_others(self):
         self.delivered()
@@ -511,8 +536,6 @@ class WriteTests(RetirementCase):
         self.terminals["next"] = "live"
         both = [{"objective": "objective", "release": [self.where()]},
                 {"objective": "reconcile", "release": [self.where()]}]
-        found = self.retire(objectives=both)
-        self.assertIn("Not retirable now: reconcile releasing " + self.where() + " (owner_not_lost)", found["question"])
         decision = self.decide(objectives=both)  # The refused objective's facts are partial (no Runs).
         self.assertEqual(decision["objectives"][1]["runs"], [])
         rows = {row["objective"]: row for row in self.retire(decision, objectives=both)["objectives"]}

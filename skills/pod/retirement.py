@@ -141,6 +141,46 @@ def _governor_rows(project: Path, objective: str) -> list[dict]:
             if row["decision"] == "ALLOW" and row["outcome"] in PRESERVED_OUTCOMES]
 
 
+def _claimants(project: Path, objective: str) -> list[str] | None:
+    """Objectives of this repository whose claim names this one as successor; None when a record that could
+    hold such a claim is unreadable. Directories without a record carry no claim and are skipped."""
+    from .github import repository_context
+    from .ledger import CONTEXT_LIMIT, record_name, state_root
+    from .listing import _name
+    from .util import bounded_json
+    context = repository_context(project)
+    root = state_root(project)
+    try:
+        if root.is_symlink():
+            return None
+        with os.scandir(root) as frontier:
+            entries = sorted(frontier, key=lambda entry: entry.name)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return None
+    found = []
+    for entry in entries:
+        if entry.name.startswith("."):
+            continue
+        try:
+            if entry.is_symlink():
+                return None
+            if not entry.is_dir(follow_symlinks=False) or not (Path(entry.path) / "context.json").exists():
+                continue
+            raw = bounded_json(Path(entry.path) / "context.json", limit=CONTEXT_LIMIT)
+        except (OSError, PodError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        link = raw.get("continued_by")
+        name = _name(raw)
+        if (isinstance(link, dict) and link.get("objective") == objective and name is not None
+                and record_name(project, context, name) == entry.name):
+            found.append(name)
+    return found
+
+
 def _paths(state: dict) -> set[str]:
     from .listing import _facts
     return {os.path.normpath(path) for path in _facts(state)["worktrees"]}
@@ -169,19 +209,6 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         # Retiring a successor would leave its predecessor's chain neither open nor closed (R110).
         return fail("objective_continues", "This objective continues objective " + state["continues"]["objective"]
                     + "; historical retirement never ends a successor that holds a claim.")
-    from .listing import objective_list
-    try:
-        listed = objective_list(project)
-    except PodError as exc:
-        return fail("scope_unreadable", f"Pod's records of this repository cannot be listed ({exc.code}).")
-    if listed["status"] != "listed" or listed["complete"] is not True:
-        return fail("scope_unreadable", "Pod cannot read every record of this repository, so a claim naming this "
-                    "objective as its successor cannot be ruled out.")
-    claimant = next((row["objective"] for row in listed["objectives"] if row.get("continued_by") == objective), None)
-    if claimant is not None:
-        # An interrupted claim recorded the predecessor's link before this objective's own back-link.
-        return fail("objective_continues", f"Objective {claimant} records this objective as its successor; "
-                    "historical retirement never ends a successor that holds a claim.")
     if isinstance(state.get(FIELD), dict):
         verdict.update(status="retired", condition="objective_retired", facts={
             "objective": objective, "owner": state[FIELD]["owner"], "runs": list(state[FIELD]["runs"]),
@@ -191,6 +218,14 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
         return fail("objective_closed", "The objective is closed; a closed objective needs no retirement.")
+    claimants = _claimants(project, objective)
+    if claimants is None:
+        return fail("scope_unreadable", "A Pod record that could name this objective as a claimed successor is "
+                    "unreadable.")
+    if claimants:
+        # An interrupted claim recorded the predecessor's link before this objective's own back-link.
+        return fail("objective_continues", f"Objective {claimants[0]} records this objective as its successor; "
+                    "historical retirement never ends a successor that holds a claim.")
     owner = state.get("owner")
     if not owner:
         return fail("owner_unrecorded", "The objective records no coordinator.")
@@ -364,12 +399,19 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
                 f"history whose coordinator is gone, releasing {', '.join(paths)} for cleanup? Retirement does not "
                 f"close or complete {'it' if len(names) == 1 else 'them'}: {held} pending, unknown, failed or "
                 "unreported record(s) stay exactly as recorded, and the record will accept no further writes.")
+    # Only a refusal that came after every fact was read leaves complete facts a decision can bind (R112).
+    later = [row for row in refused if row["status"] == "refused" and row["facts"]["runs"]]
+    never = [row for row in refused if row not in later]
+    if later:
+        question += (" Not retirable now, but a decision that also names it retires it once its condition clears "
+                     "and its facts still match: " + "; ".join(
+                         f"{row['objective']} releasing {', '.join(row['facts']['release'])} ({row['condition']})"
+                         for row in later) + ".")
+    if never:
+        question += (" Not retirable by a decision on these facts: " + "; ".join(
+            f"{row['objective']} ({row['condition']})" for row in never) + ".")
     if refused:
-        # A decision that names a refused objective retires it once its condition clears and its facts still match.
-        question += (" Not retirable now: " + "; ".join(
-            f"{row['objective']} releasing {', '.join(row['facts']['release'])} ({row['condition']})" for row in refused)
-            + ". A decision that also names one of these retires it later, once its condition clears and its facts "
-              "still match; leave it out of the decision otherwise.")
+        question += " Leave out of the decision any objective the owner does not want to end this way."
     return question
 
 

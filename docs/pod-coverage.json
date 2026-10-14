@@ -3167,7 +3167,8 @@
         "tests.test_historical_retirement.WriteTests.test_facts_another_writer_changed_after_the_decision_refuse",
         "tests.test_historical_retirement.WriteTests.test_a_multi_objective_decision_has_independent_results",
         "tests.test_historical_retirement.WriteTests.test_an_objective_detection_already_refused_never_blocks_the_others",
-        "tests.test_historical_retirement.WriteTests.test_the_question_names_a_late_refused_objective_a_decision_could_retire_later"
+        "tests.test_historical_retirement.WriteTests.test_the_question_names_a_late_refused_objective_a_decision_could_retire_later",
+        "tests.test_historical_retirement.WriteTests.test_an_early_refusal_is_named_as_never_retired_by_these_facts"
       ],
       "status": "NOT_RUN"
     },
