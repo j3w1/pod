@@ -85,5 +85,5 @@ read-only. No production or provider mutation, and no package or release publica
 The upstream repository may use the owner's external metadata service to manage designated
 GitHub labels and Project membership. Do not add competing automation for those managed
 surfaces; ask a maintainer when ownership is unclear. This service is not part of Pod and is
-not required to install, use or fork it. Its own [reviewed policy](https://github.com/j3w1/ce-metadata/tree/main/policy)
+not required to install, use or fork it. Its own [reviewed policy](https://github.com/j3w1/ce-meta/tree/main/policy)
 governs its actions.
