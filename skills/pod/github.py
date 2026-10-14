@@ -26,8 +26,13 @@ _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
 # Command authorization remains local even though the object-id syntax is shared.
 _RUN_ID = re.compile(r"[0-9]{1,20}\Z")
+_ATTEMPT = re.compile(r"[1-9][0-9]{0,3}\Z")
 _INPUT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}=[^\n\r\x00]{0,512}\Z")
-RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName"
+RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName,attempt,startedAt"
+# A run list asks for one more run than it reads, so a full list says whether it was cut short.
+RUN_LIST_LIMIT = 20
+# A mutation that has not answered within this many seconds has ended; a read is bounded by half.
+MUTATION_TIMEOUT_S = 120
 PR_FIELDS = "number,url,headRefOid,state,isDraft"
 ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
@@ -94,10 +99,13 @@ def gh_allowed(argv: list[str]) -> bool:
                    for index in range(0, len(tail), 2))
     if (len(argv) == 10 and argv[:2] == ["run", "list"] and argv[2] == "--workflow"
             and _WORKFLOW.fullmatch(argv[3]) and argv[4] == "--commit" and _GIT_ID.fullmatch(argv[5])
-            and argv[6:] == ["--json", RUN_FIELDS, "--limit", "20"]):
+            and argv[6:] == ["--json", RUN_FIELDS, "--limit", str(RUN_LIST_LIMIT + 1)]):
         return True
     if (len(argv) == 5 and argv[:2] == ["run", "view"] and _RUN_ID.fullmatch(argv[2])
             and argv[3:] == ["--json", RUN_FIELDS]):
+        return True
+    if (len(argv) == 7 and argv[:2] == ["run", "view"] and _RUN_ID.fullmatch(argv[2])
+            and argv[3] == "--attempt" and _ATTEMPT.fullmatch(argv[4]) and argv[5:] == ["--json", RUN_FIELDS]):
         return True
     if len(argv) == 3 and argv[:2] == ["run", "cancel"] and _RUN_ID.fullmatch(argv[2]):
         return True
@@ -432,10 +440,12 @@ def _run(command: list[str], *, cwd: Path, timeout: int, mutation: bool) -> subp
 
 
 def _normalise_run(row: dict) -> dict:
+    attempt = row.get("attempt")
     return {"id": str(row.get("databaseId")), "status": row.get("status"), "conclusion": row.get("conclusion"),
             "created_at": row.get("createdAt"), "updated_at": row.get("updatedAt"),
             "head_sha": row.get("headSha"), "url": row.get("url"), "event": row.get("event"),
-            "workflow": row.get("workflowName")}
+            "workflow": row.get("workflowName"), "started_at": row.get("startedAt"),
+            "attempt": attempt if type(attempt) is int and attempt >= 1 else None}
 
 
 class GhPort:
@@ -447,14 +457,14 @@ class GhPort:
     def _git(self, argv: list[str], *, mutation: bool) -> subprocess.CompletedProcess:
         if not git_allowed(argv):
             raise PodError("unsupported_git_operation", "The GitHub port issues only an exact push or head read")
-        return _run([str(git_executable()), *argv], cwd=self.project, timeout=120 if mutation else 30,
-                    mutation=mutation)
+        return _run([str(git_executable()), *argv], cwd=self.project,
+                    timeout=MUTATION_TIMEOUT_S if mutation else 30, mutation=mutation)
 
     def _gh(self, argv: list[str], *, mutation: bool) -> subprocess.CompletedProcess:
         if not gh_allowed(argv):
             raise PodError("unsupported_gh_operation", "The GitHub port accepts only known gh operations")
-        completed = _run([str(gh_executable()), *argv], cwd=self.project, timeout=120 if mutation else 60,
-                         mutation=mutation)
+        completed = _run([str(gh_executable()), *argv], cwd=self.project,
+                         timeout=MUTATION_TIMEOUT_S if mutation else 60, mutation=mutation)
         if len(completed.stdout) > MAX_OUTPUT:
             raise PodError("gh_contract", "gh output exceeds bounded size")
         return completed
@@ -568,14 +578,23 @@ class GhPort:
         return {"status": "dispatched"}
 
     def runs(self, *, workflow: str, commit: str) -> list[dict]:
+        """This workflow's runs on this commit, newest first: at most RUN_LIST_LIMIT + 1 of them.
+
+        `--workflow` and `--commit` filter on the server. One run past the limit says the newest
+        RUN_LIST_LIMIT were not all of them; GitHub lists only the runs it still retains.
+        """
         rows = self._gh_json(["run", "list", "--workflow", workflow, "--commit", commit,
-                              "--json", RUN_FIELDS, "--limit", "20"])
+                              "--json", RUN_FIELDS, "--limit", str(RUN_LIST_LIMIT + 1)])
         if not isinstance(rows, list):
             raise PodError("gh_contract", "gh run list returned an unsupported shape")
         return [_normalise_run(row) for row in rows if isinstance(row, dict)]
 
-    def run(self, *, run_id: str) -> dict:
-        row = self._gh_json(["run", "view", run_id, "--json", RUN_FIELDS])
+    def run(self, *, run_id: str, attempt: int | None = None) -> dict:
+        """One run, as its latest attempt or exactly the attempt named."""
+        argv = ["run", "view", run_id]
+        if attempt is not None:
+            argv += ["--attempt", str(attempt)]
+        row = self._gh_json([*argv, "--json", RUN_FIELDS])
         if not isinstance(row, dict):
             raise PodError("gh_contract", "gh run view returned an unsupported shape")
         return _normalise_run(row)

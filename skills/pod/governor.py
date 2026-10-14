@@ -13,6 +13,7 @@ Authorization denial stays a separate class from "permitted but premature".
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 import platform
@@ -98,7 +99,7 @@ class GitHubPort(Protocol):
     def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> dict: ...
     def dispatch(self, *, workflow: str, ref: str, inputs: dict) -> dict: ...
     def runs(self, *, workflow: str, commit: str) -> list[dict]: ...
-    def run(self, *, run_id: str) -> dict: ...
+    def run(self, *, run_id: str, attempt: int | None = None) -> dict: ...
     def rerun(self, *, run_id: str, failed_only: bool) -> dict: ...
     def cancel(self, *, run_id: str) -> dict: ...
 
@@ -1039,13 +1040,23 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         if decision == "ALLOW" and not managed and proposal["kind"] in EXECUTABLE_KINDS:
             result["executes"] = False
             result["next_action"] = (f"Action reserved as {record_id} for the caller to perform; Pod performs nothing. "
-                                     "An identical governor-execute will attach. Perform it and record governor-outcome, "
-                                     "or record governor-outcome CANCELED then call governor-execute.")
+                                     "An identical governor-execute will attach. " + _RESERVATION_STEPS)
         elif managed and decision == "REUSE" and verdict["reuse"]["kind"] == "attach":
             attached = _find_row(journal, record_id)
             if attached.get("decision_reserved") is True:
-                result["next_action"] = (f"Attached to decision reservation {record_id}; perform the action and record "
-                                         "governor-outcome, or record governor-outcome CANCELED then call governor-execute.")
+                refusal = cancel_refusal(attached, journal)
+                result["next_action"] = (f"Attached to decision reservation {record_id}; " + (
+                    _RESERVATION_STEPS if refusal is None else
+                    f"{refusal}, so it is never canceled: call governor-reconcile, which reads it back and "
+                    "never resubmits."))
+        elif proposal["kind"] == "merge" and decision in ("ALLOW", "REUSE"):
+            merged = _find_row(journal, record_id)
+            if merged["outcome"] in ("pending", "UNKNOWN"):
+                result["next_action"] = (f"Merge {'decided' if decision == 'ALLOW' else 'already decided'} as "
+                                         f"{record_id}; Pod does not merge. After the merge, {_fetch_first(merged)}, "
+                                         "then record governor-outcome PASS with provider.merge_commit, or FAILED "
+                                         "only when the target lacks the candidate's result. Never merge again for "
+                                         "this decision.")
         result["explanation"] = _explanation(decision, proposal, verdict, result["next_action"])
         result["_binding"] = verdict["binding"]
         result["_unit"] = unit
@@ -1162,10 +1173,193 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
             "classification": None, "classifications": [], "derived_from": row["record_id"]})
 
 
+_RESERVATION_STEPS = ("After performing it, record governor-outcome PASS or FAILED, which Pod accepts only from "
+                      "its own readback, or call governor-reconcile. Only if it was never performed: record "
+                      "governor-outcome CANCELED with detail saying so (refused on any sign of execution), then call "
+                      "governor-execute.")
+
+
+def _execution_signs(row: dict, journal: dict) -> list[str]:
+    """What the stored records show of an action having been performed."""
+    signs = []
+    if row["receipt"].get("provider"):
+        signs.append("a provider receipt is recorded")
+    if row.get("run_event") is not None or row.get("rejected_run") is not None:
+        signs.append("a run was read back for it")
+    if any(other.get("derived_from") == row["record_id"] for other in journal["actions"]):
+        signs.append("a validation it started is recorded")
+    return signs
+
+
+def cancel_refusal(row: dict, journal: dict) -> str | None:
+    """Why a reserved action may not be recorded CANCELED, or None when it may.
+
+    CANCELED says the reserved action never ran. Only a pending decision reservation with no recorded sign
+    of execution may say so, and only Pod's readback then confirms that no effect is visible. This is the
+    one predicate both the outcome and the "cancel, then execute" offer use, so any other row that must
+    never be canceled is refused here.
+    """
+    if row.get("decision_reserved") is not True:
+        return "only a decision reservation for the caller to perform is canceled"
+    if row["outcome"] != "pending":
+        return f"the row is {row['outcome']}; only a pending reservation is canceled"
+    signs = _execution_signs(row, journal)
+    return "it shows signs of execution: " + ", ".join(signs) if signs else None
+
+
+def _outcome_class(row: dict) -> str:
+    """Who performs the row's effect, which decides the evidence each outcome needs."""
+    kind = row["action"]["kind"]
+    if kind == "merge":
+        return "merge"
+    if kind in ("release", "deploy"):
+        return "project"
+    return "reservation" if row.get("decision_reserved") is True else "performed"
+
+
+def _outcome_refusal(subcode: str, message: str, next_action: str, record_id: str) -> PodError:
+    return PodError("outcome_evidence_required", f"{message}. Next: {next_action}",
+                    {"detail": subcode, "record": record_id, "next_action": next_action})
+
+
+def _restated(row: dict, provider: dict | None, evidence: list[str], detail: str | None) -> bool:
+    """Whether recording this outcome again would leave the row exactly as it is."""
+    receipt = row["receipt"]
+    return ((provider is None or {**(receipt.get("provider") or {}), **provider} == receipt.get("provider"))
+            and (not evidence or set(evidence) <= set(receipt.get("evidence") or []))
+            and (detail is None or detail == receipt.get("detail")))
+
+
+def _fetch_first(row: dict) -> str:
+    target = row.get("target_binding") or {}
+    remote, base = target.get("remote", "<remote>"), target.get("base", "<base>")
+    return f"fetch first (git fetch {remote} {base}) so the target ref shows the merge"
+
+
+def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
+                   provider: dict | None, evidence: list[str], detail: str | None) -> str | None:
+    """Refuse an outcome its evidence does not support; return the provider read it still needs, if any.
+
+    Rows Pod performed take outcomes from execution or readback, and manually only UNKNOWN. A merge PASS
+    passes R93's Git checks, and FAILED or CANCELED needs the target to lack the candidate's result. A
+    release or deploy outcome carries a receipt or evidence reference. A decision reservation's PASS or
+    FAILED is what Pod's readback shows, and CANCELED needs no sign of execution. UNKNOWN never becomes
+    CANCELED.
+    """
+    record_id = row["record_id"]
+    cls = _outcome_class(row)
+    if outcome == "UNKNOWN":
+        if provider is not None and cls in ("performed", "reservation"):
+            raise _outcome_refusal("receipt_from_readback", "This row's provider receipt comes only from Pod's own "
+                                   "execution or readback", "record UNKNOWN without a provider receipt", record_id)
+        return None
+    if outcome == "CANCELED" and row["outcome"] == "UNKNOWN":
+        raise _outcome_refusal("unknown_not_cancelable", "An UNKNOWN effect may have happened; it never becomes "
+                               "CANCELED by assertion", "settle it from provider readback with governor-reconcile",
+                               record_id)
+    if cls == "performed":
+        raise _outcome_refusal("performed_by_pod", f"Pod performed this {row['action']['kind']}; its outcome comes "
+                               "only from execution or readback, and a manual outcome may record only UNKNOWN",
+                               "call governor-reconcile, which reads it back and never resubmits", record_id)
+    if outcome == "CANCELED" and not detail:
+        raise _outcome_refusal("attestation_missing", "CANCELED attests that the action never ran",
+                               "state in detail why it was never performed", record_id)
+    if cls == "project":
+        if outcome == "CANCELED":
+            if row["outcome"] != "pending" or row["receipt"].get("provider"):
+                raise _outcome_refusal("execution_signs", "Only a pending release or deploy without a receipt is "
+                                       "canceled", "record its outcome with the receipt", record_id)
+        elif not provider and not evidence:
+            raise _outcome_refusal("receipt_missing", f"A {row['action']['kind']} {outcome} needs the project's "
+                                   "receipt or an evidence reference", "record the outcome with provider or "
+                                   "evidence naming the receipt", record_id)
+        return None
+    if cls == "merge":
+        return _check_merge_outcome(project, state, journal, row, outcome, provider=provider)
+    if provider is not None:
+        raise _outcome_refusal("receipt_from_readback", "A reservation's provider receipt comes from Pod's own "
+                               "readback", "record the outcome without a provider receipt", record_id)
+    if outcome == "CANCELED":
+        refusal = cancel_refusal(row, journal)
+        if refusal is not None:
+            raise _outcome_refusal("execution_signs", "CANCELED is refused: " + refusal,
+                                   "call governor-reconcile, which reads it back and never resubmits", record_id)
+    return "readback"
+
+
+def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
+                         provider: dict | None) -> None:
+    from .governance import target_contains_result, verify_merge_result
+    from .ledger import map_of
+    record_id = row["record_id"]
+    map_state = map_of(state)
+    if map_state is None:
+        raise _outcome_refusal("map_missing", "A merge outcome is checked against the bound target and base of the "
+                               "objective map", "checkpoint the objective map first", record_id)
+    if outcome == "PASS":
+        unit = journal["units"].get(row["action"]["unit"])
+        merged = {**(row["receipt"].get("provider") or {}), **(provider or {})}
+        if not merged.get("merge_commit"):
+            raise _outcome_refusal("merge_commit_missing", "A merge PASS keeps the provider merge_commit",
+                                   _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
+        try:
+            verify_merge_result(project, {**row, "receipt": {**row["receipt"], "provider": merged}}, unit,
+                                map_state["governance"])
+        except PodError as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            raise _outcome_refusal("merge_unverified", "The merge result fails R93's Git checks ("
+                                   + str(detail.get("detail")) + ")", _fetch_first(row) + "; then "
+                                   + str(detail.get("next_action") or "record the outcome again"), record_id) from exc
+        return None
+    if provider is not None and provider.get("merge_commit"):
+        raise _outcome_refusal("merge_commit_conflict", f"A merge {outcome} names no merge_commit",
+                               "record PASS for a merge that landed", record_id)
+    contained = target_contains_result(project, row, map_state["governance"])
+    if contained is None:
+        raise _outcome_refusal("target_unobservable", "Git cannot show whether the target holds the candidate's "
+                               "result", _fetch_first(row) + ", then record the outcome again", record_id)
+    if contained:
+        raise _outcome_refusal("target_contains_result", "The target holds the candidate's result, so the merge "
+                               "landed", _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
+    return None
+
+
+def _readback_answer(project: Path, row: dict, journal: dict, outcome: str, port: GitHubPort | None,
+                     now: datetime | None = None) -> dict:
+    """Pod's own provider readback for a reservation outcome; it settles only what the provider shows."""
+    from .governor_effects import _observe, _port
+    unit = journal["units"].get(row["action"]["unit"])
+    if unit is None:
+        raise _outcome_refusal("readback_unavailable", "No delivery unit binds this row", "prepare the unit",
+                               row["record_id"])
+    try:
+        answer = _observe(port or _port(project), row, unit, journal, now=now)
+    except PodError as exc:
+        raise _outcome_refusal("readback_unavailable", "Pod could not read the provider back (" + exc.code + ")",
+                               "retry when the provider answers; nothing was recorded", row["record_id"]) from exc
+    if outcome == "CANCELED":
+        partial = (answer.get("provider_read") or {}).get("truncated")
+        if answer["seen"] or partial:
+            raise _outcome_refusal("execution_signs", "CANCELED is refused: Pod's readback "
+                                   + ("shows the effect" if answer["seen"] else "saw only partial history"),
+                                   "call governor-reconcile, which reads it back and never resubmits",
+                                   row["record_id"])
+        return answer
+    if answer["outcome"] != outcome:
+        shown = answer["outcome"] or ("no settled result: " + str(answer["hold"]))
+        raise _outcome_refusal("readback_disagrees", f"Pod's readback shows {shown}, not {outcome}",
+                               "call governor-reconcile, which records what the provider shows", row["record_id"])
+    return answer
+
+
 def record_outcome(project: Path, objective: str, *, owner: str, record_id: str, outcome: str,
                    provider: object = None, evidence: list[str] | None = None, detail: str | None = None,
-                   now: datetime | None = None) -> dict:
-    """Bind the real result of an allowed action so later decisions can reuse it."""
+                   now: datetime | None = None, port: GitHubPort | None = None) -> dict:
+    """Bind the real result of an allowed action, refused unless that outcome's evidence is present.
+
+    A restatement of the recorded outcome changes nothing. A merge PASS then reads back the unit's
+    unsettled effects, so a merged candidate never leaves a validation whose readback was never attempted.
+    """
     bounded_text(owner, name="owner")
     bounded_text(record_id, name="record_id", limit=128)
     if outcome not in OUTCOMES or outcome == "pending":
@@ -1181,17 +1375,74 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
     moment = (now or datetime.now(timezone.utc)).isoformat()
-    with _lock(context_path):
-        state = _owned_state(project, objective, owner, context_path)
-        journal = _read_journal(record_path)
-        row = _find_row(journal, record_id)
-        if row["decision"] != "ALLOW":
-            raise PodError("invalid_outcome", "Only an admitted action carries an outcome")
-        _settle(journal, row, outcome=outcome, provider=provider_record, evidence=references,
-                detail=detail, moment=moment)
-        _write_journal(record_path, journal)
-        return {"status": "recorded", "record_id": record_id, "outcome": row["outcome"],
-                "receipt": row["receipt"]}
+    answer = snapshot = None
+    while True:
+        with _lock(context_path):
+            state = _owned_state(project, objective, owner, context_path)
+            journal = _read_journal(record_path)
+            row = _find_row(journal, record_id)
+            if row["decision"] != "ALLOW":
+                raise PodError("invalid_outcome", "Only an admitted action carries an outcome")
+            if row["outcome"] == outcome:
+                if _restated(row, provider_record, references, detail):
+                    break
+                raise _outcome_refusal("receipt_recorded", f"{outcome} is already recorded with another receipt, "
+                                       "and a recorded receipt is not restated",
+                                       "restate it exactly, or settle an UNKNOWN row with governor-reconcile",
+                                       record_id)
+            if row["outcome"] not in ("pending", "UNKNOWN"):
+                raise PodError("outcome_conflict", "A different outcome was already recorded")
+            needs = _check_outcome(project, state, journal, row, outcome, provider=provider_record,
+                                   evidence=references, detail=detail)
+            if needs is None:
+                _settle(journal, row, outcome=outcome, provider=provider_record, evidence=references,
+                        detail=detail, moment=moment)
+                _write_journal(record_path, journal)
+                break
+            if answer is not None:
+                # The provider was read with no lock held; the row must still be the one read back.
+                if row != snapshot:
+                    raise PodError("outcome_conflict", "The row changed while it was read back; retry")
+                if outcome == "CANCELED":
+                    _settle(journal, row, outcome=outcome, provider=None, evidence=references, detail=detail,
+                            moment=moment)
+                else:
+                    from .governor_effects import _record_run_event
+                    _settle(journal, row, outcome=outcome, provider=answer["provider"], evidence=references,
+                            detail=answer["detail"], moment=moment)
+                    _record_run_event(row, answer["provider"])
+                _write_journal(record_path, journal)
+                break
+            snapshot = deepcopy(row)
+        answer = _readback_answer(project, snapshot, journal, outcome, port, now)
+    result = {"status": "recorded", "record_id": record_id, "outcome": row["outcome"], "receipt": row["receipt"]}
+    if row["action"]["kind"] == "merge" and row["outcome"] == "PASS":
+        result["readback"] = _merged_readback(project, objective, owner=owner, row=row, port=port,
+                                              now=now or datetime.now(timezone.utc))
+    return result
+
+
+def _merged_readback(project: Path, objective: str, *, owner: str, row: dict, port: GitHubPort | None,
+                     now: datetime) -> list[dict]:
+    """Read back every unsettled effect of a merged unit; a read that fails is kept as that attempt."""
+    from .governor_effects import _note_readback, _port, reconcile
+    journal = _read_journal(_record_path(project, objective))
+    rows = [other for other in journal["actions"]
+            if other["action"]["unit"] == row["action"]["unit"] and other["decision"] == "ALLOW"
+            and other["outcome"] in ("pending", "UNKNOWN") and other["action"]["kind"] in EXECUTABLE_KINDS]
+    remote = port
+    attempts = []
+    for other in rows:
+        try:
+            remote = remote or _port(project)
+            read = reconcile(project, objective, owner=owner, record_id=other["record_id"], port=remote, now=now)
+            attempts.append({"record_id": other["record_id"], "status": read["status"], "action": read["action"]})
+        except PodError as exc:
+            _note_readback(project, objective, owner=owner, record_id=other["record_id"],
+                           reason="readback after the merge failed: " + exc.code, moment=now)
+            attempts.append({"record_id": other["record_id"], "status": other["outcome"], "action": "failed",
+                             "reason": exc.code})
+    return attempts
 
 
 def classify_failure(project: Path, objective: str, *, owner: str, record_id: str, classification: dict,
@@ -1640,6 +1891,96 @@ def objective_delivery_reporting(project: Path, objective: str) -> dict:
               else "PENDING" if "PENDING" in statuses else "FAILED" if "FAILED" in statuses
               else "NOT_RUN")
     return {"units": {name: unit["authorization"] for name, unit in units.items()}, "hosted_checks": hosted}
+
+
+FINALIZATION_RECORDS = ("merge_outcome", "delivery_record", "validation_readback", "report_consumption",
+                        "closure")
+_FINALIZATION_STEPS = {
+    "merge_outcome": "fetch the merge target, then record governor-outcome for merge {ids}: PASS with "
+                     "provider.merge_commit, or FAILED only when the target lacks the candidate's result; "
+                     "never merge again",
+    "delivery_record": "write a checkpoint with delivery: {{record: {ids}}}",
+    "validation_readback": "settle {ids} from Pod's own readback with governor-reconcile, or record a release "
+                           "or deploy outcome with its receipt or evidence reference; nothing is resubmitted",
+    "report_consumption": "consume the worker report of admission {ids} with internal report (a worker "
+                          "that produced none is reported failed or uncertain), or record an implementation "
+                          "result's disposition in a checkpoint",
+    "closure": "write a checkpoint with close: true",
+}
+
+
+def finalization_step(name: str, entries: list[dict]) -> str:
+    """The step that records one remaining finalization record, naming its records' short ids."""
+    ids = [entry["record"][:12] for entry in entries]
+    shown = ", ".join(ids[:4]) + (f" and {len(ids) - 4} more" if len(ids) > 4 else "")
+    return _FINALIZATION_STEPS[name].format(ids=shown)
+
+
+def _finalization_entry(record: str, kind: str, state: str, derived_from: str | None = None) -> dict:
+    return {"record": record, "kind": kind, "state": state, "derived_from": derived_from}
+
+
+def finalization(state: dict | None, journal: dict) -> dict:
+    """What a coordinator still records before saying the objective is finished or its terminal safe to retire.
+
+    Pure over the stored context and Governor journal: no Git, provider or native read. The remaining
+    records keep the order a coordinator records them in: the merge outcome, the delivery record, every
+    validation readback, report consumption, then closure. Closure ends finalization, because nothing can
+    be recorded after it; whether work is still running rather than finalizing is a reader's decision.
+    """
+    from .ledger import map_of
+    context = state if isinstance(state, dict) else {}
+    map_state = map_of(context)
+    records: dict[str, list[dict]] = {name: [] for name in FINALIZATION_RECORDS}
+    closed = bool(map_state is not None and map_state.get("closure"))
+    if not closed:
+        for row in journal.get("actions", []):
+            if row.get("decision") != "ALLOW":
+                continue
+            kind = row["action"]["kind"]
+            if row["outcome"] in ("pending", "UNKNOWN"):
+                name = "merge_outcome" if kind == "merge" else "validation_readback"
+                records[name].append(_finalization_entry(row["record_id"], kind, row["outcome"],
+                                                         row.get("derived_from")))
+            elif kind == "merge" and row["outcome"] == "PASS" and map_state is not None \
+                    and map_state.get("delivery") is None:
+                records["delivery_record"].append(_finalization_entry(row["record_id"], kind, "PASS"))
+        for key, admission in sorted(context.get("admissions", {}).items()):
+            if not isinstance(admission, dict) or admission.get("state") in ("closed", "deferred"):
+                continue
+            role = str(admission.get("role"))
+            # An implementation result settles by its disposition, which needs no report; other roles by
+            # their consumed report.
+            if role == "implement" and admission.get("disposition") is not None:
+                continue
+            if admission.get("report") is None:
+                records["report_consumption"].append(_finalization_entry(key, role, str(admission.get("state"))))
+            elif role == "implement":
+                records["report_consumption"].append(_finalization_entry(key, role, "undispositioned"))
+    remaining = [name for name in FINALIZATION_RECORDS
+                 if records[name] or (name == "closure" and map_state is not None and not closed)]
+    if remaining:
+        next_action = ("Not finished: record " + ", ".join(remaining) + " in that order before saying the "
+                       "objective is finished or the coordinator safe to retire. Next: "
+                       + finalization_step(remaining[0], records[remaining[0]]))
+    elif closed:
+        next_action = ("Finished: closure is recorded and Pod needs nothing more; the coordinator may say the "
+                       "objective is finished and is safe to retire.")
+    else:
+        next_action = ("Finished recording: nothing remains to record, and this objective has no obligation map "
+                       "to close.")
+    return {"schema": "pod-finalization/v1", "remaining": remaining,
+            "records": {name: records[name] for name in remaining}, "finished": not remaining,
+            "next_action": next_action}
+
+
+def objective_finalization(project: Path, objective: str) -> dict | None:
+    """The finalization projection of this objective's local records, or None when they cannot be read."""
+    from .ledger import read
+    try:
+        return finalization(read(project, objective), _read_journal(_record_path(project, objective)))
+    except PodError:
+        return None
 
 
 def status_at(root: Path, *, project: Path | None = None,

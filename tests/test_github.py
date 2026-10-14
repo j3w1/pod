@@ -86,8 +86,9 @@ class AllowlistTests(unittest.TestCase):
                    ["pr", "create", "--head", "agent/x", "--base", "main", "--title", "t", "--body", ""],
                    ["workflow", "run", "ci.yml", "--ref", "agent/x"],
                    ["workflow", "run", "ci.yml", "--ref", "agent/x", "-f", "probe=ruleset"],
-                   ["run", "list", "--workflow", "ci.yml", "--commit", COMMIT, "--json", RUN_FIELDS, "--limit", "20"],
+                   ["run", "list", "--workflow", "ci.yml", "--commit", COMMIT, "--json", RUN_FIELDS, "--limit", "21"],
                    ["run", "view", "123", "--json", RUN_FIELDS],
+                   ["run", "view", "123", "--attempt", "1", "--json", RUN_FIELDS],
                    ["issue", "view", "7", "--repo", "acme/widgets", "--json", ISSUE_FIELDS],
                    ["api", "repos/acme/widgets/issues/comments/99", "--jq", AMENDMENT_JQ],
                    ["run", "cancel", "123"], ["run", "rerun", "123"], ["run", "rerun", "123", "--failed"])
@@ -99,6 +100,10 @@ class AllowlistTests(unittest.TestCase):
                         ["workflow", "run", "ci.yml", "--ref", "agent/x", "--json"],
                         ["workflow", "run", "ci", "--ref", "agent/x"],
                         ["run", "view", "abc", "--json", RUN_FIELDS],
+                        ["run", "list", "--workflow", "ci.yml", "--commit", COMMIT, "--json", RUN_FIELDS,
+                         "--limit", "20"],
+                        ["run", "view", "123", "--attempt", "0", "--json", RUN_FIELDS],
+                        ["run", "view", "123", "--attempt", "x", "--json", RUN_FIELDS],
                         ["run", "cancel", "123", "--force"],
                         ["issue", "view", "7", "--repo", "acme/widgets"],
                         ["pr", "list", "--head", "agent/x", "--base", "main", "--state", "all", "--json", PR_FIELDS,
@@ -173,13 +178,19 @@ class PortReadingTests(unittest.TestCase):
     def test_runs_are_normalised_and_dispatch_inputs_are_ordered(self):
         row = ('[{"databaseId": 123, "status": "completed", "conclusion": "success", "createdAt": "2026-09-21T00:00:01Z",'
                ' "updatedAt": "2026-09-21T00:05:00Z", "headSha": "%s", "url": "u", "event": "workflow_dispatch",'
-               ' "workflowName": "ci"}]' % COMMIT)
+               ' "workflowName": "ci", "attempt": 2}]' % COMMIT)
         with self.run_with([completed(row)]):
             runs = self.port.runs(workflow="ci.yml", commit=COMMIT)
+        self.assertEqual(self.commands[-1][-2:], ["--limit", "21"])
         self.assertEqual(runs[0]["id"], "123")
-        self.assertEqual((runs[0]["status"], runs[0]["conclusion"], runs[0]["head_sha"]), ("completed", "success", COMMIT))
+        self.assertEqual((runs[0]["status"], runs[0]["conclusion"], runs[0]["head_sha"], runs[0]["attempt"]),
+                         ("completed", "success", COMMIT, 2))
         with self.run_with([completed(row[1:-1])]):
             self.assertEqual(self.port.run(run_id="123")["workflow"], "ci")
+        self.assertEqual(self.commands[-1], ["run", "view", "123", "--json", RUN_FIELDS])
+        with self.run_with([completed(row[1:-1].replace('"attempt": 2', '"attempt": "1"'))]):
+            self.assertIsNone(self.port.run(run_id="123", attempt=1)["attempt"])
+        self.assertEqual(self.commands[-1], ["run", "view", "123", "--attempt", "1", "--json", RUN_FIELDS])
         with self.run_with([completed("ok\n")]):
             self.port.dispatch(workflow="ci.yml", ref="agent/x", inputs={"zeta": "1", "alpha": "2"})
         self.assertEqual(self.commands[-1], ["workflow", "run", "ci.yml", "--ref", "agent/x", "-f", "alpha=2",

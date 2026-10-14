@@ -41,6 +41,29 @@ interchangeable with an earlier pull-request check, so the governor never treats
 pull-request run as merge-queue evidence, and a repository with a queue keeps the
 `merge_group` trigger on its required workflow.
 
+## What the governor reads back
+
+The governor binds a validation row to a run only when the run matches what the row's own effect
+started: one of its events, its exact head commit, created at or after the submission, and its own
+attempt (R115). A push or pull-request update starts `push` runs and, on a branch with an open pull
+request, `pull_request` or `pull_request_target` runs, so a row derived from a publication binds
+only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. Every row
+binds its run's first attempt, except a rerun. Before rerunning, the governor records the run, its
+latest attempt and the submission start, and right after GitHub accepts the call it records that
+acceptance; one rule binds the rerun's attempt on every path. The count proves it: with the
+acceptance recorded, the single new attempt is the one Pod's call created. GitHub sets a rerun's
+`startedAt` at the request in whole seconds, so that start is only checked against the second
+holding the recorded submission start, and a start in an earlier second holds as a contradiction.
+Every other state, an attempt bound without that provenance included, holds the row, since GitHub
+names no requester per attempt. A run already bound to a row is checked the same way as a new
+one, and its workflow by appearing in the workflow-filtered list, because `gh run view` names only the
+workflow's display name.
+It reads runs with `gh run list --workflow FILE --commit SHA --json …,attempt --limit 21`:
+GitHub filters by workflow and commit, and the extra run tells the governor that the newest 20 were
+not all of them. GitHub lists only the runs it still retains. A missing run or a truncated list
+leaves the row pending with that reason, even when a visible run matches or is the row's own bound
+run; it is never read as a failure or as proof that nothing ran.
+
 ## What the governor consumes
 
 The project maps what its actions trigger in `.pod/config.yaml`:

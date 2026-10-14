@@ -102,6 +102,10 @@ class GovernorFakePort:
         self.prs = {}
         self.runs_by = {}
         self.run_status = {}
+        # Earlier attempts of a rerun run, as `gh run view --attempt` would show them.
+        self.attempts = {}
+        # When the attempt a rerun starts begins, as `startedAt` reports it.
+        self.rerun_stamp = "2026-09-21T00:00:01+00:00"
         self.next_run = 100
         self.lost = set(lost)
         self.rejected = set(rejected)
@@ -122,13 +126,14 @@ class GovernorFakePort:
             raise PodError("remote_effect_uncertain", "lost")
         return {"status": "pushed", "remote_head": commit}
 
-    def _start(self, workflow, commit, *, event):
+    def _start(self, workflow, commit, *, event, created_at="2026-09-21T00:00:01+00:00"):
         run = {"id": str(self.next_run), "status": "in_progress", "conclusion": None,
-               "created_at": "2026-09-21T00:00:01+00:00", "url": "https://example.invalid/run",
-               "event": event}
+               "created_at": created_at, "url": "https://example.invalid/run",
+               "event": event, "head_sha": commit, "attempt": 1, "started_at": created_at}
         self.next_run += 1
         self.runs_by.setdefault((workflow, commit), []).append(run)
         self.run_status[run["id"]] = run
+        self.attempts[run["id"]] = {}
         return run
 
     def pull_request(self, *, head, base):
@@ -145,6 +150,9 @@ class GovernorFakePort:
 
     def dispatch(self, *, workflow, ref, inputs):
         self.calls.append(("dispatch", workflow, ref, dict(inputs)))
+        if "dispatch" in self.rejected:
+            # gh exits non-zero when GitHub refuses the dispatch, e.g. a workflow without that trigger.
+            raise PodError("remote_effect_uncertain", "gh workflow run did not confirm the dispatch")
         if self.delay:
             time.sleep(self.delay)
         self._start(workflow, self.heads.get(f"origin/{ref}"), event="workflow_dispatch")
@@ -156,14 +164,23 @@ class GovernorFakePort:
         self.calls.append(("runs", workflow, commit))
         if self.blind:
             return []
-        return [dict(run) for run in self.runs_by.get((workflow, commit), [])]
+        # Newest first, as gh lists them; each run shows its latest attempt.
+        return [dict(self.run_status[run["id"]]) for run in reversed(self.runs_by.get((workflow, commit), []))]
 
-    def run(self, *, run_id):
-        return dict(self.run_status[run_id])
+    def run(self, *, run_id, attempt=None):
+        current = self.run_status[run_id]
+        if attempt is None or attempt == current["attempt"]:
+            return dict(current)
+        if attempt not in self.attempts[run_id]:
+            raise PodError("remote_read_failed", "gh read did not succeed")  # GitHub answers 404.
+        return dict(self.attempts[run_id][attempt])
 
     def rerun(self, *, run_id, failed_only):
         self.calls.append(("rerun", run_id, failed_only))
-        self.run_status[run_id].update({"status": "in_progress", "conclusion": None})
+        current = self.run_status[run_id]
+        self.attempts[run_id][current["attempt"]] = dict(current)
+        current.update({"status": "in_progress", "conclusion": None, "attempt": current["attempt"] + 1,
+                        "started_at": self.rerun_stamp})
         return {"status": "rerun_requested"}
 
     def cancel(self, *, run_id):
