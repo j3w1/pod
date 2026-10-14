@@ -1642,6 +1642,78 @@ def objective_delivery_reporting(project: Path, objective: str) -> dict:
     return {"units": {name: unit["authorization"] for name, unit in units.items()}, "hosted_checks": hosted}
 
 
+FINALIZATION_RECORDS = ("merge_outcome", "delivery_record", "validation_readback", "report_consumption",
+                        "closure")
+_FINALIZATION_STEPS = {
+    "merge_outcome": "fetch the merge target, then record governor-outcome for merge {ids}: PASS with "
+                     "provider.merge_commit, or FAILED only when the target lacks the candidate's result; "
+                     "never merge again",
+    "delivery_record": "write a checkpoint with delivery: {{record: {ids}}}",
+    "validation_readback": "settle {ids} from Pod's own readback with governor-reconcile, or record a release "
+                           "or deploy outcome with its receipt or evidence reference; nothing is resubmitted",
+    "report_consumption": "consume the worker report of admission {ids} with internal report, or record "
+                          "its result's disposition in a checkpoint",
+    "closure": "write a checkpoint with close: true",
+}
+
+
+def _finalization_entry(record: str, kind: str, state: str, derived_from: str | None = None) -> dict:
+    return {"record": record, "kind": kind, "state": state, "derived_from": derived_from}
+
+
+def finalization(state: dict | None, journal: dict) -> dict:
+    """What a coordinator still records before saying the objective is finished or its terminal safe to retire.
+
+    Pure over the stored context and Governor journal: no Git, provider or native read. The remaining
+    records keep the order a coordinator records them in: the merge outcome, the delivery record, every
+    validation readback, report consumption, then closure. Closure ends finalization, because nothing can
+    be recorded after it; whether work is still running rather than finalizing is a reader's decision.
+    """
+    from .ledger import map_of
+    context = state if isinstance(state, dict) else {}
+    map_state = map_of(context)
+    records: dict[str, list[dict]] = {name: [] for name in FINALIZATION_RECORDS}
+    closed = bool(map_state is not None and map_state.get("closure"))
+    if not closed:
+        for row in journal.get("actions", []):
+            if row.get("decision") != "ALLOW":
+                continue
+            kind = row["action"]["kind"]
+            if row["outcome"] in ("pending", "UNKNOWN"):
+                name = "merge_outcome" if kind == "merge" else "validation_readback"
+                records[name].append(_finalization_entry(row["record_id"], kind, row["outcome"],
+                                                         row.get("derived_from")))
+            elif kind == "merge" and row["outcome"] == "PASS" and map_state is not None \
+                    and map_state.get("delivery") is None:
+                records["delivery_record"].append(_finalization_entry(row["record_id"], kind, "PASS"))
+        for key, admission in sorted(context.get("admissions", {}).items()):
+            if not isinstance(admission, dict) or admission.get("state") in ("closed", "deferred"):
+                continue
+            role = str(admission.get("role"))
+            if admission.get("report") is None:
+                records["report_consumption"].append(_finalization_entry(key, role, str(admission.get("state"))))
+            elif role == "implement" and admission.get("disposition") is None:
+                records["report_consumption"].append(_finalization_entry(key, role, "undispositioned"))
+    remaining = [name for name in FINALIZATION_RECORDS
+                 if records[name] or (name == "closure" and map_state is not None and not closed)]
+    if remaining:
+        first = remaining[0]
+        ids = [entry["record"][:12] for entry in records[first]]
+        shown = ", ".join(ids[:4]) + (f" and {len(ids) - 4} more" if len(ids) > 4 else "")
+        next_action = ("Not finished: record " + ", ".join(remaining) + " in that order before saying the "
+                       "objective is finished or the coordinator safe to retire. Next: "
+                       + _FINALIZATION_STEPS[first].format(ids=shown))
+    elif closed:
+        next_action = ("Finished: closure is recorded and Pod needs nothing more; the coordinator may say the "
+                       "objective is finished and is safe to retire.")
+    else:
+        next_action = ("Finished: nothing remains to record and this objective has no obligation map to close; "
+                       "the coordinator may say the work is finished.")
+    return {"schema": "pod-finalization/v1", "remaining": remaining,
+            "records": {name: records[name] for name in remaining}, "finished": not remaining,
+            "next_action": next_action}
+
+
 def status_at(root: Path, *, project: Path | None = None,
               native_projection: dict | None = None) -> dict:
     """Read-only projection of one objective's governor state from its private directory."""
