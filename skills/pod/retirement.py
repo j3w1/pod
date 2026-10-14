@@ -169,6 +169,19 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         # Retiring a successor would leave its predecessor's chain neither open nor closed (R110).
         return fail("objective_continues", "This objective continues objective " + state["continues"]["objective"]
                     + "; historical retirement never ends a successor that holds a claim.")
+    from .listing import objective_list
+    try:
+        listed = objective_list(project)
+    except PodError as exc:
+        return fail("scope_unreadable", f"Pod's records of this repository cannot be listed ({exc.code}).")
+    if listed["status"] != "listed" or listed["complete"] is not True:
+        return fail("scope_unreadable", "Pod cannot read every record of this repository, so a claim naming this "
+                    "objective as its successor cannot be ruled out.")
+    claimant = next((row["objective"] for row in listed["objectives"] if row.get("continued_by") == objective), None)
+    if claimant is not None:
+        # An interrupted claim recorded the predecessor's link before this objective's own back-link.
+        return fail("objective_continues", f"Objective {claimant} records this objective as its successor; "
+                    "historical retirement never ends a successor that holds a claim.")
     if isinstance(state.get(FIELD), dict):
         verdict.update(status="retired", condition="objective_retired", facts={
             "objective": objective, "owner": state[FIELD]["owner"], "runs": list(state[FIELD]["runs"]),
@@ -342,14 +355,22 @@ def _block_valid(block: dict) -> bool:
             and bool(block["delivery"]))
 
 
-def _question(eligible: list[dict], tally: dict) -> str:
+def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
+    """One plain question naming every objective a decision on this request could bind, and its paths."""
     names = [row["objective"] for row in eligible]
     paths = sorted({path for row in eligible for path in row["facts"]["release"]})
     held = sum(tally.values())
-    return (f"May Pod retire {'objective' if len(names) == 1 else 'objectives'} {', '.join(names)} as delivered "
-            f"history whose coordinator is gone, releasing {', '.join(paths)} for cleanup? Retirement does not "
-            f"close or complete {'it' if len(names) == 1 else 'them'}: {held} pending, unknown, failed or unreported "
-            "record(s) stay exactly as recorded, and the record will accept no further writes.")
+    question = (f"May Pod retire {'objective' if len(names) == 1 else 'objectives'} {', '.join(names)} as delivered "
+                f"history whose coordinator is gone, releasing {', '.join(paths)} for cleanup? Retirement does not "
+                f"close or complete {'it' if len(names) == 1 else 'them'}: {held} pending, unknown, failed or "
+                "unreported record(s) stay exactly as recorded, and the record will accept no further writes.")
+    if refused:
+        # A decision that names a refused objective retires it once its condition clears and its facts still match.
+        question += (" Not retirable now: " + "; ".join(
+            f"{row['objective']} releasing {', '.join(row['facts']['release'])} ({row['condition']})" for row in refused)
+            + ". A decision that also names one of these retires it later, once its condition clears and its facts "
+              "still match; leave it out of the decision otherwise.")
+    return question
 
 
 def historical_retirement(project: Path, objectives: object, *, decision: object | None = None,
@@ -430,12 +451,12 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
         out = {"status": "retirement_available" if eligible else "retirement_unavailable",
                "repository": repository, "objectives": results}
         if eligible:
-            out["question"] = _question(eligible, tally)
-            out["next_action"] = ("Ask the owner the question. Then rerun the same request with a user_direct "
-                                  "decision of exactly {provenance, instruction, repository, reason, objectives}, "
-                                  "each requested objective in order as {objective, owner, runs, release, records, "
-                                  "delivery} with these facts and its delivery references; a refused objective "
-                                  "stays refused alone.")
+            out["question"] = _question(eligible, [row for row in results if row["status"] != "eligible"], tally)
+            out["next_action"] = ("Ask the owner the question. Then rerun the request with only the objectives the "
+                                  "owner's answer names, and a user_direct decision of exactly {provenance, "
+                                  "instruction, repository, reason, objectives}, each of those objectives in order as "
+                                  "{objective, owner, runs, release, records, delivery} with these facts and its "
+                                  "delivery references; a refused objective stays refused alone.")
         else:
             out["next_action"] = "Historical retirement fits no requested objective now; resolve each named condition."
         return out

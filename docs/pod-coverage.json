@@ -3140,6 +3140,7 @@
         "tests.test_historical_retirement.RefusalTableTests.test_lifecycle_refuses",
         "tests.test_historical_retirement.RefusalTableTests.test_unreadable_records_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_scope_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_claims_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_coordinator_refuses",
         "tests.test_historical_retirement.RefusalTableTests.test_run_binding_refuses",
         "tests.test_historical_retirement.RefusalTableTests.test_workers_refuse",
@@ -3165,7 +3166,8 @@
         "tests.test_historical_retirement.WriteTests.test_replay_is_idempotent_and_changed_facts_refuse",
         "tests.test_historical_retirement.WriteTests.test_facts_another_writer_changed_after_the_decision_refuse",
         "tests.test_historical_retirement.WriteTests.test_a_multi_objective_decision_has_independent_results",
-        "tests.test_historical_retirement.WriteTests.test_an_objective_detection_already_refused_never_blocks_the_others"
+        "tests.test_historical_retirement.WriteTests.test_an_objective_detection_already_refused_never_blocks_the_others",
+        "tests.test_historical_retirement.WriteTests.test_the_question_names_a_late_refused_objective_a_decision_could_retire_later"
       ],
       "status": "NOT_RUN"
     },

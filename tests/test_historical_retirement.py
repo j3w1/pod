@@ -257,6 +257,22 @@ def _continues(case):
     path.write_text(json.dumps(raw))
 
 
+def _claimed_by_another(case):
+    """A claim interrupted after it recorded the predecessor's link, before this objective's back-link."""
+    case.claim_only()
+    path, raw = _raw(case, "reconcile")
+    raw["continued_by"] = {"objective": "objective", "record": "r", "owner": "owner", "runs": ["run-s"],
+                           "at": "2026-10-14T00:00:00+00:00", "instruction": "continue", "unfinished": [],
+                           "unreported": [], "ambiguity": [], "orca_claim": "unavailable"}
+    path.write_text(json.dumps(raw))
+
+
+def _list_incomplete(case):
+    stray = objective_root(case.project, "objective").parent / "stray"
+    stray.mkdir()
+    (stray / "governor.json").write_text("{}")  # Pod files without the record that names them.
+
+
 def _no_run(case):
     path, raw = _raw(case, "objective")
     raw["checkpoint"]["native_refs"], raw["admissions"] = [], {}
@@ -287,6 +303,8 @@ REFUSALS = {
     "closed": (_closed, "objective_closed"),
     "continued": (_continued, "objective_continued"),
     "continues": (_continues, "objective_continues"),
+    "claimed-by-another": (_claimed_by_another, "objective_continues"),
+    "list-incomplete": (_list_incomplete, "scope_unreadable"),
     "owner-live": (lambda case: case.terminals.update(owner="live"), "owner_not_lost"),
     "owner-unreadable": (lambda case: case.terminals.update(owner="unreadable"), "owner_not_lost"),
     "owner-stop-unconfirmed": (lambda case: case.terminals.update(owner="stop-unconfirmed"), "owner_not_lost"),
@@ -316,7 +334,8 @@ class RefusalTableTests(GroupedTable):
     """Each unproven fact refuses detection and the owner's earlier decision, and writes nothing."""
     GROUPS = {"test_lifecycle_refuses": ["closed", "continued", "continues"],
               "test_unreadable_records_refuse": ["handoff-pending", "record-unsupported", "journal-unreadable"],
-              "test_scope_refuses": ["no-run", "too-many-records"],
+              "test_scope_refuses": ["no-run", "too-many-records", "list-incomplete"],
+              "test_claims_refuse": ["claimed-by-another"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
               "test_run_binding_refuses": ["run-rebound", "generation-changed"],
               "test_workers_refuse": ["workers-unreadable", "workers-incomplete", "dispatch-unreadable"],
@@ -354,6 +373,9 @@ class RefusalTableTests(GroupedTable):
         self.rows()
 
     def test_scope_refuses(self):
+        self.rows()
+
+    def test_claims_refuse(self):
         self.rows()
 
     def test_requests_refuse(self):
@@ -462,12 +484,35 @@ class WriteTests(RetirementCase):
         self.assertEqual(read(self.project, "objective")["historical_retirement"]["objectives"],
                          ["objective", "reconcile"])
 
+    def test_the_question_names_a_late_refused_objective_a_decision_could_retire_later(self):
+        # Review 2 F10: a decision naming an objective refused late carries its complete facts and retires it once
+        # the condition clears, so the owner's question names it, its path and its condition.
+        self.delivered()
+        self.claim_only()
+        both = [{"objective": "objective", "release": [self.where()]},
+                {"objective": "reconcile", "release": [self.where()]}]
+        decision = self.decide(objectives=both)
+        self.path_terminals[self.where()] = [{"handle": "user", "connected": True, "writable": True,
+                                              "orphaned": False, "worktreePath": self.where()}]
+        found = self.retire(objectives=both[1:] + both[:1])
+        self.assertEqual(found["status"], "retirement_unavailable")
+        self.path_terminals.clear()
+        self.terminals["next"] = "live"
+        found = self.retire(objectives=both)
+        self.assertTrue(found["question"].startswith("May Pod retire objective objective as delivered history"))
+        self.assertIn("Not retirable now: reconcile", found["question"])
+        self.assertIn("A decision that also names one of these retires it later", found["question"])
+        self.assertIn("only the objectives the owner's answer names", found["next_action"])
+        self.assertEqual(self.retire(decision, objectives=both)["status"], "partially_retired")
+
     def test_an_objective_detection_already_refused_never_blocks_the_others(self):
         self.delivered()
         self.claim_only()
         self.terminals["next"] = "live"
         both = [{"objective": "objective", "release": [self.where()]},
                 {"objective": "reconcile", "release": [self.where()]}]
+        found = self.retire(objectives=both)
+        self.assertIn("Not retirable now: reconcile releasing " + self.where() + " (owner_not_lost)", found["question"])
         decision = self.decide(objectives=both)  # The refused objective's facts are partial (no Runs).
         self.assertEqual(decision["objectives"][1]["runs"], [])
         rows = {row["objective"]: row for row in self.retire(decision, objectives=both)["objectives"]}
