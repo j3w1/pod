@@ -29,13 +29,30 @@ class RetirementCase(SuccessionCase):
         self.generations = {}
         self.worktree_elsewhere = False
         self.unknown = None
+        # Orca's worktree identity per path (R113), and its complete host-wide inventories.
+        self.instances = {}
+        self.repo_entry = "repo"
+        self.inventory = {"worktrees": [], "terminals": []}
+        self.inventory_shape = {}
 
     def native_read(self, argv, **kwargs):
         if argv[:3] == ["worktree", "show", "--worktree"]:
             self.native_calls.append(list(argv))
             path = argv[3].removeprefix("path:")
             return {"runtime": self.port.runtime, "result": {"worktree": {
-                "path": path + "-elsewhere" if self.worktree_elsewhere else path, "isMainWorktree": False}}}
+                "id": self.repo_entry + "::" + path, "path": path + "-elsewhere" if self.worktree_elsewhere else path,
+                "isMainWorktree": False,
+                "identity": {"key": self.instances.get(path, "wt2:local:first"), "executionHostId": "local"}}}}
+        if argv in (["worktree", "list", "--json"], ["terminal", "list", "--json"]):
+            self.native_calls.append(list(argv))
+            kind = argv[0] + "s"
+            shape = self.inventory_shape.get(kind, {})
+            if shape == "unreadable":
+                raise PodError("orca_read_failed", SENTINEL, {"native_code": "runtime_unavailable"})
+            rows = deepcopy(self.inventory[kind])
+            return {"runtime": self.port.runtime, "result": {
+                kind: rows, "totalCount": len(rows), "truncated": False,
+                "hostScope": {"hostIds": ["local"], "omittedHostIds": []}, **shape}}
         if argv[:3] == ["terminal", "list", "--worktree"]:
             self.native_calls.append(list(argv))
             if self.terminal_list_failure:
