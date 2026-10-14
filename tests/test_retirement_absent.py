@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 import os
 import unittest
+from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import objective_root, read
@@ -118,6 +119,28 @@ def _shape(kind, shape):
     return lambda case: case.inventory_shape.update({kind: shape})
 
 
+def _exact_shape(shape):
+    return lambda case: case.path_list_shape.update(shape)
+
+
+def _pathless_worktree_row(case):
+    case.inventory["worktrees"] = [{"id": "repo::" + case.gone}]  # Names no readable path: never evidence.
+
+
+def _unlocated_terminal(case):
+    case.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False}]
+
+
+def _terminal_named_by_id(case):
+    case.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                    "worktreeId": "repo::" + case.gone}]
+
+
+def _live_terminal_beneath_existing(case):
+    case.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                    "worktreePath": case.kept + "/nested"}]
+
+
 def _linked(case):
     git(case.project, "worktree", "remove", case.kept)
     (case.root / "elsewhere").mkdir()
@@ -165,6 +188,14 @@ PATH_REFUSALS = {
     "plain-directory": (_plain_directory, "gone", "path_foreign", "foreign"),
     "another-repository": (_another_repository, "gone", "path_foreign", "foreign"),
     "reused-entry": (_reused_entry, "kept", "path_foreign", "foreign"),
+    "pathless-worktree-row": (_pathless_worktree_row, "gone", "path_unverified", "unknown"),
+    "unlocated-terminal-row": (_unlocated_terminal, "gone", "path_unverified", "unknown"),
+    "terminal-named-by-id": (_terminal_named_by_id, "gone", "path_in_use", "absent"),
+    "exact-list-miscounted": (_exact_shape({"totalCount": 7}), "kept", "path_unverified", "unknown"),
+    "exact-list-without-local-host": (_exact_shape({"hostScope": {"hostIds": ["ssh"], "omittedHostIds": []}}),
+                                      "kept", "path_unverified", "unknown"),
+    "exact-list-without-host-scope": (_exact_shape({"hostScope": None}), "kept", "path_unverified", "unknown"),
+    "live-terminal-beneath-existing": (_live_terminal_beneath_existing, "kept", "path_in_use", "existing"),
 }
 
 
@@ -184,7 +215,14 @@ class PathRefusalTableTests(GroupedTable):
         "test_a_linked_path_refuses": ["linked-path"],
         "test_a_plain_directory_refuses": ["plain-directory"],
         "test_another_repository_refuses": ["another-repository"],
-        "test_a_reused_path_refuses": ["reused-entry"]}
+        "test_a_reused_path_refuses": ["reused-entry"],
+        "test_a_pathless_worktree_row_refuses": ["pathless-worktree-row"],
+        "test_an_unlocated_terminal_row_refuses": ["unlocated-terminal-row"],
+        "test_a_live_terminal_named_by_worktree_id_refuses": ["terminal-named-by-id"],
+        "test_a_miscounted_exact_terminal_list_refuses": ["exact-list-miscounted"],
+        "test_an_exact_terminal_list_without_this_host_refuses": ["exact-list-without-local-host"],
+        "test_an_exact_terminal_list_without_host_scope_refuses": ["exact-list-without-host-scope"],
+        "test_a_live_terminal_beneath_an_existing_path_refuses": ["live-terminal-beneath-existing"]}
 
     def row(self, kind):
         arrange, which, condition, disposition = PATH_REFUSALS[kind]
@@ -250,6 +288,27 @@ class PathRefusalTableTests(GroupedTable):
         self.rows()
 
     def test_a_reused_path_refuses(self):
+        self.rows()
+
+    def test_a_pathless_worktree_row_refuses(self):
+        self.rows()
+
+    def test_an_unlocated_terminal_row_refuses(self):
+        self.rows()
+
+    def test_a_live_terminal_named_by_worktree_id_refuses(self):
+        self.rows()
+
+    def test_a_miscounted_exact_terminal_list_refuses(self):
+        self.rows()
+
+    def test_an_exact_terminal_list_without_this_host_refuses(self):
+        self.rows()
+
+    def test_an_exact_terminal_list_without_host_scope_refuses(self):
+        self.rows()
+
+    def test_a_live_terminal_beneath_an_existing_path_refuses(self):
         self.rows()
 
 
@@ -362,6 +421,74 @@ class DecisionTests(AbsentCase):
         os.rmdir(self.gone)
         later = {row["objective"]: row["status"] for row in self.retire(decision, objectives=both)["objectives"]}
         self.assertEqual(later, {"objective": "retired", "reconcile": "replayed"})
+
+
+class ConcurrencyTests(AbsentCase):
+    """Review 1 F1: a path that changes while Pod reads, or after it read, never retires on the old facts."""
+
+    def decided(self):
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        self.release = self.request(self.gone, self.kept)
+        return self.decide(objectives=self.release)
+
+    def test_a_path_that_appears_while_pod_reads_is_never_proven_absent(self):
+        decision = self.decided()
+        before = self.snapshot()
+        self.during_inventory = lambda: os.mkdir(self.gone)
+        row = self.located(self.retire(objectives=self.release))[self.gone]
+        self.assertEqual((row["disposition"], row["condition"], row["evidence"]["filesystem"]),
+                         ("unknown", "path_unverified", "changed"))
+        os.rmdir(self.gone)
+        self.during_inventory = lambda: os.mkdir(self.gone)
+        verdict = self.retire(decision, objectives=self.release)["objectives"][0]
+        self.assertEqual((verdict["status"], verdict["condition"]), ("refused", "path_unverified"))
+        self.assertEqual(before, self.snapshot())
+
+    def test_a_path_that_changes_after_detection_refuses_before_the_write(self):
+        from pod import retirement
+        decision = self.decided()
+        before, detect = self.snapshot(), retirement._detect
+        for change, undo in ((lambda: os.mkdir(self.gone), lambda: os.rmdir(self.gone)),
+                             (lambda: self.instances.update({self.kept: "wt2:local:recreated"}),
+                              lambda: self.instances.update({self.kept: "wt2:local:kept"}))):
+            def racing(*args, **kwargs):
+                verdict = detect(*args, **kwargs)
+                change()
+                return verdict
+            with self.subTest(change=change), patch.object(retirement, "_detect", side_effect=racing):
+                verdict = self.retire(decision, objectives=self.release)["objectives"][0]
+                self.assertEqual((verdict["status"], verdict["condition"], verdict["changed"]),
+                                 ("refused", "retirement_decision_mismatch", ["locations"]))
+            undo()
+            self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
+
+    def test_each_objective_reads_the_host_afresh(self):
+        self.decided()
+        self.claim_only()
+        both = self.release + [{"objective": "reconcile", "release": [self.where()]}]
+        self.native_calls.clear()
+        self.retire(objectives=both)
+        self.assertEqual(self.native_calls.count(["terminal", "list", "--json"]), 2)
+
+    def test_the_question_explains_what_a_late_refused_objective_would_end(self):
+        # Review 1 F5: consent invited for later must describe that objective's effects too.
+        self.placed()
+        self.claim_only()
+        path, raw = _raw(self, "objective")
+        raw["checkpoint"].pop("worktree")
+        path.write_text(json.dumps(raw))
+        self.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                        "worktreePath": self.gone}]
+        found = self.retire(objectives=self.request(self.gone) + [{"objective": "reconcile",
+                                                                     "release": [self.where()]}])
+        question = found["question"]
+        for words in ("objective releasing " + self.gone + " (absent) (path_in_use)",
+                      "its missing directory does not prove that work stopped",
+                      "Objective objective keeps holding its recorded worktree(s) it does not release: " + self.kept,
+                      "Objective objective's record does not list every location its work used"):
+            self.assertIn(words, question)
 
 
 class PreservationTests(AbsentCase):

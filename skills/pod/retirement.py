@@ -261,9 +261,41 @@ def _filesystem(path: str) -> str:
     return "directory"
 
 
+def _complete(result: object, kind: str) -> list | None:
+    """The rows of an Orca list it reports complete: untruncated, its total equal to its rows, covering the local
+    execution host and omitting none. Anything else is None, never an empty list (R113)."""
+    if not isinstance(result, dict):
+        return None
+    rows, scope = result.get(kind), result.get("hostScope")
+    hosts = scope.get("hostIds") if isinstance(scope, dict) else None
+    if (isinstance(rows, list) and result.get("truncated") is False and result.get("totalCount") == len(rows)
+            and all(isinstance(row, dict) for row in rows) and isinstance(hosts, list) and "local" in hosts
+            and scope.get("omittedHostIds") == []):
+        return rows
+    return None
+
+
+def _places(row: dict, kind: str) -> list[str] | None:
+    """Every location an inventory row names. A row that names none Pod can read is None, so it makes the
+    inventory unusable rather than silently dropping out of a proof."""
+    from .listing import _location as named
+    if kind == "worktrees":
+        found = [row.get("path")]
+        if "git" in row:
+            found.append(row["git"].get("path") if isinstance(row["git"], dict) else None)
+    else:
+        found = [] if row.get("worktreePath") is None else [row["worktreePath"]]
+        if row.get("worktreeId") is not None:
+            found.append(named(row["worktreeId"]))
+    if not found or any(not isinstance(place, str) or not place.startswith("/") for place in found):
+        return None
+    return found
+
+
 class _Host:
     """The repository's Git worktree registry and Orca's complete worktree and terminal inventories, each read at
-    most once per request. A failed, partial or host-incomplete read stays unavailable, never an empty list."""
+    most once for one objective. A failed, partial, host-incomplete or unlocatable read stays unavailable, never an
+    empty list."""
 
     def __init__(self, project: Path):
         self.project, self._reads = project, {}
@@ -283,17 +315,25 @@ class _Host:
     def inventory(self, kind: str) -> dict | None:
         if kind not in self._reads:
             from .orca import read_command
+            self._reads[kind] = None
             try:
                 result = read_command([kind.removesuffix("s"), "list", "--json"])["result"]
-                rows, scope = result.get(kind), result.get("hostScope")
-                hosts = scope.get("hostIds") if isinstance(scope, dict) else None
-                complete = (isinstance(rows, list) and result.get("truncated") is False
-                            and result.get("totalCount") == len(rows) and all(isinstance(row, dict) for row in rows)
-                            and isinstance(hosts, list) and "local" in hosts and scope.get("omittedHostIds") == [])
-                self._reads[kind] = {"rows": rows, "hosts": sorted(str(host) for host in hosts)} if complete else None
-            except (PodError, KeyError, TypeError, AttributeError):
-                self._reads[kind] = None
+            except (PodError, KeyError, TypeError):
+                return None
+            rows = _complete(result, kind)
+            places = [_places(row, kind) for row in rows] if rows is not None else [None]
+            if None not in places:
+                self._reads[kind] = {"rows": rows, "places": places,
+                                     "hosts": sorted(str(host) for host in result["hostScope"]["hostIds"])}
         return self._reads[kind]
+
+    def beneath(self, kind: str, path: str) -> list[dict] | None:
+        """The rows of an inventory naming the path or anything beneath it; None while the inventory is unusable."""
+        found = self.inventory(kind)
+        if found is None:
+            return None
+        return [row for row, places in zip(found["rows"], found["places"])
+                if any(_within(place, path) for place in places)]
 
 
 def _exited(row: dict) -> bool:
@@ -320,10 +360,22 @@ def _recorded_entries(state: dict) -> dict[str, set[str]]:
     return entries
 
 
-def _existing(path: str, repository: str, entries: set[str]) -> dict:
+def _identity(path: str) -> str | None:
+    """The worktree identity Orca's exact show reports for an existing path, or None when it reports none."""
+    from .orca import read_command
+    try:
+        worktree = read_command(["worktree", "show", "--worktree", "path:" + path, "--json"])["result"]["worktree"]
+        identity = worktree.get("identity") if isinstance(worktree, dict) and worktree.get("path") == path else None
+        key = identity.get("key") if isinstance(identity, dict) else None
+    except (PodError, KeyError, TypeError):
+        return None
+    return key if _text(key, 256) else None
+
+
+def _existing(path: str, repository: str, entries: set[str], host: _Host) -> dict:
     """A released path that exists: a worktree root of this repository that Orca resolves exactly, under the
-    repository entry the record names, with every terminal Orca lists in it proven exited (R112), and its Orca
-    worktree identity for the decision (R113)."""
+    repository entry the record names, with every terminal Orca lists in it or beneath it proven exited (R112), and
+    its Orca worktree identity for the decision (R113)."""
     from .gitio import read as git_read
     from .orca import read_command
     found = git_read(Path(path), ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"])
@@ -338,14 +390,11 @@ def _existing(path: str, repository: str, entries: set[str]) -> dict:
     try:
         shown = read_command(["worktree", "show", "--worktree", "path:" + path, "--json"])
         listed = read_command(["terminal", "list", "--worktree", "path:" + path, "--json"])
-        worktree, rows = shown["result"]["worktree"], listed["result"]["terminals"]
-        scope = listed["result"].get("hostScope")
+        worktree, rows = shown["result"]["worktree"], _complete(listed["result"], "terminals")
         identity = worktree.get("identity") if isinstance(worktree, dict) else None
         key = identity.get("key") if isinstance(identity, dict) else None
-        if (not isinstance(worktree, dict) or worktree.get("path") != path
-                or not isinstance(rows, list) or listed["result"].get("truncated") is not False
-                or isinstance(scope, dict) and scope.get("omittedHostIds")
-                or any(not isinstance(row, dict) or row.get("worktreePath") != path for row in rows)):
+        if (not isinstance(worktree, dict) or worktree.get("path") != path or rows is None
+                or any(row.get("worktreePath") != path for row in rows)):
             raise PodError("orca_contract", "terminal list is partial or names another worktree")
         if not _text(key, 256):
             raise PodError("orca_contract", "Orca reports no identity for the worktree")
@@ -358,11 +407,19 @@ def _existing(path: str, repository: str, entries: set[str]) -> dict:
         return _location(path, "foreign", "path_foreign", "Orca now registers this path under another repository "
                          "entry than the one the record names: the path was reused.",
                          filesystem="directory", git="this_repository", orca="reused")
-    live = [row for row in rows if not _exited(row)]
+    beneath = host.beneath("terminals", path)
+    if beneath is None:
+        return _location(path, "unknown", "path_unverified", "Orca's terminal inventory is unreadable, partial, "
+                         "misses an execution host or has a row without a readable location, so terminals beneath "
+                         "this path stay unverified.", filesystem="directory", git="this_repository", orca="resolved")
+    # The exact list and the host inventory overlap; a terminal counts once, by handle where it has one.
+    terminals = {row.get("handle") if isinstance(row.get("handle"), str) else ("row", index, source): row
+                 for source, group in (("exact", rows), ("beneath", beneath)) for index, row in enumerate(group)}
+    live = [row for row in terminals.values() if not _exited(row)]
     row = _location(path, "existing", "path_in_use" if live else None,
-                    "An Orca terminal that is not proven exited is in this path." if live else None,
+                    "An Orca terminal that is not proven exited is in or beneath this path." if live else None,
                     filesystem="directory", git="this_repository", orca="resolved",
-                    exited_terminals=len(rows) - len(live))
+                    exited_terminals=len(terminals) - len(live))
     row["worktree"] = key
     return row
 
@@ -370,7 +427,8 @@ def _existing(path: str, repository: str, entries: set[str]) -> dict:
 def _absent(path: str, host: _Host) -> dict:
     """A released path proven gone on this host: absent from its filesystem with no link in its ancestry, from the
     repository's Git worktree registry, stale registrations included, and from Orca's complete worktree inventory;
-    Orca's complete terminal inventory may name it only for terminals proven exited (R113)."""
+    Orca's complete terminal inventory may name it only for terminals proven exited. The filesystem is read again
+    after the other reads, so a path that appears meanwhile is never proven absent (R113)."""
     registry = host.registry()
     if registry is None:
         return _location(path, "unknown", "path_unverified", "Git's worktree registry of this repository could not "
@@ -379,21 +437,34 @@ def _absent(path: str, host: _Host) -> dict:
         return _location(path, "unknown", "path_unverified", "Git still registers a worktree at or beneath this "
                          "path, though its directory is gone; resolve that stale registration through Git first.",
                          filesystem="absent", git="registered")
-    worktrees, terminals = host.inventory("worktrees"), host.inventory("terminals")
+    worktrees, terminals = host.beneath("worktrees", path), host.beneath("terminals", path)
     if worktrees is None or terminals is None:
         return _location(path, "unknown", "path_unverified", "Orca's worktree or terminal inventory is unreadable, "
-                         "partial or misses an execution host.", filesystem="absent", git="unregistered")
-    if any(_within(row.get("path"), path) or _within((row.get("git") or {}).get("path")
-                                                     if isinstance(row.get("git"), dict) else None, path)
-           for row in worktrees["rows"]):
+                         "partial, misses an execution host or has a row without a readable location.",
+                         filesystem="absent", git="unregistered")
+    if worktrees:
         return _location(path, "unknown", "path_unverified", "Orca still lists a worktree at or beneath this path.",
                          filesystem="absent", git="unregistered", orca="listed")
-    rows = [row for row in terminals["rows"] if _within(row.get("worktreePath"), path)]
-    live = [row for row in rows if not _exited(row)]
+    if _filesystem(path) != "absent":
+        return _location(path, "unknown", "path_unverified", "The path appeared, or its ancestry changed, while Pod "
+                         "read Git and Orca; detect again.", filesystem="changed", git="unregistered")
+    live = [row for row in terminals if not _exited(row)]
     return _location(path, "absent", "path_in_use" if live else None,
-                     "An Orca terminal that is not proven exited names this path." if live else None,
-                     filesystem="absent", git="unregistered", orca="unlisted", hosts=worktrees["hosts"],
-                     exited_terminals=len(rows) - len(live))
+                     "An Orca terminal that is not proven exited names this path or a location beneath it." if live
+                     else None, filesystem="absent", git="unregistered", orca="unlisted",
+                     hosts=host.inventory("worktrees")["hosts"], exited_terminals=len(terminals) - len(live))
+
+
+def _moved(located: list[dict]) -> bool:
+    """Whether any released path no longer stands as detection found it, read again right before the write."""
+    for row in located:
+        shown = _filesystem(row["path"])
+        if row["disposition"] == "absent" and shown != "absent":
+            return True
+        if row["disposition"] == "existing" and (shown != "directory" or _identity(row["path"]) != row["worktree"]):
+            return True
+    return False
+
 
 
 _UNPROVEN = {"linked": "A link or file stands in this path or its ancestry, so where it leads stays unproven.",
@@ -404,7 +475,7 @@ def _locate(path: str, repository: str, host: _Host, entries: set[str]) -> dict:
     """One released path: existing, proven absent, foreign, or unknown with the reason absence stays unproven."""
     shown = _filesystem(path)
     if shown == "directory":
-        return _existing(path, repository, entries)
+        return _existing(path, repository, entries, host)
     if shown == "absent":
         return _absent(path, host)
     return _location(path, "unknown", "path_unverified", _UNPROVEN[shown], filesystem=shown)
@@ -625,42 +696,51 @@ def _block_valid(block: dict) -> bool:
             and bool(block["delivery"]))
 
 
+def _released(locations: list[dict]) -> str:
+    return ", ".join(row["path"] + (" (absent)" if row["disposition"] == "absent" else " (existing worktree)")
+                     for row in locations)
+
+
+def _effects(row: dict) -> str:
+    """What cleanup keeps holding for one objective after retirement, and the hold retirement ends (R113)."""
+    facts, said = row["facts"], ""
+    if facts["retained"]:
+        said += (f" Objective {row['objective']} keeps holding its recorded worktree(s) it does not release: "
+                 + ", ".join(facts["retained"]) + ".")
+    if facts["unrecorded_locations"] == "hold_ends":
+        said += (f" Objective {row['objective']}'s record does not list every location its work used, so while it "
+                 "is open cleanup holds every task worktree of this repository for it; retirement ends that hold.")
+    return said
+
+
 def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
     """One plain question naming every objective a decision on this request could bind, its paths and how each
     stands, and what cleanup holds for it afterwards (R113)."""
     names = [row["objective"] for row in eligible]
-    standing = {row["path"]: row["disposition"] for item in eligible for row in item["facts"]["locations"]}
-    paths = [path + (" (absent)" if standing[path] == "absent" else " (existing worktree)") for path in sorted(standing)]
-    held = sum(tally.values())
+    standing = {row["path"]: row for item in eligible for row in item["facts"]["locations"]}
     question = (f"May Pod retire {'objective' if len(names) == 1 else 'objectives'} {', '.join(names)} as delivered "
-                f"history whose coordinator is gone, releasing {', '.join(paths)} for cleanup?")
-    if "absent" in standing.values():
-        question += (" An absent path is gone from this host's filesystem, from the repository's Git worktree "
-                     "registry and from Orca's complete worktree and terminal inventories; its missing directory "
-                     "does not prove that work stopped, which the coordinator, Run and Dispatch checks prove.")
-    for row in eligible:
-        facts = row["facts"]
-        if facts["retained"]:
-            question += (f" Objective {row['objective']} keeps holding its recorded worktree(s) it does not release: "
-                         + ", ".join(facts["retained"]) + ".")
-        if facts["unrecorded_locations"] == "hold_ends":
-            question += (f" Objective {row['objective']}'s record does not list every location its work used, so "
-                         "while it is open cleanup holds every task worktree of this repository for it; retirement "
-                         "ends that hold.")
-    question += (f" Retirement does not close or complete {'it' if len(names) == 1 else 'them'}: {held} pending, "
-                 "unknown, failed or unreported record(s) stay exactly as recorded, and the record will accept no "
-                 "further writes.")
+                f"history whose coordinator is gone, releasing {_released([standing[key] for key in sorted(standing)])} "
+                "for cleanup?")
     # Only a refusal that came after every fact was read, with every path an existing worktree or proven absent,
-    # leaves facts a decision can bind (R112, R113).
+    # leaves facts a decision can bind (R112, R113); what that decision would end is said for it too.
     later = [row for row in refused if row["status"] == "refused" and row["facts"]["runs"]
              and row["facts"]["locations"]
              and all(item["disposition"] in RELEASABLE for item in row["facts"]["locations"])]
     never = [row for row in refused if row not in later]
+    if any(item["disposition"] == "absent" for row in eligible + later for item in row["facts"]["locations"]):
+        question += (" An absent path is gone from this host's filesystem, from the repository's Git worktree "
+                     "registry and from Orca's complete worktree and terminal inventories; its missing directory "
+                     "does not prove that work stopped, which the coordinator, Run and Dispatch checks prove.")
+    question += "".join(_effects(row) for row in eligible)
+    held = sum(tally.values())
+    question += (f" Retirement does not close or complete {'it' if len(names) == 1 else 'them'}: {held} pending, "
+                 "unknown, failed or unreported record(s) stay exactly as recorded, and the record will accept no "
+                 "further writes.")
     if later:
         question += (" Not retirable now, but a decision that also names it retires it once its condition clears "
                      "and its facts still match: " + "; ".join(
-                         f"{row['objective']} releasing {', '.join(row['facts']['release'])} ({row['condition']})"
-                         for row in later) + ".")
+                         f"{row['objective']} releasing {_released(row['facts']['locations'])} ({row['condition']})"
+                         for row in later) + "." + "".join(_effects(row) for row in later))
     if never:
         question += (" Not retirable by a decision on these facts: " + "; ".join(
             f"{row['objective']} ({row['condition']})" for row in never) + ".")
@@ -684,7 +764,6 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
     if decision is not None:
         decision = _decision(decision, requested, repository)
     port = port or OrcaPort(project)
-    host = _Host(project)
     paths = {row["objective"]: _path(project, row["objective"]) for row in requested}
     results = []
     with ExitStack() as stack:
@@ -703,8 +782,9 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                            "message": f"The objective's record is unreadable or unsupported ({exc.code}).",
                            "next_action": "Historical retirement needs a readable current record."}
             else:
+                # Each objective reads the host afresh: an earlier objective's inventory is never its proof.
                 verdict = _detect(project, name, row["release"], state, port=port, repository=repository,
-                                  host=host)
+                                  host=_Host(project))
             verdict["record"] = record_name(project, context, name)
             if decision is None:
                 results.append(verdict)
@@ -730,6 +810,12 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                 "changed": changed,
                                 "message": "The decision differs from fresh owner, Run, path, disposition, "
                                            "reservation or record facts. Nothing was written.",
+                                "next_action": "detect again and confirm the changed facts with the owner"})
+                continue
+            if _moved(verdict["locations"]):
+                results.append({**verdict, "status": "refused", "condition": "retirement_decision_mismatch",
+                                "changed": ["locations"],
+                                "message": "A released path changed after Pod read its facts. Nothing was written.",
                                 "next_action": "detect again and confirm the changed facts with the owner"})
                 continue
             entry = {"at": datetime.now(timezone.utc).isoformat(), "decision": digest(decision),

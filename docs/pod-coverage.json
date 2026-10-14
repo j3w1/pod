@@ -3239,7 +3239,14 @@
         "tests.test_retirement_absent.PathRefusalTableTests.test_a_reused_path_refuses",
         "tests.test_retirement_absent.PathRefusalTableShapeTests.test_the_path_refusal_table_runs_every_row_once",
         "tests.test_retirement_absent.UnprovenFilesystemTests.test_an_unreadable_parent_or_a_linked_ancestor_keeps_absence_unproven",
-        "tests.test_retirement_absent.UnprovenFilesystemTests.test_a_matching_recorded_repository_entry_passes"
+        "tests.test_retirement_absent.UnprovenFilesystemTests.test_a_matching_recorded_repository_entry_passes",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_a_pathless_worktree_row_refuses",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_an_unlocated_terminal_row_refuses",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_a_live_terminal_named_by_worktree_id_refuses",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_a_miscounted_exact_terminal_list_refuses",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_an_exact_terminal_list_without_this_host_refuses",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_an_exact_terminal_list_without_host_scope_refuses",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_a_live_terminal_beneath_an_existing_path_refuses"
       ],
       "status": "NOT_RUN"
     },
@@ -3254,7 +3261,11 @@
         "tests.test_retirement_absent.DecisionTests.test_a_reappearing_or_recreated_path_refuses_and_stable_facts_retire",
         "tests.test_retirement_absent.DecisionTests.test_a_decision_without_dispositions_or_claiming_more_refuses",
         "tests.test_retirement_absent.DecisionTests.test_a_record_another_writer_widened_refuses",
-        "tests.test_retirement_absent.DecisionTests.test_a_mixed_batch_reports_each_objective_and_later_retires_the_other"
+        "tests.test_retirement_absent.DecisionTests.test_a_mixed_batch_reports_each_objective_and_later_retires_the_other",
+        "tests.test_retirement_absent.ConcurrencyTests.test_a_path_that_appears_while_pod_reads_is_never_proven_absent",
+        "tests.test_retirement_absent.ConcurrencyTests.test_a_path_that_changes_after_detection_refuses_before_the_write",
+        "tests.test_retirement_absent.ConcurrencyTests.test_each_objective_reads_the_host_afresh",
+        "tests.test_retirement_absent.ConcurrencyTests.test_the_question_explains_what_a_late_refused_objective_would_end"
       ],
       "status": "NOT_RUN"
     },
