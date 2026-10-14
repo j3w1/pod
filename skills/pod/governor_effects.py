@@ -112,7 +112,7 @@ def _history(port: GitHubPort, *, workflow: str, commit: str) -> tuple[list[dict
 def _unlisted(read: dict, *, events: tuple[str, ...] | None, since: str, outcome: str) -> str:
     """Why a lookup bound nothing: missing or partial history is never a failure or a proof of no effect."""
     wanted = " or ".join(events) if events else "any event"
-    reason = (f"no {wanted} run of {read['scope']} created at or after {since} is listed "
+    reason = (f"no {wanted} run created at or after {since} is among the listed {read['scope']} "
               f"({read['listed']} listed, limit {read['limit']})")
     if read["truncated"]:
         reason += "; the list was truncated, so an older matching run may be hidden"
