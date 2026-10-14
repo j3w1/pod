@@ -93,9 +93,9 @@ class OrcaAdapterTests(unittest.TestCase):
 
     def test_an_identity_that_cannot_pass_exactly_never_reaches_orca(self):
         # Final audit 2 M1: JSON carries a lone surrogate or a NUL that no argument or record can hold; Pod refuses it
-        # with a diagnosis, never UnicodeEncodeError or ValueError, and never sends it, even past its own allowlist.
+        # with a diagnosis, never UnicodeEncodeError or ValueError, and never sends it, even past its allowlists.
         import tempfile
-        from pod.orca import _envelope,_read_allowed
+        from pod.orca import _envelope,_read_allowed,run_show
         for bad in ('d\ud800','d\udcff','d\x00x'):
             for argv in (['terminal','show','--terminal',bad,'--json'],
                          ['orchestration','worker-show','--dispatch',bad,'--json'],
@@ -111,6 +111,12 @@ class OrcaAdapterTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code,'unsupported_orca_read')
                     runner.assert_not_called()
             self.assertIsNone(worktree_selector('path:/w/'+bad))
+            for call,code in ((lambda: run_show(bad),'orca_contract'),(lambda: worker_rows(bad),'orca_contract'),
+                              (lambda: worktree_identity('path:/w/'+bad),'invalid_worktree_selector')):
+                with (self.subTest(code=code,bad=ascii(bad)),patch('pod.orca.subprocess.run') as runner,
+                      self.assertRaises(PodError) as caught): call()  # A caller that checks the identity first.
+                self.assertEqual(caught.exception.code,code)
+                runner.assert_not_called()
             with patch('pod.orca.subprocess.run') as runner:
                 for argv in (['orchestration','run-use','--id',bad,'--json'],
                              START[:3]+[bad]+START[4:],START[:-2]+[bad,'--json']):
@@ -123,13 +129,27 @@ class OrcaAdapterTests(unittest.TestCase):
             self.assertEqual(caught.exception.code,'orca_contract')
         with tempfile.TemporaryDirectory() as temporary:
             out=Path(temporary)/'out'; out.write_text(json.dumps({'ok':True,'result':{},'_meta':{'runtimeId':'r'}}))
-            tool=Path(temporary)/'orca'; tool.write_text(f'#!/bin/sh\ncat "{out}"\n'); tool.chmod(0o755)
-            with patch('pod.orca.executable',return_value=tool),patch('pod.orca._read_allowed',return_value=True):
-                for bad in ('d\ud800','d\x00x'):  # The real subprocess path, should an argument pass the allowlist.
-                    with self.subTest(bad=ascii(bad)),self.assertRaises(PodError) as caught:
-                        read_command(['orchestration','worker-show','--dispatch',bad,'--json'])
-                    self.assertEqual(caught.exception.code,'unsupported_orca_read')
-                self.assertEqual(read_command(['orchestration','worker-show','--dispatch','d','--json'])['runtime'],'r')
+            started=Path(temporary)/'started'
+            tool=Path(temporary)/'orca'; tool.write_text(f'#!/bin/sh\ntouch "{started}"\ncat "{out}"\n')
+            tool.chmod(0o755)
+            # Final audit N1: the real subprocess path, should an argument pass an allowlist. Python raises on a lone
+            # surrogate or NUL, and would pass a surrogate-escaped one (\udcff) to Orca as the raw byte.
+            for allowed,call,code in (
+                    ('_read_allowed',
+                     lambda value: read_command(['orchestration','worker-show','--dispatch',value,'--json']),
+                     'unsupported_orca_read'),
+                    ('_mutate_allowed',
+                     lambda value: mutate_command(['orchestration','run-use','--id',value,'--json']),
+                     'unsupported_orca_mutation')):
+                with patch('pod.orca.executable',return_value=tool),patch('pod.orca.'+allowed,return_value=True):
+                    for bad in ('d\ud800','d\udcff','d\x00x'):
+                        with self.subTest(allowed=allowed,bad=ascii(bad)),self.assertRaises(PodError) as caught:
+                            call(bad)
+                        self.assertEqual(caught.exception.code,code)
+                        self.assertFalse(started.exists())  # No process started.
+                    self.assertEqual(call('d')['runtime'],'r')
+                    self.assertTrue(started.exists())
+                    started.unlink()
             out.write_text(json.dumps({'ok':True,'result':{},'_meta':{'runtimeId':'r\ud800'}}))
             with patch('pod.orca.executable',return_value=tool),self.assertRaises(PodError) as caught:
                 read_command(['orchestration','run-current','--json'])

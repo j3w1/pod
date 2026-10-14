@@ -93,6 +93,9 @@ def _read_allowed(argv: list[str]) -> bool:
 def read_command(argv: list[str], *, timeout: int = 10) -> dict:
     if not _read_allowed(argv):
         raise PodError("unsupported_orca_read", "Orca adapter accepts only known read operations")
+    if not all(_passable(value) for value in argv):
+        # Checked whatever the shape: Python would pass a surrogate-escaped argument to Orca as raw bytes (R18).
+        raise PodError("unsupported_orca_read", "Orca read arguments must be UTF-8 text without NUL")
     command = [str(executable()), *argv]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
@@ -100,9 +103,6 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
         raise PodError("orca_unavailable", "Orca read failed") from exc
     except UnicodeDecodeError:
         raise PodError("orca_contract", "Orca read output is not valid UTF-8") from None
-    except ValueError:
-        # The allowlist already refuses an argument that cannot be passed exactly; no read ever raises on one.
-        raise PodError("unsupported_orca_read", "Orca read arguments must be UTF-8 text without NUL") from None
     if proc.returncode:
         detail = {}
         if len(proc.stdout) <= MAX_OUTPUT:
@@ -306,6 +306,8 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
     """Run one allowlisted state-changing Orca command and return its exact receipt."""
     if not _mutate_allowed(argv):
         raise PodError("unsupported_orca_mutation", "Orca adapter accepts only known mutations")
+    if not all(_passable(value) for value in argv):
+        raise PodError("unsupported_orca_mutation", "Orca mutation arguments must be UTF-8 text without NUL")
     command = [str(executable()), *argv]
     stdout, stderr, returncode, transport = None, None, None, "completed"
     try:

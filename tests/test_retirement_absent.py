@@ -840,7 +840,8 @@ class WithinTests(unittest.TestCase):
                 (at("missing", "..", "real", "gone"), gone, True), (at("shortcut"), kept, False),
                 (at("real", "kept", "out", "x"), kept, True), (at("elsewhere", "x"), kept, False),
                 (at("locked", "sub", "x"), at("locked"), True), (at("locked", "sub"), kept, False),
-                (at("real", "kept\x00x"), kept, True), ("relative/kept", kept, False), (None, kept, False)):
+                (at("real", "kept\x00x"), kept, True), ("relative/kept", kept, False), (None, kept, False),
+                (at("real"), "/x\x00y", True)):  # Final audit N2: a path that cannot be placed matches everything.
             with self.subTest(candidate=ascii(candidate), path=path):
                 self.assertIs(_within(candidate, path), matches)
 
