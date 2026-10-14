@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,6 +49,15 @@ DISPATCH_EVENT = "workflow_dispatch"
 # Pod cannot tell whether a pull request was open, so a run of either publication kind may be any of these.
 PUBLICATION_EVENTS = ("push", "pull_request", "pull_request_target")
 RETENTION = "GitHub lists only the runs it still retains; a deleted or expired run is not listed"
+# An effect is read as absent only after its call's time limit and this margin for clock skew and provider
+# propagation, since a call still in flight may land (R115).
+ABSENCE_MARGIN_S = 600
+
+
+def absent_after(started: datetime) -> datetime:
+    """When an effect submitted at `started` that has not appeared may first be read as absent."""
+    from .github import MUTATION_TIMEOUT_S
+    return started + timedelta(seconds=MUTATION_TIMEOUT_S + ABSENCE_MARGIN_S)
 
 
 def _requested_dispatch(row: dict) -> bool:
@@ -239,8 +248,12 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_reques
             if _uncertain(exc):
                 return "UNKNOWN", own, "rerun response was lost"
             raise
+        # GitHub accepted the rerun: only now can a single new attempt be proved this row's own.
+        own["accepted"] = True
+        if intent is not None:
+            intent(own)
         try:
-            run, _ = _own_rerun_attempt(port, own)
+            run = _own_rerun_attempt(port, own)["run"]
         except PodError:
             run = None
         if run is None:
@@ -345,7 +358,8 @@ def _record_intent(project: Path, objective: str, *, owner: str, record_id: str,
         journal = _read_journal(record_path)
         row = _find_row(journal, record_id)
         row["receipt"]["provider"] = {**(row["receipt"].get("provider") or {}), **provider}
-        row["receipt"]["detail"] = "submitting; its result is read back"
+        row["receipt"]["detail"] = ("submitted and accepted; its own attempt is read back" if provider.get("accepted")
+                                    else "submitting; its result is read back")
         _write_journal(record_path, journal)
         return dict(row)
 
@@ -477,31 +491,49 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
     return result
 
 
-def _own_rerun_attempt(port: GitHubPort, provenance: dict) -> tuple[dict | None, str | None]:
-    """The rerun's own attempt, when provider facts prove it, else None with why.
+def _own_rerun_attempt(port: GitHubPort, provenance: dict, now: datetime | None = None) -> dict:
+    """What provider facts prove about a rerun's own attempt: `run` when one is proved, else `reason`, and
+    `absent` when the rerun is proved not to have taken effect.
 
-    Only one fact pattern proves it: the run's latest attempt is exactly one after the attempt read before
-    submission, and it started at or after the recorded submission start. Two or more new attempts, or one that
-    started before the submission, may be another actor's; Pod's own rows are never taken as the complete
-    history of a run.
+    The proof needs Pod's own submission confirmed accepted, the run's latest attempt exactly one after the
+    attempt read before submission, and that attempt started at or after the recorded submission start; then no
+    other actor's attempt can be it. Without the confirmation a single new attempt may be another actor's; two
+    or more new attempts, or one that started earlier, may be too. Pod's own rows are never taken as the complete
+    history of a run. When the exact run view shows no attempt after the pre-read once the call's time limit and
+    the absence margin have passed, an unconfirmed rerun did not take effect.
     """
     run_id = provenance["run_id"]
     before = provenance.get("before_attempt")
     submitted = _stamp(provenance.get("submitted_at"))
     if type(before) is not int or submitted is None:
-        return None, ("this rerun has no recorded pre-submission attempt and start, so its own attempt cannot be told "
-                      "from another actor's")
+        return {"run": None, "absent": False,
+                "reason": "this rerun has no recorded pre-submission attempt and start, so its own attempt cannot be "
+                          "told from another actor's"}
+    accepted = provenance.get("accepted") is True
     latest = port.run(run_id=run_id)
     attempt = latest.get("attempt")
     started = _stamp(latest.get("started_at"))
     if attempt == before:
-        return None, f"run {run_id} shows no attempt after attempt {before}, read before the rerun was submitted"
-    if (attempt == before + 1 and str(latest.get("id")) == run_id and started is not None
-            and started >= submitted.replace(microsecond=0)):
-        return latest, None
-    return None, (f"run {run_id} shows attempt {attempt} after attempt {before} read before the rerun was submitted"
-                  + ("" if attempt == before + 1 else ", more than one new attempt")
-                  + "; Pod cannot prove which is its own, so none binds")
+        floor = absent_after(submitted)
+        if not accepted and str(latest.get("id")) == run_id and (now or datetime.now(timezone.utc)) >= floor:
+            return {"run": None, "absent": True,
+                    "reason": f"run {run_id} still shows attempt {before}, read before the rerun was submitted, after "
+                              f"{floor.isoformat()}: the unconfirmed rerun did not take effect"}
+        return {"run": None, "absent": False,
+                "reason": f"run {run_id} shows no attempt after attempt {before}, read before the rerun was submitted"}
+    single = attempt == before + 1 and str(latest.get("id")) == run_id
+    if single and started is not None and started >= submitted.replace(microsecond=0) and accepted:
+        return {"run": latest, "absent": False, "reason": None}
+    if single and not accepted and started is not None and started >= submitted.replace(microsecond=0):
+        why = ("Pod's submission was never confirmed accepted, so that attempt may be another actor's while Pod's "
+               "own never landed")
+    elif single:
+        why = "it started before the rerun was submitted, so it may be another actor's"
+    else:
+        why = "more than one new attempt exists, and any of them may be another actor's"
+    return {"run": None, "absent": False,
+            "reason": f"run {run_id} shows attempt {attempt} after attempt {before} read before the rerun was "
+                      f"submitted; {why}; Pod cannot prove which is its own, so none binds"}
 
 
 def _rerun_source(row: dict, journal: dict) -> str | None:
@@ -516,7 +548,7 @@ def _rerun_source(row: dict, journal: dict) -> str | None:
     return str(_bound_run_id(failed[-1])) if failed else None
 
 
-def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
+def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict, *, now: datetime | None = None) -> dict:
     """Read the provider for one unsettled row and say what it shows, writing nothing.
 
     The answer carries an outcome, or a hold with its reason; `seen` says whether the provider shows the
@@ -570,12 +602,17 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
                     return answer
             else:
                 try:
-                    run, reason = _own_rerun_attempt(port, {**provider, "run_id": run_id})
+                    proof = _own_rerun_attempt(port, {**provider, "run_id": run_id}, now)
                 except PodError as exc:
-                    run, reason = None, f"run {run_id} is not readable ({exc.code})"
-                if run is None:
-                    answer["hold"] = f"{reason}; the row stays {row['outcome']}"
+                    proof = {"run": None, "absent": False, "reason": f"run {run_id} is not readable ({exc.code})"}
+                if proof["absent"]:
+                    # Recorded as the effect's failure to take place, never as no effect (R116).
+                    answer.update(outcome="FAILED", detail=proof["reason"])
                     return answer
+                if proof["run"] is None:
+                    answer["hold"] = f"{proof['reason']}; the row stays {row['outcome']}"
+                    return answer
+                run = proof["run"]
         elif run_id:
             # A bound run is verified exactly as a newly selected one, whoever bound it (R115).
             run = port.run(run_id=str(run_id), attempt=1)
@@ -673,7 +710,7 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
     if unit is None:
         raise PodError("unit_unbound", "No delivery unit binds this row")
     moment = now or datetime.now(timezone.utc)
-    answer = _observe(port or _port(project), row, unit, journal)
+    answer = _observe(port or _port(project), row, unit, journal, now=moment)
     if answer["reject"] is not None:
         _reject_run(project, objective, owner=owner, record_id=record_id, rejected=answer["reject"])
     result = {"record_id": record_id}

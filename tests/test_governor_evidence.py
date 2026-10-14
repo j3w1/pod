@@ -266,7 +266,8 @@ class ProviderEventTests(EvidenceCase):
         port.rerun = original
         row = self.rerun_row()
         self.assertEqual(row["outcome"], "pending")
-        self.assertEqual(set(row["receipt"]["provider"]), {"run_id", "rerun", "before_attempt", "submitted_at"})
+        self.assertEqual(set(row["receipt"]["provider"]),
+                         {"run_id", "rerun", "before_attempt", "submitted_at", "accepted"})
         return row
 
     def test_an_interrupted_rerun_resumes_from_its_recorded_provenance(self):
@@ -295,6 +296,61 @@ class ProviderEventTests(EvidenceCase):
         self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
         self.assertIn("more than one new attempt", held["reason"])
         self.assertEqual(len([call for call in port.calls if call[0] == "rerun"]), 2)  # Pod's one, the actor's one.
+
+    def test_a_rerun_interrupted_inside_its_call_never_binds_an_unconfirmed_attempt(self):
+        """Strict: without Pod's confirmed acceptance a lone new attempt may be another actor's, so it holds."""
+        from contextlib import nullcontext
+        from unittest.mock import patch
+        for hard_kill in (False, True):
+            with self.subTest(hard_kill=hard_kill):
+                port = FakePort()
+                _, run_id = self.failed_dispatch(port)
+                original = port.rerun
+
+                def landed_then_killed(*, run_id, failed_only):
+                    original(run_id=run_id, failed_only=failed_only)
+                    raise KeyboardInterrupt("killed before the reply was processed")
+                port.rerun = landed_then_killed
+                # A hard kill writes nothing more; otherwise execution records the interrupted effect UNKNOWN.
+                stop = (patch("pod.governor_effects._record_execution", side_effect=RuntimeError("killed"))
+                        if hard_kill else nullcontext())
+                with stop, self.assertRaises((KeyboardInterrupt, RuntimeError)):
+                    self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
+                port.rerun = original
+                row = self.rerun_row()
+                self.assertNotIn("accepted", row["receipt"]["provider"])
+                self.assertEqual(row["outcome"], "pending" if hard_kill else "UNKNOWN")
+                port.complete(run_id, "success")
+                held = self.reconcile(row["record_id"], port)
+                self.assertEqual(held["action"], "hold")
+                self.assertIn("never confirmed accepted", held["reason"])
+                self.assertEqual(len([call for call in port.calls if call[0] == "rerun"]), 1)
+                self.journal.unlink()
+                self.binding = self.prepared()["candidate"]
+                self.preflight(self.binding["id"])
+
+    def test_an_unconfirmed_rerun_is_failed_only_once_proved_absent(self):
+        """With no attempt after the pre-read past the call's time limit and margin, the rerun did not happen."""
+        from datetime import timedelta
+        from unittest.mock import patch
+        port = FakePort()
+        _, run_id = self.failed_dispatch(port)
+
+        def killed(*, run_id, failed_only):
+            raise KeyboardInterrupt("killed before the call left")
+        port.rerun = killed
+        with patch("pod.governor_effects._record_execution", side_effect=RuntimeError("killed")), \
+                self.assertRaises(RuntimeError):
+            self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
+        row = self.rerun_row()
+        early = reconcile(self.project, "objective", owner="owner", record_id=row["record_id"], port=port,
+                          now=NOW + timedelta(seconds=300))
+        self.assertEqual((early["status"], early["action"]), ("pending", "hold"))
+        late = reconcile(self.project, "objective", owner="owner", record_id=row["record_id"], port=port,
+                         now=NOW + timedelta(seconds=720))
+        self.assertEqual(late["status"], "FAILED")
+        self.assertIn("did not take effect", late["receipt"]["detail"])
+        self.assertFalse([call for call in port.calls if call[0] == "rerun"])
 
     def test_an_actor_between_the_pre_read_and_the_submission_never_binds(self):
         """DA-A-01: the pre-read race, with Pod's own attempt landing or its reply lost."""

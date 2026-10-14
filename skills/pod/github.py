@@ -31,6 +31,8 @@ _INPUT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}=[^\n\r\x00]{0,512}\Z")
 RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName,attempt,startedAt"
 # A run list asks for one more run than it reads, so a full list says whether it was cut short.
 RUN_LIST_LIMIT = 20
+# A mutation that has not answered within this many seconds has ended; a read is bounded by half.
+MUTATION_TIMEOUT_S = 120
 PR_FIELDS = "number,url,headRefOid,state,isDraft"
 ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
@@ -455,14 +457,14 @@ class GhPort:
     def _git(self, argv: list[str], *, mutation: bool) -> subprocess.CompletedProcess:
         if not git_allowed(argv):
             raise PodError("unsupported_git_operation", "The GitHub port issues only an exact push or head read")
-        return _run([str(git_executable()), *argv], cwd=self.project, timeout=120 if mutation else 30,
-                    mutation=mutation)
+        return _run([str(git_executable()), *argv], cwd=self.project,
+                    timeout=MUTATION_TIMEOUT_S if mutation else 30, mutation=mutation)
 
     def _gh(self, argv: list[str], *, mutation: bool) -> subprocess.CompletedProcess:
         if not gh_allowed(argv):
             raise PodError("unsupported_gh_operation", "The GitHub port accepts only known gh operations")
-        completed = _run([str(gh_executable()), *argv], cwd=self.project, timeout=120 if mutation else 60,
-                         mutation=mutation)
+        completed = _run([str(gh_executable()), *argv], cwd=self.project,
+                         timeout=MUTATION_TIMEOUT_S if mutation else 60, mutation=mutation)
         if len(completed.stdout) > MAX_OUTPUT:
             raise PodError("gh_contract", "gh output exceeds bounded size")
         return completed

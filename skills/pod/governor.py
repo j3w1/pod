@@ -1324,7 +1324,8 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
     return None
 
 
-def _readback_answer(project: Path, row: dict, journal: dict, outcome: str, port: GitHubPort | None) -> dict:
+def _readback_answer(project: Path, row: dict, journal: dict, outcome: str, port: GitHubPort | None,
+                     now: datetime | None = None) -> dict:
     """Pod's own provider readback for a reservation outcome; it settles only what the provider shows."""
     from .governor_effects import _observe, _port
     unit = journal["units"].get(row["action"]["unit"])
@@ -1332,7 +1333,7 @@ def _readback_answer(project: Path, row: dict, journal: dict, outcome: str, port
         raise _outcome_refusal("readback_unavailable", "No delivery unit binds this row", "prepare the unit",
                                row["record_id"])
     try:
-        answer = _observe(port or _port(project), row, unit, journal)
+        answer = _observe(port or _port(project), row, unit, journal, now=now)
     except PodError as exc:
         raise _outcome_refusal("readback_unavailable", "Pod could not read the provider back (" + exc.code + ")",
                                "retry when the provider answers; nothing was recorded", row["record_id"]) from exc
@@ -1413,7 +1414,7 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
                 _write_journal(record_path, journal)
                 break
             snapshot = deepcopy(row)
-        answer = _readback_answer(project, snapshot, journal, outcome, port)
+        answer = _readback_answer(project, snapshot, journal, outcome, port, now)
     result = {"status": "recorded", "record_id": record_id, "outcome": row["outcome"], "receipt": row["receipt"]}
     if row["action"]["kind"] == "merge" and row["outcome"] == "PASS":
         result["readback"] = _merged_readback(project, objective, owner=owner, row=row, port=port,

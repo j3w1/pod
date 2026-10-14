@@ -49,7 +49,8 @@ attempt (R115). A push or pull-request update starts `push` runs and, on a branc
 request, `pull_request` or `pull_request_target` runs, so a row derived from a publication binds
 only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. Every row
 binds its run's first attempt, except a rerun. Before rerunning, the governor records the run, its
-latest attempt and the submission start; it binds the rerun's attempt only when exactly one new
+latest attempt and the submission start, and right after GitHub accepts the call it records that
+acceptance; it binds the rerun's attempt only when the acceptance is recorded, exactly one new
 attempt exists and its `startedAt` is at or after that start, and otherwise holds the row, since
 GitHub names no requester per attempt. A run already bound to a row is checked the same way as a new
 one, and its workflow by appearing in the workflow-filtered list, because `gh run view` names only the
