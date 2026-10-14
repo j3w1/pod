@@ -581,7 +581,7 @@ class OfflineOmissionTests(ProductionCase):
                 attached = case.op("governor-execute", action=action)
                 self.assertEqual(attached["reuse"]["kind"], "attach")
                 self.assertEqual(len(case.remote.calls), calls)
-                case.op("governor-outcome", record_id=decided["record_id"], outcome="CANCELED")
+                case.op("governor-outcome", record_id=decided["record_id"], outcome="CANCELED", detail="never performed")
                 executed = case.op("governor-execute", action=action)
                 effects = [call[0] for call in case.remote.calls[calls:]]
                 expected = {"push": ["push"], "pr_update": ["push", "pr_create"],
