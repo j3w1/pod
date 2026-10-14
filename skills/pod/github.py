@@ -434,6 +434,9 @@ def _run(command: list[str], *, cwd: Path, timeout: int, mutation: bool) -> subp
     except (OSError, subprocess.TimeoutExpired) as exc:
         code = "remote_effect_uncertain" if mutation else "remote_read_failed"
         raise PodError(code, "The remote command gave no response") from exc
+    except UnicodeDecodeError:
+        code = "remote_effect_uncertain" if mutation else "remote_read_failed"
+        raise PodError(code, "The command's output is not valid UTF-8") from None
     finally:
         if mutation:
             forget_repository_reads()

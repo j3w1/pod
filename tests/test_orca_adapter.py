@@ -64,6 +64,33 @@ class OrcaAdapterTests(unittest.TestCase):
             read_command(['--version'])
             self.assertNotIn('env',runner.call_args.kwargs)
 
+    def test_output_that_is_not_utf8_is_no_evidence_and_a_cut_preview_is_harmless(self):
+        # Review 3 H3: decoded by the real subprocess path, refused as a contract failure. Final audit L1: Orca cuts a
+        # terminal preview to its last 300 UTF-16 units, which can leave a lone surrogate; Pod never uses a preview.
+        import tempfile
+        from pod.orca import terminal_identity
+        from pod.retirement import _Host
+        units=('head \U0001F916'+'z'*299).encode('utf-16-le','surrogatepass')
+        preview=units[-600:].decode('utf-16-le','surrogatepass')
+        self.assertEqual(preview[0],'\udd16')
+        live={'handle':'h','connected':True,'writable':True,'orphaned':False,'worktreePath':'/w/x','preview':preview}
+        shown={'ok':True,'result':{'terminal':live},'_meta':{'runtimeId':'r'}}
+        listed={'ok':True,'result':{'terminals':[live],'totalCount':1,'truncated':False,
+                                   'hostScope':{'hostIds':['local'],'omittedHostIds':[]}},'_meta':{'runtimeId':'r'}}
+        with tempfile.TemporaryDirectory() as temporary:
+            def answering(name,payload):
+                out=Path(temporary)/(name+'.out'); out.write_bytes(payload)
+                tool=Path(temporary)/name; tool.write_text(f'#!/bin/sh\ncat "{out}"\n'); tool.chmod(0o755)
+                return patch('pod.orca.executable',return_value=tool)
+            with answering('bytes',json.dumps(listed).encode().replace(b'/w/x',b'/w/\xff')),\
+                 self.assertRaises(PodError) as caught:
+                read_command(['terminal','list','--json'])
+            self.assertEqual(caught.exception.code,'orca_contract')
+            with answering('show',json.dumps(shown).encode()):
+                self.assertEqual(terminal_identity('h')['state'],'live')
+            with answering('list',json.dumps(listed).encode()):
+                self.assertIsNotNone(_Host(Path(temporary)).inventory('terminals'))
+
     def test_read_allowlist_refuses_native_mutations_and_account_reads(self):
         with patch('pod.orca.subprocess.run') as runner:
             for argv in (['account','list','--json'],['host','list','--json'],
