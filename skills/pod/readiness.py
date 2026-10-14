@@ -198,19 +198,33 @@ def _claim_route(claim: dict | None) -> dict:
     return {**route, "status": "blocked", "condition": claim["condition"], "message": claim["message"]}
 
 
+# Plain names of the Governor kinds a readback settles; release and deploy record their own outcome.
+_READBACKS = {"push": "push", "pr_update": "pull request update", "workflow_dispatch": "workflow dispatch",
+              "validation_rerun": "validation rerun", "remote_diagnostic": "remote diagnostic",
+              "cancel_validation": "validation cancellation"}
+
+
+def _record(name: str, entry: dict) -> str:
+    """One remaining record in plain words, by its kind and what it derives from."""
+    referent, kind = clean(entry["record"])[:12], clean(entry["kind"])
+    if name == "merge_outcome":
+        return f"the merge outcome ({referent})"
+    if name == "delivery_record":
+        return f"the delivery record of merge {referent}"
+    if name == "report_consumption":
+        return (f"the disposition of implementation result {referent}" if entry["state"] == "undispositioned"
+                else f"the {kind} worker's report ({referent})")
+    if entry.get("derived_from"):
+        return f"the validation readback of publication {clean(entry['derived_from'])[:12]} ({referent})"
+    if kind in ("release", "deploy"):
+        return f"the {kind} outcome ({referent})"
+    return f"the {_READBACKS.get(kind, kind)} readback ({referent})"
+
+
 def _phrase(pending: dict) -> str:
-    parts = []
-    for name in pending["remaining"]:
-        if name == "closure":
-            parts.append("closure")
-            continue
-        for entry in pending["records"][name]:
-            referent = clean(entry["record"])[:12]
-            parts.append({"merge_outcome": f"the merge outcome ({referent})",
-                          "delivery_record": f"the delivery record of merge {referent}",
-                          "validation_readback": f"the {clean(entry['kind'])} readback ({referent})",
-                          "report_consumption": f"a result disposition ({referent})"
-                          if entry["state"] == "undispositioned" else f"a worker report ({referent})"}[name])
+    parts = [part for name in pending["remaining"]
+             for part in (["closure"] if name == "closure" else
+                          [_record(name, entry) for entry in pending["records"][name]])]
     if len(parts) > 4:
         parts = parts[:3] + [f"{len(parts) - 4} more record(s)", parts[-1]]
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]

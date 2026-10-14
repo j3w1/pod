@@ -126,8 +126,10 @@ class StateTests(ReadinessCase):
                          [("merge-1", "merge", "PASS"), (derived["record_id"], "workflow_dispatch", "pending"),
                           (self.admission["admission_id"], "implement", "bound")])
         self.assertEqual(pending["records"]["validation_readback"][0]["derived_from"], published["record_id"])
-        self.assertTrue(readiness["summary"].startswith("Delivered but finalizing: Pod still needs the delivery "
-                                                        "record of merge merge-1, the workflow_dispatch readback"))
+        self.assertTrue(readiness["summary"].startswith(
+            "Delivered but finalizing: Pod still needs the delivery record of merge merge-1, the validation "
+            f"readback of publication {published['record_id'][:12]} ({derived['record_id'][:12]}), the implement "
+            "worker's report"), readiness["summary"])
         self.assertIn("not safe to close", readiness["summary"])
         self.assertEqual(self.readiness("next"), readiness)
         self.assertEqual(before, self.snapshot())
@@ -235,7 +237,8 @@ class LostCoordinatorTests(ReadinessCase):
         derived = readiness["finalization"]["records"]["validation_readback"]
         self.assertEqual([(row["kind"], row["state"], row["derived_from"]) for row in derived],
                          [("workflow_dispatch", "pending", published["record_id"])])
-        self.assertIn("Pod still needs the workflow_dispatch readback", readiness["summary"])
+        self.assertIn(f"Pod still needs the validation readback of publication {published['record_id'][:12]}",
+                      readiness["summary"])
         self.assertEqual(self.read_as(None)["readiness"], readiness)
 
 
@@ -345,6 +348,22 @@ class ProjectionTests(unittest.TestCase):
                                  outstanding=set())
         self.assertEqual((mapless["state"], mapless["finalization"]["remaining"]), ("working", ["validation_readback"]))
         self.assertIn("no obligation map is recorded", readiness._summary(mapless))
+
+    def test_the_plain_line_names_each_record_by_its_kind(self):
+        rows = [ReadinessCase.row("r1", "release", "UNKNOWN"), ReadinessCase.row("p1", "push", "pending"),
+                ReadinessCase.row("m1", "merge", "PASS")]
+        admissions = {"i1": {"role": "implement", "state": "bound", "report": {"status": "validated_observation"},
+                             "disposition": None},
+                      "v1": {"role": "review", "state": "bound", "report": None}}
+        block = readiness.base(self.state([{"id": "O1", "state": "satisfied"}], admissions), {"actions": rows},
+                               outstanding=set())
+        self.assertEqual(readiness._phrase(block["finalization"]),
+                         "the delivery record of merge m1, the release outcome (r1), the push readback (p1), "
+                         "2 more record(s) and closure")
+        block["finalization"]["records"]["validation_readback"] = []
+        self.assertEqual(readiness._phrase(block["finalization"]),
+                         "the delivery record of merge m1, the disposition of implementation result i1, "
+                         "the review worker's report (v1) and closure")
 
     def test_gate_parties_decide_who_acts_after_closure(self):
         closure = {"seq": 1, "revision": 1, "report": {}}

@@ -3295,6 +3295,308 @@
         "tests.test_retirement_absent.LocatedEntryShapeTests.test_the_block_derives_reservations_from_the_record"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A275",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_readiness.StateTests.test_working_reads_the_same_for_the_owner_a_live_peer_and_a_reader_outside_orca",
+        "tests.test_status_selection.StatusSelectionTests.test_a_run_that_selects_one_objective_carries_the_same_readiness"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A276",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_readiness.StateTests.test_waiting_names_the_party_and_what_it_must_supply",
+        "tests.test_readiness.ProjectionTests.test_wait_classes_name_their_party_or_none"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A277",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_readiness.StateTests.test_a_merged_candidate_with_a_pending_readback_never_reads_safe",
+        "tests.test_readiness.StateTests.test_merge_decided_but_unrecorded_names_the_merge_outcome",
+        "tests.test_readiness.ProjectionTests.test_delivery_under_way_finalizes_and_the_line_stays_short",
+        "tests.test_readiness.ProjectionTests.test_the_plain_line_names_each_record_by_its_kind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A278",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_readiness.StateTests.test_closed_reads_closed_after_main_advances",
+        "tests.test_readiness.StateTests.test_a_closed_objective_still_reads_closed_after_its_worktree_is_removed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A279",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_readiness.StateTests.test_closed_with_external_work_names_each_gate_and_who_acts",
+        "tests.test_readiness.ProjectionTests.test_gate_parties_decide_who_acts_after_closure"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A280",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_names_its_recovery_routes_for_every_non_owner_reader",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A281",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_with_a_pending_effect_names_the_exact_refusal",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A282",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_readiness.EndedTests.test_an_owner_retirement_says_why_pod_needs_no_coordinator",
+        "tests.test_readiness.EndedTests.test_a_continued_record_names_its_successor_and_the_successor_reads_its_own_work",
+        "tests.test_readiness.EndedTests.test_unknown_and_unreadable_objectives_are_unavailable_with_the_reason"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A283",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_readiness.CompatibilityTests.test_open_work_for_the_owner_and_a_peer",
+        "tests.test_readiness.CompatibilityTests.test_a_lost_coordinator_and_its_handoff_fields",
+        "tests.test_readiness.CompatibilityTests.test_a_closed_objective",
+        "tests.test_readiness.CompatibilityTests.test_a_claimed_predecessor_and_its_successor",
+        "tests.test_readiness.CompatibilityTests.test_a_retired_objective"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A284",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_readiness.ListLabelTests.test_the_list_carries_a_record_only_label_without_orca",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A285",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.ProviderEventTests.test_an_actual_dispatch_refusal_stays_unknown_and_leaves_the_publication_row_alone",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A286",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.ProviderEventTests.test_a_publication_derived_row_binds_only_a_publication_event_run",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A287",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.ProviderEventTests.test_an_unexecuted_reservation_is_never_failed_or_proof",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A288",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.ProviderEventTests.test_missing_and_partial_history_hold_the_row_with_their_reason",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A289",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governor_evidence.ProviderEventTests.test_a_completed_matching_run_settles_with_its_attempt",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A290",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governor_evidence.ProviderEventTests.test_a_later_attempt_never_settles_the_first",
+        "tests.test_governor_evidence.ProviderEventTests.test_a_rerun_binds_only_the_attempt_after_the_failed_one",
+        "tests.test_governor_evidence.ProviderEventTests.test_a_run_of_another_event_or_commit_does_not_bind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A291",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governor_evidence.EarlierReaderTests.test_pod_0_12_0_loads_new_rows_and_reads_them_as_recorded",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A292",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.OutcomeEvidenceTests.test_rows_pod_performed_take_only_unknown_by_hand",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A293",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.OutcomeEvidenceTests.test_a_reservation_settles_only_from_pods_readback",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A294",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.OutcomeEvidenceTests.test_cancel_then_execute_is_offered_only_while_no_sign_of_execution",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A295",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governor_evidence.MergeOutcomeTests.test_a_merge_pass_keeps_its_verified_merge_commit_and_says_fetch_first",
+        "tests.test_governor_evidence.MergeOutcomeTests.test_failed_or_canceled_only_when_the_target_lacks_the_result",
+        "tests.test_governor_evidence.MergeOutcomeTests.test_a_squash_result_counts_as_contained"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A296",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governor_evidence.OutcomeEvidenceTests.test_release_and_deploy_need_a_receipt_or_evidence",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A297",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_governor_evidence.OutcomeEvidenceTests.test_a_restart_or_lost_reply_duplicates_no_effect",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A298",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_finalization.FinalizationTests.test_every_remaining_record_is_named_in_recording_order",
+        "tests.test_finalization.FinalizationTests.test_the_next_action_follows_the_first_remaining_record",
+        "tests.test_finalization.FinalizationTests.test_closure_ends_finalization_and_only_then_reports_finished",
+        "tests.test_finalization.FinalizationTests.test_a_mapless_objective_has_no_delivery_record_or_closure_to_write",
+        "tests.test_finalization.FinalizationTests.test_the_projection_reads_and_changes_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A299",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_finalization.ResumeTests.test_an_interrupted_merge_finishes_once_and_announces_only_after_closure",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A300",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_finalization.ResumeTests.test_an_interrupted_merge_finishes_once_and_announces_only_after_closure",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A301",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_finalization.ResumeTests.test_a_closed_objective_stays_finished_after_its_target_advances",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A302",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_finalization.ResumeTests.test_an_interrupted_publication_resumes_by_attachment_and_readback",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A303",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_finalization.ClosureOrderTests.test_a_settled_worker_without_a_consumed_report_holds_a_new_closure",
+        "tests.test_finalization.ClosureOrderTests.test_an_implementation_result_closes_by_its_disposition_without_a_report",
+        "tests.test_finalization.ClosureOrderTests.test_a_closure_recorded_before_this_rule_still_validates",
+        "tests.test_finalization.ResumeTests.test_a_closed_objective_stays_finished_after_its_target_advances"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }
