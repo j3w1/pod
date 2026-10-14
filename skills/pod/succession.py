@@ -46,13 +46,15 @@ def validate_link(name: str, value: object) -> None:
 
 
 def refuse_continued(state: dict | None) -> None:
-    """The one refusal a continued objective gives every write, including its own coordinator's."""
+    """The one refusal a continued objective, or one under historical retirement (R112), gives every write."""
     link = state.get("continued_by") if isinstance(state, dict) else None
     if isinstance(link, dict):
         raise PodError("objective_continued",
                        f"This objective was continued by successor objective {link['objective']}; "
                        "its record is kept and accepts no writes",
                        {"successor": link["objective"], "next_action": ACTION.format(link["objective"])})
+    from .retirement import refuse_retired
+    refuse_retired(state)
 
 
 def _read(project: Path, objective: str) -> dict | None:
@@ -180,6 +182,9 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
             return verdict
         return fail("predecessor_claimed", f"Successor objective {link['objective']} already continues it.",
                     ACTION.format(link["objective"]))
+    if isinstance(prior.get("historical_retirement"), dict):
+        return fail("predecessor_retired", "The owner's historical retirement covers the predecessor; it is not "
+                    "continued.")
     back = state.get("continues")
     if isinstance(back, dict):
         return fail("successor_started", f"This successor already continues objective {back['objective']}.")

@@ -72,11 +72,21 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
                    if isinstance(row, dict) and isinstance(row.get("dispatchId"), str)}
     closure = map_state.get("closure") if isinstance(map_state, dict) else None
     continued = state.get("continued_by") if isinstance(state.get("continued_by"), dict) else None
+    retirement = state.get("historical_retirement") if isinstance(state.get("historical_retirement"), dict) else None
+    preserved = []
     for key, row in state["admissions"].items():
         binding = row.get("native_binding") or {}
         item = {"admission": key, "role": row["role"], "serves": list(row["serves"]),
                 "route": row["route_decision"], "dispatch": binding.get("dispatchId"),
                 "state": row["state"]}
+        if retirement is not None and row["state"] not in ("closed", "deferred"):
+            # Retirement read every recorded Dispatch settled; a start without one keeps its unknown
+            # outcome, never settled, unverified or successful (R112).
+            if row["state"] == "bound":
+                settled.append({**item, "settlement": "retirement", "retired_at": retirement["at"]})
+            else:
+                preserved.append({**item, "outcome": "unknown", "retired_at": retirement["at"]})
+            continue
         if failure is not None and closure is not None and row["state"] not in ("closed", "deferred"):
             # Closure was accepted only with no outstanding assignment, judged from an exact read,
             # so its record proves these settled even when today's read cannot repeat it.
@@ -151,7 +161,9 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
                             f"{str(checkpoint.get('candidate') or 'unknown')[:12]})")
         else:
             progress.append("remaining gate: " + str(gate)[:160])
-    if authority:
+    if retirement is not None:
+        next_action = "historical retirement by the owner: not completed, and its record accepts no writes"
+    elif authority:
         next_action = "obtain authority for " + authority[0]["obligation"]
     elif failure is not None and unverified:
         next_action = (f"native settlement is unverified ({failure['code']}; bound runtime "
@@ -170,6 +182,8 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
     assignments = {"active": active, "settled": settled}
     if failure is not None:
         assignments["unverified"] = unverified
+    if retirement is not None:
+        assignments["preserved"] = preserved
     return {"assignments": assignments,
             "retained_terminals": retained,
             "gates": {"remaining": remaining, "blocked_external": external, "authority_waits": authority},
@@ -375,6 +389,14 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             result.update(owner_handoff=handoff, blocker=handoff["status"],
                           next_safe_action=handoff["next_action"], next_action=handoff["next_action"])
     if state is not None:
+        from .retirement import ACTION as RETIREMENT, status_block as retirement_block
+        retirement = retirement_block(state)
+        if retirement is not None:
+            # Under historical retirement a record is read, never written; it is not closed, continued or
+            # successful (R112).
+            # Other objectives keep their exact earlier projection, without a phase field.
+            result.update(phase="retired", retirement=retirement, blocker="objective_retired",
+                          next_safe_action=RETIREMENT.format(objective), next_action=RETIREMENT.format(objective))
         from .succession import ACTION, status_block
         block = status_block(project, state)
         if block is not None:
@@ -456,6 +478,19 @@ def render(result: dict) -> None:
             for item in assignments.get("unverified", []):
                 print(f"  Unverified {item['role']} (dispatch {item['dispatch'] or 'pending'}): "
                       + _orca_attention_label(item["orca_attention"]))
+        retirement = result.get("retirement")
+        if isinstance(retirement, dict):
+            tally = retirement["counts"]
+            print(f"Historical retirement by the owner at {clean(retirement['retired_at'])}: not completed or closed; released "
+                  + ", ".join(clean(path) for path in retirement["released"])
+                  + f"; preserved {tally['pending']} pending, {tally['unknown']} unknown, {tally['failed']} failed and "
+                  f"{tally['unreported']} unreported record(s); {len(retirement['unfinished'])} unfinished "
+                  "obligation(s); this record accepts no writes")
+            for reference in retirement["delivery"]:
+                print(f"  Delivery reference: {clean(reference)}")
+            preserved = result.get("assignments", {}).get("preserved", [])
+            if preserved:
+                print(f"Preserved without settlement: {len(preserved)} start(s) whose outcome stays unknown")
         succession = result.get("succession")
         if isinstance(succession, dict) and succession.get("continued_by"):
             print(f"Continued by successor objective {clean(succession['continued_by'])} "

@@ -99,6 +99,19 @@ class TrackedSourceAuditTests(unittest.TestCase):
                               "tests/fixtures/state.txt"])
             self.assertFalse(any("legacy_hold" in row or "docs/history" in row for row in findings))
 
+    def test_historical_retirement_vocabulary_passes_while_bare_trail_words_do_not(self):
+        with fixture() as root:
+            tracked(root, {
+                "docs/current.md": b"`internal historical-retirement` writes `historical_retirement`; phase `retired`,\n"
+                                   b'status "retired" and objective_retired. The historical retirement keeps records.\n',
+                "docs/trail-a.md": b"The " + b"retired mechanism is gone.\n",
+                "docs/trail-b.md": b"See the " + b"historical record.\n",
+                "docs/trail-c.md": b"A " + b"legacy path.\n",
+                "docs/trail-d.md": b"It was " + b"Retired in a release.\n",
+            })
+            flagged = sorted(row.split(" :: ")[0] for row in audit_source(root))
+            self.assertEqual(flagged, ["docs/trail-a.md", "docs/trail-b.md", "docs/trail-c.md", "docs/trail-d.md"])
+
     def test_publication_paths_are_findings_including_a_skill_setup_module(self):
         with fixture() as root:
             tracked(root, {"skills/pod/setup.py": b"# project enrollment\n"})
