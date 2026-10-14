@@ -10,7 +10,8 @@ from pod.operations import guarded_start
 from pod.retirement import status_block, validate_entry
 from tests.common import GroupedTable, assert_grouped_table
 from tests.kernel_support import git
-from tests.test_historical_retirement import RecordShapeTests, RetirementCase
+from tests import test_historical_retirement as earlier  # Its test classes would be discovered twice if imported.
+from tests.test_historical_retirement import RetirementCase
 from tests.test_owner_handoff import SENTINEL
 from tests.test_succession import _raw
 
@@ -406,7 +407,7 @@ class PreservationTests(AbsentCase):
 
 
 class LocatedEntryShapeTests(unittest.TestCase):
-    ENTRY = {**RecordShapeTests.ENTRY, "released": ["/w/one", "/w/two"],
+    ENTRY = {**earlier.RecordShapeTests.ENTRY, "released": ["/w/one", "/w/two"],
              "locations": [{"path": "/w/one", "disposition": "absent"},
                            {"path": "/w/two", "disposition": "existing", "worktree": "wt2:local:k"}]}
 
