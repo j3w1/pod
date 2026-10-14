@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -17,7 +18,7 @@ from unittest.mock import patch
 from pod.errors import PodError
 from pod.governor import CHAIN_FIELDS, _read_journal, _record_path, _write_journal, reconcile, record_outcome
 from pod.internal import run
-from pod.ledger import objective_root, read
+from pod.ledger import objective_root, read, state_root
 from tests.common import GroupedTable, assert_grouped_table
 from tests.kernel_support import git
 from tests.test_succession import SuccessionCase
@@ -450,8 +451,43 @@ class ReservationTests(CarriedCase):
         self.assertIn("claim on objective objective is incomplete", refused["message"])
         self.assertEqual(before, self.snapshot())
 
+    def earlier_shape(self):
+        """Synthetic control: a claim an earlier Pod left after the predecessor's link, without a reservation."""
+        self.lost_with(self.publications)
+        self.successor()
+        with patch("pod.succession._carry", side_effect=KeyboardInterrupt("after the link")), \
+                self.assertRaises(KeyboardInterrupt):
+            self.claim(self.decide())
+        from pod import ledger
+        state = read(self.project, "successor")
+        state.pop("continues")
+        ledger._write(ledger._path(self.project, "successor"), state)
+
+    def test_closure_proves_no_claim_names_a_successor_that_already_started(self):
+        """Work an earlier Pod let it start does not prove the absence of the claim: closure reads for it."""
+        self.earlier_shape()
+        with patch("pod.succession.refuse_incomplete"):  # An earlier Pod's work, which did not check.
+            self.mine("governor-prepare", unit="own", branch={"remote": "origin", "branch": "own", "base": "target"})
+        before = self.snapshot()
+        self.refused(self.close_successor, code="claim_incomplete")
+        self.assertEqual(before, self.snapshot())
+
+    def test_an_unreadable_record_holds_closure_but_not_work(self):
+        self.lost_with(lambda: None)
+        self.successor()
+        broken = state_root(self.project) / "zz-unreadable"
+        broken.mkdir()
+        (broken / "context.json").write_text("{")
+        self.mine("governor-prepare", unit="own", branch={"remote": "origin", "branch": "own", "base": "target"})
+        self.refused(self.close_successor, code="claim_unverified")
+        (broken / "context.json").unlink()
+        broken.rmdir()
+        self.close_successor()
+        self.assertTrue(read(self.project, "successor")["checkpoint"]["closure"])
+
     def test_a_replay_refuses_a_successor_that_changed_without_a_reservation(self):
-        """Synthetic control: an interrupted claim recorded without the reservation, then the successor closed."""
+        """Synthetic control: an interrupted claim recorded without the reservation, then the successor closed by a
+        Pod that did not check for it."""
         self.lost_with(self.publications)
         self.successor()
         decision = self.decide()
@@ -463,7 +499,9 @@ class ReservationTests(CarriedCase):
         state = read(self.project, "successor")
         state.pop("continues")
         ledger._write(path, state)
-        self.close_successor()
+        self.refused(self.close_successor, code="claim_incomplete")  # This version refuses that closure.
+        with patch("pod.succession.refuse_incomplete"):
+            self.close_successor()
         before = self.snapshot()
         refused = self.refused(lambda: self.claim(decision), code="successor_started")
         self.assertIn("the successor is closed or delivered", str(refused))
@@ -994,6 +1032,161 @@ class ChainTableTests(GroupedTable):
 class ChainTableShapeTests(unittest.TestCase):
     def test_the_chain_table_runs_every_row_once(self):
         assert_grouped_table(self, ChainTableTests, CHAIN_ROWS, limit=1)
+
+
+# Every on-disk shape an interrupted claim leaves, by the writer that left it and where it stopped, crossed with the
+# route that recovers it (R110, R118): Pod 0.13.1 linked the predecessor and then completed the successor, and so did
+# 0.10.0 to 0.13.0; the earlier PR-B candidate 2b613c8 copied rows in between; this version reserves the successor
+# first. The earlier writers are their genuine succession routines from Git objects, over the current records.
+EARLIER_WRITERS = {"pod-0.13.1": "13f63a1ccb58d3bb74f53efbaeeec7a7df35fcef",
+                   "candidate-2b613c8": "2b613c8fe4be566de28ed4149c8998c97d6c160c"}
+SHAPE_STOPS = {"pod-0.13.1": ("after_link",), "candidate-2b613c8": ("after_link", "after_rows"),
+               "current": ("before_link", "after_link", "after_rows")}
+SHAPE_ROWS = [(writer, stop, recovery) for writer, stops in SHAPE_STOPS.items() for stop in stops
+              for recovery in ("replay", "handoff", "rebind") + (("release",) if stop == "before_link" else ())]
+
+
+class ShapeCase(ChainCase):
+    """One interrupted claim of each shape, then its successor, a third objective and the recovery routes."""
+
+    _routines = {}
+
+    def routine(self, writer):
+        """The genuine succession routine of an earlier writer, from Git objects, over the current records."""
+        if writer not in self._routines:
+            repository = Path(__file__).resolve().parents[1]
+            source = subprocess.run(["git", "-C", str(repository), "show",
+                                     EARLIER_WRITERS[writer] + ":skills/pod/succession.py"],
+                                    check=True, capture_output=True, text=True).stdout
+            module = types.ModuleType("pod._succession_" + writer.replace("-", "_").replace(".", "_"))
+            module.__package__ = "pod"
+            exec(compile(source, f"succession-{writer}.py", "exec"), module.__dict__)
+            self._routines[writer] = module
+        return self._routines[writer]
+
+    def interrupted(self, writer, stop):
+        """The claim of `objective` by `successor`, as `writer` makes it, stopped at `stop`; returns its decision."""
+        from pod import ledger
+        claim = (lambda decision=None: self.claim(decision)) if writer == "current" else (
+            lambda decision=None: self.routine(writer).succession(
+                self.project, "successor", owner="next", predecessor="objective", decision=decision))
+        decision = {"provenance": "user_direct", "instruction": "Continue the lost objective", **claim()["facts"]}
+        real = ledger._write
+
+        def completing(path, value):
+            if "state" not in value.get("continues", {"state": None}):
+                raise KeyboardInterrupt("after the rows")
+            return real(path, value)
+        if stop == "after_rows" or writer == "pod-0.13.1":
+            stopped = patch("pod.ledger._write", side_effect=completing)
+        elif writer == "current":
+            stopped = patch(CHAIN_STOPS[stop], side_effect=KeyboardInterrupt(stop))
+        else:
+            stopped = patch.object(self.routine(writer), "_carry", side_effect=KeyboardInterrupt(stop))
+        with stopped, self.assertRaises(KeyboardInterrupt):
+            claim(decision)
+        return decision
+
+    def handed_over(self):
+        """The owner hands the reserved successor to terminal `third` after its coordinator is lost."""
+        self.terminals["next"] = "stale"
+        self.act("third", "run-s")
+        self.current["coordinator_handle"] = "next"
+        verdict = self.status(objective="successor")["owner_handoff"]
+        self.assertEqual(verdict["status"], "handoff_available", verdict)
+
+        def moved(argv, **kwargs):
+            self.current.update(coordinator_handle="third", consumer_generation=2)
+            return {"runtime": self.port.runtime, "exit": 0, "error": None, "result": {}}
+        with patch("pod.orca.mutate_command", side_effect=moved):
+            run("owner-handoff", {"project": str(self.project), "objective": "successor", "owner": "third",
+                                  "decision": {"provenance": "user_direct", "instruction": "Recover it",
+                                               **verdict["facts"]}})
+        return "third"
+
+    def shape_row(self, writer, stop, recovery):
+        built = self.lost_with(lambda: {} if writer == "pod-0.13.1" else self.publications())
+        effects = self.writes()
+        self.successor()
+        decision = self.interrupted(writer, stop)
+        # The successor of an incomplete claim, whatever its shape, neither works nor closes, before any write.
+        before = self.snapshot()
+        self.refused(lambda: self.mine("governor-prepare", unit="own",
+                                       branch={"remote": "origin", "branch": "own", "base": "target"}),
+                     code="claim_incomplete")
+        self.refused(lambda: self.close("successor", "next", "run-s"), code="claim_incomplete")
+        self.assertEqual(before, self.snapshot())
+        # A third objective never continues it.
+        self.successor(name="other", caller="other", run_id="run-o")
+        before = self.snapshot()
+        refused = self.claim(name="other", caller="other", predecessor="successor")
+        self.assertEqual(refused["condition"], "predecessor_claim_incomplete", refused.get("message"))
+        self.assertEqual(before, self.snapshot())
+        caller = "next"
+        self.act("next", "run-s")
+        if recovery == "release":
+            self.terminals["owner"] = "live"  # The predecessor's coordinator returns before the claim links it.
+            self.refused(lambda: self.claim({**decision, "ambiguity": ["x"]}), code="succession_decision_mismatch")
+            self.refused(lambda: self.claim(decision), code="predecessor_live")
+            self.assertNotIn("continues", read(self.project, "successor"))
+            self.close("successor", "next", "run-s")  # Released, it works and closes as its own objective.
+            self.assertEqual(self.writes(), effects)
+            return
+        if recovery == "handoff":
+            caller = self.handed_over()
+        if recovery == "rebind":
+            self.port.runtime = self.port.placement["runtime"] = "runtime-restarted"
+        self.assertEqual(self.claim(decision, caller=caller)["status"], "claimed")  # The decision that made it.
+        self.assertEqual(read(self.project, "successor")["continues"]["objective"], "objective")
+        self.assertNotIn("state", read(self.project, "successor")["continues"])
+        self.assertEqual(sorted(row["record_id"] for row in self.journal("successor")["actions"]),
+                         sorted(built.values()))
+        if built:
+            blocked = self.refused(lambda: self.close("successor", caller, "run-s"))
+            self.assertEqual(blocked.detail["detail"], "closure_unfinished")
+        else:
+            self.close("successor", caller, "run-s")
+        self.assertEqual(self.writes(), effects)
+
+
+class ShapeTableTests(GroupedTable):
+    """R118's incomplete-claim predicate: one named group method per shape and recovery route."""
+    GROUPS = {f"test_{writer.replace('-', '_').replace('.', '_')}_{stop}_{recovery}": [(writer, stop, recovery)]
+              for writer, stop, recovery in SHAPE_ROWS}
+
+    def row(self, item):
+        case = ShapeCase()
+        case.setUp()
+        try:
+            with self.subTest(row=item):
+                case.shape_row(*item)
+        finally:
+            case.doCleanups()
+
+    def test_pod_0_13_1_after_link_replay(self): self.rows()
+    def test_pod_0_13_1_after_link_handoff(self): self.rows()
+    def test_pod_0_13_1_after_link_rebind(self): self.rows()
+    def test_candidate_2b613c8_after_link_replay(self): self.rows()
+    def test_candidate_2b613c8_after_link_handoff(self): self.rows()
+    def test_candidate_2b613c8_after_link_rebind(self): self.rows()
+    def test_candidate_2b613c8_after_rows_replay(self): self.rows()
+    def test_candidate_2b613c8_after_rows_handoff(self): self.rows()
+    def test_candidate_2b613c8_after_rows_rebind(self): self.rows()
+    def test_current_before_link_replay(self): self.rows()
+    def test_current_before_link_handoff(self): self.rows()
+    def test_current_before_link_rebind(self): self.rows()
+    def test_current_before_link_release(self): self.rows()
+    def test_current_after_link_replay(self): self.rows()
+    def test_current_after_link_handoff(self): self.rows()
+    def test_current_after_link_rebind(self): self.rows()
+    def test_current_after_rows_replay(self): self.rows()
+    def test_current_after_rows_handoff(self): self.rows()
+    def test_current_after_rows_rebind(self): self.rows()
+
+
+class ShapeTableShapeTests(unittest.TestCase):
+    def test_the_shape_table_runs_every_row_once(self):
+        assert_grouped_table(self, ShapeTableTests, SHAPE_ROWS, limit=1)
 
 
 class EarlierReaderTests(CarriedCase):

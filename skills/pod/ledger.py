@@ -1275,6 +1275,9 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                  "a disposition names a recorded admission", record='checkpoint map transition')
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
         if proposed.get("close") is True:
+            from .succession import refuse_incomplete
+            # Closure proves that no incomplete claim, from any writer, names this objective as successor (R118).
+            refuse_incomplete(project, objective, state, full=True)
             # A delivery recorded in the closing write itself does not count: closure is the last record, and
             # its report is derived before that write adds the delivery.
             ctx["closure_unrecorded"] = _closure_unrecorded(
@@ -1789,6 +1792,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
                         "report": report_projection(map_state, ctx)}
             if value.get("close") is True:
+                from .succession import refuse_incomplete
+                refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's closure (R118).
                 ctx["closure_unrecorded"] = _closure_unrecorded(project, objective, state,
                                                                 delivered=map_state.get("delivery") is not None)
             new_map = accept_write(map_state, value, ctx, triaged=triaged)

@@ -3845,6 +3845,46 @@
       ],
       "offline_test": "tests.test_carried_claim.ReservationTests.test_an_objective_named_by_an_incomplete_earlier_claim_is_never_claimed",
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A322",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ShapeTableTests.test_pod_0_13_1_after_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_pod_0_13_1_after_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_pod_0_13_1_after_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_rows_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_rows_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_rows_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_release",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_rebind",
+        "tests.test_carried_claim.ShapeTableShapeTests.test_the_shape_table_runs_every_row_once"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A323",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ReservationTests.test_closure_proves_no_claim_names_a_successor_that_already_started",
+        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_closure_but_not_work"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

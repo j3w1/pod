@@ -339,9 +339,12 @@ def nonowner_detection(project: Path, objective: str, state: dict | None, owner:
 
 def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: str, *, code="native_authority_unverified", port=None, current=None,
                     claim: str | None = None, reserved: bool = True) -> None:
-    from .succession import refuse_continued
-    # Any caller, owner or not, is told the objective was continued (R110).
+    from .succession import refuse_continued, refuse_incomplete
+    # Any caller, owner or not, is told the objective was continued (R110), or that an incomplete claim names it as
+    # successor, whatever writer left that claim (R118).
     refuse_continued(state, claim=claim, reserved=reserved)
+    if reserved:
+        refuse_incomplete(project, objective, state, claim=claim)
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)
     if verdict is not None:
         raise PodError(code, "Caller is not the recorded owner. " + verdict["message"],

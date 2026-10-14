@@ -79,13 +79,84 @@ def refuse_continued(state: dict | None, *, claim: str | None = None, reserved: 
                        {"successor": link["objective"], "next_action": ACTION.format(link["objective"])})
     pending = reserved_for(state) if reserved else None
     if pending is not None and pending != claim:
-        raise PodError("claim_incomplete",
-                       f"This objective's claim on predecessor objective {pending} is incomplete; it accepts no "
-                       "other write until that claim completes",
-                       {"predecessor": pending, "next_action": "rerun the same internal succession claim to "
-                                                               "complete it"})
+        raise _claim_incomplete(pending)
     from .retirement import refuse_retired
     refuse_retired(state)
+
+
+def _claim_incomplete(predecessor: str) -> PodError:
+    return PodError("claim_incomplete",
+                    f"This objective's claim on predecessor objective {predecessor} is incomplete; it accepts no "
+                    "other write until that claim completes",
+                    {"predecessor": predecessor,
+                     "next_action": "rerun the same internal succession claim to complete it, after an owner handoff "
+                                    "or runtime rebind if its coordinator is gone"})
+
+
+def incoming_claim(project: Path, objective: str, state: dict | None, *, full: bool = False) -> dict | None:
+    """The incomplete claim that names this objective as its successor, from any writer, or None (R110, R118).
+
+    The one predicate for every shape an interrupted claim leaves. This version reserves the successor first, so its
+    own `continues` names the predecessor with `state: claiming`. Pod 0.10.0 to 0.13.1 linked the predecessor and
+    then wrote the successor's `continues`, and the earlier PR-B candidate copied rows in between; a claim of theirs
+    interrupted after the link shows only as a predecessor's `continued_by` naming this objective while its own
+    `continues` is missing, which retirement's claimant scan of the repository's records finds.
+
+    Rows or units the earlier candidate copied before stopping name their predecessor in the objective's own
+    journal. The scan runs only where this objective's records cannot prove there is none: a completed `continues`
+    proves it, and so does work it already started, since every writer refuses to begin a claim of a started
+    successor. `full` scans anyway, for closure and for continuing it as a predecessor, which also cover a claim an
+    earlier Pod left before the objective started. Returns `{"predecessor": name}`, or `{"predecessor": None}` when
+    a record that could hold such a claim is unreadable.
+    """
+    if not isinstance(state, dict):
+        return None
+    back = state.get("continues")
+    if isinstance(back, dict):
+        return {"predecessor": back["objective"]} if back.get("state") == CLAIMING else None
+    copied = _copied_from(project, objective)
+    if copied is not None:
+        return {"predecessor": copied}
+    if not full and _started(project, objective, state):
+        return None
+    from .retirement import _claimants
+    claimants = _claimants(project, objective)
+    if claimants is None:
+        return {"predecessor": None}
+    return {"predecessor": claimants[0]} if claimants else None
+
+
+def _copied_from(project: Path, objective: str) -> str | None:
+    """The predecessor a claim copied rows or units from into this objective's journal, if any."""
+    from .governor import _read_journal, _record_path
+    try:
+        journal = _read_journal(_record_path(project, objective))
+    except PodError:
+        return None
+    for item in [*journal["actions"], *journal["units"].values()]:
+        name = (item.get("carried_from") or {}).get("objective")
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def refuse_incomplete(project: Path, objective: str, state: dict | None, *, claim: str | None = None,
+                      full: bool = False) -> None:
+    """Refuse the successor of an incomplete claim every write but that claim's own (R118).
+
+    An unreadable record that could hold such a claim refuses only where `full` asks for proof, closure and
+    continuing it as a predecessor; ordinary work goes on, since only those two could strand the claim's effects.
+    """
+    found = incoming_claim(project, objective, state, full=full)
+    if found is None or claim is not None and found["predecessor"] == claim:
+        return
+    if found["predecessor"] is None:
+        if full:
+            raise PodError("claim_unverified", "A Pod record that could name this objective as the successor of an "
+                           "incomplete claim is unreadable",
+                           {"next_action": "repair or remove the unreadable record, then retry"})
+        return
+    raise _claim_incomplete(found["predecessor"])
 
 
 def _read(project: Path, objective: str) -> dict | None:
@@ -362,24 +433,16 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
 def _incomplete_claim(project: Path, objective: str, state: dict) -> tuple | None:
     """The refusal for continuing an objective whose own claim of its predecessor is incomplete, or None (R118).
 
-    Such an objective is reserved by that claim, or (written by an earlier Pod) named as successor by a predecessor's
-    link it has not completed. It is never a predecessor: claiming it would freeze the only record that can complete
-    the claim, and an empty successor could close while the original effects stay unsettled.
+    It is never a predecessor: claiming it would freeze the only record that can complete that claim, and an empty
+    successor could close while the original effects stay unsettled.
     """
-    back = state.get("continues")
-    if isinstance(back, dict) and back.get("state") != CLAIMING:
+    found = incoming_claim(project, objective, state, full=True)
+    if found is None:
         return None
-    if isinstance(back, dict):
-        own = back["objective"]
-    else:
-        from .retirement import _claimants
-        claimants = _claimants(project, objective)
-        if claimants is None:
-            return ("predecessor_unverified", "A Pod record that could name the predecessor as a claimed successor is "
-                    "unreadable.")
-        if not claimants:
-            return None
-        own = claimants[0]
+    if found["predecessor"] is None:
+        return ("predecessor_unverified", "A Pod record that could name the predecessor as a claimed successor is "
+                "unreadable.")
+    own = found["predecessor"]
     return ("predecessor_claim_incomplete",
             f"The predecessor's own claim on objective {own} is incomplete; it is not continued until that claim "
             "completes.",
@@ -600,13 +663,19 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
         if verdict["status"] != "claim_available":
             raise PodError(verdict["condition"], verdict["message"],
                            {"succession": verdict, "next_action": verdict["next_action"]})
-        if _differs(decision, verdict["facts"]):
+        facts = verdict["facts"]
+        if (reserved and _scope(decision) == state["continues"]["decision"]
+                and _handed_over(state, decision["successor_owner"], owner, since=state["continues"]["at"])):
+            # The decision that reserved this successor names its owner then; a completed owner handoff since then
+            # moved the successor to this caller, so the authorized owner stands and every other fact is fresh.
+            facts = {**facts, "successor_owner": decision["successor_owner"]}
+        if _differs(decision, facts):
             raise PodError("succession_decision_mismatch",
                            "The decision differs from fresh predecessor, successor, owner, Run, ambiguity or carried "
                            "Governor facts. Nothing was written.",
                            {"succession": verdict, "next_action": verdict["next_action"]})
         at = datetime.now(timezone.utc).isoformat()
-        prior["continued_by"] = {"objective": objective, "record": own.parent.name, "owner": owner,
+        prior["continued_by"] = {"objective": objective, "record": own.parent.name, "owner": facts["successor_owner"],
                                  "runs": list(verdict["facts"]["runs"]), "at": at,
                                  "instruction": decision["instruction"], "unfinished": verdict["unfinished"],
                                  "unreported": verdict["unreported"],
@@ -625,6 +694,20 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
         _write(own, state)
         return {"status": "claimed", "replayed": False, "predecessor": predecessor, "successor": objective,
                 "continued_by": prior["continued_by"], CARRIED: list(verdict["facts"][CARRIED])}
+
+
+def _handed_over(state: dict, original: str, current: str, *, since: str) -> bool:
+    """Whether completed owner handoffs recorded after `since` moved this objective from `original` to `current`."""
+    if original == current or state.get("owner") != current:
+        return False
+    history = ((state.get("checkpoint") or {}).get("continuity") or {}).get("history") or []
+    owner = original
+    for entry in history:
+        decision = entry.get("decision") if isinstance(entry, dict) else None
+        if (entry.get("provenance") == "owner_handoff" and entry.get("state") == "done" and isinstance(decision, dict)
+                and str(entry.get("at")) >= since and decision.get("from_owner") == owner):
+            owner = decision.get("to_owner")
+    return owner == current
 
 
 def _differs(decision: dict, facts: dict) -> bool:
