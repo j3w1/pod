@@ -463,10 +463,13 @@ class GovernorAcknowledgementTests(JsonBoundary, GovernorCase):
         decision, raw = self.invoke("governor", self.owned(action=request))
         self.assertEqual(decision, raw)
         self.assertEqual(decision["decision"], "ALLOW")
+        # R5: the reservation's PASS is what Pod reads back; the caller adds only an evidence reference.
+        self.remote = GovernorFakePort()
+        self.remote.heads[request["target"]] = binding["commit"]
         outcome, full = self.invoke("governor-outcome", self.owned(record_id=decision["record_id"],
-            outcome="PASS", provider={"merge_commit": COMMIT}, evidence=["test receipt"]))
+            outcome="PASS", evidence=["test receipt"]))
         self.assertEqual(outcome["receipt"]["provider"], full["receipt"]["provider"])
-        self.assertEqual(outcome["receipt"]["provider"]["merge_commit"], COMMIT)
+        self.assertEqual(outcome["receipt"]["provider"]["remote_head"], binding["commit"])
         repeated, full = self.invoke("governor-outcome", self.owned(record_id=outcome["record_id"], outcome=outcome["outcome"]))
         self.assertEqual(repeated["outcome"], full["outcome"])
 
@@ -503,8 +506,11 @@ class GovernorAcknowledgementTests(JsonBoundary, GovernorCase):
     def test_classification_drives_correction_without_echoing_the_stored_row(self):
         candidate = self.prepared()["candidate"]
         self.preflight(candidate["id"])
-        admitted, _ = self.invoke("governor", self.owned(action=self.with_publish_authorization(action(candidate=candidate["id"]))))
-        self.invoke("governor-outcome", self.owned(record_id=admitted["record_id"], outcome="FAILED"))
+        # A refused push is FAILED by execution; R5 accepts no manual FAILED for an effect Pod performs.
+        self.remote = GovernorFakePort(rejected=("push",))
+        admitted, _ = self.invoke("governor-execute",
+                                  self.owned(action=self.with_publish_authorization(action(candidate=candidate["id"]))))
+        self.assertEqual(admitted["outcome"], "FAILED")
         lean, raw = self.invoke("governor-classify", self.owned(record_id=admitted["record_id"], classification={
             "class": "code_defect", "reason": "fixture defect", "correction": correction("first")}))
         self.assertEqual(lean["classification"]["correction_identity"], raw["classification"]["correction_identity"])

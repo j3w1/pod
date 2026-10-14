@@ -84,7 +84,7 @@ def _delivery_object(project: Path, argv: list[str], *, subcode: str) -> str:
 
 def verify_delivery(project: Path, objective: str, map_state: dict, record_id: str, *, seq: int) -> dict:
     """Bind a Governor merge PASS to one exact target result without moving policy authority."""
-    from .governor import _read_journal, _record_path, validate_authorization
+    from .governor import _read_journal, _record_path
     if not isinstance(record_id, str) or not 1 <= len(record_id) <= 128:
         raise _delivery_refusal("record_missing", "A bounded Governor record id is required",
                                 "name the allowed merge PASS record from this objective")
@@ -107,6 +107,17 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
         raise _delivery_refusal("record_not_merge_pass", "The record is not an allowed merge PASS",
                                 "settle the exact governed merge before recording delivery", record=record_id)
     unit = journal["units"].get(row["action"].get("unit"))
+    return {"seq": seq, "record": record_id, **verify_merge_result(project, row, unit, map_state["governance"])}
+
+
+def verify_merge_result(project: Path, row: dict, unit: dict | None, governance: dict) -> dict:
+    """R93's Git checks for one merge row: the exact candidate, consent, target and result.
+
+    The delivery record and a merge PASS outcome both use these checks; the row's provider receipt names
+    the result, or else the target's current commit does.
+    """
+    from .governor import validate_authorization
+    record_id = row["record_id"]
     candidate = unit.get("candidate") if isinstance(unit, dict) else None
     if (not isinstance(candidate, dict) or not isinstance(candidate.get("commit"), str)
             or not isinstance(candidate.get("tree"), str)
@@ -130,7 +141,6 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
     if candidate_tree != candidate["tree"]:
         raise _delivery_refusal("candidate_mismatch", "The prepared candidate tree differs from Git",
                                 "prepare the candidate from a current Git observation", record=record_id)
-    governance = map_state["governance"]
     # The target admitted with the merge decision is authoritative; the unit's branch may change later.
     admitted = row.get("target_binding")
     if not isinstance(admitted, dict):
@@ -191,9 +201,43 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
     if provider.get("method") is not None and provider["method"] != method:
         raise _delivery_refusal("method_mismatch", "Provider merge method differs from the verified result",
                                 "reconcile the provider merge readback", method=method)
-    return {"seq": seq, "record": record_id, "target_ref": target_ref, "base": base,
-            "result": result, "candidate": head, "tree": tree, "method": method,
-            "authorization_reference": authorization["reference"], "provider": dict(provider)}
+    return {"target_ref": target_ref, "base": base, "result": result, "candidate": head, "tree": tree,
+            "method": method, "authorization_reference": authorization["reference"], "provider": dict(provider)}
+
+
+MAX_RESULT_SCAN = 512
+
+
+def target_contains_result(project: Path, row: dict, governance: dict) -> bool | None:
+    """Whether the merge row's target holds its candidate's result, as the local tracking ref shows it.
+
+    True when the row's candidate commit is reachable from the target, or a commit after the bound base
+    carries that commit's tree (a squash); False only when neither holds within a bounded walk from the
+    base; None when the target, the candidate, the base's ancestry or the walk cannot be observed. Fetch
+    first: the answer is only as fresh as the tracking ref.
+    """
+    from . import gitio
+    admitted = row.get("target_binding")
+    head, base = row.get("commit"), governance.get("base") if isinstance(governance, dict) else None
+    if (not isinstance(admitted, dict) or not isinstance(head, str) or not _OBJECT.fullmatch(head)
+            or not isinstance(base, str) or not _OBJECT.fullmatch(base)):
+        return None
+    current = _resolve_commit(project, admitted.get("ref"))
+    tree = _git(project, ["rev-parse", "--verify", "--quiet", head + "^{tree}"])
+    tree = tree.stdout.strip() if tree is not None and tree.returncode == 0 else ""
+    if current is None or not _OBJECT.fullmatch(tree):
+        return None
+    if gitio.is_ancestor(project, head, current, resolve=_resolve_commit) is True:
+        return True
+    if gitio.is_ancestor(project, base, current, resolve=_resolve_commit) is not True:
+        return None
+    walk = _git(project, ["log", "--format=%H %T", f"--max-count={MAX_RESULT_SCAN + 1}", f"{base}..{current}"])
+    if walk is None or walk.returncode != 0:
+        return None
+    words = walk.stdout.split()
+    if len(words) % 2 or len(words) // 2 > MAX_RESULT_SCAN:
+        return None
+    return tree in words[1::2]
 
 
 def _resolve_commit(root: Path, ref: str) -> str | None:

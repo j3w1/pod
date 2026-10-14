@@ -41,6 +41,19 @@ interchangeable with an earlier pull-request check, so the governor never treats
 pull-request run as merge-queue evidence, and a repository with a queue keeps the
 `merge_group` trigger on its required workflow.
 
+## What the governor reads back
+
+The governor binds a validation row to a run only when the run matches what the row's own effect
+started: one of its events, its exact head commit, created at or after the submission, and its own
+attempt (R115). A push or pull-request update starts `push` runs and, on a branch with an open pull
+request, `pull_request` or `pull_request_target` runs, so a row derived from a publication binds
+only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. Every row
+binds its run's first attempt, except a rerun, which binds the next attempt of the run it reruns.
+It reads runs with `gh run list --workflow FILE --commit SHA --json …,attempt --limit 21`:
+GitHub filters by workflow and commit, and the extra run tells the governor that the newest 20 were
+not all of them. GitHub lists only the runs it still retains. A missing run or a truncated list
+leaves the row pending with that reason; it is never read as a failure or as proof that nothing ran.
+
 ## What the governor consumes
 
 The project maps what its actions trigger in `.pod/config.yaml`:
