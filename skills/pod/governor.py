@@ -1197,13 +1197,56 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
             "classification": None, "classifications": [], "derived_from": row["record_id"]})
 
 
+# A carried marker's chain provenance: which objective the row came from, its record id and the claim time. Every
+# other marker field is a readback fact, kept unchanged on every later hop (R118).
+CHAIN_FIELDS = ("objective", "record", "at")
+
+
+def readback_identity(row: dict, journal: dict, governance: dict | None) -> tuple[dict, str | None]:
+    """The facts beyond the row itself that a carried row's readback reads, or why they cannot be identified.
+
+    A row carried before keeps its marker's facts on every hop, never the intermediate successor's candidate, base or
+    branch. Otherwise a merge takes its admitted candidate and consent tree, the predecessor's admitted base and its
+    unit's branch; a cancellation its run, from its receipt or, when that has none, its marker or eligible target.
+    """
+    from .governor_effects import _bound_run_id
+    carried = row.get("carried_from")
+    kept = ({key: value for key, value in carried.items() if key not in CHAIN_FIELDS}
+            if isinstance(carried, dict) else {})
+    kind = row["action"]["kind"]
+    unknown = "its pull request, candidate or admitted base cannot be identified"
+    if kind == "merge" and isinstance(carried, dict):
+        if not isinstance(row.get("target_binding"), dict) or not row.get("commit") or not all(
+                isinstance(kept.get(key), dict) for key in ("candidate", "governance", "branch")):
+            return {}, unknown
+    elif kind == "merge":
+        consent = row["action"].get("authorization") or {}
+        unit = journal["units"].get(row["action"]["unit"]) or {}
+        if (not isinstance(row.get("target_binding"), dict) or not isinstance(unit.get("branch"), dict)
+                or not row.get("commit") or not consent.get("tree")
+                or not isinstance(governance, dict) or not governance.get("base")):
+            return {}, unknown
+        kept = {"candidate": {"id": row.get("candidate_id"), "commit": row["commit"], "tree": consent["tree"]},
+                "governance": {"base_ref": governance.get("base_ref"), "base": governance["base"]},
+                "branch": dict(unit["branch"])}
+    elif kind == "cancel_validation" and not (row["receipt"].get("provider") or {}).get("run_id"):
+        if not kept.get("run_id"):
+            target = next((other for other in journal["actions"] if other["record_id"] == row["action"]["target"]),
+                          None)
+            run_id = _bound_run_id(target) if target is not None else None
+            if not run_id:
+                return {}, "no run identity binds the cancellation"
+            kept = {**kept, "run_id": str(run_id)}
+    return kept, None
+
+
 def carry_refusal(row: dict, journal: dict, governance: dict | None) -> str | None:
     """Why a lost coordinator's unsettled row cannot move to a successor, or None when it can (R118).
 
     A carried row settles only by Pod's own readback, so it must name what that readback reads: its unit and
     branch or commit, the run it reruns or cancels, and for a merge its pull request, candidate and base.
     """
-    from .governor_effects import _bound_run_id, _rerun_source, rerun_unattributable
+    from .governor_effects import _rerun_source, rerun_unattributable
     kind = row["action"]["kind"]
     if kind not in CARRIED_KINDS:
         return f"a {kind} is performed by the project and has no readback"
@@ -1212,12 +1255,10 @@ def carry_refusal(row: dict, journal: dict, governance: dict | None) -> str | No
         return "no delivery unit binds it, so nothing can read it back"
     if kind in PUBLICATION_KINDS and (pushed_branch(row, unit) is None or not row.get("commit")):
         return "its unit no longer names the branch and commit it pushed"
-    if kind == "merge":
-        consent = row["action"].get("authorization") or {}
-        if (not isinstance(row.get("target_binding"), dict) or not isinstance(unit.get("branch"), dict)
-                or not row.get("commit") or not consent.get("tree")
-                or not isinstance(governance, dict) or not governance.get("base")):
-            return "its pull request, candidate or admitted base cannot be identified"
+    # A merge's candidate, base and branch and a cancellation's run, judged as the copy will keep them.
+    unidentified = readback_identity(row, journal, governance)[1]
+    if unidentified is not None:
+        return unidentified
     if kind == "validation_rerun":
         run_id = _rerun_source(row, journal)
         if run_id is None:
@@ -1225,10 +1266,6 @@ def carry_refusal(row: dict, journal: dict, governance: dict | None) -> str | No
         unattributable = rerun_unattributable(row["receipt"].get("provider") or {})
         if unattributable is not None:
             return unattributable
-    if kind == "cancel_validation":
-        target = next((other for other in journal["actions"] if other["record_id"] == row["action"]["target"]), None)
-        if not (row["receipt"].get("provider") or {}).get("run_id") and not (target and _bound_run_id(target)):
-            return "no run identity binds the cancellation"
     if kind in DISPATCH_KINDS and not ((row["receipt"].get("provider") or {}).get("run_id")
                                        or (row["receipt"].get("provider") or {}).get("ref_commit") or row.get("commit")):
         return "it names neither a run nor a commit to look up"
@@ -1244,11 +1281,11 @@ def carry_into(journal: dict, source: dict, record_ids: list[str], *, objective:
                at: str) -> bool:
     """Copy the named rows of a predecessor's journal, and their units, into this successor journal.
 
-    Each copy keeps its record id and is marked with the predecessor objective and that id; a row or unit
-    already carried stays as it is, so an interrupted claim completes by the same call. Returns whether the
-    journal changed. The predecessor's journal is only read.
+    Each copy keeps its record id and is marked with the predecessor objective and that id, and with the readback
+    facts `readback_identity` keeps (unchanged from an earlier hop's marker); a row or unit already carried stays as
+    it is, so an interrupted claim completes by the same call. Returns whether the journal changed. The
+    predecessor's journal is only read.
     """
-    from .governor_effects import _bound_run_id
     rows = {row["record_id"]: row for row in source["actions"]}
     present = {row["record_id"] for row in journal["actions"]}
     changed = False
@@ -1263,15 +1300,8 @@ def carry_into(journal: dict, source: dict, record_ids: list[str], *, objective:
             raise PodError("successor_started", f"The successor already has its own delivery unit {name}")
         if record_id in present:
             continue
-        marker = {"objective": objective, "record": record_id, "at": at}
-        kind = row["action"]["kind"]
-        if kind == "merge":
-            marker.update(candidate={"id": row.get("candidate_id"), "commit": row["commit"],
-                                     "tree": row["action"]["authorization"]["tree"]},
-                          governance={"base_ref": governance.get("base_ref"), "base": governance["base"]},
-                          branch=dict(source["units"][name]["branch"]))
-        elif kind == "cancel_validation" and not (row["receipt"].get("provider") or {}).get("run_id"):
-            marker["run_id"] = str(_bound_run_id(rows[row["action"]["target"]]))
+        kept, _ = readback_identity(row, source, governance)
+        marker = {**deepcopy(kept), "objective": objective, "record": record_id, "at": at}
         journal["actions"].append({**deepcopy(row), "carried_from": marker})
         present.add(record_id)
         changed = True

@@ -15,9 +15,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.governor import _read_journal, _record_path, _write_journal, reconcile, record_outcome
+from pod.governor import CHAIN_FIELDS, _read_journal, _record_path, _write_journal, reconcile, record_outcome
 from pod.internal import run
 from pod.ledger import objective_root, read
+from tests.common import GroupedTable, assert_grouped_table
 from tests.kernel_support import git
 from tests.test_succession import SuccessionCase
 
@@ -64,6 +65,30 @@ class CarriedCase(SuccessionCase):
             row.update(state="satisfied", evidence=[{"check": "criterion", "command": "unit", "result": "passed",
                                                      "reference": "successor-proof"}])
         return self.mine("checkpoint", value=self.core(obligations=rows, close=True))
+
+    def merge_decision(self):
+        candidate = self.renew()
+        consent = {**self.authorization, "scope": ["merge"], "target": "origin/target"}
+        decided = self.op("governor", action={"kind": "merge", "candidate": candidate["commit"],
+                                              "target": "origin/target", "reason": "deliver", "unit": "default",
+                                              "effects": [], "authorization": consent})
+        self.assertEqual(decided["decision"], "ALLOW", decided["explanation"])
+        self.consent = consent
+        return {"merge": decided["record_id"]}
+
+    def pull_request(self, state, merge_commit=None):
+        self.remote.pr_history[("delivery", "target")] = [{
+            "number": 9, "url": "https://example.invalid/pull/9", "head_sha": self.candidate, "state": state,
+            "merge_commit": merge_commit, "merged_at": None}]
+
+    def merged(self, *, fetched):
+        git(self.project, "checkout", "-q", "target")
+        git(self.project, "merge", "--no-ff", "-qm", "merge", "main")
+        result = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "checkout", "-q", "main")
+        if fetched:
+            git(self.project, "update-ref", "refs/remotes/origin/target", result)
+        return result
 
     def mine(self, operation, **fields):
         """A successor coordinator's own helper call."""
@@ -388,12 +413,42 @@ class ReservationTests(CarriedCase):
         self.terminals["owner"] = "live"  # The predecessor's coordinator returns before the claim links it.
         detected = self.claim()
         self.assertEqual((detected["status"], detected["reserved"]), ("claim_unavailable", True))
+        # Only the decision that made the reservation releases it; any other refuses and writes nothing.
+        before = self.snapshot()
+        others = {"predecessor": "elsewhere", "successor": "elsewhere", "predecessor_owner": "someone",
+                  "successor_owner": "someone", "runs": ["run-x"], "ambiguity": ["x"],
+                  "carried": decision["carried"][:-1]}
+        for field, value in others.items():
+            with self.subTest(field=field):
+                self.refused(lambda: self.claim({**decision, field: value}), code="succession_decision_mismatch")
+                self.assertEqual(before, self.snapshot())
         released = self.refused(lambda: self.claim(decision), code=detected["condition"])
         self.assertIn("reservation was released", str(released))
         self.assertNotIn("continues", read(self.project, "successor"))
         self.assertNotIn("continued_by", read(self.project, "objective"))
         self.close_successor()  # Released, the successor works and closes as its own objective again.
         self.assertTrue(read(self.project, "successor")["checkpoint"]["closure"])
+
+    def test_an_objective_named_by_an_incomplete_earlier_claim_is_never_claimed(self):
+        """Synthetic control: a claim an earlier Pod left after the predecessor's link, without a reservation."""
+        self.lost_with(self.publications)
+        self.successor()
+        decision = self.decide()
+        with patch("pod.succession._carry", side_effect=KeyboardInterrupt("after the link")), \
+                self.assertRaises(KeyboardInterrupt):
+            self.claim(decision)
+        from pod import ledger
+        state = read(self.project, "successor")
+        state.pop("continues")
+        ledger._write(ledger._path(self.project, "successor"), state)
+        self.terminals["next"] = "exited"
+        self.run_holders["run-s"] = "next"
+        self.successor(name="third", caller="third", run_id="run-t")
+        before = self.snapshot()
+        refused = self.claim(name="third", caller="third", predecessor="successor")
+        self.assertEqual(refused["condition"], "predecessor_claim_incomplete", refused.get("message"))
+        self.assertIn("claim on objective objective is incomplete", refused["message"])
+        self.assertEqual(before, self.snapshot())
 
     def test_a_replay_refuses_a_successor_that_changed_without_a_reservation(self):
         """Synthetic control: an interrupted claim recorded without the reservation, then the successor closed."""
@@ -642,30 +697,6 @@ class CarriedUnconfirmedRerunTests(CarriedCase):
 class MergeTests(CarriedCase):
     """PoD#4 — a carried merge stays pending while its pull request is open and settles PASS only by R93."""
 
-    def merge_decision(self):
-        candidate = self.renew()
-        consent = {**self.authorization, "scope": ["merge"], "target": "origin/target"}
-        decided = self.op("governor", action={"kind": "merge", "candidate": candidate["commit"],
-                                              "target": "origin/target", "reason": "deliver", "unit": "default",
-                                              "effects": [], "authorization": consent})
-        self.assertEqual(decided["decision"], "ALLOW", decided["explanation"])
-        self.consent = consent
-        return {"merge": decided["record_id"]}
-
-    def pull_request(self, state, merge_commit=None):
-        self.remote.pr_history[("delivery", "target")] = [{
-            "number": 9, "url": "https://example.invalid/pull/9", "head_sha": self.candidate, "state": state,
-            "merge_commit": merge_commit, "merged_at": None}]
-
-    def merged(self, *, fetched):
-        git(self.project, "checkout", "-q", "target")
-        git(self.project, "merge", "--no-ff", "-qm", "merge", "main")
-        result = git(self.project, "rev-parse", "HEAD")
-        git(self.project, "checkout", "-q", "main")
-        if fetched:
-            git(self.project, "update-ref", "refs/remotes/origin/target", result)
-        return result
-
     def test_open_then_merged_pull_request_settles_by_r93_and_closes_the_successor(self):
         built = self.lost_with(self.merge_decision)
         effects = self.writes()
@@ -778,6 +809,191 @@ class MergeTests(CarriedCase):
                          now=started + timedelta(seconds=721))
         self.assertEqual(late["status"], "FAILED")
         self.assertIn("closed without merging", late["receipt"]["detail"])
+
+
+# R118's chain invariant over every sibling state: how many claims the rows moved through, where the last claim
+# stopped, and which kinds of row the predecessor left unsettled.
+CHAIN_STOPS = {
+    "before_link": "pod.ledger._write_succession",  # After the successor's reservation.
+    "after_link": "pod.succession._carry",  # After the predecessor's link, before the rows.
+    "after_rows": "pod.ledger._write",  # After the rows, before the successor's link completes.
+}
+CHAIN_ROWS = [(depth, stop, kinds) for depth in (1, 2, 3) for stop in CHAIN_STOPS
+              for kinds in ("publications", "runs", "merge")]
+
+
+class ChainCase(CarriedCase):
+    """A predecessor's unsettled rows carried along one to three claims, the last one interrupted (R118)."""
+
+    HOPS = (("successor", "next", "run-s"), ("third", "third", "run-t"), ("fourth", "fourth", "run-f"))
+
+    def setUp(self):
+        super().setUp()
+        self.terminals.update(fourth="live", other="live")
+
+    def act(self, caller, run_id):
+        """Calls from here on come from that terminal on that Run."""
+        os.environ["ORCA_TERMINAL_HANDLE"] = caller
+        self.current = {"id": run_id, "coordinator_handle": caller, "consumer_generation": 1}
+
+    def runs_rows(self):
+        """A rerun, a requested dispatch, and cancellations of a pending and of an already settled validation."""
+        self.failed_release()
+        rerun = self.op("governor-execute", action=self.action("validation_rerun", target="release.yml"))
+        nightly = self.op("governor-execute", action=self.action("workflow_dispatch", target="nightly.yml"))
+        weekly = self.op("governor-execute", action=self.action("workflow_dispatch", target="weekly.yml"))
+        pending = self.op("governor", action=self.action("cancel_validation", target=nightly["record_id"]))
+        settled = self.op("governor", action=self.action("cancel_validation", target=weekly["record_id"]))
+        self.weekly_run = weekly["receipt"]["provider"]["run_id"]
+        self.remote.complete(self.weekly_run, "cancelled")  # An outside actor's.
+        self.assertEqual(self.op("governor-reconcile", record_id=weekly["record_id"])["status"], "CANCELED")
+        return {"rerun": rerun["record_id"], "requested": nightly["record_id"],
+                "cancel_with_target": pending["record_id"], "cancel_without_target": settled["record_id"]}
+
+    def merge_rows(self):
+        """A merge decision, then the merge lands and the target advances before any successor checkpoints."""
+        self.admitted_base = git(self.project, "rev-parse", "refs/remotes/origin/target")
+        built = self.merge_decision()
+        self.pull_request("MERGED", self.merged(fetched=True))
+        return built
+
+    def close(self, name, caller, run_id):
+        self.act(caller, run_id)
+        rows = read(self.project, name)["checkpoint"]["obligations"]
+        for row in rows:
+            row.pop("executor", None)
+            row.update(state="satisfied", evidence=[{"check": "criterion", "command": "unit", "result": "passed",
+                                                     "reference": "successor-proof"}])
+        return run("checkpoint", {"project": str(self.project), "objective": name, "owner": caller,
+                                  "value": self.core(obligations=rows, close=True)})
+
+    def claimed(self, depth, stop):
+        """Claims along the chain, each earlier successor lost in turn; the last claim stops at `stop`."""
+        predecessor = "objective"
+        for index, (name, caller, run_id) in enumerate(self.HOPS[:depth]):
+            self.successor(name=name, caller=caller, run_id=run_id)
+            facts = self.claim(name=name, caller=caller, predecessor=predecessor)["facts"]
+            decision = {"provenance": "user_direct", "instruction": "Continue the lost objective", **facts}
+            if index < depth - 1:
+                self.claim(decision, name=name, caller=caller, predecessor=predecessor)
+                self.terminals[caller] = "exited"
+                self.run_holders[run_id] = caller
+                predecessor = name
+                continue
+            from pod import ledger
+            target, real = CHAIN_STOPS[stop], ledger._write
+
+            def completing(path, value):
+                if "state" not in value.get("continues", {"state": None}):
+                    raise KeyboardInterrupt("after the rows")
+                return real(path, value)
+            stopped = patch(target, side_effect=completing if stop == "after_rows" else KeyboardInterrupt(stop))
+            with stopped, self.assertRaises(KeyboardInterrupt):
+                self.claim(decision, name=name, caller=caller, predecessor=predecessor)
+            return name, caller, run_id, predecessor, decision
+
+    def read_back_all(self, kinds, built, holder, caller):
+        """Make the provider show each original effect, then read each back in the final successor."""
+        if kinds == "publications":
+            first = self.row(built["pr_update"], holder)["commit"]
+            self.remote.pr_history[("delivery", "target")] = [{
+                "number": 7, "url": "https://example.invalid/pull/7", "head_sha": first, "state": "OPEN",
+                "merge_commit": None, "merged_at": None}]
+            self.remote.complete(self.remote._start("ci.yml", self.row(built["derived"], holder)["commit"],
+                                                    event="pull_request")["id"], "success")
+            expected = {"push": "PASS", "pr_update": "PASS", "derived": "PASS"}
+        elif kinds == "runs":
+            rerun = self.row(built["rerun"], holder)["receipt"]["provider"]["run_id"]
+            self.remote.complete(rerun, "success")
+            self.remote.complete(self.row(built["requested"], holder)["receipt"]["provider"]["run_id"], "cancelled")
+            expected = {"rerun": "PASS", "cancel_with_target": "PASS", "cancel_without_target": "PASS",
+                        "requested": "CANCELED"}
+        else:
+            expected = {"merge": "PASS"}
+        settled = {}
+        for name in expected:  # A carried cancellation reads back before the carried target it names.
+            settled[name] = run("governor-reconcile", {"project": str(self.project), "objective": holder,
+                                                       "owner": caller, "record_id": built[name]})["status"]
+        return settled, expected
+
+    def chain_row(self, depth, stop, kinds):
+        built = self.lost_with({"publications": self.publications, "runs": self.runs_rows,
+                                "merge": self.merge_rows}[kinds])
+        effects = self.writes()
+        name, caller, run_id, predecessor, decision = self.claimed(depth, stop)
+        # The interrupted claim reserves its successor: it neither works nor closes, and nothing can claim it.
+        self.refused(lambda: self.close(name, caller, run_id), code="claim_incomplete")
+        self.successor(name="other", caller="other", run_id="run-o")
+        before = self.snapshot()
+        refused = self.claim(name="other", caller="other", predecessor=name)
+        self.assertEqual(refused["condition"], "predecessor_claim_incomplete", refused.get("message"))
+        self.assertIn(f"objective {name} with predecessor {predecessor}", refused["next_action"])
+        self.assertEqual(before, self.snapshot())
+        # The same decision completes it; the rows then block its closure until each reads back.
+        self.act(caller, run_id)
+        self.assertEqual(self.claim(decision, name=name, caller=caller, predecessor=predecessor)["status"], "claimed")
+        self.assertEqual(self.refused(lambda: self.close(name, caller, run_id)).detail["detail"], "closure_unfinished")
+        first = {row["record_id"]: row["carried_from"] for row in self.journal("successor")["actions"]}
+        for row in self.journal(name)["actions"]:
+            kept = {key: value for key, value in row["carried_from"].items() if key not in CHAIN_FIELDS}
+            self.assertEqual(kept, {key: value for key, value in first[row["record_id"]].items()
+                                    if key not in CHAIN_FIELDS})
+            self.assertEqual(row["carried_from"]["objective"], predecessor)
+        if kinds == "merge":
+            self.assertEqual(self.row(built["merge"], name)["carried_from"]["governance"]["base"], self.admitted_base)
+        if kinds == "runs":
+            self.assertEqual(self.row(built["cancel_without_target"], name)["carried_from"]["run_id"], self.weekly_run)
+        self.act(caller, run_id)
+        settled, expected = self.read_back_all(kinds, built, name, caller)
+        self.assertEqual(settled, expected)
+        self.assertEqual(self.writes(), effects)
+
+
+class ChainTableTests(GroupedTable):
+    """R118's chain invariant: one named group method per row, so each stays within the fast lane's limit."""
+    GROUPS = {f"test_{depth}_hop_{stop}_{kinds}": [(depth, stop, kinds)] for depth, stop, kinds in CHAIN_ROWS}
+
+    def row(self, item):
+        case = ChainCase()
+        case.setUp()
+        try:
+            with self.subTest(row=item):
+                case.chain_row(*item)
+        finally:
+            case.doCleanups()
+
+    def test_1_hop_before_link_publications(self): self.rows()
+    def test_1_hop_before_link_runs(self): self.rows()
+    def test_1_hop_before_link_merge(self): self.rows()
+    def test_1_hop_after_link_publications(self): self.rows()
+    def test_1_hop_after_link_runs(self): self.rows()
+    def test_1_hop_after_link_merge(self): self.rows()
+    def test_1_hop_after_rows_publications(self): self.rows()
+    def test_1_hop_after_rows_runs(self): self.rows()
+    def test_1_hop_after_rows_merge(self): self.rows()
+    def test_2_hop_before_link_publications(self): self.rows()
+    def test_2_hop_before_link_runs(self): self.rows()
+    def test_2_hop_before_link_merge(self): self.rows()
+    def test_2_hop_after_link_publications(self): self.rows()
+    def test_2_hop_after_link_runs(self): self.rows()
+    def test_2_hop_after_link_merge(self): self.rows()
+    def test_2_hop_after_rows_publications(self): self.rows()
+    def test_2_hop_after_rows_runs(self): self.rows()
+    def test_2_hop_after_rows_merge(self): self.rows()
+    def test_3_hop_before_link_publications(self): self.rows()
+    def test_3_hop_before_link_runs(self): self.rows()
+    def test_3_hop_before_link_merge(self): self.rows()
+    def test_3_hop_after_link_publications(self): self.rows()
+    def test_3_hop_after_link_runs(self): self.rows()
+    def test_3_hop_after_link_merge(self): self.rows()
+    def test_3_hop_after_rows_publications(self): self.rows()
+    def test_3_hop_after_rows_runs(self): self.rows()
+    def test_3_hop_after_rows_merge(self): self.rows()
+
+
+class ChainTableShapeTests(unittest.TestCase):
+    def test_the_chain_table_runs_every_row_once(self):
+        assert_grouped_table(self, ChainTableTests, CHAIN_ROWS, limit=1)
 
 
 class EarlierReaderTests(CarriedCase):

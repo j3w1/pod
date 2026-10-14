@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 
 from .errors import PodError
-from .util import bounded_text, exact
+from .util import bounded_text, digest, exact
 
 DECISION = {"provenance", "instruction", "predecessor", "predecessor_owner", "successor",
             "successor_owner", "runs", "ambiguity"}
@@ -29,7 +29,8 @@ CONTINUED = {"objective", "record", "owner", "runs", "at", "instruction", "unfin
              "ambiguity", "orca_claim"}
 CONTINUES = {"objective", "record", "at"}
 # A claim reserves its successor before it links the predecessor: the successor's link names the predecessor with
-# this state until the claim completes, and the successor accepts no other write meanwhile.
+# this state, and the digest of the decision that made the claim, until the claim completes; the successor accepts no
+# other write meanwhile.
 CLAIMING = "claiming"
 MAX_CHAIN = 8
 MAX_LISTED = 64
@@ -45,7 +46,7 @@ def validate_link(name: str, value: object) -> None:
     """The stored shape of either side of a claim; anything else makes the record unsupported."""
     fields = CONTINUED if name == "continued_by" else CONTINUES
     if name == "continues" and isinstance(value, dict) and value.get("state") == CLAIMING:
-        fields = CONTINUES | {"state"}
+        fields = CONTINUES | {"state", "decision"}
     if (not isinstance(value, dict) or set(value) != fields
             or any(not isinstance(value[key], str) or not value[key] or len(value[key]) > 1024
                    for key in fields - {"runs", "unfinished", "unreported", "ambiguity"})
@@ -270,6 +271,9 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
     facts["predecessor_owner"] = prior["owner"]
     if unfinished(prior) is not None:
         return refused("predecessor_handoff_pending", "The predecessor has an unfinished owner handoff.")
+    incomplete = _incomplete_claim(project, predecessor, prior)
+    if incomplete is not None:
+        return refused(*incomplete)
     try:
         runs = sorted(_run_references(prior))
     except PodError:
@@ -353,6 +357,40 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
                            "Settle the predecessor's workers through Orca, then rerun the claim.")
     unfinished_rows = [ob["id"] for ob in (map_state or {}).get("obligations", []) if ob["state"] not in TERMINAL]
     return None, unfinished_rows, unreported
+
+
+def _incomplete_claim(project: Path, objective: str, state: dict) -> tuple | None:
+    """The refusal for continuing an objective whose own claim of its predecessor is incomplete, or None (R118).
+
+    Such an objective is reserved by that claim, or (written by an earlier Pod) named as successor by a predecessor's
+    link it has not completed. It is never a predecessor: claiming it would freeze the only record that can complete
+    the claim, and an empty successor could close while the original effects stay unsettled.
+    """
+    back = state.get("continues")
+    if isinstance(back, dict) and back.get("state") != CLAIMING:
+        return None
+    if isinstance(back, dict):
+        own = back["objective"]
+    else:
+        from .retirement import _claimants
+        claimants = _claimants(project, objective)
+        if claimants is None:
+            return ("predecessor_unverified", "A Pod record that could name the predecessor as a claimed successor is "
+                    "unreadable.")
+        if not claimants:
+            return None
+        own = claimants[0]
+    return ("predecessor_claim_incomplete",
+            f"The predecessor's own claim on objective {own} is incomplete; it is not continued until that claim "
+            "completes.",
+            f"Complete that claim first: rerun internal succession for objective {objective} with predecessor {own} "
+            "and the decision that made it, from its recorded coordinator, after an owner handoff or runtime rebind "
+            "if that coordinator is gone.")
+
+
+def _scope(decision: dict) -> str:
+    """The digest of a claim decision's exact facts, kept by the reservation it makes."""
+    return digest({**{key: decision[key] for key in FACTS}, CARRIED: decision.get(CARRIED, [])})
 
 
 def _carried(project: Path, predecessor: str, prior: dict) -> tuple[list[dict], tuple | None]:
@@ -549,6 +587,10 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                 return {**verdict, "reserved": True,
                         "next_action": "rerun internal succession with the claim's decision to release this "
                                        "successor's reservation, since the claim cannot complete"}
+            if _scope(decision) != state["continues"]["decision"]:
+                raise PodError("succession_decision_mismatch",
+                               "The decision differs from the one that reserved this successor. Nothing was written.",
+                               {"succession": verdict, "next_action": "rerun with the decision that made the claim"})
             state.pop("continues")
             _write(own, state)
             raise PodError(verdict["condition"], verdict["message"] + " The successor's reservation was released.",
@@ -574,7 +616,8 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
         # that frozen journal; then the successor's link without the reservation, which marks the claim complete.
         # A replay after any interruption recomputes the same rows and completes what is missing.
         if not reserved:
-            state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at, "state": CLAIMING}
+            state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at, "state": CLAIMING,
+                                  "decision": _scope(decision)}
             _write(own, state)
         _write_succession(other, prior)
         _carry(project, objective, predecessor, prior, verdict["facts"][CARRIED], at=at)

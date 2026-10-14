@@ -3792,6 +3792,59 @@
       ],
       "offline_test": "tests.test_carried_claim.CarriedChainTests.test_the_predecessor_follows_a_row_carried_again_and_keeps_an_earlier_settled_one",
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A319",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_before_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_before_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_before_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_rows_publications",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_rows_runs",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_rows_merge",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_before_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_before_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_before_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_rows_publications",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_rows_runs",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_rows_merge",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_before_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_before_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_before_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_rows_publications",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_rows_runs",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_rows_merge",
+        "tests.test_carried_claim.ChainTableShapeTests.test_the_chain_table_runs_every_row_once"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A320",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.ReservationTests.test_a_reservation_whose_claim_cannot_complete_is_released",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A321",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.ReservationTests.test_an_objective_named_by_an_incomplete_earlier_claim_is_never_claimed",
+      "status": "NOT_RUN"
     }
   ]
 }
