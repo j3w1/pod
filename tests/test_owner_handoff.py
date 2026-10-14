@@ -215,6 +215,12 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
                 **{key: SENTINEL for key in ("preview", "title", "worktreePath", "branch", "ptyId", "tabId", "leafId")}}}}
         if argv[:2] == ["orchestration", "run-current"] and self.binding_failure:
             raise PodError("orca_unavailable", SENTINEL)
+        if argv[:2] == ["orchestration", "run-show"]:
+            # Who coordinates the Run now: the binding run-current shows for it, else its original owner.
+            current = self.current if isinstance(self.current, dict) and self.current.get("id") == argv[3] else {}
+            return {"runtime": self.port.runtime, "result": {"run": {
+                "id": argv[3], "coordinator_handle": current.get("coordinator_handle", "owner"),
+                "consumer_generation": current.get("consumer_generation", 1)}}}
         if argv[:2] == ["orchestration", "worker-list"]:
             if self.worker_list_failure:
                 raise PodError("orca_unavailable", SENTINEL)

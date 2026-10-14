@@ -32,6 +32,17 @@ def baseline_status() -> types.ModuleType:
     return module
 
 
+# R114 adds only these fields; every earlier field and render line is compared unchanged.
+READINESS = ("readiness", "successor_claim")
+
+
+def assert_render_after_readiness(test: unittest.TestCase, observed: dict, rendered: str, expected: str) -> None:
+    """The readiness summary is the new first line; the earlier rendering follows it byte for byte."""
+    first, rest = rendered.split("\n", 1)
+    test.assertEqual(first, observed["readiness"]["summary"])
+    test.assertEqual(rest, expected)
+
+
 def earlier_preferences(module: types.ModuleType):
     """The 0.6.6 module reads 0.6.x preference keys; the objective details are what is compared."""
     if module is current_status:
@@ -139,10 +150,10 @@ class UnverifiedStatusTests(UnverifiedStatusCase):
         self.assertEqual(expected["schema"], "pod-cli/v4")
         self.assertEqual(observed["schema"], "pod-cli/v5")
         preference_view = ("preferences", "routes")
-        self.assertEqual({key: value for key, value in observed.items() if key not in preference_view},
+        self.assertEqual({key: value for key, value in observed.items() if key not in preference_view + READINESS},
                          {**{key: value for key, value in expected.items() if key not in preference_view},
                           "schema": "pod-cli/v5"})
-        self.assertEqual(observed_render, expected_render)
+        assert_render_after_readiness(self, observed, observed_render, expected_render)
         self.assertEqual(len(observed["assignments"]["active"]), 1)
         # A mismatched runtime changes only presentation: the kernel still counts every open row.
         state = read(self.project, "objective")
@@ -220,10 +231,10 @@ class RecordedGenerationStatusTests(continuity.ContinuityCase):
         self.assertEqual(expected["schema"], "pod-cli/v4")
         self.assertEqual(observed["schema"], "pod-cli/v5")
         preference_view = ("preferences", "routes")
-        self.assertEqual({key: value for key, value in observed.items() if key not in preference_view},
+        self.assertEqual({key: value for key, value in observed.items() if key not in preference_view + READINESS},
                          {**{key: value for key, value in expected.items() if key not in preference_view},
                           "schema": "pod-cli/v5"})
-        self.assertEqual(observed_render, expected_render)
+        assert_render_after_readiness(self, observed, observed_render, expected_render)
 
 
 if __name__ == "__main__":

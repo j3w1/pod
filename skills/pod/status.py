@@ -218,6 +218,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         if run is None:
             return result
     from .ledger import _read, kernel_view, read, superseded_for_run
+    from .readiness import assess, unavailable
+    record_root = None
     try:
         if objective is None:
             matches = contexts_for_run(run)
@@ -230,7 +232,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                     for _, row in matches], key=lambda row: str(row["objective"])),
                     "next_safe_action": "rerun with --objective ID"})
                 return result
-            context_root = matches[0][0] if matches else None
+            context_root = record_root = matches[0][0] if matches else None
             state = matches[0][1] if matches else None
             superseded = superseded_for_run(run) if context_root is None else []
         else:
@@ -240,14 +242,20 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 result.update({"status": "blocked", "blocker": "objective_unknown",
                                "next_safe_action": "name a recorded objective in this project",
                                "objective": objective, "repository_context": str(project),
-                               "state_root_searched": str(state_root(project))})
+                               "state_root_searched": str(state_root(project)),
+                               "readiness": unavailable("objective_unknown", "this objective has no readable "
+                                                        "record in this repository")})
                 return result
+            from .ledger import objective_root
+            record_root = objective_root(project, objective)
             refs = {row.get("runId") for row in state["checkpoint"].get("native_refs", [])
                     if isinstance(row, dict)}
             refs.update(row.get("run_id") for row in state["admissions"].values())
             if run is not None and run not in refs:
                 result.update({"status": "blocked", "blocker": "objective_run_mismatch",
-                               "next_safe_action": "select a Run recorded by this objective"})
+                               "next_safe_action": "select a Run recorded by this objective",
+                               "readiness": unavailable("objective_run_mismatch", "the named Run is not "
+                                                        "recorded by this objective")})
                 return result
             if run is None:
                 try:
@@ -262,6 +270,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     except PodError as exc:
         result.update({"status": "blocked", "blocker": exc.code,
                        "next_safe_action": "inspect the objective state"})
+        if objective is not None:
+            result["readiness"] = unavailable(exc.code, f"the objective record cannot be read ({exc.code})")
         return result
     result["run"] = run
     native_error = None
@@ -382,6 +392,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     if (result.get("detail") or {}).get("native_code") == "no_active_sender_terminal":
         result["next_safe_action"] = "This process is not in a live Orca terminal; Pod records need one. Observe read-only with pod status --objective ID"
         result["next_action"] = result["next_safe_action"]
+    handoff = None
     if state is not None and checkpoint is not None:
         from .handoff import nonowner_detection
         handoff = nonowner_detection(project, objective, state, state["owner"])
@@ -411,6 +422,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                           next_action="rerun the same internal succession claim to complete it")
         elif block is not None:
             result["succession"]["state"] = "claimed"
+    if state is not None and checkpoint is not None and isinstance(objective, str) and record_root is not None:
+        # New fields only: every earlier field above keeps its exact value (R114).
+        error = result["obligations"].get("error") if isinstance(result.get("obligations"), dict) else None
+        result.update(assess(project, objective, state, record_root, view=view, map_error=error,
+                             failure=result.get("native_settlement_failure"), owner_reader=handoff is None))
     return result
 
 
@@ -433,6 +449,8 @@ def project_for_state(checkpoint: dict, project: Path) -> Path:
 
 
 def render(result: dict) -> None:
+        if isinstance(result.get("readiness"), dict):
+            print(clean(result["readiness"]["summary"]))
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
         for choice in result.get("choices", []):
             print(f"  Choose {choice['objective']} | {choice['worktree'] or 'unbound'} | "
@@ -510,6 +528,10 @@ def render(result: dict) -> None:
         handoff = result.get("owner_handoff")
         if isinstance(handoff, dict):
             print(f"Owner handoff: {clean(handoff['condition'])}; {clean(handoff['message'])}")
+        claim = result.get("successor_claim")
+        if isinstance(claim, dict):
+            print("Successor claim: " + ("available; " if claim["status"] == "claim_available"
+                                         else f"refused ({clean(claim['condition'])}); ") + clean(claim["message"]))
         for entry in (result.get("runtime_continuity") or {}).get("history", []):
             label = "Owner handoff" if entry["provenance"] == "owner_handoff" else "Runtime rebind"
             print(f"{label}: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "

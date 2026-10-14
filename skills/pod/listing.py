@@ -156,6 +156,8 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
                **facts}
         from .succession import links
         row.update(links(target, raw))
+        from .readiness import label
+        row["readiness"] = label(Path(entry.path), raw, name) if row["schema"] == "current" else "unavailable"
         if row["phase"] == "retired" and row["schema"] == "current":
             from .retirement import status_block
             row["retirement"] = status_block(raw)
@@ -192,7 +194,8 @@ def render(result: dict) -> None:
         link = (f" -> {clean(row['continued_by'])}" if row.get("continued_by") else "")
         print(f"  {clean(row['objective'])[:64]} | {row['phase']}{link} | {row['schema']} | "
               f"runs {', '.join(clean(run) for run in row['runs'][:4]) or 'none'} | "
-              f"worktrees {', '.join(clean(path) for path in row['worktrees'][:2]) or 'unrecorded'}")
+              f"worktrees {', '.join(clean(path) for path in row['worktrees'][:2]) or 'unrecorded'} | "
+              f"readiness {row['readiness']}")
     for item in result["unreadable_records"]:
         print(f"  Unreadable record {clean(item['record'])}: {clean(item['code'])}")
     for record in result["unattributed_records"]:

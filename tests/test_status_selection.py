@@ -39,6 +39,14 @@ class StatusSelectionTests(KernelCase):
         self.assertEqual(mismatched["blocker"], "objective_run_mismatch")
         self.assertEqual([path.read_bytes() for path in paths], before)
 
+    def test_a_run_that_selects_one_objective_carries_the_same_readiness(self):
+        self.intake()
+        by_run, by_name = self.status("--run", "run"), self.status("--objective", "objective")
+        self.assertEqual(by_run["objective"], "objective")
+        self.assertEqual(by_run["readiness"], by_name["readiness"])
+        self.assertEqual((by_run["readiness"]["state"], by_run["readiness"]["acts_next"]), ("working", "coordinator"))
+        self.assertNotIn("readiness", self.status("--run", "other"))  # No recorded objective is selected.
+
     def test_gates_and_hosted_progress_are_derived(self):
         self.intake(remaining_gates=[{"kind": "hosted_ci", "workflow": "ci.yml"}])
         status = self.status("--objective", "objective")
