@@ -1386,8 +1386,15 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
                                    "receipt or an evidence reference", "record the outcome with provider or "
                                    "evidence naming the receipt", record_id)
         return None
+    if cls == "merge" and isinstance(row.get("carried_from"), dict):
+        # A carried merge's PASS or FAILED is what Pod's own readback of its pull request and Git shows, under the
+        # same rule reconcile uses: an open, missing or truncated pull-request history holds (R118).
+        if provider is not None:
+            raise _outcome_refusal("receipt_from_readback", "A carried merge's provider receipt comes from Pod's own "
+                                   "readback", "record the outcome without a provider receipt", record_id)
+        return "readback"
     if cls == "merge":
-        return _check_merge_outcome(project, state, journal, row, outcome, provider=provider, now=now)
+        return _check_merge_outcome(project, state, journal, row, outcome, provider=provider)
     if provider is not None:
         raise _outcome_refusal("receipt_from_readback", "A reservation's provider receipt comes from Pod's own "
                                "readback", "record the outcome without a provider receipt", record_id)
@@ -1400,26 +1407,23 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
 
 
 def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
-                         provider: dict | None, now: datetime) -> None:
-    from .governance import carried_merge_context, target_contains_result, verify_merge_result
+                         provider: dict | None) -> None:
+    from .governance import target_contains_result, verify_merge_result
     from .ledger import map_of
     record_id = row["record_id"]
     map_state = map_of(state)
-    carried = isinstance(row.get("carried_from"), dict)
-    if map_state is None and not carried:
+    if map_state is None:
         raise _outcome_refusal("map_missing", "A merge outcome is checked against the bound target and base of the "
                                "objective map", "checkpoint the objective map first", record_id)
-    # A carried merge is checked against the candidate and base it was admitted with (R118).
-    unit, governance = carried_merge_context(row, journal["units"].get(row["action"]["unit"]),
-                                             None if carried else map_state["governance"])
     if outcome == "PASS":
+        unit = journal["units"].get(row["action"]["unit"])
         merged = {**(row["receipt"].get("provider") or {}), **(provider or {})}
         if not merged.get("merge_commit"):
             raise _outcome_refusal("merge_commit_missing", "A merge PASS keeps the provider merge_commit",
                                    _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
         try:
             verify_merge_result(project, {**row, "receipt": {**row["receipt"], "provider": merged}}, unit,
-                                governance)
+                                map_state["governance"])
         except PodError as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             raise _outcome_refusal("merge_unverified", "The merge result fails R93's Git checks ("
@@ -1429,21 +1433,13 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
     if provider is not None and provider.get("merge_commit"):
         raise _outcome_refusal("merge_commit_conflict", f"A merge {outcome} names no merge_commit",
                                "record PASS for a merge that landed", record_id)
-    contained = target_contains_result(project, row, governance)
+    contained = target_contains_result(project, row, map_state["governance"])
     if contained is None:
         raise _outcome_refusal("target_unobservable", "Git cannot show whether the target holds the candidate's "
                                "result", _fetch_first(row) + ", then record the outcome again", record_id)
     if contained:
         raise _outcome_refusal("target_contains_result", "The target holds the candidate's result, so the merge "
                                "landed", _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
-    if carried:
-        from .governor_effects import absence_floor
-        floor = absence_floor(row)
-        if floor is None or now < floor:
-            raise _outcome_refusal("absence_too_early", "A carried merge's absence is not read before "
-                                   + (floor.isoformat() if floor else "its recorded start is known")
-                                   + ": a call already in flight may still land", "retry after that time",
-                                   record_id)
     return None
 
 

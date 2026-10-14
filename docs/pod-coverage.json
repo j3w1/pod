@@ -3726,6 +3726,56 @@
         "tests.test_carried_claim.CarriedUnconfirmedRerunTests.test_a_rerun_that_never_landed_reads_failed_only_after_the_absence_floor"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A314",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ReservationTests.test_a_claim_interrupted_after_its_reservation_holds_the_successor",
+        "tests.test_carried_claim.ReservationTests.test_a_claim_interrupted_after_the_predecessor_link_holds_the_successor",
+        "tests.test_carried_claim.ReservationTests.test_a_claim_interrupted_after_the_carried_rows_holds_the_successor",
+        "tests.test_carried_claim.ReservationTests.test_a_reserved_successor_may_still_change_coordinator_or_rebind",
+        "tests.test_carried_claim.ReservationTests.test_a_reservation_whose_claim_cannot_complete_is_released",
+        "tests.test_carried_claim.ReservationTests.test_a_replay_refuses_a_successor_that_changed_without_a_reservation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A315",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.MergeTests.test_a_manual_outcome_of_a_carried_merge_holds_like_its_readback",
+        "tests.test_carried_claim.MergeTests.test_a_manual_failed_carried_merge_needs_a_closed_pull_request_past_the_margin"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A316",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.CarriedSettlementTests.test_a_carried_pull_request_update_settles_only_from_its_pull_request",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A317",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.CarriedSettlementTests.test_a_carried_cancellation_settles_whether_or_not_its_target_was_carried",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A318",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.CarriedChainTests.test_the_predecessor_follows_a_row_carried_again_and_keeps_an_earlier_settled_one",
+      "status": "NOT_RUN"
     }
   ]
 }

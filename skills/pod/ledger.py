@@ -244,7 +244,9 @@ def read(project: Path, objective: str) -> dict | None:
 
 def _write(path: Path, value: dict) -> None:
     from .succession import refuse_continued
-    refuse_continued(value)  # Backstop: only its own transition writes a continued record or a historical retirement.
+    # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
+    # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
+    refuse_continued(value, reserved=False)
     value["revision"] += 1
     _validate_context(value)
     atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
@@ -288,7 +290,7 @@ def _run_references(state: dict) -> dict[str, str]:
 
 def require_authority(project: Path, objective: str, *, owner: str,
                       state: dict | None = None, run_id: str | None = None,
-                      native_port=None, expected_runtime: str | None = None) -> dict:
+                      native_port=None, expected_runtime: str | None = None, claim: str | None = None) -> dict:
     """Join a stable native current Run to this objective's persisted owner and refs.
 
     Every caller passing ``state`` holds the objective lock, so a proven runtime
@@ -301,9 +303,9 @@ def require_authority(project: Path, objective: str, *, owner: str,
     locked = state is not None
     state = _read(_path(project, objective)) if state is None else state
     from .succession import refuse_continued
-    refuse_continued(state)
+    refuse_continued(state, claim=claim)  # `claim`: the succession claim of this successor, the one write it allows.
     from .handoff import refuse_nonowner
-    refuse_nonowner(project, objective, state, owner, port=native_port)
+    refuse_nonowner(project, objective, state, owner, port=native_port, claim=claim)
     if state["owner"] not in (None, owner):
         raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
     refs = _run_references(state)
@@ -653,7 +655,8 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
         state = _read(path)
         if state["owner"] != owner or state.get("checkpoint") is None:
             raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
-        _require_open(state)
+        # A rebind is no work: a successor an incomplete claim reserves may rebind so that it can finish the claim.
+        _require_open(state, reserved=False)
         refs = _run_references(state)
         if len(set(refs.values())) != 1:
             raise PodError("native_authority_unverified", "Objective Run references span runtimes")
@@ -1075,9 +1078,9 @@ def map_read(project: Path, objective: str) -> dict:
             "finalization": remaining}
 
 
-def _require_open(state: dict) -> None:
+def _require_open(state: dict, *, reserved: bool = True) -> None:
     from .succession import refuse_continued
-    refuse_continued(state)
+    refuse_continued(state, reserved=reserved)
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
         from .obligations import refuse

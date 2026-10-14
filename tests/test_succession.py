@@ -389,13 +389,15 @@ class AfterClaimTests(SuccessionCase):
 
         def interrupted(path, value):
             calls.append(path)
-            if path == objective_root(self.project, "successor") / "context.json" and len(calls) == 1:
+            # The successor's completing link, written after its reservation and the predecessor's link (R118).
+            if (path == objective_root(self.project, "successor") / "context.json"
+                    and "state" not in value.get("continues", {"state": None})):
                 raise PodError("unsafe_state", "interrupted")
             return original(path, value)
         with patch("pod.ledger._write", side_effect=interrupted):
             self.refused(lambda: self.claim(decision), code="unsafe_state")
         self.assertEqual(read(self.project, "objective")["continued_by"]["objective"], "successor")
-        self.assertNotIn("continues", read(self.project, "successor"))
+        self.assertEqual(read(self.project, "successor")["continues"]["state"], "claiming")
         self.assertEqual(self.status()["succession"]["state"], "claim_incomplete")
         before = self.snapshot()
         verdict = self.claim()  # Detection reports the gap and still writes nothing.

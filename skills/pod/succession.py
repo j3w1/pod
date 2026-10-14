@@ -28,6 +28,9 @@ CARRIED = "carried"
 CONTINUED = {"objective", "record", "owner", "runs", "at", "instruction", "unfinished", "unreported",
              "ambiguity", "orca_claim"}
 CONTINUES = {"objective", "record", "at"}
+# A claim reserves its successor before it links the predecessor: the successor's link names the predecessor with
+# this state until the claim completes, and the successor accepts no other write meanwhile.
+CLAIMING = "claiming"
 MAX_CHAIN = 8
 MAX_LISTED = 64
 ACTION = "Read the successor objective with pod status --objective {}; this record accepts no writes."
@@ -41,6 +44,8 @@ def _texts(value: object, *, limit: int) -> bool:
 def validate_link(name: str, value: object) -> None:
     """The stored shape of either side of a claim; anything else makes the record unsupported."""
     fields = CONTINUED if name == "continued_by" else CONTINUES
+    if name == "continues" and isinstance(value, dict) and value.get("state") == CLAIMING:
+        fields = CONTINUES | {"state"}
     if (not isinstance(value, dict) or set(value) != fields
             or any(not isinstance(value[key], str) or not value[key] or len(value[key]) > 1024
                    for key in fields - {"runs", "unfinished", "unreported", "ambiguity"})
@@ -51,14 +56,33 @@ def validate_link(name: str, value: object) -> None:
         raise PodError("state_unsupported", f"Objective {name.replace('_', ' ')} record is malformed")
 
 
-def refuse_continued(state: dict | None) -> None:
-    """The one refusal a continued objective, or one under historical retirement (R112), gives every write."""
+def reserved_for(state: dict | None) -> str | None:
+    """The predecessor an incomplete claim of this successor names, if one is in progress."""
+    back = state.get("continues") if isinstance(state, dict) else None
+    return back["objective"] if isinstance(back, dict) and back.get("state") == CLAIMING else None
+
+
+def refuse_continued(state: dict | None, *, claim: str | None = None, reserved: bool = True) -> None:
+    """The one refusal a continued objective, or one under historical retirement (R112), gives every write.
+
+    A successor that an incomplete claim reserves refuses every write but that claim's own (`claim` names its
+    predecessor) until the claim completes (R118). `reserved=False` skips that check where no work is done: the
+    record's write backstop, so the claim itself can write, and an owner handoff or runtime rebind, which move
+    authority so that a new coordinator can finish the claim.
+    """
     link = state.get("continued_by") if isinstance(state, dict) else None
     if isinstance(link, dict):
         raise PodError("objective_continued",
                        f"This objective was continued by successor objective {link['objective']}; "
                        "its record is kept and accepts no writes",
                        {"successor": link["objective"], "next_action": ACTION.format(link["objective"])})
+    pending = reserved_for(state) if reserved else None
+    if pending is not None and pending != claim:
+        raise PodError("claim_incomplete",
+                       f"This objective's claim on predecessor objective {pending} is incomplete; it accepts no "
+                       "other write until that claim completes",
+                       {"predecessor": pending, "next_action": "rerun the same internal succession claim to "
+                                                               "complete it"})
     from .retirement import refuse_retired
     refuse_retired(state)
 
@@ -87,7 +111,8 @@ def chain_state(project: Path, state: dict) -> dict:
         back = (successor or {}).get("continues")
         if successor is None:
             return {"state": "unknown", "objective": name, "reason": "successor record unreadable"}
-        if not isinstance(back, dict) or back.get("objective") != (current.get("checkpoint") or {}).get("objective"):
+        if (not isinstance(back, dict) or back.get("objective") != (current.get("checkpoint") or {}).get("objective")
+                or back.get("state") == CLAIMING):
             return {"state": "claim_incomplete", "objective": name,
                     "reason": "the successor does not yet record the claim; rerun the same claim"}
         current = successor
@@ -112,9 +137,13 @@ def links(project: Path, raw: dict) -> dict:
 
 
 def _carried_settlement(project: Path, state: dict, link: dict) -> dict | None:
-    """How the rows this predecessor's claim carried stand now, read from the successor's journal (R118).
+    """How the rows this predecessor's claim carried stand now (R118).
 
-    None when the claim carried nothing; an unreadable successor journal is said, not guessed.
+    Each row is read from the successor's journal and, while it is still unsettled there and that successor was
+    itself continued, from the later successor that carried it again, at most eight objectives along. A settled
+    result is current wherever it was recorded; a row the chain cannot follow (unreadable, looping, too long, or a
+    later claim that has not yet copied it) reads unavailable rather than a frozen earlier outcome. None when the
+    claim carried nothing.
     """
     from .governor import _read_journal, _record_path
     name = (state.get("checkpoint") or {}).get("objective")
@@ -122,11 +151,49 @@ def _carried_settlement(project: Path, state: dict, link: dict) -> dict | None:
         journal = _read_journal(_record_path(project, link["objective"]))
     except PodError as exc:
         return {"rows": None, "reason": f"the successor's Governor journal is unreadable ({exc.code})"}
-    rows = [{"record": row["record_id"], "kind": row["action"]["kind"], "outcome": row["outcome"]}
-            for row in journal["actions"] if (row.get("carried_from") or {}).get("objective") == name]
+    rows = [row for row in journal["actions"] if (row.get("carried_from") or {}).get("objective") == name]
     if not rows:
         return None
-    return {"rows": rows[:MAX_LISTED], "unsettled": sum(row["outcome"] in ("pending", "UNKNOWN") for row in rows)}
+    current = [_current_carried(project, link["objective"], row) for row in rows]
+    # An unavailable row (outcome None) is not known settled, so it counts as unsettled.
+    return {"rows": current[:MAX_LISTED],
+            "unsettled": sum(row["outcome"] in ("pending", "UNKNOWN", None) for row in current)}
+
+
+def _current_carried(project: Path, holder: str, row: dict) -> dict:
+    """One carried row's current outcome, following it through later claims; `held_by` names where it was read."""
+    from .governor import _read_journal, _record_path
+    entry = {"record": row["record_id"], "kind": row["action"]["kind"]}
+    seen = {holder}
+    for _ in range(MAX_CHAIN):
+        if row["outcome"] not in ("pending", "UNKNOWN"):
+            break
+        record = _read(project, holder)
+        if record is None:
+            return {**entry, "outcome": None, "reason": f"objective {holder} is unreadable"}
+        link = record.get("continued_by")
+        if not isinstance(link, dict):
+            break
+        later = link["objective"]
+        if later in seen:
+            return {**entry, "outcome": None, "reason": "successor chain loops"}
+        seen.add(later)
+        try:
+            journal = _read_journal(_record_path(project, later))
+        except PodError as exc:
+            return {**entry, "outcome": None,
+                    "reason": f"objective {later}'s Governor journal is unreadable ({exc.code})"}
+        copy = next((other for other in journal["actions"] if other["record_id"] == row["record_id"]
+                     and (other.get("carried_from") or {}).get("objective") == holder), None)
+        if copy is None:
+            return {**entry, "outcome": None, "reason": f"objective {later} has not recorded this row; its claim "
+                                                        "may be incomplete"}
+        holder, row = later, copy
+    else:
+        if row["outcome"] in ("pending", "UNKNOWN") and isinstance(((_read(project, holder) or {})
+                                                                    .get("continued_by")), dict):
+            return {**entry, "outcome": None, "reason": "successor chain exceeds eight objectives"}
+    return {**entry, "outcome": row["outcome"], "held_by": holder}
 
 
 def status_block(project: Path, state: dict) -> dict | None:
@@ -152,8 +219,13 @@ def status_block(project: Path, state: dict) -> dict | None:
     return block
 
 
-def _started(project: Path, objective: str, state: dict) -> str | None:
-    """Why the successor has already begun work, if it has."""
+def _started(project: Path, objective: str, state: dict, *, predecessor: str | None = None,
+             carried: frozenset = frozenset()) -> str | None:
+    """Why the successor has already begun work, if it has.
+
+    Rows and units this claim of `predecessor` already copied (record ids in `carried`) are the claim's own
+    partial write, not the successor's work.
+    """
     from .governor import _read_journal, _record_path
     from .obligations import TERMINAL
     checkpoint = state.get("checkpoint") or {}
@@ -167,7 +239,10 @@ def _started(project: Path, objective: str, state: dict) -> str | None:
         journal = _read_journal(_record_path(project, objective))
     except PodError:
         return "the successor's Governor journal is unreadable"
-    if journal["actions"] or journal["units"]:
+    def mine(item: dict) -> bool:
+        return predecessor is not None and (item.get("carried_from") or {}).get("objective") == predecessor
+    if (any(not (mine(row) and row["record_id"] in carried) for row in journal["actions"])
+            or any(not mine(unit) for unit in journal["units"].values())):
         return "the successor already has Governor work"
     return None
 
@@ -330,7 +405,8 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
                          carried=[row["record_id"] for row in _carried(project, predecessor, prior)[0]])
             back = state.get("continues")
             verdict.update(status="claimed", condition="claimed_by_this_successor", record=record,
-                           complete=isinstance(back, dict) and back.get("objective") == predecessor,
+                           complete=(isinstance(back, dict) and back.get("objective") == predecessor
+                                     and back.get("state") != CLAIMING),
                            message="This successor already holds the claim.")
             return verdict
         return fail("predecessor_claimed", f"Successor objective {link['objective']} already continues it.",
@@ -339,7 +415,7 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
         return fail("predecessor_retired", "The owner's historical retirement covers the predecessor; it is not "
                     "continued.")
     back = state.get("continues")
-    if isinstance(back, dict):
+    if isinstance(back, dict) and reserved_for(state) != predecessor:
         return fail("successor_started", f"This successor already continues objective {back['objective']}.")
     started = _started(project, objective, state)
     if started:
@@ -426,7 +502,7 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
         if state.get("checkpoint") is None:
             raise PodError("successor_unrecorded", "Write the successor objective's first checkpoint before the claim",
                            {"next_action": "checkpoint the successor objective, then rerun internal succession"})
-        require_authority(project, objective, owner=owner, state=state, native_port=port)
+        require_authority(project, objective, owner=owner, state=state, native_port=port, claim=predecessor)
         try:
             prior = _read(other)
         except PodError as exc:
@@ -450,12 +526,33 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                 if decision is None:  # Detection never writes, even to finish an interrupted claim.
                     return {**verdict, "next_action": "rerun internal succession with the claim's decision "
                                                       "to record the successor's link"}
+                # Before copying rows, the successor must still be open with no work of its own: only rows and
+                # units this claim already copied may be there (R118).
+                blocker = _started(project, objective, state, predecessor=predecessor,
+                                   carried=frozenset(recorded[CARRIED])) if recorded[CARRIED] else None
+                if blocker:
+                    raise PodError("successor_started", "The successor changed while the claim was incomplete: "
+                                   + blocker + "; no carried row is copied. Nothing was written.",
+                                   {"next_action": "the owner decides how the predecessor's unsettled effects "
+                                                   "settle, for example by historical retirement"})
                 _carry(project, objective, predecessor, prior, recorded[CARRIED], at=link["at"])
                 state["continues"] = {"objective": predecessor, "record": verdict["record"],
                                       "at": prior["continued_by"]["at"]}
                 _write(own, state)
             return {"status": "claimed", "replayed": True, "predecessor": predecessor, "successor": objective,
                     "continued_by": prior["continued_by"], CARRIED: recorded[CARRIED]}
+        reserved = reserved_for(state) == predecessor
+        if verdict["status"] != "claim_available" and reserved:
+            # The claim reserved this successor and stopped before linking the predecessor, which cannot be
+            # claimed now: the owner's decision releases the reservation, and detection says so.
+            if decision is None:
+                return {**verdict, "reserved": True,
+                        "next_action": "rerun internal succession with the claim's decision to release this "
+                                       "successor's reservation, since the claim cannot complete"}
+            state.pop("continues")
+            _write(own, state)
+            raise PodError(verdict["condition"], verdict["message"] + " The successor's reservation was released.",
+                           {"succession": verdict, "next_action": verdict["next_action"]})
         if decision is None:
             return verdict
         if verdict["status"] != "claim_available":
@@ -472,9 +569,13 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                                  "instruction": decision["instruction"], "unfinished": verdict["unfinished"],
                                  "unreported": verdict["unreported"],
                                  "ambiguity": list(verdict["facts"]["ambiguity"]), "orca_claim": "unavailable"}
-        # Order: the predecessor's link first, which freezes its record and Governor journal; then the carried
-        # rows, read from that frozen journal; then the successor's link, which marks the claim complete. A replay
-        # after any interruption recomputes the same rows and completes what is missing.
+        # Order: the successor's reservation first, so it accepts no other write until the claim completes; then
+        # the predecessor's link, which freezes its record and Governor journal; then the carried rows, read from
+        # that frozen journal; then the successor's link without the reservation, which marks the claim complete.
+        # A replay after any interruption recomputes the same rows and completes what is missing.
+        if not reserved:
+            state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at, "state": CLAIMING}
+            _write(own, state)
         _write_succession(other, prior)
         _carry(project, objective, predecessor, prior, verdict["facts"][CARRIED], at=at)
         state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at}

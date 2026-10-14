@@ -337,9 +337,11 @@ def nonowner_detection(project: Path, objective: str, state: dict | None, owner:
     return detect(project, objective, state, port=port, caller=current["caller"])
 
 
-def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: str, *, code="native_authority_unverified", port=None, current=None) -> None:
+def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: str, *, code="native_authority_unverified", port=None, current=None,
+                    claim: str | None = None, reserved: bool = True) -> None:
     from .succession import refuse_continued
-    refuse_continued(state)  # Any caller, owner or not, is told the objective was continued (R110).
+    # Any caller, owner or not, is told the objective was continued (R110).
+    refuse_continued(state, claim=claim, reserved=reserved)
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)
     if verdict is not None:
         raise PodError(code, "Caller is not the recorded owner. " + verdict["message"],
@@ -365,7 +367,9 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
     # Keep the objective lock through the single native mutation and authoritative re-read.
     with _lock(path):
         state = _read(path)
-        _require_open(state)
+        # A handoff moves coordination, not work: a successor an incomplete claim reserves may change coordinator
+        # so that the new one finishes the claim (R118).
+        _require_open(state, reserved=False)
         if state.get("checkpoint") is None or owner != os.environ.get("ORCA_TERMINAL_HANDLE"):
             raise PodError("native_authority_unverified", "Handoff needs this live caller and a recorded objective")
         pending = unfinished(state)

@@ -411,9 +411,13 @@ def _record_execution(project: Path, objective: str, *, owner: str, record_id: s
             _settle(journal, row, outcome=outcome, provider=provider, evidence=[], detail=detail, moment=moment)
             _record_run_event(row, provider)
             if outcome == "PASS" and row["action"]["kind"] == "cancel_validation":
-                target = _find_row(journal, row["action"]["target"])
-                # A carried target settles only by its own readback (R118).
-                if target["outcome"] == "pending" and not isinstance(target.get("carried_from"), dict):
+                # The cancellation's own observed receipt is settled above. Its target settles CANCELED here only
+                # when this journal holds it, pending and not carried: a carried target settles by its own readback,
+                # and a carried cancellation's settled target was never copied (R118).
+                target = next((other for other in journal["actions"]
+                               if other["record_id"] == row["action"]["target"]), None)
+                if (target is not None and target["outcome"] == "pending"
+                        and not isinstance(target.get("carried_from"), dict)):
                     _settle(journal, target, outcome="CANCELED", provider=None, evidence=[],
                             detail="superseded by candidate " + str(row.get("candidate_id"))[:12], moment=moment)
                     _count(journal["counters"], "cancellations")
@@ -690,8 +694,9 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
         # by that commit, never by whatever the unit's current candidate happens to be.
         branch = pushed_branch(row, unit)
         if kind == "pr_update" and carried and branch is not None and commit is not None:
-            # A carried pull-request update reads its pull request back, also once it merged and its branch went.
-            pr, _, _ = _carried_pull_request(port, row, branch, branch["base"])
+            # A carried pull-request update settles PASS only from its pull request, also once it merged and its
+            # branch went: the branch head proves a push, not the update (R118).
+            pr, scope, truncated = _carried_pull_request(port, row, branch, branch["base"])
             if pr is not None:
                 answer.update(outcome="PASS", seen=True, detail=f"pull request #{pr.get('number')} carries the "
                               "candidate commit",
@@ -699,6 +704,21 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
                                         "pr": pr.get("number"), "pr_url": pr.get("url"), "pr_state": pr.get("state"),
                                         "triggered": _triggered_runs(port, row, commit)})
                 return answer
+            if truncated:
+                answer["hold"] = (f"the {scope} were truncated, so this update's pull request cannot be told; the row "
+                                  f"stays {row['outcome']}")
+                return answer
+            head = port.branch_head(remote=branch["remote"], branch=branch["branch"])
+            if head != commit and head is not None and head == unit["published"].get(branch["remote"] + "/"
+                                                                                       + branch["branch"]):
+                answer.update(outcome="FAILED", absence=True,
+                              detail="not_pushed: the remote branch is still at the previously recorded commit and no "
+                                     "pull request carries the candidate commit")
+            else:
+                answer["hold"] = (f"no pull request with head {commit[:12]} is among the {scope}"
+                                  + ("; the remote branch carries the commit, which proves a push, not the update"
+                                     if head == commit else "") + f"; the row stays {row['outcome']}")
+            return answer
         head = port.branch_head(remote=branch["remote"], branch=branch["branch"]) if branch else None
         if branch is None:
             answer["hold"] = "the unit no longer names the branch this row pushed"

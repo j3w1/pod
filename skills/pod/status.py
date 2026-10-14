@@ -408,7 +408,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             # Other objectives keep their exact earlier projection, without a phase field.
             result.update(phase="retired", retirement=retirement, blocker="objective_retired",
                           next_safe_action=RETIREMENT.format(objective), next_action=RETIREMENT.format(objective))
-        from .succession import ACTION, status_block
+        from .succession import ACTION, reserved_for, status_block
         block = status_block(project, state)
         if block is not None:
             result["succession"] = block
@@ -416,7 +416,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             # A continued record is read, never written: its successor holds the remaining work.
             result.update(blocker="objective_continued", next_safe_action=ACTION.format(block["continued_by"]),
                           next_action=ACTION.format(block["continued_by"]))
-        elif block is not None and block.get("continues") and not _claim_recorded(project, state):
+        elif block is not None and block.get("continues") and (not _claim_recorded(project, state)
+                                                               or reserved_for(state) is not None):
             result["succession"]["state"] = "claim_incomplete"
             result.update(next_safe_action="rerun the same internal succession claim to complete it",
                           next_action="rerun the same internal succession claim to complete it")
