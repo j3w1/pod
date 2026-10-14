@@ -145,7 +145,7 @@ def _claimants(project: Path, objective: str) -> list[str] | None:
     """Objectives of this repository whose claim names this one as successor; None when a record that could
     hold such a claim is unreadable. Directories without a record carry no claim and are skipped."""
     from .github import repository_context
-    from .ledger import CONTEXT_LIMIT, record_name, state_root
+    from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
     from .util import bounded_json
     context = repository_context(project)
@@ -166,7 +166,7 @@ def _claimants(project: Path, objective: str) -> list[str] | None:
         try:
             if entry.is_symlink():
                 return None
-            if not entry.is_dir(follow_symlinks=False) or not (Path(entry.path) / "context.json").exists():
+            if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
                 continue
             raw = bounded_json(Path(entry.path) / "context.json", limit=CONTEXT_LIMIT)
         except (OSError, PodError):

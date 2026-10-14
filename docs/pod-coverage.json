@@ -3140,6 +3140,8 @@
         "tests.test_historical_retirement.RefusalTableTests.test_lifecycle_refuses",
         "tests.test_historical_retirement.RefusalTableTests.test_unreadable_records_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_scope_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_handoff_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_other_records_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_claims_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_coordinator_refuses",
         "tests.test_historical_retirement.RefusalTableTests.test_run_binding_refuses",

@@ -276,6 +276,14 @@ def _record_unreadable_elsewhere(case):
     (stray / "context.json").write_text("{")  # A record that could hold a claim naming this objective.
 
 
+def _record_directory_unreadable(case):
+    stray = objective_root(case.project, "objective").parent / "stray"
+    stray.mkdir()
+    (stray / "context.json").write_text("{}")
+    stray.chmod(0)  # A claimant Pod cannot even look into.
+    case.addCleanup(stray.chmod, 0o700)
+
+
 def _no_run(case):
     path, raw = _raw(case, "objective")
     raw["checkpoint"]["native_refs"], raw["admissions"] = [], {}
@@ -308,6 +316,7 @@ REFUSALS = {
     "continues": (_continues, "objective_continues"),
     "claimed-by-another": (_claimed_by_another, "objective_continues"),
     "record-unreadable-elsewhere": (_record_unreadable_elsewhere, "scope_unreadable"),
+    "record-directory-unreadable": (_record_directory_unreadable, "scope_unreadable"),
     "owner-live": (lambda case: case.terminals.update(owner="live"), "owner_not_lost"),
     "owner-unreadable": (lambda case: case.terminals.update(owner="unreadable"), "owner_not_lost"),
     "owner-stop-unconfirmed": (lambda case: case.terminals.update(owner="stop-unconfirmed"), "owner_not_lost"),
@@ -336,8 +345,10 @@ REFUSALS = {
 class RefusalTableTests(GroupedTable):
     """Each unproven fact refuses detection and the owner's earlier decision, and writes nothing."""
     GROUPS = {"test_lifecycle_refuses": ["closed", "continued", "continues"],
-              "test_unreadable_records_refuse": ["handoff-pending", "record-unsupported", "journal-unreadable"],
-              "test_scope_refuses": ["no-run", "too-many-records", "record-unreadable-elsewhere"],
+              "test_unreadable_records_refuse": ["record-unsupported", "journal-unreadable"],
+              "test_handoff_refuses": ["handoff-pending"],
+              "test_scope_refuses": ["no-run", "too-many-records"],
+              "test_other_records_refuse": ["record-unreadable-elsewhere", "record-directory-unreadable"],
               "test_claims_refuse": ["claimed-by-another"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
               "test_run_binding_refuses": ["run-rebound", "generation-changed"],
@@ -376,6 +387,12 @@ class RefusalTableTests(GroupedTable):
         self.rows()
 
     def test_scope_refuses(self):
+        self.rows()
+
+    def test_handoff_refuses(self):
+        self.rows()
+
+    def test_other_records_refuse(self):
         self.rows()
 
     def test_claims_refuse(self):
