@@ -443,7 +443,7 @@
       ],
       "offline_test": [
         "tests.test_orca_adapter.OrcaAdapterTests.test_read_allowlist_refuses_native_mutations_and_account_reads",
-        "tests.test_orca_adapter.OrcaAdapterTests.test_output_that_is_not_utf8_or_carries_a_lone_surrogate_is_no_evidence",
+        "tests.test_orca_adapter.OrcaAdapterTests.test_output_that_is_not_utf8_is_no_evidence_and_a_cut_preview_is_harmless",
         "tests.test_retirement_absent.NativeTextTests.test_git_output_that_is_not_utf8_refuses"
       ],
       "status": "NOT_RUN"
@@ -3270,7 +3270,9 @@
         "tests.test_retirement_absent.PathRefusalTableTests.test_a_live_terminal_spelled_in_other_letter_case_holds_the_path",
         "tests.test_retirement_absent.PathRefusalTableTests.test_an_identity_that_cannot_be_encoded_refuses",
         "tests.test_retirement_absent.DetectionTests.test_a_sibling_whose_name_only_begins_with_the_path_holds_nothing",
-        "tests.test_retirement_absent.WithinTests.test_locations_match_by_identity_and_folded_names"
+        "tests.test_retirement_absent.WithinTests.test_locations_match_by_identity_and_folded_names",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_an_orca_listing_through_a_dangling_link_refuses",
+        "tests.test_retirement_absent.PathRefusalTableTests.test_a_live_terminal_through_a_dangling_link_holds_the_path"
       ],
       "status": "NOT_RUN"
     },

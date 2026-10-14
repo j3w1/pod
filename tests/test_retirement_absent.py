@@ -280,6 +280,23 @@ def _other_case_terminal(case):
                                     "worktreePath": _other_case(case) + "/nested"}]
 
 
+def _dangling_link(case):
+    """Final audit L2: a location spelled through a link to the released directory, dangling now that it is gone."""
+    shortcut = str(case.root / "shortcut")
+    os.symlink(case.gone, shortcut)
+    return shortcut
+
+
+def _dangling_link_listing(case):
+    shortcut = _dangling_link(case)
+    case.inventory["worktrees"] = [{"path": shortcut, "git": {"path": shortcut}}]
+
+
+def _dangling_link_terminal(case):
+    case.inventory["terminals"] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                    "worktreePath": _dangling_link(case) + "/nested"}]
+
+
 def _unencodable_identity(case):
     case.instances[case.kept] = "wt2:local:\ud800"  # JSON can carry a lone surrogate that no record can.
 
@@ -327,6 +344,8 @@ PATH_REFUSALS = {
     "other-case-registration": (_other_case_registration, "gone", "path_unverified", "unknown"),
     "other-case-terminal": (_other_case_terminal, "gone", "path_in_use", "absent"),
     "unencodable-identity": (_unencodable_identity, "kept", "path_unverified", "unknown", ("kept",)),
+    "dangling-link-listing": (_dangling_link_listing, "gone", "path_unverified", "unknown"),
+    "dangling-link-terminal": (_dangling_link_terminal, "gone", "path_in_use", "absent"),
 }
 
 
@@ -370,7 +389,9 @@ class PathRefusalTableTests(GroupedTable):
         "test_a_live_terminal_through_a_bind_mount_holds_an_existing_path": ["bind-mounted-terminal-in-existing"],
         "test_a_registration_spelled_in_other_letter_case_refuses": ["other-case-registration"],
         "test_a_live_terminal_spelled_in_other_letter_case_holds_the_path": ["other-case-terminal"],
-        "test_an_identity_that_cannot_be_encoded_refuses": ["unencodable-identity"]}
+        "test_an_identity_that_cannot_be_encoded_refuses": ["unencodable-identity"],
+        "test_an_orca_listing_through_a_dangling_link_refuses": ["dangling-link-listing"],
+        "test_a_live_terminal_through_a_dangling_link_holds_the_path": ["dangling-link-terminal"]}
 
     def row(self, kind):
         arrange, which, condition, disposition, *released = PATH_REFUSALS[kind]
@@ -505,6 +526,12 @@ class PathRefusalTableTests(GroupedTable):
         self.rows()
 
     def test_an_identity_that_cannot_be_encoded_refuses(self):
+        self.rows()
+
+    def test_an_orca_listing_through_a_dangling_link_refuses(self):
+        self.rows()
+
+    def test_a_live_terminal_through_a_dangling_link_holds_the_path(self):
         self.rows()
 
 
@@ -791,6 +818,8 @@ class WithinTests(unittest.TestCase):
         (self.root / "real" / "kept").mkdir(parents=True)
         (self.root / "locked" / "sub").mkdir(parents=True)
         os.symlink(self.root / "real", self.root / "link")
+        os.symlink(self.root / "real" / "gone", self.root / "shortcut")  # Dangling: the path it names is gone.
+        os.symlink(os.path.join("real", "gone"), self.root / "relative")
 
     def test_locations_match_by_identity_and_folded_names(self):
         from pod.retirement import _within
@@ -805,6 +834,8 @@ class WithinTests(unittest.TestCase):
                 (at("real", "gone", "x"), gone, True), (at("link", "gone"), gone, True), (at("alias", "gone"), gone, True),
                 (at("real", "GONE", "x"), gone, True), (at("real", "Gone\u0301"), at("real", "gon\u00e9"), True),
                 (at("real", "gone-2"), gone, False), (at("real", "kept", "gone"), gone, False),
+                (at("shortcut"), gone, True), (at("shortcut", "nested"), gone, True), (at("relative", "x"), gone, True),
+                (at("missing", "..", "real", "gone"), gone, True), (at("shortcut"), kept, False),
                 (at("locked", "sub", "x"), at("locked"), True), (at("locked", "sub"), kept, False),
                 (at("real", "kept\x00x"), kept, True), ("relative/kept", kept, False), (None, kept, False)):
             with self.subTest(candidate=ascii(candidate), path=path):

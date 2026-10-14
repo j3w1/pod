@@ -282,17 +282,20 @@ def _standing(place: str) -> list[tuple[tuple[int, int], tuple[str, ...]]]:
 
 
 def _within(candidate: object, path: str) -> bool:
-    """Whether a location the registry or another inventory names is the path or lies beneath it on this host. Both
-    are placed from the deepest directory this host shows on their way, compared by device and inode, and the names
-    below it are compared folded, so a link, a bind mount or a case-insensitive directory cannot hide a match;
-    over-matching only leaves the path unknown. Inventories admit only readable locations; should one still not
-    resolve, it could be anywhere and counts as a match (R113)."""
+    """Whether a location the registry or another inventory names is the path or lies beneath it on this host. The
+    path is placed at its deepest existing directory; the location matches when its own walk, as spelled or with its
+    links resolved, passes through that directory, by device and inode, with the same folded names below it. So a
+    link, even one left dangling by the path's removal, a bind mount or a case-insensitive directory cannot hide a
+    match; over-matching only leaves the path unknown. Inventories admit only readable locations; should one still
+    not resolve, it could be anywhere and counts as a match (R113)."""
     if not isinstance(candidate, str) or not candidate.startswith("/"):
         return False
     try:
         anchor, below = _standing(path)[-1]
-        return any(key == anchor and names[:len(below)] == below for key, names in _standing(candidate))
-    except (ValueError, IndexError):
+        return any(key == anchor and names[:len(below)] == below
+                   for place in dict.fromkeys((candidate, os.path.realpath(candidate)))
+                   for key, names in _standing(place))
+    except (OSError, ValueError, IndexError):
         return True
 
 
