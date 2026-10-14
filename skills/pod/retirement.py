@@ -24,7 +24,7 @@ FACTS = DECIDED - {"delivery"}
 ENTRY = {"at", "decision", "instruction", "reason", "repository", "objectives", "owner", "runs",
          "released", "preserved", "unfinished", "delivery", "native"}
 GOVERNOR_ROW = {"kind", "id", "action", "candidate", "outcome"}
-ADMISSION_ROW = {"kind", "id", "role", "state", "dispatch"}
+ADMISSION_ROW = {"kind", "id", "role", "state", "dispatch", "reported"}
 NATIVE = {"runtime", "owner", "runs", "dispatches", "exited_terminals"}
 PRESERVED_OUTCOMES = ("pending", "UNKNOWN", "FAILED")
 MAX_OBJECTIVES = 16
@@ -58,7 +58,8 @@ def _record_row(row: object) -> bool:
     if row.get("kind") == "admission":
         return (set(row) == ADMISSION_ROW and all(_text(row[key], 256) for key in ("id", "role", "state"))
                 and row["state"] in ("reserved", "unresolved", "bound")
-                and (row["dispatch"] is None or _text(row["dispatch"], 256)))
+                and (row["dispatch"] is None or _text(row["dispatch"], 256))
+                and type(row["reported"]) is bool and (row["state"] == "bound" or not row["reported"]))
     return False
 
 
@@ -108,12 +109,15 @@ def refuse_retired(state: dict | None) -> None:
 
 
 def counts(rows: list[dict]) -> dict:
+    """Preserved records by meaning; a bound start whose report Pod validated is settled, as in R110."""
     tally = {"pending": 0, "unknown": 0, "failed": 0, "unreported": 0}
     for row in rows:
         if row["kind"] == "governor":
             tally[{"pending": "pending", "UNKNOWN": "unknown", "FAILED": "failed"}[row["outcome"]]] += 1
-        else:
-            tally["unreported" if row["state"] == "bound" else "unknown"] += 1
+        elif row["state"] != "bound":
+            tally["unknown"] += 1
+        elif not row["reported"]:
+            tally["unreported"] += 1
     return tally
 
 
@@ -161,6 +165,10 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     if isinstance(state.get("continued_by"), dict):
         return fail("objective_continued", "A successor continues this objective; historical retirement does not apply to it separately.",
                     "Read the successor with pod status --objective " + state["continued_by"]["objective"] + ".")
+    if isinstance(state.get("continues"), dict):
+        # Retiring a successor would leave its predecessor's chain neither open nor closed (R110).
+        return fail("objective_continues", "This objective continues objective " + state["continues"]["objective"]
+                    + "; historical retirement never ends a successor that holds a claim.")
     if isinstance(state.get(FIELD), dict):
         verdict.update(status="retired", condition="objective_retired", facts={
             "objective": objective, "owner": state[FIELD]["owner"], "runs": list(state[FIELD]["runs"]),
@@ -193,7 +201,9 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         if row["state"] in ("closed", "deferred"):
             continue
         records.append({"kind": "admission", "id": key, "role": row["role"], "state": row["state"],
-                        "dispatch": (row.get("native_binding") or {}).get("dispatchId")})
+                        "dispatch": (row.get("native_binding") or {}).get("dispatchId"),
+                        "reported": row["state"] == "bound"
+                        and (row.get("report") or {}).get("status") == "validated_observation"})
     if len(records) > MAX_RECORDS:
         return fail("scope_unreadable", f"More than {MAX_RECORDS} preserved records cannot be bound to one decision.")
     verdict["facts"]["records"] = records
@@ -226,9 +236,20 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
                 return fail("workers_unverified", "A worker has no Dispatch identity.")
             dispatches[dispatch] = None
     verdict["facts"]["runs"] = runs
+    from .operations import _receipt_from_request_show
     for key, row in state["admissions"].items():
         if row["state"] == "bound":
             dispatches[row["native_binding"]["dispatchId"]] = (key, row["native_binding"])
+        elif row["state"] in ("reserved", "unresolved") and isinstance(row.get("request_uuid"), str):
+            # A request Orca still holds could yet start a worker; absent or completed ones are settled by
+            # the complete worker lists above.
+            try:
+                found, _ = _receipt_from_request_show(port.request_show(row["request_uuid"]), row["request_uuid"])
+            except PodError as exc:
+                return fail("workers_unverified", f"Admission {key[:12]}'s start request could not be read ({exc.code}).")
+            if found == "pending":
+                return fail("work_live", f"Admission {key[:12]}'s start request is still pending in Orca.",
+                            "Let Orca settle the request, then detect again.")
     for dispatch in sorted(dispatches):
         try:
             shown = port.show_worker(dispatch)
@@ -250,12 +271,15 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     terminals = 0
     for path in release:
         try:
+            shown = read_command(["worktree", "show", "--worktree", "path:" + path, "--json"])
             listed = read_command(["terminal", "list", "--worktree", "path:" + path, "--json"])
             rows = listed["result"]["terminals"]
             scope = listed["result"].get("hostScope")
-            if (not isinstance(rows, list) or listed["result"].get("truncated") is not False
-                    or isinstance(scope, dict) and scope.get("omittedHostIds")):
-                raise PodError("orca_contract", "terminal list is partial")
+            if (not isinstance(shown["result"]["worktree"], dict) or shown["result"]["worktree"].get("path") != path
+                    or not isinstance(rows, list) or listed["result"].get("truncated") is not False
+                    or isinstance(scope, dict) and scope.get("omittedHostIds")
+                    or any(not isinstance(row, dict) or row.get("worktreePath") != path for row in rows)):
+                raise PodError("orca_contract", "terminal list is partial or names another worktree")
         except (PodError, KeyError, TypeError) as exc:
             return fail("path_unverified", "Orca could not list the terminals of a path to release ("
                         + (exc.code if isinstance(exc, PodError) else "orca_contract") + ").")
@@ -305,14 +329,17 @@ def _decision(value: object, requested: list[dict], repository: str) -> dict:
     if decision["provenance"] != "user_direct" or decision["repository"] != repository:
         raise mismatch
     blocks = decision["objectives"]
-    if not isinstance(blocks, list) or len(blocks) != len(requested):
+    if not isinstance(blocks, list) or len(blocks) != len(requested) or any(
+            not isinstance(block, dict) or block.get("objective") != row["objective"]
+            or block.get("release") != row["release"] for block, row in zip(blocks, requested)):
         raise mismatch
-    for block, row in zip(blocks, requested):
-        block = exact(block, DECIDED, DECIDED, name="retirement_decision_objective")
-        if (not _facts_valid(block) or not _texts(block["delivery"], MAX_DELIVERY, 512) or not block["delivery"]
-                or block["objective"] != row["objective"] or block["release"] != row["release"]):
-            raise mismatch
     return decision
+
+
+def _block_valid(block: dict) -> bool:
+    """One objective's part of the decision; a malformed one refuses only that objective."""
+    return (set(block) == DECIDED and _facts_valid(block) and _texts(block["delivery"], MAX_DELIVERY, 512)
+            and bool(block["delivery"]))
 
 
 def _question(eligible: list[dict], tally: dict) -> str:
@@ -363,7 +390,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                 results.append(verdict)
                 continue
             block = decision["objectives"][index]
-            facts = {key: block[key] for key in FACTS}
+            facts = {key: block.get(key) for key in FACTS}
             if verdict["status"] == "retired":
                 if state[FIELD]["decision"] == digest(decision):
                     results.append({**verdict, "status": "replayed",
@@ -375,7 +402,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             if verdict["status"] != "eligible":
                 results.append(verdict)
                 continue
-            if facts != verdict["facts"]:
+            if not _block_valid(block) or facts != verdict["facts"]:
                 results.append({**verdict, "status": "refused", "condition": "retirement_decision_mismatch",
                                 "message": "The decision differs from fresh owner, Run, path or record facts. "
                                            "Nothing was written.",
@@ -390,7 +417,8 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             state[FIELD] = entry
             _write_retirement(path, state)
             results.append({**verdict, "status": "retired", "retirement": status_block(state),
-                            "message": "Retired: the record is kept, not completed, and accepts no writes.",
+                            "message": "Historical retirement recorded: the record is kept, not completed, and "
+                                       "accepts no writes.",
                             "next_action": ACTION.format(name)})
     done = [row for row in results if row["status"] in ("retired", "replayed")]
     if decision is None:
@@ -403,10 +431,11 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                "repository": repository, "objectives": results}
         if eligible:
             out["question"] = _question(eligible, tally)
-            out["next_action"] = ("Ask the owner the question. Then rerun with a user_direct decision of exactly "
-                                  "{provenance, instruction, repository, reason, objectives}, each objective "
-                                  "{objective, owner, runs, release, records, delivery} with these facts and the "
-                                  "delivery references.")
+            out["next_action"] = ("Ask the owner the question. Then rerun the same request with a user_direct "
+                                  "decision of exactly {provenance, instruction, repository, reason, objectives}, "
+                                  "each requested objective in order as {objective, owner, runs, release, records, "
+                                  "delivery} with these facts and its delivery references; a refused objective "
+                                  "stays refused alone.")
         else:
             out["next_action"] = "Historical retirement fits no requested objective now; resolve each named condition."
         return out

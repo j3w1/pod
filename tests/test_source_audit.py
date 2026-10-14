@@ -108,9 +108,12 @@ class TrackedSourceAuditTests(unittest.TestCase):
                 "docs/trail-b.md": b"See the " + b"historical record.\n",
                 "docs/trail-c.md": b"A " + b"legacy path.\n",
                 "docs/trail-d.md": b"It was " + b"Retired in a release.\n",
+                "docs/trail-e.md": b"The '" + b"retired mechanism.\n",
+                "docs/trail-f.md": b"the " + b"retired' tool\n",
             })
             flagged = sorted(row.split(" :: ")[0] for row in audit_source(root))
-            self.assertEqual(flagged, ["docs/trail-a.md", "docs/trail-b.md", "docs/trail-c.md", "docs/trail-d.md"])
+            self.assertEqual(flagged, ["docs/trail-a.md", "docs/trail-b.md", "docs/trail-c.md", "docs/trail-d.md",
+                                       "docs/trail-e.md", "docs/trail-f.md"])
 
     def test_publication_paths_are_findings_including_a_skill_setup_module(self):
         with fixture() as root:

@@ -13,8 +13,10 @@ from pod.github import repository_context
 from pod.governor import _record_path
 from pod.internal import run
 from pod.ledger import objective_root, read
+from pod.operations import OrcaPort
 from pod.retirement import counts, validate_entry
 from tests.common import GroupedTable, assert_grouped_table
+from tests.kernel_support import REQUEST
 from tests.test_owner_handoff import SENTINEL
 from tests.test_succession import SuccessionCase, _closed, _differing_identity, _raw
 
@@ -25,9 +27,15 @@ class RetirementCase(SuccessionCase):
         self.path_terminals = {}
         self.terminal_list_failure = False
         self.generations = {}
+        self.worktree_elsewhere = False
         self.unknown = None
 
     def native_read(self, argv, **kwargs):
+        if argv[:3] == ["worktree", "show", "--worktree"]:
+            self.native_calls.append(list(argv))
+            path = argv[3].removeprefix("path:")
+            return {"runtime": self.port.runtime, "result": {"worktree": {
+                "path": path + "-elsewhere" if self.worktree_elsewhere else path, "isMainWorktree": False}}}
         if argv[:3] == ["terminal", "list", "--worktree"]:
             self.native_calls.append(list(argv))
             if self.terminal_list_failure:
@@ -44,23 +52,30 @@ class RetirementCase(SuccessionCase):
     def where(self):
         return repository_context(self.project)["worktree"]
 
-    def delivered(self, *, settled=True, unknown_start=True):
-        """Delivered history: a publication whose derived validation is pending, a start whose outcome
-        is unknown, then the coordinator lost."""
+    def delivered(self, *, unknown_start=True, reported=False):
+        """Delivered history: a publication whose derived validation is pending, a start whose reply was
+        lost (its outcome unknown, and absent from Orca), then the coordinator lost."""
         self.establish()
-        started = self.start("task-2", self.packet(["S2"], boundary={"paths": ["area2"]}))["admission"] \
-            if unknown_start else None
+        if unknown_start:
+            lost = PodError("native_effect_uncertain", SENTINEL)
+            # Orca answered with the request it recorded, then the reply was lost: the production uncertain path.
+            lost.native_reference = {"runtime": self.port.runtime, "request_uuid": REQUEST, "_request_conflict": False}
+            with patch.object(OrcaPort, "start_worker", side_effect=lost):
+                with self.assertRaises(PodError):
+                    self.start("task-2", self.packet(["S2"], boundary={"paths": ["area2"]}))
+            self.unknown = next(key for key, row in self.state()["admissions"].items() if row["state"] == "unresolved")
+            self.port.state = "absent"  # Orca holds no receipt for that request.
         self.op("checkpoint", value=self.core(obligations=self.stored(), worktree=self.binding()))
         published = self.op("governor-execute", action=self.action(effects=["workflow:ci.yml"]))
         self.publication = published["record_id"]
-        if settled:
-            self.settle(self.admission)
-        if started is not None:
-            del self.port.workers[started["native_binding"]["dispatchId"]]  # Orca never shows its Dispatch.
-            path, raw = _raw(self, "objective")
-            raw["admissions"][started["admission_id"]].update(state="unresolved", native_binding=None)
-            path.write_text(json.dumps(raw))
-            self.unknown = started["admission_id"]
+        self.settle(self.admission)
+        if reported:
+            rows = self.stored()
+            for row in rows:
+                if row["id"] == "S1":
+                    row.pop("executor", None)
+                    row.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+            self.report(self.admission, self.frozen, map={"obligations": rows})
         self.lose()
 
     def claim_only(self, name="reconcile"):
@@ -124,9 +139,10 @@ class DetectionTests(RetirementCase):
                          ("objective", "owner", [{"run": "run", "generation": 1}], [self.where()]))
         governor = [row for row in facts["records"] if row["kind"] == "governor"]
         self.assertEqual([(row["action"], row["outcome"]) for row in governor], [("workflow_dispatch", "pending")])
-        admissions = {row["id"]: (row["state"], row["dispatch"]) for row in facts["records"] if row["kind"] == "admission"}
-        self.assertEqual(admissions, {self.admission["admission_id"]: ("bound", "dispatch-1"),
-                                      self.unknown: ("unresolved", None)})
+        admissions = {row["id"]: (row["state"], row["dispatch"], row["reported"])
+                      for row in facts["records"] if row["kind"] == "admission"}
+        self.assertEqual(admissions, {self.admission["admission_id"]: ("bound", "dispatch-1", False),
+                                      self.unknown: ("unresolved", None, False)})
         self.assertEqual(verdict["unfinished"], ["O1", "S1", "S2"])
         self.assertEqual(verdict["native"]["owner"], "terminal_handle_stale")
         self.assertIn("objective", found["question"])
@@ -141,7 +157,8 @@ class DetectionTests(RetirementCase):
         self.delivered()
         self.terminals["owner"] = "exited"
         self.path_terminals[self.where()] = [{"handle": "old", "connected": False, "writable": False,
-                                              "orphaned": False, "exitCause": {"kind": "operator_close"}}]
+                                              "orphaned": False, "exitCause": {"kind": "operator_close"},
+                                              "worktreePath": self.where()}]
         verdict = self.retire()["objectives"][0]
         self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
         self.assertEqual((verdict["native"]["owner"], verdict["native"]["exited_terminals"]), ("exited", 1))
@@ -162,11 +179,15 @@ class DetectionTests(RetirementCase):
         before = self.snapshot()
         for changes in ({"provenance": "coordinator"}, {"repository": "another"},
                         {"objectives": [{**decision["objectives"][0], "release": ["/elsewhere"]}]},
-                        {"objectives": [{**decision["objectives"][0], "delivery": []}]},
                         {"objectives": []}):
-            with self.subTest(changes=changes), self.assertRaises(PodError) as caught:
-                self.retire({**decision, **changes})
-            self.assertEqual(caught.exception.code, "retirement_decision_mismatch")
+            with self.subTest(changes=changes):
+                with self.assertRaises(PodError) as caught:
+                    self.retire({**decision, **changes})
+                self.assertEqual(caught.exception.code, "retirement_decision_mismatch")
+        for part in ({"delivery": []}, {"records": [{"kind": "other"}]}, {"extra": True}):
+            with self.subTest(part=part):  # A malformed objective part refuses only that objective.
+                verdict = self.retire({**decision, "objectives": [{**decision["objectives"][0], **part}]})
+                self.assertEqual(verdict["objectives"][0]["condition"], "retirement_decision_mismatch")
         self.assertEqual(before, self.snapshot())
 
     def test_an_unknown_objective_or_an_unrecorded_path_refuses_alone(self):
@@ -205,75 +226,123 @@ def _incomplete(case):
 
 
 def _live_terminal(case):
-    case.path_terminals[case.where()] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False}]
+    case.path_terminals[case.where()] = [{"handle": "user", "connected": True, "writable": True, "orphaned": False,
+                                          "worktreePath": case.where()}]
 
 
 def _detached_terminal(case):
-    case.path_terminals[case.where()] = [{"handle": "user", "connected": False, "writable": False, "orphaned": False}]
+    case.path_terminals[case.where()] = [{"handle": "user", "connected": False, "writable": False, "orphaned": False,
+                                          "worktreePath": case.where()}]
+
+
+def _terminal_elsewhere(case):
+    case.path_terminals[case.where()] = [{"handle": "user", "connected": False, "writable": False, "orphaned": False,
+                                          "exitCause": {"kind": "exited"}, "worktreePath": "/another"}]
 
 
 def _handoff_pending(case):
-    pending = patch("pod.handoff.unfinished", return_value={"state": "pending"})
-    pending.start(); case.addCleanup(pending.stop)
+    """A real pending owner handoff whose Run rebind reply was lost, written by the production path."""
+    case.mode = "lost"
+    case.refused(lambda: case.handoff())
+    assert case.entry()["state"] == "pending"
+
+
+def _dispatch_live(case):
+    case.port.workers["dispatch-1"].update(outcome="in_progress", state="ready")
+
+
+def _continues(case):
+    path, raw = _raw(case, "objective")
+    raw["continues"] = {"objective": "earlier", "record": "r", "at": "2026-10-14T00:00:00+00:00"}
+    path.write_text(json.dumps(raw))
+
+
+def _no_run(case):
+    path, raw = _raw(case, "objective")
+    raw["checkpoint"]["native_refs"], raw["admissions"] = [], {}
+    path.write_text(json.dumps(raw))
+
+
+def _too_many_records(case):
+    bound = patch("pod.retirement.MAX_RECORDS", 1)
+    bound.start(); case.addCleanup(bound.stop)
+
+
+def _request_failure(code):
+    def arrange(case):
+        if code == "pending":
+            case.port.state = "pending"
+        else:
+            failing = patch.object(OrcaPort, "request_show", side_effect=PodError("orca_unavailable", SENTINEL))
+            failing.start(); case.addCleanup(failing.stop)
+    return arrange
 
 
 def _show_failure(case):
     case.port.show_failure = PodError("orca_unavailable", SENTINEL)
 
 
-# kind: (arrange after the owner decided, expected condition, delivered(settled=...))
+# kind: (arrange after the owner decided, expected condition)
 REFUSALS = {
-    "closed": (_closed, "objective_closed", True),
-    "continued": (_continued, "objective_continued", True),
-    "owner-live": (lambda case: case.terminals.update(owner="live"), "owner_not_lost", True),
-    "owner-unreadable": (lambda case: case.terminals.update(owner="unreadable"), "owner_not_lost", True),
-    "owner-stop-unconfirmed": (lambda case: case.terminals.update(owner="stop-unconfirmed"), "owner_not_lost", True),
-    "run-rebound": (lambda case: case.run_holders.update(run="third"), "generation_changed", True),
-    "generation-changed": (lambda case: case.generations.update(run=2), "generation_changed", True),
-    "handoff-pending": (_handoff_pending, "handoff_pending", True),
-    "workers-unreadable": (lambda case: setattr(case, "worker_list_failure", True), "workers_unverified", True),
-    "workers-incomplete": (_incomplete, "workers_unverified", True),
-    "dispatch-unreadable": (_show_failure, "workers_unverified", True),
-    "dispatch-differs": (_differing_identity, "workers_unverified", True),
-    "dispatch-live": (None, "work_live", False),
-    "terminal-live": (_live_terminal, "path_in_use", True),
-    "terminal-detached": (_detached_terminal, "path_in_use", True),
-    "terminals-unreadable": (lambda case: setattr(case, "terminal_list_failure", True), "path_unverified", True),
-    "journal-unreadable": (_journal_unreadable, "scope_unreadable", True),
-    "record-unsupported": (_record_unsupported, "scope_unreadable", True),
+    "closed": (_closed, "objective_closed"),
+    "continued": (_continued, "objective_continued"),
+    "continues": (_continues, "objective_continues"),
+    "owner-live": (lambda case: case.terminals.update(owner="live"), "owner_not_lost"),
+    "owner-unreadable": (lambda case: case.terminals.update(owner="unreadable"), "owner_not_lost"),
+    "owner-stop-unconfirmed": (lambda case: case.terminals.update(owner="stop-unconfirmed"), "owner_not_lost"),
+    "run-rebound": (lambda case: case.run_holders.update(run="third"), "generation_changed"),
+    "generation-changed": (lambda case: case.generations.update(run=2), "generation_changed"),
+    "handoff-pending": (_handoff_pending, "handoff_pending"),
+    "workers-unreadable": (lambda case: setattr(case, "worker_list_failure", True), "workers_unverified"),
+    "workers-incomplete": (_incomplete, "workers_unverified"),
+    "dispatch-unreadable": (_show_failure, "workers_unverified"),
+    "dispatch-differs": (_differing_identity, "workers_unverified"),
+    "dispatch-live": (_dispatch_live, "work_live"),
+    "request-pending": (_request_failure("pending"), "work_live"),
+    "request-unreadable": (_request_failure("unreadable"), "workers_unverified"),
+    "terminal-live": (_live_terminal, "path_in_use"),
+    "terminal-detached": (_detached_terminal, "path_in_use"),
+    "terminals-unreadable": (lambda case: setattr(case, "terminal_list_failure", True), "path_unverified"),
+    "path-resolves-elsewhere": (lambda case: setattr(case, "worktree_elsewhere", True), "path_unverified"),
+    "terminal-elsewhere": (_terminal_elsewhere, "path_unverified"),
+    "journal-unreadable": (_journal_unreadable, "scope_unreadable"),
+    "record-unsupported": (_record_unsupported, "scope_unreadable"),
+    "no-run": (_no_run, "scope_unreadable"),
+    "too-many-records": (_too_many_records, "scope_unreadable"),
 }
 
 
 class RefusalTableTests(GroupedTable):
     """Each unproven fact refuses detection and the owner's earlier decision, and writes nothing."""
-    GROUPS = {"test_lifecycle_refuses": ["closed", "continued"],
+    GROUPS = {"test_lifecycle_refuses": ["closed", "continued", "continues"],
               "test_unreadable_records_refuse": ["handoff-pending", "record-unsupported", "journal-unreadable"],
+              "test_scope_refuses": ["no-run", "too-many-records"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
               "test_run_binding_refuses": ["run-rebound", "generation-changed"],
               "test_workers_refuse": ["workers-unreadable", "workers-incomplete", "dispatch-unreadable"],
               "test_dispatches_refuse": ["dispatch-differs", "dispatch-live"],
-              "test_paths_refuse": ["terminal-live", "terminal-detached", "terminals-unreadable"]}
+              "test_requests_refuse": ["request-pending", "request-unreadable"],
+              "test_paths_refuse": ["terminal-live", "terminal-detached", "terminals-unreadable"],
+              "test_path_identity_refuses": ["path-resolves-elsewhere", "terminal-elsewhere"]}
 
     def row(self, kind):
-        arrange, condition, settled = REFUSALS[kind]
+        arrange, condition = REFUSALS[kind]
         case = RetirementCase(); case.setUp()
         try:
             with self.subTest(kind=kind):
-                case.delivered(settled=settled)
-                decision = case.decide() if settled else None
-                if arrange is not None:
-                    arrange(case)
-                before, starts = case.snapshot(), len(case.port.starts)
+                case.delivered()
+                decision = case.decide()
+                arrange(case)
+                before, starts, mutations = case.snapshot(), len(case.port.starts), len(case.mutations)
                 found = case.retire()
                 verdict = found["objectives"][0]
                 self.assertEqual((found["status"], verdict["status"], verdict["condition"]),
                                  ("retirement_unavailable", "refused", condition), verdict.get("message"))
                 self.assertNotIn("question", found)
-                if decision is not None:
-                    applied = case.retire(decision)
-                    self.assertEqual((applied["status"], applied["objectives"][0]["condition"]), ("refused", condition))
+                applied = case.retire(decision)
+                self.assertEqual((applied["status"], applied["objectives"][0]["condition"]), ("refused", condition))
                 self.assertEqual(before, case.snapshot())
-                self.assertEqual((case.mutations, len(case.port.starts)), ([], starts))
+                self.assertEqual((len(case.mutations), len(case.port.starts)), (mutations, starts))
                 self.assertNotIn(SENTINEL, json.dumps(found))
         finally:
             case.doCleanups()
@@ -282,6 +351,15 @@ class RefusalTableTests(GroupedTable):
         self.rows()
 
     def test_unreadable_records_refuse(self):
+        self.rows()
+
+    def test_scope_refuses(self):
+        self.rows()
+
+    def test_requests_refuse(self):
+        self.rows()
+
+    def test_path_identity_refuses(self):
         self.rows()
 
     def test_coordinator_refuses(self):
@@ -342,12 +420,16 @@ class WriteTests(RetirementCase):
         released = self.snapshot()
         replayed = self.retire(decision)
         self.assertEqual((replayed["status"], replayed["objectives"][0]["status"]), ("retired", "replayed"))
+        found = self.retire()
+        self.assertEqual((found["status"], found["objectives"][0]["status"], found["objectives"][0]["condition"]),
+                         ("retirement_unavailable", "retired", "objective_retired"))
+        self.assertEqual(found["objectives"][0]["facts"]["records"], decision["objectives"][0]["records"])
         self.assertEqual(released, self.snapshot())
         other = self.retire({**decision, "reason": "another reason"})["objectives"][0]
         self.assertEqual((other["status"], other["condition"]), ("refused", "objective_retired"))
         self.assertEqual(released, self.snapshot())
 
-    def test_a_competing_writer_that_changes_the_facts_is_detected_under_the_lock(self):
+    def test_facts_another_writer_changed_after_the_decision_refuse(self):
         self.delivered()
         decision = self.decide()
         path = _record_path(self.project, "objective")
@@ -379,6 +461,23 @@ class WriteTests(RetirementCase):
                          ("replayed", "objective_retired"))
         self.assertEqual(read(self.project, "objective")["historical_retirement"]["objectives"],
                          ["objective", "reconcile"])
+
+    def test_an_objective_detection_already_refused_never_blocks_the_others(self):
+        self.delivered()
+        self.claim_only()
+        self.terminals["next"] = "live"
+        both = [{"objective": "objective", "release": [self.where()]},
+                {"objective": "reconcile", "release": [self.where()]}]
+        decision = self.decide(objectives=both)  # The refused objective's facts are partial (no Runs).
+        self.assertEqual(decision["objectives"][1]["runs"], [])
+        rows = {row["objective"]: row for row in self.retire(decision, objectives=both)["objectives"]}
+        self.assertEqual((rows["objective"]["status"], rows["reconcile"]["condition"]), ("retired", "owner_not_lost"))
+        malformed = self.decide(objectives=both[1:])
+        malformed["objectives"][0]["delivery"] = []
+        self.terminals["next"] = "stale"
+        verdict = self.retire(malformed, objectives=both[1:])["objectives"][0]
+        self.assertEqual(verdict["condition"], "retirement_decision_mismatch")
+        self.assertNotIn("historical_retirement", read(self.project, "reconcile"))
 
 
 class AfterRetirementTests(RetirementCase):
@@ -446,6 +545,19 @@ class AfterRetirementTests(RetirementCase):
         self.assertNotIn("continued_by", row)
         phase = "retired"
         self.assertIn(f"| {phase} |", self.listed(text=True))
+        path, raw = _raw(self, "objective")
+        raw["historical_retirement"]["released"] = []  # A malformed entry: the record is unsupported.
+        path.write_text(json.dumps(raw))
+        row = self.listed()["objective"]
+        self.assertEqual((row["phase"], row["schema"], "retirement" in row), (phase, "unsupported", False))
+
+    def test_a_bound_start_whose_report_pod_validated_is_not_unreported(self):
+        self.delivered(reported=True)
+        records = self.retire()["objectives"][0]["facts"]["records"]
+        self.assertEqual([row["reported"] for row in records if row["kind"] == "admission" and row["state"] == "bound"],
+                         [True])
+        self.retire(self.decide())
+        self.assertEqual(self.status()["retirement"]["counts"], {"pending": 1, "unknown": 1, "failed": 0, "unreported": 0})
 
 
 class RecordShapeTests(unittest.TestCase):
@@ -456,7 +568,10 @@ class RecordShapeTests(unittest.TestCase):
                             "outcome": "FAILED"},
                            {"kind": "governor", "id": "h", "action": "workflow_dispatch", "candidate": "c",
                             "outcome": "UNKNOWN"},
-                           {"kind": "admission", "id": "a", "role": "review", "state": "reserved", "dispatch": None}],
+                           {"kind": "admission", "id": "a", "role": "review", "state": "reserved", "dispatch": None,
+                            "reported": False},
+                           {"kind": "admission", "id": "b", "role": "review", "state": "bound", "dispatch": "d",
+                            "reported": True}],
              "unfinished": ["pod-9"], "delivery": ["PR #99"],
              "native": {"runtime": "rt", "owner": "terminal_handle_stale", "runs": 1, "dispatches": 0,
                         "exited_terminals": 0}}
@@ -466,7 +581,9 @@ class RecordShapeTests(unittest.TestCase):
         self.assertEqual(counts(self.ENTRY["preserved"]), {"pending": 0, "unknown": 2, "failed": 1, "unreported": 0})
 
     def test_a_malformed_entry_makes_the_record_unsupported(self):
-        for changes in ({"released": []}, {"released": ["relative"]}, {"delivery": []},
+        reported_unbound = [{"kind": "admission", "id": "a", "role": "review", "state": "reserved", "dispatch": None,
+                             "reported": True}]
+        for changes in ({"released": []}, {"released": ["relative"]}, {"delivery": []}, {"preserved": reported_unbound},
                         {"preserved": [{"kind": "governor", "id": "g", "action": "x", "candidate": "c", "outcome": "PASS"}]},
                         {"native": {}}, {"extra": 1}):
             with self.subTest(changes=changes), self.assertRaises(PodError) as caught:
