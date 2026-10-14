@@ -50,10 +50,12 @@ request, `pull_request` or `pull_request_target` runs, so a row derived from a p
 only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. Every row
 binds its run's first attempt, except a rerun. Before rerunning, the governor records the run, its
 latest attempt and the submission start, and right after GitHub accepts the call it records that
-acceptance; one rule binds the rerun's attempt on every path, only when the acceptance is recorded,
-exactly one new attempt exists and its `startedAt` is after that start, compared exactly and outside
-the submission's own second because GitHub reports whole seconds. Every other state, an attempt
-bound without that provenance included, holds the row, since GitHub names no requester per attempt. A run already bound to a row is checked the same way as a new
+acceptance; one rule binds the rerun's attempt on every path. The count proves it: with the
+acceptance recorded, the single new attempt is the one Pod's call created. GitHub sets a rerun's
+`startedAt` at the request in whole seconds, so that start is only checked against the second
+holding the recorded submission start, and a start in an earlier second holds as a contradiction.
+Every other state, an attempt bound without that provenance included, holds the row, since GitHub
+names no requester per attempt. A run already bound to a row is checked the same way as a new
 one, and its workflow by appearing in the workflow-filtered list, because `gh run view` names only the
 workflow's display name.
 It reads runs with `gh run list --workflow FILE --commit SHA --json …,attempt --limit 21`:

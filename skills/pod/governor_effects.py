@@ -496,13 +496,15 @@ def _own_rerun_attempt(port: GitHubPort, provenance: dict, now: datetime | None 
     immediate read, readback (reconcile, a reservation's outcome, the merge PASS sweep) and a carried row's.
 
     `run` is the attempt once proved this rerun's own; otherwise `reason` says why the row holds, and `absent`
-    says an unconfirmed rerun is proved never to have taken effect. The proof needs all of: the provenance
-    recorded before submission (the run, the attempt read then, and the submission start at full precision);
-    the acceptance recorded right after GitHub accepted the call; exactly one attempt after the pre-read; and
-    that attempt's start after the recorded submission start, compared exactly and outside its whole second,
-    since GitHub reports whole seconds and a start within that second cannot be ordered against it. Pod's own
-    rows are never taken as a run's history, so an attempt bound without this provenance holds. A proved
-    attempt is bound by number and read again by number, so a later actor's attempt never displaces it.
+    says an unconfirmed rerun is proved never to have taken effect. The proof is the count: with the provenance
+    recorded before submission (the run, the attempt read then, and the submission start at full precision) and
+    the acceptance recorded right after GitHub accepted the call, Pod's call created an attempt, so exactly one
+    attempt after the pre-read is Pod's. The attempt's start only guards against a contradiction, at the
+    provider's precision: GitHub sets a rerun's start at the request in whole seconds, so a start in the second
+    holding the recorded submission start, or later, agrees, and a start in an earlier second contradicts the
+    record and holds. Pod's own rows are never taken as a run's history, so an attempt bound without this
+    provenance holds. A proved attempt is bound by number and read again by number, so a later actor's attempt
+    never displaces it.
     """
     def held(reason: str) -> dict:
         return {"run": None, "absent": False, "reason": reason}
@@ -549,12 +551,13 @@ def _own_rerun_attempt(port: GitHubPort, provenance: dict, now: datetime | None 
     if started is None:
         return held(f"GitHub reports no start for attempt {own} of run {run_id}, so it cannot be ordered after the "
                     "rerun's submission")
-    if started < submitted:
-        return held(f"attempt {own} of run {run_id} started at {started.isoformat()}, before the rerun was submitted at "
-                    f"{submitted.isoformat()}, so it may be another actor's; none binds")
-    if started.replace(microsecond=0) == submitted.replace(microsecond=0):
-        return held(f"attempt {own} of run {run_id} started within the second the rerun was submitted "
-                    f"({submitted.isoformat()}); GitHub reports whole seconds, so their order is unknown and none binds")
+    # GitHub reports whole seconds, so Pod's own timestamp is floored to its second to compare at that precision,
+    # and never further.
+    second = submitted.replace(microsecond=0)
+    if started < second:
+        return held(f"attempt {own} of run {run_id} started at {started.isoformat()}, in a second before the rerun "
+                    f"was submitted at {submitted.isoformat()}: that contradicts the record, whether the attempt is "
+                    "another actor's or this host's clock and GitHub's disagree, so none binds")
     return {"run": view, "absent": False, "reason": None}
 
 

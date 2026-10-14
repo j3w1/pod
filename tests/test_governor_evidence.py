@@ -507,11 +507,12 @@ class ProviderEventTests(EvidenceCase):
         self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
 
 
-# R115's one rerun attribution rule, every sibling state. Times are seconds after NOW; the failed attempt 1
-# started before NOW. Shapes: "new" is the provenance execution records (run, attempt read before, submission
-# start), "+accepted" adds the acceptance recorded after GitHub accepted the call, "+bound" adds the attempt a
-# proof bound; "5209eca" is a pending row as that earlier writer bound it (its provider receipt captured by the
-# delta review probe), "run only" a rerun recorded with just its run, and "reservation" no provider receipt.
+# R115's one rerun attribution rule, every sibling state: the count proves the attempt Pod's, and its whole-second
+# start only guards against a contradiction with the recorded submission. Times are seconds after NOW; the failed
+# attempt 1 started before NOW. Shapes: "new" is the provenance execution records (run, attempt read before,
+# submission start), "+accepted" adds the acceptance recorded after GitHub accepted the call, "+bound" adds the
+# attempt a proof bound; "5209eca" is a pending row as that earlier writer bound it (its provider receipt captured
+# by the delta review probe), "run only" a rerun recorded with just its run, and "reservation" no provider receipt.
 RERUN_STATES = (
     # name, shape, submitted, bound attempt, new attempts (start, conclusion), readback at, outcome, reason
     ("accepted single attempt the next second passes", "new+accepted", 0, None, [(1, "success")], 0, "PASS", None),
@@ -527,12 +528,13 @@ RERUN_STATES = (
     ("unaccepted single attempt", "new", 0, None, [(1, "success")], 0, "hold", "never confirmed accepted"),
     ("more than one new attempt", "new+accepted", 0, None, [(1, "failure"), (5, "success")], 0, "hold",
      "more than one new attempt"),
-    ("a start before the submission", "new+accepted", 0, None, [(-1, "success")], 0, "hold",
-     "before the rerun was submitted"),
-    ("a whole-second start earlier than a fractional submission", "new+accepted", 1.8, None, [(1, "success")], 0,
-     "hold", "before the rerun was submitted"),
-    ("a start in the submission's own second", "new+accepted", 1, None, [(1, "success")], 0, "hold",
-     "started within the second the rerun was submitted"),
+    ("a start in a second before the submission", "new+accepted", 0, None, [(-1, "success")], 0, "hold",
+     "in a second before the rerun was submitted"),
+    ("a whole-second start within a fractional submission's second", "new+accepted", 1.8, None, [(1, "success")], 0,
+     "PASS", None),
+    ("a whole-second start a second before a fractional submission", "new+accepted", 1.8, None, [(0, "success")], 0,
+     "hold", "in a second before the rerun was submitted"),
+    ("a start in the submission's own whole second", "new+accepted", 1, None, [(1, "success")], 0, "PASS", None),
     ("a fractional submission and a start the next second", "new+accepted", 0.8, None, [(1, "success")], 0, "PASS",
      None),
     ("no start reported", "new+accepted", 0, None, [(None, "success")], 0, "hold", "reports no start"),
@@ -545,8 +547,10 @@ RERUN_STATES = (
      "without its recorded acceptance"),
     ("a bound attempt that is not the next one", "new+accepted+bound", 0, 3, [(1, "failure"), (5, "success")], 0,
      "hold", "without its recorded acceptance and the single attempt after attempt 1"),
-    ("a bound attempt that started before a fractional submission", "new+accepted+bound", 1.8, 2, [(1, "success")],
-     0, "hold", "before the rerun was submitted"),
+    ("a bound attempt that started within a fractional submission's second", "new+accepted+bound", 1.8, 2,
+     [(1, "failure")], 0, "FAILED", None),
+    ("a bound attempt that started a second before a fractional submission", "new+accepted+bound", 1.8, 2,
+     [(0, "success")], 0, "hold", "in a second before the rerun was submitted"),
 )
 
 
@@ -623,8 +627,9 @@ class RerunAttributionTableTests(EvidenceCase):
                     self.assertEqual(result["status"], outcome, result)
                     if reason:
                         self.assertIn(reason, result["receipt"]["detail"])
-        # Execution reads its own attempt by the same rule: a start within the submission's second never binds.
-        for submitted, start, bound, outcome in ((1.8, 1, None, "hold"), (0.8, 1, 2, "PASS")):
+        # Execution reads its own attempt by the same rule: a start in the submission's second binds, an earlier
+        # second never does.
+        for submitted, start, bound, outcome in ((1.8, 1, 2, "PASS"), (1.8, 0, None, "hold")):
             with self.subTest(execution=submitted):
                 provider, result = self.executed(submitted, start)
                 self.assertEqual((provider.get("attempt"), provider["accepted"]), (bound, True))
