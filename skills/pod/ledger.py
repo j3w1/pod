@@ -884,7 +884,9 @@ def _authorization_granted(project: Path, objective: str):
             return applicable_authorization(unit, row["action"].get("authorization"),
                                             candidate=row.get("commit") or row["action"]["candidate"],
                                             tree=tree, scope=scope)
+        # A row carried from a lost coordinator records the predecessor's consent, never this objective's (R118).
         return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
+                   and not isinstance(row.get("carried_from"), dict)
                    and candidate in (row["action"]["candidate"], row.get("commit"), row.get("candidate_id"))
                    and valid(row) for row in journal["actions"])
     return granted

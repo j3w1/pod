@@ -60,6 +60,13 @@ def absent_after(started: datetime) -> datetime:
     return started + timedelta(seconds=MUTATION_TIMEOUT_S + ABSENCE_MARGIN_S)
 
 
+def absence_floor(row: dict) -> datetime | None:
+    """When a carried row's absent effect may first be read as FAILED (R118): a lost coordinator's call may
+    still be in flight from the row's start. None when that start is unknown."""
+    started = _stamp(row["receipt"].get("started_at"))
+    return absent_after(started) if started else None
+
+
 def _requested_dispatch(row: dict) -> bool:
     """A workflow_dispatch row the coordinator asked for, as opposed to one a publication started."""
     return row["action"]["kind"] == "workflow_dispatch" and row.get("derived_from") is None
@@ -264,7 +271,8 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_reques
         run_id = _bound_run_id(target)
         older_same_unit = (target["action"]["unit"] == row["action"]["unit"]
                            and target.get("candidate_id") != row.get("candidate_id"))
-        if target["outcome"] != "pending" or not target.get("cancel_safe") or not run_id or not older_same_unit:
+        if (target["outcome"] != "pending" or not target.get("cancel_safe") or not run_id or not older_same_unit
+                or isinstance(target.get("carried_from"), dict)):
             raise PodError("cancel_unsafe", "Only a pending, cancel-safe validation of an older candidate in the same "
                                             "unit, with a run identity, is canceled")
         try:
@@ -404,7 +412,8 @@ def _record_execution(project: Path, objective: str, *, owner: str, record_id: s
             _record_run_event(row, provider)
             if outcome == "PASS" and row["action"]["kind"] == "cancel_validation":
                 target = _find_row(journal, row["action"]["target"])
-                if target["outcome"] == "pending":
+                # A carried target settles only by its own readback (R118).
+                if target["outcome"] == "pending" and not isinstance(target.get("carried_from"), dict):
                     _settle(journal, target, outcome="CANCELED", provider=None, evidence=[],
                             detail="superseded by candidate " + str(row.get("candidate_id"))[:12], moment=moment)
                     _count(journal["counters"], "cancellations")
@@ -491,6 +500,25 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
     return result
 
 
+def rerun_unattributable(provenance: dict) -> str | None:
+    """Why a rerun's record alone means no readback can ever attribute its attempt (R115), or None.
+
+    The record-only half of `_own_rerun_attempt`'s rule, which a successor's claim also applies (R118): a rerun
+    without the provenance recorded before submission, or with an attempt bound without its recorded acceptance
+    or other than the single one after the pre-read, holds for good, since attempts on a run only accumulate.
+    """
+    before = provenance.get("before_attempt")
+    bound = provenance.get("attempt")
+    if type(before) is not int or _stamp(provenance.get("submitted_at")) is None:
+        what = f"attempt {bound} was bound to this rerun" if type(bound) is int else "this rerun was recorded"
+        return (f"{what} without the attempt read and start recorded before submission, so its own attempt cannot "
+                "be told from another actor's")
+    if type(bound) is int and (bound != before + 1 or provenance.get("accepted") is not True):
+        return (f"attempt {bound} was bound to this rerun without its recorded acceptance and the single attempt "
+                f"after attempt {before}, so it cannot be proved its own")
+    return None
+
+
 def _own_rerun_attempt(port: GitHubPort, provenance: dict, now: datetime | None = None) -> dict:
     """The one rule that attributes a rerun's attempt (R115), on every path that reads one: execution's
     immediate read, readback (reconcile, a reservation's outcome, the merge PASS sweep) and a carried row's.
@@ -508,20 +536,16 @@ def _own_rerun_attempt(port: GitHubPort, provenance: dict, now: datetime | None 
     """
     def held(reason: str) -> dict:
         return {"run": None, "absent": False, "reason": reason}
+    unattributable = rerun_unattributable(provenance)
+    if unattributable is not None:
+        return held(unattributable)
     run_id = provenance["run_id"]
-    before = provenance.get("before_attempt")
-    submitted = _stamp(provenance.get("submitted_at"))
+    before = provenance["before_attempt"]
+    submitted = _stamp(provenance["submitted_at"])
     bound = provenance.get("attempt")
-    if type(before) is not int or submitted is None:
-        what = f"attempt {bound} was bound to this rerun" if type(bound) is int else "this rerun was recorded"
-        return held(f"{what} without the attempt read and start recorded before submission, so its own attempt "
-                    "cannot be told from another actor's")
     accepted = provenance.get("accepted") is True
     own = before + 1
     if type(bound) is int:
-        if bound != own or not accepted:
-            return held(f"attempt {bound} was bound to this rerun without its recorded acceptance and the single "
-                        f"attempt after attempt {before}, so it cannot be proved its own")
         view = port.run(run_id=run_id, attempt=own)
         if view.get("attempt") != own or str(view.get("id")) != run_id:
             return held(f"run {run_id} did not answer for attempt {own}, the one this rerun started")
@@ -573,23 +597,108 @@ def _rerun_source(row: dict, journal: dict) -> str | None:
     return str(_bound_run_id(failed[-1])) if failed else None
 
 
-def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict, *, now: datetime | None = None) -> dict:
+def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict, *, project: Path | None = None,
+             now: datetime | None = None) -> dict:
     """Read the provider for one unsettled row and say what it shows, writing nothing.
 
     The answer carries an outcome, or a hold with its reason; `seen` says whether the provider shows the
-    row's effect at all, and `reject` names a bound run that turned out not to be the row's own.
+    row's effect at all, and `reject` names a bound run that turned out not to be the row's own. A carried
+    row's absent effect holds until its absence floor (R118).
     """
+    answer = _read_back(port, row, unit, journal, project=project, now=now)
+    if answer.pop("absence") and isinstance(row.get("carried_from"), dict):
+        floor = absence_floor(row)
+        if floor is None or (now or datetime.now(timezone.utc)) < floor:
+            answer.update(outcome=None, provider=None, hold=f"{answer['detail']}; a carried effect's absence is not "
+                          "read as FAILED before " + (floor.isoformat() if floor else "its start is known")
+                          + ", as a call already in flight may still land", detail=None)
+    return answer
+
+
+def _carried_pull_request(port: GitHubPort, row: dict, branch: dict, base: str) -> tuple[dict | None, str, bool]:
+    """The pull request of a carried row's branch whose head is the row's commit, what the read covered, and
+    whether it was truncated: a truncated list settles nothing, as with runs (R115)."""
+    from .github import PR_LIST_LIMIT
+    found = port.pull_requests(head=branch["branch"], base=base)
+    truncated = len(found) > PR_LIST_LIMIT
+    mine = [pr for pr in found[:PR_LIST_LIMIT] if pr.get("head_sha") == row.get("commit")]
+    scope = (f"pull requests of {branch['branch']} into {base} ({min(len(found), PR_LIST_LIMIT)} listed, "
+             f"limit {PR_LIST_LIMIT}" + ("; truncated" if truncated else "") + ")")
+    order = {"MERGED": 0, "OPEN": 1, "CLOSED": 2}
+    if truncated:
+        return None, scope, True
+    return (min(mine, key=lambda pr: order.get(pr.get("state"), 3)) if mine else None), scope, False
+
+
+def _read_back_merge(port: GitHubPort, row: dict, unit: dict, *, project: Path | None, answer: dict) -> dict:
+    """A carried merge settles PASS only from a merged pull request whose result passes R93's Git checks."""
+    from .governance import carried_merge_context, target_contains_result, verify_merge_result
+    from .governor import _fetch_first
+    carried = row["carried_from"]
+    branch = carried.get("branch") or unit.get("branch")
+    if project is None or not isinstance(branch, dict):
+        answer["hold"] = "a carried merge is read back from its pull request and Git in its project"
+        return answer
+    base = row["target_binding"]["base"]
+    pr, scope, truncated = _carried_pull_request(port, row, branch, base)
+    if pr is None:
+        answer["hold"] = (f"the {scope} were truncated, so this merge's pull request cannot be told; the merge stays "
+                          "pending" if truncated else
+                          f"no pull request with head {row['commit'][:12]} is among the {scope}; the merge stays pending")
+        return answer
+    unit_view, governance = carried_merge_context(row, unit)
+    named = f"pull request #{pr.get('number')}"
+    if pr.get("state") == "MERGED" and pr.get("merge_commit"):
+        provider = {**(row["receipt"].get("provider") or {}), "merge_commit": pr["merge_commit"]}
+        try:
+            verified = verify_merge_result(project, {**row, "receipt": {**row["receipt"], "provider": provider}},
+                                           unit_view, governance)
+        except PodError as exc:
+            detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else exc.code
+            answer.update(seen=True, hold=f"{named} merged as {pr['merge_commit'][:12]}, but R93's Git checks do not "
+                          f"verify it yet ({detail}); {_fetch_first(row)}")
+            return answer
+        answer.update(outcome="PASS", seen=True, detail=f"{named} merged; R93's Git checks verify the result",
+                      provider={**provider, "method": verified["method"], "pr": pr.get("number"),
+                                "pr_url": pr.get("url")})
+        return answer
+    if pr.get("state") == "CLOSED" and target_contains_result(project, row, governance) is False:
+        answer.update(outcome="FAILED", absence=True,
+                      detail=f"{named} was closed without merging and the target lacks the candidate's result")
+        return answer
+    answer["hold"] = (f"{named} is {str(pr.get('state')).lower()}; the merge stays pending until it merges"
+                      if pr.get("state") != "CLOSED" else
+                      f"{named} was closed without merging, but Git cannot show the target lacks the result; "
+                      f"{_fetch_first(row)}")
+    return answer
+
+
+def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, project: Path | None,
+               now: datetime | None = None) -> dict:
     from .governor import DISPATCH_KINDS, PUBLICATION_KINDS, pushed_branch
     commit = row.get("commit")
     kind = row["action"]["kind"]
     provider = row["receipt"].get("provider") or {}
     since = row["receipt"]["started_at"]
     answer = {"outcome": None, "provider": None, "detail": None, "hold": None, "seen": False,
-              "reject": None, "provider_read": None}
+              "reject": None, "provider_read": None, "absence": False}
+    carried = isinstance(row.get("carried_from"), dict)
+    if kind == "merge" and carried:
+        return _read_back_merge(port, row, unit, project=project, answer=answer)
     if kind in PUBLICATION_KINDS:
         # The row carries the commit it was admitted for. A superseded generation is looked up
         # by that commit, never by whatever the unit's current candidate happens to be.
         branch = pushed_branch(row, unit)
+        if kind == "pr_update" and carried and branch is not None and commit is not None:
+            # A carried pull-request update reads its pull request back, also once it merged and its branch went.
+            pr, _, _ = _carried_pull_request(port, row, branch, branch["base"])
+            if pr is not None:
+                answer.update(outcome="PASS", seen=True, detail=f"pull request #{pr.get('number')} carries the "
+                              "candidate commit",
+                              provider={**provider, "branch": branch["remote"] + "/" + branch["branch"],
+                                        "pr": pr.get("number"), "pr_url": pr.get("url"), "pr_state": pr.get("state"),
+                                        "triggered": _triggered_runs(port, row, commit)})
+                return answer
         head = port.branch_head(remote=branch["remote"], branch=branch["branch"]) if branch else None
         if branch is None:
             answer["hold"] = "the unit no longer names the branch this row pushed"
@@ -598,7 +707,8 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict, *, now: dat
                           provider={**provider, "remote_head": head, "branch": branch["remote"] + "/" + branch["branch"],
                                     "triggered": _triggered_runs(port, row, commit)})
         elif head is not None and head == unit["published"].get(branch["remote"] + "/" + branch["branch"]):
-            answer.update(outcome="FAILED", detail="not_pushed: the remote branch is still at the previously recorded commit")
+            answer.update(outcome="FAILED", absence=True,
+                          detail="not_pushed: the remote branch is still at the previously recorded commit")
         else:
             answer["hold"] = "remote branch head is " + (head[:12] if head else "absent")
         return answer
@@ -685,7 +795,7 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict, *, now: dat
                       provider={**({"ref_commit": lookup} if lookup else {}), **_provider_run(run)})
         return answer
     if kind == "cancel_validation":
-        run_id = provider.get("run_id")
+        run_id = provider.get("run_id") or (row.get("carried_from") or {}).get("run_id")
         if not run_id:
             # A reserved cancellation names the run it would cancel through its target row.
             target = next((other for other in journal["actions"] if other["record_id"] == row["action"]["target"]),
@@ -723,7 +833,7 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
     if unit is None:
         raise PodError("unit_unbound", "No delivery unit binds this row")
     moment = now or datetime.now(timezone.utc)
-    answer = _observe(port or _port(project), row, unit, journal, now=moment)
+    answer = _observe(port or _port(project), row, unit, journal, project=project, now=moment)
     if answer["reject"] is not None:
         _reject_run(project, objective, owner=owner, record_id=record_id, rejected=answer["reject"])
     result = {"record_id": record_id}
@@ -736,4 +846,9 @@ def reconcile(project: Path, objective: str, *, owner: str, record_id: str, port
                 "receipt": held["receipt"]}
     settled = _record_execution(project, objective, owner=owner, record_id=record_id, outcome=answer["outcome"],
                                 provider=answer["provider"], detail=answer["detail"], now=moment)
-    return {**result, "status": settled["outcome"], "action": "readback", "receipt": settled["receipt"]}
+    result = {**result, "status": settled["outcome"], "action": "readback", "receipt": settled["receipt"]}
+    if row["action"]["kind"] == "merge" and settled["outcome"] == "PASS":
+        # A carried merge read back as merged reads back its unit's unsettled effects too (R117).
+        from .governor import _merged_readback
+        result["readback"] = _merged_readback(project, objective, owner=owner, row=settled, port=port, now=moment)
+    return result

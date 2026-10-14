@@ -4,6 +4,10 @@ The claim ends the predecessor's write authority and gives it to no one: its own
 Runs, map and evidence stay exactly as recorded, and its old coordinator is refused by name. It
 never steals: Orca must report the predecessor's coordinator gone and its work settled. Orca has
 no worktree claim or conditional send, so the claim binds none (`orca_claim: unavailable`).
+
+It carries the predecessor's unsettled Governor rows that Pod can read back into the successor's own
+journal (R118); they settle only by that readback. The claim is a cooperative Pod record, not an
+operating-system fence: a process of the old coordinator that is still running is not stopped by it.
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ from .util import bounded_text, exact
 DECISION = {"provenance", "instruction", "predecessor", "predecessor_owner", "successor",
             "successor_owner", "runs", "ambiguity"}
 FACTS = DECISION - {"provenance", "instruction"}
+# The carried Governor rows a decision names (R118); a decision without them names none.
+CARRIED = "carried"
 CONTINUED = {"objective", "record", "owner", "runs", "at", "instruction", "unfinished", "unreported",
              "ambiguity", "orca_claim"}
 CONTINUES = {"objective", "record", "at"}
@@ -105,6 +111,24 @@ def links(project: Path, raw: dict) -> dict:
     return out
 
 
+def _carried_settlement(project: Path, state: dict, link: dict) -> dict | None:
+    """How the rows this predecessor's claim carried stand now, read from the successor's journal (R118).
+
+    None when the claim carried nothing; an unreadable successor journal is said, not guessed.
+    """
+    from .governor import _read_journal, _record_path
+    name = (state.get("checkpoint") or {}).get("objective")
+    try:
+        journal = _read_journal(_record_path(project, link["objective"]))
+    except PodError as exc:
+        return {"rows": None, "reason": f"the successor's Governor journal is unreadable ({exc.code})"}
+    rows = [{"record": row["record_id"], "kind": row["action"]["kind"], "outcome": row["outcome"]}
+            for row in journal["actions"] if (row.get("carried_from") or {}).get("objective") == name]
+    if not rows:
+        return None
+    return {"rows": rows[:MAX_LISTED], "unsettled": sum(row["outcome"] in ("pending", "UNKNOWN") for row in rows)}
+
+
 def status_block(project: Path, state: dict) -> dict | None:
     link = state.get("continued_by")
     back = state.get("continues")
@@ -119,6 +143,9 @@ def status_block(project: Path, state: dict) -> dict | None:
                      orca_claim=link["orca_claim"])
         if chain.get("reason"):
             block["reason"] = chain["reason"]
+        carried = _carried_settlement(project, state, link)
+        if carried is not None:
+            block["carried"] = carried
     if isinstance(back, dict):
         block["continues"] = back["objective"]
         block["continues_at"] = back["at"]
@@ -153,7 +180,7 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
     settled admissions. `previous` is a read of the predecessor's coordinator terminal this call already made.
     """
     from .handoff import unfinished
-    from .ledger import _governor_pending, _native_assignment_settled, _run_references, map_of
+    from .ledger import _native_assignment_settled, _run_references, map_of
     from .orca import run_show, terminal_identity, worker_rows
     from .obligations import TERMINAL
 
@@ -207,8 +234,10 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
             if not isinstance(dispatch, str) or not dispatch:
                 return refused("predecessor_unverified", "A predecessor worker has no Dispatch identity.")
             dispatches[dispatch] = run
-    if _governor_pending(project, predecessor):
-        return refused("predecessor_effect_pending", "The predecessor has a Governor effect whose outcome is pending.")
+    carried, refusal = _carried(project, predecessor, prior)
+    if refusal is not None:
+        return refused(*refusal)
+    facts["carried"] = [row["record_id"] for row in carried]
     unreported = []
     bound = {}
     for key in sorted(prior["admissions"]):
@@ -251,13 +280,33 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
     return None, unfinished_rows, unreported
 
 
+def _carried(project: Path, predecessor: str, prior: dict) -> tuple[list[dict], tuple | None]:
+    """The predecessor's unsettled Governor rows a claim carries, or the refusal of one it cannot (R118)."""
+    from .governor import _read_journal, _record_path, carried_rows, carry_refusal
+    from .ledger import map_of
+    try:
+        journal = _read_journal(_record_path(project, predecessor))
+    except PodError as exc:
+        return [], ("predecessor_unverified", f"The predecessor's Governor journal is unreadable ({exc.code}).")
+    rows = carried_rows(journal)
+    governance = (map_of(prior) or {}).get("governance")
+    for row in rows:
+        reason = carry_refusal(row, journal, governance)
+        if reason is not None:
+            return [], ("predecessor_effect_pending",
+                        f"The predecessor's {row['outcome']} {row['action']['kind']} {row['record_id'][:12]} cannot "
+                        f"be carried: {reason}.",
+                        "Settle it in the predecessor first; a successor carries only effects Pod can read back.")
+    return rows, None
+
+
 def _predecessor_facts(project: Path, objective: str, predecessor: str, state: dict,
                        prior: dict | None, owner: str, *, port) -> dict:
     """Fresh facts, read-only; an unproven fact holds the claim."""
     from .ledger import record_name
     from .github import repository_context
     facts = {"predecessor": predecessor, "predecessor_owner": None, "successor": objective,
-             "successor_owner": owner, "runs": [], "ambiguity": []}
+             "successor_owner": owner, "runs": [], "ambiguity": [], CARRIED: []}
     verdict = {"status": "claim_unavailable", "condition": None, "facts": facts}
 
     def fail(condition: str, message: str, action: str | None = None) -> dict:
@@ -277,7 +326,8 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
         if link["objective"] == objective:
             # The facts of the recorded claim, so its own decision can complete an interrupted link.
             facts.update(predecessor_owner=prior.get("owner"), successor_owner=link["owner"],
-                         runs=list(link["runs"]), ambiguity=list(link["ambiguity"]))
+                         runs=list(link["runs"]), ambiguity=list(link["ambiguity"]),
+                         carried=[row["record_id"] for row in _carried(project, predecessor, prior)[0]])
             back = state.get("continues")
             verdict.update(status="claimed", condition="claimed_by_this_successor", record=record,
                            complete=isinstance(back, dict) and back.get("objective") == predecessor,
@@ -300,6 +350,9 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
     question = (f"May Pod record objective {objective} as the successor of objective {predecessor}? "
                 "Orca reports the predecessor's coordinator gone and its work settled; the predecessor's record is "
                 "kept, and it will accept no further writes.")
+    if facts[CARRIED]:
+        question += (f" Its {len(facts[CARRIED])} unsettled Governor effect(s) move to the successor, which settles "
+                     "them only by reading them back and never repeats them.")
     verdict.update(status="claim_available", condition="claimable", record=record, question=question,
                    unfinished=unfinished_rows[:MAX_LISTED], unreported=unreported[:MAX_LISTED],
                    message="The predecessor's coordinator is gone and its work settled.",
@@ -314,7 +367,7 @@ def claim_view(project: Path, objective: str, state: dict, *, port, previous: di
     The predecessor's own checks in the claim's order, for a reader that is not the recorded coordinator;
     the successor's checks (recorded, open, not started) wait for an actual claim.
     """
-    facts = {"predecessor": objective, "predecessor_owner": None, "runs": [], "ambiguity": []}
+    facts = {"predecessor": objective, "predecessor_owner": None, "runs": [], "ambiguity": [], CARRIED: []}
     view = {"status": "claim_unavailable", "condition": None, "facts": facts}
 
     def fail(condition: str, message: str, action: str | None = None) -> dict:
@@ -348,7 +401,7 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
     from .operations import OrcaPort
     bounded_text(predecessor, name="predecessor", limit=256)
     if decision is not None:
-        decision = exact(decision, DECISION, DECISION, name="succession_decision")
+        decision = exact(decision, DECISION | {CARRIED}, DECISION, name="succession_decision")
         bounded_text(decision["instruction"], name="instruction", limit=1024)
         if decision["provenance"] != "user_direct":
             raise PodError("succession_decision_mismatch", "Only the owner's direct instruction permits a claim")
@@ -387,8 +440,9 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                                {"next_action": "a successor continues exactly one predecessor"})
             link = prior["continued_by"]
             recorded = {"predecessor": predecessor, "predecessor_owner": prior["owner"], "successor": objective,
-                        "successor_owner": link["owner"], "runs": link["runs"], "ambiguity": link["ambiguity"]}
-            if decision is not None and any(decision[key] != recorded[key] for key in FACTS):
+                        "successor_owner": link["owner"], "runs": link["runs"], "ambiguity": link["ambiguity"],
+                        CARRIED: verdict["facts"][CARRIED]}
+            if decision is not None and _differs(decision, recorded):
                 raise PodError("succession_decision_mismatch",
                                "The decision differs from the recorded claim. Nothing was written.",
                                {"next_action": "rerun with the decision that made the claim"})
@@ -396,28 +450,52 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                 if decision is None:  # Detection never writes, even to finish an interrupted claim.
                     return {**verdict, "next_action": "rerun internal succession with the claim's decision "
                                                       "to record the successor's link"}
+                _carry(project, objective, predecessor, prior, recorded[CARRIED], at=link["at"])
                 state["continues"] = {"objective": predecessor, "record": verdict["record"],
                                       "at": prior["continued_by"]["at"]}
                 _write(own, state)
             return {"status": "claimed", "replayed": True, "predecessor": predecessor, "successor": objective,
-                    "continued_by": prior["continued_by"]}
+                    "continued_by": prior["continued_by"], CARRIED: recorded[CARRIED]}
         if decision is None:
             return verdict
         if verdict["status"] != "claim_available":
             raise PodError(verdict["condition"], verdict["message"],
                            {"succession": verdict, "next_action": verdict["next_action"]})
-        if any(decision[key] != verdict["facts"][key] for key in FACTS):
+        if _differs(decision, verdict["facts"]):
             raise PodError("succession_decision_mismatch",
-                           "The decision differs from fresh predecessor, successor, owner, Run or ambiguity facts. "
-                           "Nothing was written.", {"succession": verdict, "next_action": verdict["next_action"]})
+                           "The decision differs from fresh predecessor, successor, owner, Run, ambiguity or carried "
+                           "Governor facts. Nothing was written.",
+                           {"succession": verdict, "next_action": verdict["next_action"]})
         at = datetime.now(timezone.utc).isoformat()
         prior["continued_by"] = {"objective": objective, "record": own.parent.name, "owner": owner,
                                  "runs": list(verdict["facts"]["runs"]), "at": at,
                                  "instruction": decision["instruction"], "unfinished": verdict["unfinished"],
                                  "unreported": verdict["unreported"],
                                  "ambiguity": list(verdict["facts"]["ambiguity"]), "orca_claim": "unavailable"}
+        # Order: the predecessor's link first, which freezes its record and Governor journal; then the carried
+        # rows, read from that frozen journal; then the successor's link, which marks the claim complete. A replay
+        # after any interruption recomputes the same rows and completes what is missing.
         _write_succession(other, prior)
+        _carry(project, objective, predecessor, prior, verdict["facts"][CARRIED], at=at)
         state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at}
         _write(own, state)
         return {"status": "claimed", "replayed": False, "predecessor": predecessor, "successor": objective,
-                "continued_by": prior["continued_by"]}
+                "continued_by": prior["continued_by"], CARRIED: list(verdict["facts"][CARRIED])}
+
+
+def _differs(decision: dict, facts: dict) -> bool:
+    return (any(decision[key] != facts[key] for key in FACTS)
+            or decision.get(CARRIED, []) != facts.get(CARRIED, []))
+
+
+def _carry(project: Path, objective: str, predecessor: str, prior: dict, record_ids: list[str], *, at: str) -> None:
+    """Write the carried rows into the successor's own journal; the caller holds both objective locks."""
+    if not record_ids:
+        return
+    from .governor import _read_journal, _record_path, _write_journal, carry_into
+    from .ledger import map_of
+    journal_path = _record_path(project, objective)
+    journal = _read_journal(journal_path)
+    if carry_into(journal, _read_journal(_record_path(project, predecessor)), record_ids, objective=predecessor,
+                  governance=(map_of(prior) or {}).get("governance"), at=at):
+        _write_journal(journal_path, journal)

@@ -106,8 +106,25 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
             or (row.get("action") or {}).get("kind") != "merge"):
         raise _delivery_refusal("record_not_merge_pass", "The record is not an allowed merge PASS",
                                 "settle the exact governed merge before recording delivery", record=record_id)
-    unit = journal["units"].get(row["action"].get("unit"))
-    return {"seq": seq, "record": record_id, **verify_merge_result(project, row, unit, map_state["governance"])}
+    unit, governance = carried_merge_context(row, journal["units"].get(row["action"].get("unit")),
+                                             map_state["governance"])
+    return {"seq": seq, "record": record_id, **verify_merge_result(project, row, unit, governance)}
+
+
+def carried_merge_context(row: dict, unit: dict | None, governance: dict | None = None) -> tuple[dict | None, dict]:
+    """The candidate and base R93 checks a merge row against.
+
+    A row carried from a lost coordinator (R118) keeps the candidate and base it was admitted with, whatever
+    the successor's unit or map says now; its target must still be the bound target named here, or its own
+    admitted one when none is given. Any other row uses its unit and the given governance unchanged.
+    """
+    carried = row.get("carried_from")
+    if not isinstance(carried, dict) or not isinstance(carried.get("candidate"), dict) \
+            or not isinstance(carried.get("governance"), dict):
+        return unit, governance or {}
+    admitted = carried["governance"]
+    return ({**(unit or {}), "candidate": dict(carried["candidate"])},
+            {"base_ref": (governance or admitted).get("base_ref"), "base": admitted.get("base")})
 
 
 def verify_merge_result(project: Path, row: dict, unit: dict | None, governance: dict) -> dict:

@@ -79,7 +79,7 @@ class ClaimTests(SuccessionCase):
         self.assertEqual(verdict["status"], "claim_available", verdict)
         self.assertEqual(verdict["facts"], {"predecessor": "objective", "predecessor_owner": "owner",
                                             "successor": "successor", "successor_owner": "next",
-                                            "runs": ["run"], "ambiguity": []})
+                                            "runs": ["run"], "ambiguity": [], "carried": []})
         for identity in ("owner", "next", "run-s"):  # The plain question names objectives, never handles or Runs.
             self.assertNotIn(identity, verdict["question"])
         self.assertEqual(before, self.snapshot())
@@ -165,6 +165,19 @@ def _differing_identity(case):
     path.write_text(json.dumps(raw))
 
 
+def _release_pending(case):
+    """A pending release: performed by the project, it has no readback, so no claim carries it (R118)."""
+    from pod.governor import _read_journal, _record_path, _write_journal
+    path = _record_path(case.project, "objective")
+    journal = _read_journal(path)
+    journal["actions"].append({
+        "record_id": "r" * 64, "logical_key": "r" * 64, "attempt": 1,
+        "action": {"kind": "release", "candidate": case.candidate, "target": "v1", "unit": "default"},
+        "decision": "ALLOW", "outcome": "pending", "receipt": {"started_at": "2026-01-01T00:00:00+00:00"},
+        "warnings": [], "reasons": [], "classifications": [], "run_event": None, "rejected_run": None})
+    _write_journal(path, journal)
+
+
 def _closed(case):
     path, raw = _raw(case, "objective")
     checkpoint = raw["checkpoint"]
@@ -176,7 +189,7 @@ def _closed(case):
 SIBLINGS = {
     "predecessor-closed": (_closed, "predecessor_closed", None),
     "handoff-pending": (None, "predecessor_handoff_pending", ("pod.handoff.unfinished", {"state": "pending"})),
-    "effect-pending": (None, "predecessor_effect_pending", ("pod.ledger._governor_pending", True)),
+    "release-pending": (_release_pending, "predecessor_effect_pending", None),
     "admission-unresolved": (_admission_state("unresolved"), "predecessor_work_unsettled", None),
     "reserved-with-dispatch": (_admission_state("reserved"), "predecessor_work_unsettled", None),
     "differing-identity": (_differing_identity, "predecessor_unverified", None),
@@ -204,7 +217,7 @@ class ClosedCoordinatorTests(SuccessionCase):
 
 class SiblingRefusalTableTests(GroupedTable):
     """Each unproven predecessor fact holds the claim and writes nothing."""
-    GROUPS = {"test_predecessor_record_holds_the_claim": ["predecessor-closed", "handoff-pending", "effect-pending"],
+    GROUPS = {"test_predecessor_record_holds_the_claim": ["predecessor-closed", "handoff-pending", "release-pending"],
               "test_predecessor_work_holds_the_claim": ["admission-unresolved", "reserved-with-dispatch",
                                                         "differing-identity"]}
 

@@ -218,7 +218,7 @@ class LostCoordinatorTests(ReadinessCase):
         self.assertEqual(before, self.snapshot())
         self.assertEqual(self.mutations, [])
 
-    def test_a_lost_coordinator_with_a_pending_effect_names_the_exact_refusal(self):
+    def test_a_lost_coordinator_with_a_pending_effect_names_the_carry_or_the_exact_refusal(self):
         self.establish()
         self.op("checkpoint", value=self.core(obligations=self.stored(), worktree=self.binding()))
         published = self.op("governor-execute", action=self.action(effects=["workflow:ci.yml"]))
@@ -227,19 +227,28 @@ class LostCoordinatorTests(ReadinessCase):
         self.terminals["owner"] = "exited"
         readiness = self.readiness("next")
         self.assertEqual(readiness["state"], "coordinator_lost")
-        self.assertIsNone(readiness["recovery"]["route"])
+        # R118: a successor's claim carries the pending derived validation and settles it by readback.
+        self.assertEqual(readiness["recovery"]["route"], "successor_claim")
         routes = {row["route"]: (row["status"], row["condition"]) for row in readiness["recovery"]["routes"]}
         self.assertEqual(routes, {"same_run_resume": ("blocked", "owner_not_live"),
                                   "owner_handoff": ("blocked", "owner_not_lost"),
-                                  "successor_claim": ("blocked", "predecessor_effect_pending")})
-        self.assertIn("recovery blocked: successor claim refused (predecessor_effect_pending: The predecessor has "
-                      "a Governor effect whose outcome is pending.)", readiness["summary"])
+                                  "successor_claim": ("available", "claimable")})
         derived = readiness["finalization"]["records"]["validation_readback"]
         self.assertEqual([(row["kind"], row["state"], row["derived_from"]) for row in derived],
                          [("workflow_dispatch", "pending", published["record_id"])])
+        self.assertEqual(self.read_as("next")["successor_claim"]["facts"]["carried"], [derived[0]["record"]])
         self.assertIn(f"Pod still needs the validation readback of publication {published['record_id'][:12]}",
                       readiness["summary"])
         self.assertEqual(self.read_as(None)["readiness"], readiness)
+        # A pending release has no readback: the claim refuses it, and the summary names that exact refusal.
+        self.rows(self.row("r" * 64, "release", "pending", receipt={"started_at": "2026-01-01T00:00:00+00:00"}))
+        blocked = self.readiness("next")
+        routes = {row["route"]: (row["status"], row["condition"]) for row in blocked["recovery"]["routes"]}
+        self.assertEqual(routes["successor_claim"], ("blocked", "predecessor_effect_pending"))
+        self.assertIsNone(blocked["recovery"]["route"])
+        self.assertIn("recovery blocked: successor claim refused (predecessor_effect_pending: The predecessor's "
+                      "pending release rrrrrrrrrrrr cannot be carried: a release is performed by the project and has "
+                      "no readback.)", blocked["summary"])
 
 
 class EndedTests(ReadinessCase):

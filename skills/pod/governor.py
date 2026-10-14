@@ -39,6 +39,8 @@ PUBLICATION_KINDS = ("push", "pr_update")
 DISPATCH_KINDS = ("workflow_dispatch", "remote_diagnostic")
 EXECUTABLE_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun",
                     "remote_diagnostic", "cancel_validation")
+# The kinds a successor's claim may carry from a lost coordinator (R118): each one Pod can read back.
+CARRIED_KINDS = (*EXECUTABLE_KINDS, "merge")
 PURPOSES = ("validation", "diagnostic", "checkpoint", "release", "cancellation")
 DECISIONS = ("ALLOW", "REUSE", "DEFER")
 OUTCOMES = ("pending", "PASS", "FAILED", "UNKNOWN", "CANCELED")
@@ -87,6 +89,7 @@ NEXT_ACTIONS = {
     "repeat_diagnostic": "this probe already ran unchanged; change the check or record the answer",
     "publication_unsettled": "record or reconcile the pending publication before requesting this validation",
     "exception_grant_required": "bind the exception to a current personal efficiency_exception grant",
+    "carried_row": "read the carried row back with governor-reconcile; a carried row is never cancelled",
 }
 
 
@@ -96,6 +99,7 @@ class GitHubPort(Protocol):
     def branch_head(self, *, remote: str, branch: str) -> str | None: ...
     def push(self, *, remote: str, branch: str, commit: str, expected: str | None) -> dict: ...
     def pull_request(self, *, head: str, base: str) -> dict | None: ...
+    def pull_requests(self, *, head: str, base: str) -> list[dict]: ...
     def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> dict: ...
     def dispatch(self, *, workflow: str, ref: str, inputs: dict) -> dict: ...
     def runs(self, *, workflow: str, commit: str) -> list[dict]: ...
@@ -569,6 +573,20 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
 
 
 
+def _check_carried_consent(action: dict, journal: dict, reasons: list[dict]) -> None:
+    """A carried row's authorization records a merge or publication that already happened, never a new one."""
+    consent = action.get("authorization")
+    if consent is None:
+        return
+    for row in journal["actions"]:
+        carried = row.get("carried_from")
+        if isinstance(carried, dict) and row["action"].get("authorization") == consent:
+            _reason(reasons, "authorization", "authorization_missing",
+                    f"this authorization was carried from objective {carried['objective']} and authorizes no new "
+                    f"effect; {NEXT_ACTIONS['authorization_missing']} in this objective's own session")
+            return
+
+
 def merge_target(unit: dict | None) -> dict | None:
     """The canonical branch a merge of this unit lands on, from its prepared remote and base."""
     branch = unit.get("branch") if isinstance(unit, dict) else None
@@ -725,7 +743,8 @@ def _check_unresolved(action: dict, journal: dict, logical_key: str,
     stale_pending = [row["record_id"] for row in journal["actions"]
                      if row["action"]["unit"] == action["unit"] and row["decision"] == "ALLOW"
                      and row["outcome"] == "pending" and row.get("cancel_safe")
-                     and candidate_id is not None and row.get("candidate_id") != candidate_id]
+                     and candidate_id is not None and row.get("candidate_id") != candidate_id
+                     and not isinstance(row.get("carried_from"), dict)]
     if stale_pending:
         _warn(warnings, "superseded_validation_pending",
               f"{len(stale_pending)} validation run(s) for a superseded candidate are still pending")
@@ -848,6 +867,11 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
 
     _check_authority(action, binding, deploys, releases, reasons,
                      merge_into=merge_target_name(unit) if kind == "merge" else None)
+    _check_carried_consent(action, journal, reasons)
+    if kind == "cancel_validation" and any(row["record_id"] == action["target"]
+                                           and isinstance(row.get("carried_from"), dict) for row in journal["actions"]):
+        _reason(reasons, "correctness", "carried_row",
+                f"{action['target'][:12]} was carried from a lost coordinator; it settles only by its own readback")
     _check_merge_target(action, unit, reasons)
 
     superseded, current, starting = _check_binding(action, unit, binding, checkpoint, effects,
@@ -1173,6 +1197,87 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
             "classification": None, "classifications": [], "derived_from": row["record_id"]})
 
 
+def carry_refusal(row: dict, journal: dict, governance: dict | None) -> str | None:
+    """Why a lost coordinator's unsettled row cannot move to a successor, or None when it can (R118).
+
+    A carried row settles only by Pod's own readback, so it must name what that readback reads: its unit and
+    branch or commit, the run it reruns or cancels, and for a merge its pull request, candidate and base.
+    """
+    from .governor_effects import _bound_run_id, _rerun_source, rerun_unattributable
+    kind = row["action"]["kind"]
+    if kind not in CARRIED_KINDS:
+        return f"a {kind} is performed by the project and has no readback"
+    unit = journal["units"].get(row["action"]["unit"])
+    if not isinstance(unit, dict):
+        return "no delivery unit binds it, so nothing can read it back"
+    if kind in PUBLICATION_KINDS and (pushed_branch(row, unit) is None or not row.get("commit")):
+        return "its unit no longer names the branch and commit it pushed"
+    if kind == "merge":
+        consent = row["action"].get("authorization") or {}
+        if (not isinstance(row.get("target_binding"), dict) or not isinstance(unit.get("branch"), dict)
+                or not row.get("commit") or not consent.get("tree")
+                or not isinstance(governance, dict) or not governance.get("base")):
+            return "its pull request, candidate or admitted base cannot be identified"
+    if kind == "validation_rerun":
+        run_id = _rerun_source(row, journal)
+        if run_id is None:
+            return "no failed run identity binds the rerun"
+        unattributable = rerun_unattributable(row["receipt"].get("provider") or {})
+        if unattributable is not None:
+            return unattributable
+    if kind == "cancel_validation":
+        target = next((other for other in journal["actions"] if other["record_id"] == row["action"]["target"]), None)
+        if not (row["receipt"].get("provider") or {}).get("run_id") and not (target and _bound_run_id(target)):
+            return "no run identity binds the cancellation"
+    if kind in DISPATCH_KINDS and not ((row["receipt"].get("provider") or {}).get("run_id")
+                                       or (row["receipt"].get("provider") or {}).get("ref_commit") or row.get("commit")):
+        return "it names neither a run nor a commit to look up"
+    return None
+
+
+def carried_rows(journal: dict) -> list[dict]:
+    """A lost coordinator's unsettled allowed rows: what a successor's claim must carry or refuse."""
+    return [row for row in journal["actions"] if row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")]
+
+
+def carry_into(journal: dict, source: dict, record_ids: list[str], *, objective: str, governance: dict | None,
+               at: str) -> bool:
+    """Copy the named rows of a predecessor's journal, and their units, into this successor journal.
+
+    Each copy keeps its record id and is marked with the predecessor objective and that id; a row or unit
+    already carried stays as it is, so an interrupted claim completes by the same call. Returns whether the
+    journal changed. The predecessor's journal is only read.
+    """
+    from .governor_effects import _bound_run_id
+    rows = {row["record_id"]: row for row in source["actions"]}
+    present = {row["record_id"] for row in journal["actions"]}
+    changed = False
+    for record_id in record_ids:
+        row = rows[record_id]
+        name = row["action"]["unit"]
+        unit = journal["units"].get(name)
+        if unit is None:
+            journal["units"][name] = {**deepcopy(source["units"][name]), "carried_from": {"objective": objective}}
+            changed = True
+        elif (unit.get("carried_from") or {}).get("objective") != objective:
+            raise PodError("successor_started", f"The successor already has its own delivery unit {name}")
+        if record_id in present:
+            continue
+        marker = {"objective": objective, "record": record_id, "at": at}
+        kind = row["action"]["kind"]
+        if kind == "merge":
+            marker.update(candidate={"id": row.get("candidate_id"), "commit": row["commit"],
+                                     "tree": row["action"]["authorization"]["tree"]},
+                          governance={"base_ref": governance.get("base_ref"), "base": governance["base"]},
+                          branch=dict(source["units"][name]["branch"]))
+        elif kind == "cancel_validation" and not (row["receipt"].get("provider") or {}).get("run_id"):
+            marker["run_id"] = str(_bound_run_id(rows[row["action"]["target"]]))
+        journal["actions"].append({**deepcopy(row), "carried_from": marker})
+        present.add(record_id)
+        changed = True
+    return changed
+
+
 _RESERVATION_STEPS = ("After performing it, record governor-outcome PASS or FAILED, which Pod accepts only from "
                       "its own readback, or call governor-reconcile. Only if it was never performed: record "
                       "governor-outcome CANCELED with detail saying so (refused on any sign of execution), then call "
@@ -1197,8 +1302,11 @@ def cancel_refusal(row: dict, journal: dict) -> str | None:
     CANCELED says the reserved action never ran. Only a pending decision reservation with no recorded sign
     of execution may say so, and only Pod's readback then confirms that no effect is visible. This is the
     one predicate both the outcome and the "cancel, then execute" offer use, so any other row that must
-    never be canceled is refused here.
+    never be canceled is refused here: a row carried from a lost coordinator settles only by readback.
     """
+    if isinstance(row.get("carried_from"), dict):
+        return (f"it was carried from objective {row['carried_from']['objective']} and settles only by Pod's own "
+                "readback")
     if row.get("decision_reserved") is not True:
         return "only a decision reservation for the caller to perform is canceled"
     if row["outcome"] != "pending":
@@ -1237,7 +1345,7 @@ def _fetch_first(row: dict) -> str:
 
 
 def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
-                   provider: dict | None, evidence: list[str], detail: str | None) -> str | None:
+                   provider: dict | None, evidence: list[str], detail: str | None, now: datetime) -> str | None:
     """Refuse an outcome its evidence does not support; return the provider read it still needs, if any.
 
     Rows Pod performed take outcomes from execution or readback, and manually only UNKNOWN. A merge PASS
@@ -1253,6 +1361,10 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
             raise _outcome_refusal("receipt_from_readback", "This row's provider receipt comes only from Pod's own "
                                    "execution or readback", "record UNKNOWN without a provider receipt", record_id)
         return None
+    if outcome == "CANCELED" and isinstance(row.get("carried_from"), dict):
+        raise _outcome_refusal("carried_row", "A row carried from a lost coordinator is never canceled; it settles "
+                               "only by Pod's own readback", "call governor-reconcile, which reads it back and "
+                               "never resubmits", record_id)
     if outcome == "CANCELED" and row["outcome"] == "UNKNOWN":
         raise _outcome_refusal("unknown_not_cancelable", "An UNKNOWN effect may have happened; it never becomes "
                                "CANCELED by assertion", "settle it from provider readback with governor-reconcile",
@@ -1275,7 +1387,7 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
                                    "evidence naming the receipt", record_id)
         return None
     if cls == "merge":
-        return _check_merge_outcome(project, state, journal, row, outcome, provider=provider)
+        return _check_merge_outcome(project, state, journal, row, outcome, provider=provider, now=now)
     if provider is not None:
         raise _outcome_refusal("receipt_from_readback", "A reservation's provider receipt comes from Pod's own "
                                "readback", "record the outcome without a provider receipt", record_id)
@@ -1288,23 +1400,26 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
 
 
 def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
-                         provider: dict | None) -> None:
-    from .governance import target_contains_result, verify_merge_result
+                         provider: dict | None, now: datetime) -> None:
+    from .governance import carried_merge_context, target_contains_result, verify_merge_result
     from .ledger import map_of
     record_id = row["record_id"]
     map_state = map_of(state)
-    if map_state is None:
+    carried = isinstance(row.get("carried_from"), dict)
+    if map_state is None and not carried:
         raise _outcome_refusal("map_missing", "A merge outcome is checked against the bound target and base of the "
                                "objective map", "checkpoint the objective map first", record_id)
+    # A carried merge is checked against the candidate and base it was admitted with (R118).
+    unit, governance = carried_merge_context(row, journal["units"].get(row["action"]["unit"]),
+                                             None if carried else map_state["governance"])
     if outcome == "PASS":
-        unit = journal["units"].get(row["action"]["unit"])
         merged = {**(row["receipt"].get("provider") or {}), **(provider or {})}
         if not merged.get("merge_commit"):
             raise _outcome_refusal("merge_commit_missing", "A merge PASS keeps the provider merge_commit",
                                    _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
         try:
             verify_merge_result(project, {**row, "receipt": {**row["receipt"], "provider": merged}}, unit,
-                                map_state["governance"])
+                                governance)
         except PodError as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             raise _outcome_refusal("merge_unverified", "The merge result fails R93's Git checks ("
@@ -1314,13 +1429,21 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
     if provider is not None and provider.get("merge_commit"):
         raise _outcome_refusal("merge_commit_conflict", f"A merge {outcome} names no merge_commit",
                                "record PASS for a merge that landed", record_id)
-    contained = target_contains_result(project, row, map_state["governance"])
+    contained = target_contains_result(project, row, governance)
     if contained is None:
         raise _outcome_refusal("target_unobservable", "Git cannot show whether the target holds the candidate's "
                                "result", _fetch_first(row) + ", then record the outcome again", record_id)
     if contained:
         raise _outcome_refusal("target_contains_result", "The target holds the candidate's result, so the merge "
                                "landed", _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
+    if carried:
+        from .governor_effects import absence_floor
+        floor = absence_floor(row)
+        if floor is None or now < floor:
+            raise _outcome_refusal("absence_too_early", "A carried merge's absence is not read before "
+                                   + (floor.isoformat() if floor else "its recorded start is known")
+                                   + ": a call already in flight may still land", "retry after that time",
+                                   record_id)
     return None
 
 
@@ -1333,7 +1456,7 @@ def _readback_answer(project: Path, row: dict, journal: dict, outcome: str, port
         raise _outcome_refusal("readback_unavailable", "No delivery unit binds this row", "prepare the unit",
                                row["record_id"])
     try:
-        answer = _observe(port or _port(project), row, unit, journal, now=now)
+        answer = _observe(port or _port(project), row, unit, journal, project=project, now=now)
     except PodError as exc:
         raise _outcome_refusal("readback_unavailable", "Pod could not read the provider back (" + exc.code + ")",
                                "retry when the provider answers; nothing was recorded", row["record_id"]) from exc
@@ -1374,7 +1497,8 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
         bounded_text(detail, name="detail", limit=1024)
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
-    moment = (now or datetime.now(timezone.utc)).isoformat()
+    clock = now or datetime.now(timezone.utc)
+    moment = clock.isoformat()
     answer = snapshot = None
     while True:
         with _lock(context_path):
@@ -1393,7 +1517,7 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
             if row["outcome"] not in ("pending", "UNKNOWN"):
                 raise PodError("outcome_conflict", "A different outcome was already recorded")
             needs = _check_outcome(project, state, journal, row, outcome, provider=provider_record,
-                                   evidence=references, detail=detail)
+                                   evidence=references, detail=detail, now=clock)
             if needs is None:
                 _settle(journal, row, outcome=outcome, provider=provider_record, evidence=references,
                         detail=detail, moment=moment)
@@ -1414,7 +1538,7 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
                 _write_journal(record_path, journal)
                 break
             snapshot = deepcopy(row)
-        answer = _readback_answer(project, snapshot, journal, outcome, port, now)
+        answer = _readback_answer(project, snapshot, journal, outcome, port, clock)
     result = {"status": "recorded", "record_id": record_id, "outcome": row["outcome"], "receipt": row["receipt"]}
     if row["action"]["kind"] == "merge" and row["outcome"] == "PASS":
         result["readback"] = _merged_readback(project, objective, owner=owner, row=row, port=port,
@@ -1704,10 +1828,11 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
             existing["history"] = (existing["history"] + [identity])[-MAX_HISTORY:]
             keep = set(existing["history"][-2:])
             existing["preflight"] = {cid: receipts for cid, receipts in existing["preflight"].items() if cid in keep}
+            # A carried row is never cancelled; it settles by its own readback (R118).
             superseded = [row["record_id"] for row in journal["actions"]
                           if row["action"]["unit"] == unit and row["decision"] == "ALLOW"
                           and row["outcome"] == "pending" and row.get("cancel_safe")
-                          and row.get("candidate_id") != identity]
+                          and row.get("candidate_id") != identity and not isinstance(row.get("carried_from"), dict)]
         _write_journal(record_path, journal)
         return {"status": status, "unit": unit, "candidate": existing["candidate"],
                 "superseded_validation": superseded, "branch": existing["branch"], "tasks": existing["tasks"]}
@@ -1838,7 +1963,9 @@ def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
         granted = False
         if isinstance(binding, dict) and binding.get("commit") and binding.get("tree"):
             for row in rows:
-                if row["action"]["kind"] not in kinds or row.get("commit") != binding["commit"]:
+                # A carried row's consent was the predecessor's; it never authorizes a new effect here (R118).
+                if (row["action"]["kind"] not in kinds or row.get("commit") != binding["commit"]
+                        or isinstance(row.get("carried_from"), dict)):
                     continue
                 granted = applicable_authorization(
                     unit, row["action"].get("authorization"), candidate=binding["commit"],
@@ -2002,7 +2129,8 @@ def status_at(root: Path, *, project: Path | None = None,
                           | {"kind": row["action"]["kind"], "candidate": row.get("candidate_id") or row["action"]["candidate"],
                              "unit": row["action"]["unit"], "target": row["action"]["target"],
                              "commit": row.get("commit"), "derived_from": row.get("derived_from"),
-                             "provider": row["receipt"].get("provider")}
+                             "provider": row["receipt"].get("provider"),
+                             "carried_from": (row.get("carried_from") or {}).get("objective")}
                           for row in journal["actions"][-16:]]}
     if policy is not None:
         result["enforcement"] = enforcement(policy)
