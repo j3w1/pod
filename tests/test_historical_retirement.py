@@ -29,13 +29,35 @@ class RetirementCase(SuccessionCase):
         self.generations = {}
         self.worktree_elsewhere = False
         self.unknown = None
+        # Orca's worktree identity per path (R113), and its complete host-wide inventories.
+        self.instances = {}
+        self.repo_entry = "repo"
+        self.inventory = {"worktrees": [], "terminals": []}
+        self.inventory_shape = {}
+        self.path_list_shape = {}  # Overrides of the exact per-path terminal list's completeness fields.
+        self.during_inventory = None  # Runs once while Orca answers its worktree inventory: a concurrent change.
 
     def native_read(self, argv, **kwargs):
         if argv[:3] == ["worktree", "show", "--worktree"]:
             self.native_calls.append(list(argv))
             path = argv[3].removeprefix("path:")
             return {"runtime": self.port.runtime, "result": {"worktree": {
-                "path": path + "-elsewhere" if self.worktree_elsewhere else path, "isMainWorktree": False}}}
+                "id": self.repo_entry + "::" + path, "path": path + "-elsewhere" if self.worktree_elsewhere else path,
+                "isMainWorktree": False,
+                "identity": {"key": self.instances.get(path, "wt2:local:first"), "executionHostId": "local"}}}}
+        if argv in (["worktree", "list", "--json"], ["terminal", "list", "--json"]):
+            self.native_calls.append(list(argv))
+            kind = argv[0] + "s"
+            if kind == "worktrees" and self.during_inventory is not None:
+                change, self.during_inventory = self.during_inventory, None
+                change()
+            shape = self.inventory_shape.get(kind, {})
+            if shape == "unreadable":
+                raise PodError("orca_read_failed", SENTINEL, {"native_code": "runtime_unavailable"})
+            rows = deepcopy(self.inventory[kind])
+            return {"runtime": self.port.runtime, "result": {
+                kind: rows, "totalCount": len(rows), "truncated": False,
+                "hostScope": {"hostIds": ["local"], "omittedHostIds": []}, **shape}}
         if argv[:3] == ["terminal", "list", "--worktree"]:
             self.native_calls.append(list(argv))
             if self.terminal_list_failure:
@@ -43,7 +65,7 @@ class RetirementCase(SuccessionCase):
             rows = deepcopy(self.path_terminals.get(argv[3].removeprefix("path:"), []))
             return {"runtime": self.port.runtime, "result": {
                 "terminals": rows, "totalCount": len(rows), "truncated": False,
-                "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}}
+                "hostScope": {"hostIds": ["local"], "omittedHostIds": []}, **self.path_list_shape}}
         response = super().native_read(argv, **kwargs)
         if argv[:2] == ["orchestration", "run-show"] and argv[3] in self.generations:
             response["result"]["run"]["consumer_generation"] = self.generations[argv[3]]
@@ -528,7 +550,8 @@ class WriteTests(RetirementCase):
         found = self.retire(objectives=both)
         self.assertEqual([row["status"] for row in found["objectives"]], ["eligible", "refused"])
         self.assertIn("a decision that also names it retires it once its condition clears and its facts still "
-                      "match: reconcile releasing " + context["worktree"] + " (path_in_use)", found["question"])
+                      "match: reconcile releasing " + context["worktree"] + " (existing worktree) (path_in_use; 0 "
+                      "pending, unknown, failed or unreported record(s) of it would stay as recorded)", found["question"])
         self.assertIn("only the objectives the owner's answer names", found["next_action"])
         decision = self.decide(objectives=both)
         first = {row["objective"]: row["status"] for row in self.retire(decision, objectives=both)["objectives"]}

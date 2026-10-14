@@ -50,7 +50,9 @@ def _argument(value: object, *, limit: int = 4096) -> bool:
 
 def _read_allowed(argv: list[str]) -> bool:
     if argv in (["--version"], ["status", "--json"],
-                ["orchestration", "run-current", "--json"]):
+                ["orchestration", "run-current", "--json"],
+                # R113: the complete inventories that prove a released path absent.
+                ["worktree", "list", "--json"], ["terminal", "list", "--json"]):
         return True
     if (len(argv) == 5 and argv[:3] == ["terminal", "show", "--terminal"]
             and _argument(argv[3]) and argv[4] == "--json"):

@@ -486,6 +486,15 @@ def render(result: dict) -> None:
                   + f"; preserved {tally['pending']} pending, {tally['unknown']} unknown, {tally['failed']} failed and "
                   f"{tally['unreported']} unreported record(s); {len(retirement['unfinished'])} unfinished "
                   "obligation(s); this record accepts no writes")
+            for row in retirement["locations"] or []:
+                print(f"  Released {clean(row['path'])}: "
+                      + ("absent from this host, Git and Orca when the owner decided" if row["disposition"] == "absent"
+                         else "an existing worktree of this repository when the owner decided"))
+            for path in retirement["retained"]:
+                print(f"  Still held: {clean(path)}, a recorded worktree this retirement did not release")
+            if retirement["unrecorded_locations"] == "hold_ends":
+                print("  Its record does not list every location its work used; retirement ended cleanup's hold on "
+                      "the locations it never listed")
             for reference in retirement["delivery"]:
                 print(f"  Delivery reference: {clean(reference)}")
             preserved = result.get("assignments", {}).get("preserved", [])
