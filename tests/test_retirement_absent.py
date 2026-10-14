@@ -156,6 +156,12 @@ def _nul_location(case):
                                     "exitCause": {"kind": "exited"}, "worktreePath": "/elsewhere\x00/x"}]
 
 
+def _unencodable_location(case):
+    """Review 3 H1: a location this host cannot encode (a lone surrogate JSON can carry) is unreadable."""
+    case.inventory["terminals"] = [{"handle": "user", "connected": False, "writable": False, "orphaned": False,
+                                    "exitCause": {"kind": "exited"}, "worktreePath": "/elsewhere\ud800/x"}]
+
+
 def _git_row_without_path(case):
     case.inventory["worktrees"] = [{"path": "/elsewhere", "git": {}}]
 
@@ -225,6 +231,8 @@ PATH_REFUSALS = {
     "nul-location-absent": (_nul_location, "gone", "path_unverified", "unknown"),
     "nul-location-existing": (_nul_location, "kept", "path_unverified", "unknown", ("kept",)),
     "git-row-without-path": (_git_row_without_path, "gone", "path_unverified", "unknown"),
+    "unencodable-location-absent": (_unencodable_location, "gone", "path_unverified", "unknown"),
+    "unencodable-location-existing": (_unencodable_location, "kept", "path_unverified", "unknown", ("kept",)),
     "existing-terminals-unreadable": (_shape("terminals", "unreadable"), "kept", "path_unverified", "unknown",
                                       ("kept",)),
     "existing-terminals-truncated": (_shape("terminals", {"truncated": True}), "kept", "path_unverified", "unknown",
@@ -262,6 +270,9 @@ class PathRefusalTableTests(GroupedTable):
         "test_a_nul_location_makes_the_inventory_unusable_for_an_absent_path": ["nul-location-absent"],
         "test_a_nul_location_makes_the_inventory_unusable_for_an_existing_path": ["nul-location-existing"],
         "test_a_git_entry_without_a_path_refuses": ["git-row-without-path"],
+        "test_an_unencodable_location_makes_the_inventory_unusable_for_an_absent_path": ["unencodable-location-absent"],
+        "test_an_unencodable_location_makes_the_inventory_unusable_for_an_existing_path":
+            ["unencodable-location-existing"],
         "test_an_unreadable_terminal_inventory_refuses_an_existing_path": ["existing-terminals-unreadable"],
         "test_a_truncated_terminal_inventory_refuses_an_existing_path": ["existing-terminals-truncated"],
         "test_an_unlocated_terminal_row_refuses_an_existing_path": ["existing-unlocated-terminal"]}
@@ -368,6 +379,12 @@ class PathRefusalTableTests(GroupedTable):
     def test_a_git_entry_without_a_path_refuses(self):
         self.rows()
 
+    def test_an_unencodable_location_makes_the_inventory_unusable_for_an_absent_path(self):
+        self.rows()
+
+    def test_an_unencodable_location_makes_the_inventory_unusable_for_an_existing_path(self):
+        self.rows()
+
     def test_an_unreadable_terminal_inventory_refuses_an_existing_path(self):
         self.rows()
 
@@ -406,6 +423,16 @@ class UnprovenFilesystemTests(AbsentCase):
                                  ("unknown", "path_unverified", {"filesystem": shown}))
                 self.assertEqual(self.located(found)[self.gone]["disposition"], "absent")
                 self.assertNotIn("question", found)
+
+    def test_an_exited_terminal_listed_twice_counts_once(self):
+        self.placed()
+        row = {"connected": False, "writable": False, "orphaned": False, "exitCause": {"kind": "exited"},
+               "ptyId": "pty-1", "worktreePath": self.kept}
+        self.path_terminals[self.kept] = [dict(row)]
+        self.inventory["terminals"] = [dict(row)]
+        verdict = self.retire(objectives=self.request(self.kept))["objectives"][0]
+        self.assertEqual((verdict["status"], verdict["native"]["exited_terminals"]), ("eligible", 1),
+                         verdict.get("message"))
 
     def test_a_matching_recorded_repository_entry_passes(self):
         self.placed()

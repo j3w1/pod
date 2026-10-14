@@ -235,9 +235,20 @@ def _claimants(project: Path, objective: str) -> list[str] | None:
     return found
 
 
+def _readable(place: object) -> bool:
+    """Whether a location is an absolute path this host can resolve; any other makes its inventory unusable."""
+    if not isinstance(place, str) or not place.startswith("/"):
+        return False
+    try:
+        os.fsencode(place)
+    except (UnicodeError, ValueError):
+        return False
+    return "\x00" not in place
+
+
 def _within(candidate: object, path: str) -> bool:
-    """Whether a location another inventory names is the path or lies beneath it, links resolved. A location that
-    cannot be resolved could be anywhere, so it counts as a match."""
+    """Whether a location another inventory names is the path or lies beneath it, links resolved. Inventories admit
+    only readable locations; should resolution still fail, the location could be anywhere and counts as a match."""
     if not isinstance(candidate, str) or not candidate.startswith("/"):
         return False
     try:
@@ -291,8 +302,7 @@ def _places(row: dict, kind: str) -> list[str] | None:
         found = [] if row.get("worktreePath") is None else [row["worktreePath"]]
         if row.get("worktreeId") is not None:
             found.append(named(row["worktreeId"]))
-    if not found or any(not isinstance(place, str) or not place.startswith("/") or "\x00" in place
-                        for place in found):
+    if not found or not all(_readable(place) for place in found):
         return None
     return found
 
@@ -421,8 +431,8 @@ def _existing(path: str, repository: str, entries: set[str], host: _Host) -> dic
     # exited terminals are counted once by handle where they have one.
     listed = [*rows, *beneath]
     live = [row for row in listed if not _exited(row)]
-    exited = {row["handle"] if isinstance(row.get("handle"), str) else ("row", index)
-              for index, row in enumerate(listed) if _exited(row)}
+    exited = {next((("key", row[key]) for key in ("handle", "ptyId", "incarnationId") if isinstance(row.get(key), str)),
+                   ("row", index)) for index, row in enumerate(listed) if _exited(row)}
     row = _location(path, "existing", "path_in_use" if live else None,
                     "An Orca terminal that is not proven exited is in or beneath this path." if live else None,
                     filesystem="directory", git="this_repository", orca="resolved", exited_terminals=len(exited))
