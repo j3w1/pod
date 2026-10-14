@@ -13,7 +13,7 @@ from .errors import PodError
 from .ledger import (admission_identity, binding_valid, bound_assignments as _bound_assignments,
                      objective_root, read, reserve,
                      update_admission, _lock, _path, _read, _write, _native_assignment_settled)
-from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, contract, current_run, mutate_command, read_command,
+from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, _passable, contract, current_run, mutate_command, read_command,
                    worker_rows, worker_show, worktree_identity, worktree_selector)
 from .util import atomic_json, bounded_json, bounded_text, digest
 
@@ -326,7 +326,8 @@ def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
                "dispatchId": dispatch, "workerId": projection.get("id"),
                "worktreeId": worker.get("worktreeId"),
                "terminalHandle": worker.get("agentTerminalHandle")}
-    if not binding_valid(binding):
+    # A record holds only identities that can be written and passed back to Orca exactly (R18).
+    if not binding_valid(binding) or not all(value is None or _passable(value) for value in binding.values()):
         raise PodError("native_identity_unverified", "Worker identity is incomplete")
     return binding
 

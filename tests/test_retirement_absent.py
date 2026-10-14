@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import objective_root, read
-from pod.operations import guarded_start
+from pod.operations import OrcaPort, guarded_start
 from pod.retirement import status_block, validate_entry
 from tests.common import GroupedTable, assert_grouped_table
 from tests.kernel_support import git
@@ -817,7 +817,9 @@ class WithinTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root)
         (self.root / "real" / "kept").mkdir(parents=True)
         (self.root / "locked" / "sub").mkdir(parents=True)
+        (self.root / "elsewhere").mkdir()
         os.symlink(self.root / "real", self.root / "link")
+        os.symlink(self.root / "elsewhere", self.root / "real" / "kept" / "out")  # A link out of an existing path.
         os.symlink(self.root / "real" / "gone", self.root / "shortcut")  # Dangling: the path it names is gone.
         os.symlink(os.path.join("real", "gone"), self.root / "relative")
 
@@ -836,10 +838,73 @@ class WithinTests(unittest.TestCase):
                 (at("real", "gone-2"), gone, False), (at("real", "kept", "gone"), gone, False),
                 (at("shortcut"), gone, True), (at("shortcut", "nested"), gone, True), (at("relative", "x"), gone, True),
                 (at("missing", "..", "real", "gone"), gone, True), (at("shortcut"), kept, False),
+                (at("real", "kept", "out", "x"), kept, True), (at("elsewhere", "x"), kept, False),
                 (at("locked", "sub", "x"), at("locked"), True), (at("locked", "sub"), kept, False),
-                (at("real", "kept\x00x"), kept, True), ("relative/kept", kept, False), (None, kept, False)):
+                (at("real", "kept\x00x"), kept, True), ("relative/kept", kept, False), (None, kept, False),
+                (at("real"), "/x\x00y", True)):  # Final audit N2: a path that cannot be placed matches everything.
             with self.subTest(candidate=ascii(candidate), path=path):
                 self.assertIs(_within(candidate, path), matches)
+
+
+class WalkCountTests(unittest.TestCase):
+    """Final audit L4: one objective's detection walks each inventory location once and places each path once per
+    sweep, with the results a fresh comparison gives; the next objective's host walks again."""
+
+    def test_one_host_walks_each_location_once_and_a_new_host_walks_afresh(self):
+        from pod import retirement
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        (root / "gone").mkdir()
+        locations = []
+        for index in range(4):
+            (root / "wt" / f"loc-{index}" / "sub").mkdir(parents=True)
+            locations.append(str(root / "wt" / f"loc-{index}" / "sub"))
+        os.symlink(root / "gone" / "p-1" / "sub", root / "wt" / "dangling")  # Dangling: spelled and resolved differ.
+        os.symlink(root / "wt" / "loc-0", root / "wt" / "moving")
+        locations += [str(root / "wt" / "dangling"), str(root / "wt" / "moving" / "sub")]
+        paths = [str(root / "gone" / f"p-{index}") for index in range(3)]
+
+        def host():
+            found = retirement._Host(root)
+            found._reads["registry"] = list(locations)
+            for kind, key in (("worktrees", "path"), ("terminals", "worktreePath")):
+                rows = [{key: place, "connected": False, "writable": False, "exitCause": {"kind": "exited"}}
+                        for place in locations]
+                found._reads[kind] = {"rows": rows, "places": [[place] for place in locations], "hosts": ["local"]}
+            return found
+
+        calls = {"standing": [], "realpath": []}
+        standing, realpath = retirement._standing, os.path.realpath
+
+        def counted(name, real):
+            def call(place, *args, **kwargs):
+                calls[name].append(place)
+                return real(place, *args, **kwargs)
+            return call
+        spelled = {place: len({place, realpath(place)}) for place in locations}
+        with patch.object(retirement, "_standing", counted("standing", standing)), \
+                patch.object(retirement.os.path, "realpath", counted("realpath", realpath)):
+            first = host()
+            found = [retirement._absent(path, first) for path in paths]
+            self.assertEqual(sorted(calls["realpath"]), sorted(locations))  # One resolution per location.
+            # One placement per sweep: registry, worktrees, terminals; a stale registration ends p-1's at the first.
+            placements = [calls["standing"].count(path) for path in paths]
+            self.assertEqual(placements, [3, 1, 3])
+            self.assertEqual(len(calls["standing"]) - sum(placements), sum(spelled.values()))  # Each walk once.
+            calls["standing"].clear(), calls["realpath"].clear()
+            os.remove(root / "wt" / "moving")
+            os.symlink(root / "gone" / "p-2", root / "wt" / "moving")
+            second = host()
+            again = [retirement._absent(path, second) for path in paths]
+            self.assertEqual(sorted(calls["realpath"]), sorted(locations))  # The next objective's host walks again.
+        self.assertEqual([row["disposition"] for row in found], ["absent", "unknown", "absent"])
+        self.assertEqual([row["disposition"] for row in again], ["absent", "unknown", "unknown"])
+        for path in paths:  # Exactly what a fresh comparison of every location gives.
+            fresh = host()
+            self.assertEqual(fresh.registered(path), any(retirement._within(place, path) for place in locations))
+            self.assertEqual(fresh.beneath("terminals", path),
+                             [row for row in fresh.inventory("terminals")["rows"]
+                              if retirement._within(row["worktreePath"], path)])
 
 
 class NativeTextTests(AbsentCase):
@@ -858,8 +923,113 @@ class NativeTextTests(AbsentCase):
         before = self.snapshot()
         with self.assertRaises(PodError) as caught:
             self.retire(objectives=self.request(self.gone))
-        self.assertEqual(caught.exception.code, "remote_read_failed")
+        self.assertEqual(caught.exception.code, "git_contract")  # Final audit L6: a local read, never remote.
         self.assertEqual(before, self.snapshot())
+        from pod.github import _local_git
+        for failure in (OSError("no git"), subprocess.TimeoutExpired(["git"], 20)):
+            with self.subTest(failure=failure), patch("pod.github.subprocess.run", side_effect=failure), \
+                    self.assertRaises(PodError) as caught:
+                _local_git(self.project, ["worktree", "list", "--porcelain"])
+            self.assertEqual(caught.exception.code, "git_unavailable")
+
+    def test_a_remote_read_or_effect_keeps_its_remote_contract(self):
+        from pod.github import GhPort
+        port, commit = GhPort(self.project), "0" * 40
+        tool = self.root / "remote-tool"
+        tool.write_bytes(b"#!/bin/sh\nprintf '\\377'\n")
+        tool.chmod(0o755)
+        with patch("pod.github.git_executable", return_value=tool), \
+                patch("pod.github.gh_executable", return_value=tool):
+            for call, code in ((lambda: port.branch_head(remote="origin", branch="main"), "remote_read_failed"),
+                               (lambda: port.runs(workflow="ci.yml", commit=commit), "remote_read_failed"),
+                               (lambda: port.push(remote="origin", branch="main", commit=commit, expected=None),
+                                "remote_effect_uncertain"),
+                               (lambda: port.cancel(run_id="7"), "remote_effect_uncertain")):
+                with self.subTest(code=code), self.assertRaises(PodError) as caught:
+                    call()
+                self.assertEqual(caught.exception.code, code)
+        with patch("pod.github.subprocess.run", side_effect=subprocess.TimeoutExpired(["git"], 30)), \
+                self.assertRaises(PodError) as caught:
+            port.branch_head(remote="origin", branch="main")
+        self.assertEqual(caught.exception.code, "remote_read_failed")
+
+
+class NativeIdentityTests(AbsentCase):
+    """Final audit 2 M1: an Orca runtime or worker Dispatch identity Pod would record or pass back to Orca, but that
+    cannot be encoded exactly, refuses that objective alone before Pod uses it."""
+
+    bad_run = None
+
+    def setUp(self):
+        super().setUp()
+        self.shown, self.bad_workers = [], []  # A batch's workers on `bad_run`; one objective uses extra_workers.
+        original = self.port.show_worker
+
+        def show_worker(dispatch):
+            self.shown.append(dispatch)
+            os.fsencode(dispatch)  # As subprocess.run encodes each argument: a lone surrogate raises here,
+            if "\x00" in dispatch:  # and a NUL there.
+                raise ValueError("embedded null byte")
+            return original(dispatch)
+        patched = patch.object(OrcaPort, "show_worker", side_effect=show_worker)
+        patched.start()
+        self.addCleanup(patched.stop)
+
+    def native_read(self, argv, **kwargs):
+        response = super().native_read(argv, **kwargs)
+        if argv[:2] == ["orchestration", "worker-list"] and argv[argv.index("--run") + 1] == self.bad_run:
+            response["result"]["workers"].extend(self.bad_workers)
+        return response
+
+    def decided(self):
+        self.placed()
+        self.release = self.request(self.gone)
+        return self.decide(objectives=self.release)
+
+    def refuses(self, decision, words):
+        before = self.snapshot()
+        for verdict in (self.retire(objectives=self.release)["objectives"][0],
+                        self.retire(decision, objectives=self.release)["objectives"][0]):
+            self.assertEqual((verdict["status"], verdict["condition"]), ("refused", "workers_unverified"))
+            self.assertIn(words, verdict["message"])
+        self.assertEqual(before, self.snapshot())
+
+    def test_a_worker_dispatch_that_cannot_be_encoded_refuses(self):
+        decision = self.decided()
+        for bad in ("d\ud800", "d\x00x"):
+            with self.subTest(dispatch=ascii(bad)):
+                self.extra_workers = [{"dispatchId": bad, "taskId": "x"}]
+                self.refuses(decision, "Dispatch identity cannot be encoded as UTF-8 text without NUL")
+        self.assertFalse({"d\ud800", "d\x00x"} & set(self.shown))  # Refused before any worker read used it.
+        self.extra_workers = []
+        self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
+
+    def test_a_runtime_pod_cannot_record_refuses_before_the_write(self):
+        decision = self.decided()
+        recorded = self.port.runtime
+        for bad in ("runtime-\ud800", "runtime\x00x", "r" * 257):
+            with self.subTest(runtime=ascii(bad)[:20]):
+                self.port.runtime = self.port.placement["runtime"] = bad
+                self.refuses(decision, "names an Orca runtime identity that is not UTF-8 text without NUL")
+        self.port.runtime = self.port.placement["runtime"] = recorded
+        self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
+
+    def test_a_decided_batch_retires_the_others_and_refuses_that_objective_alone(self):
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        self.claim_only()
+        both = self.request(self.gone, self.kept) + [{"objective": "reconcile", "release": [self.where()]}]
+        decision = self.decide(objectives=both)
+        self.bad_run, self.bad_workers = "run-s", [{"dispatchId": "d\ud800", "taskId": "x"}]
+        record = objective_root(self.project, "reconcile") / "context.json"
+        before = record.read_bytes()
+        result = self.retire(decision, objectives=both)
+        rows = {row["objective"]: row for row in result["objectives"]}
+        self.assertEqual((result["status"], rows["objective"]["status"], rows["reconcile"]["condition"]),
+                         ("partially_retired", "retired", "workers_unverified"))
+        self.assertEqual(rows["objective"]["retirement"]["released"], [self.gone, self.kept])
+        self.assertIn("historical_retirement", read(self.project, "objective"))
+        self.assertEqual(record.read_bytes(), before)
 
 
 class LocatedEntryShapeTests(unittest.TestCase):

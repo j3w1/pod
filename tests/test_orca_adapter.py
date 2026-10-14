@@ -91,6 +91,99 @@ class OrcaAdapterTests(unittest.TestCase):
             with answering('list',json.dumps(listed).encode()):
                 self.assertIsNotNone(_Host(Path(temporary)).inventory('terminals'))
 
+    def test_an_identity_that_cannot_pass_exactly_never_reaches_orca(self):
+        # Final audit 2 M1: JSON carries a lone surrogate or a NUL that no argument or record can hold; Pod refuses it
+        # with a diagnosis, never UnicodeEncodeError or ValueError, and never sends it, even past its allowlists.
+        import tempfile
+        from pod.orca import _envelope,_read_allowed,run_show
+        for bad in ('d\ud800','d\udcff','d\x00x'):
+            for argv in (['terminal','show','--terminal',bad,'--json'],
+                         ['orchestration','worker-show','--dispatch',bad,'--json'],
+                         ['orchestration','run-show','--id',bad,'--json'],
+                         ['orchestration','request-show','--request',bad,'--json'],
+                         ['worktree','show','--worktree','path:/w/'+bad,'--json'],
+                         ['terminal','list','--worktree','path:/w/'+bad,'--json'],
+                         ['orchestration','worker-list','--include-remote','--json','--run',bad],
+                         ['orchestration','worker-list','--include-remote','--json','--run','run','--cursor',bad]):
+                with self.subTest(argv=ascii(argv)),patch('pod.orca.subprocess.run') as runner:
+                    self.assertFalse(_read_allowed(argv))
+                    with self.assertRaises(PodError) as caught: read_command(argv)
+                    self.assertEqual(caught.exception.code,'unsupported_orca_read')
+                    runner.assert_not_called()
+            self.assertIsNone(worktree_selector('path:/w/'+bad))
+            for call,code in ((lambda: run_show(bad),'orca_contract'),(lambda: worker_rows(bad),'orca_contract'),
+                              (lambda: worktree_identity('path:/w/'+bad),'invalid_worktree_selector')):
+                with (self.subTest(code=code,bad=ascii(bad)),patch('pod.orca.subprocess.run') as runner,
+                      self.assertRaises(PodError) as caught): call()  # A caller that checks the identity first.
+                self.assertEqual(caught.exception.code,code)
+                runner.assert_not_called()
+            with patch('pod.orca.subprocess.run') as runner:
+                for argv in (['orchestration','run-use','--id',bad,'--json'],
+                             START[:3]+[bad]+START[4:],START[:-2]+[bad,'--json']):
+                    with self.subTest(argv=ascii(argv)),self.assertRaises(PodError) as caught: mutate_command(argv)
+                    self.assertEqual(caught.exception.code,'unsupported_orca_mutation')
+                runner.assert_not_called()
+            # The runtime is an identity Pod records, so the envelope refuses it; free text such as a preview is not.
+            with self.assertRaises(PodError) as caught:
+                _envelope(json.dumps({'ok':True,'result':{},'_meta':{'runtimeId':'r'+bad[1:]}}))
+            self.assertEqual(caught.exception.code,'orca_contract')
+        with tempfile.TemporaryDirectory() as temporary:
+            out=Path(temporary)/'out'; out.write_text(json.dumps({'ok':True,'result':{},'_meta':{'runtimeId':'r'}}))
+            started=Path(temporary)/'started'
+            tool=Path(temporary)/'orca'; tool.write_text(f'#!/bin/sh\ntouch "{started}"\ncat "{out}"\n')
+            tool.chmod(0o755)
+            # Final audit N1: the real subprocess path, should an argument pass an allowlist. Python raises on a lone
+            # surrogate or NUL, and would pass a surrogate-escaped one (\udcff) to Orca as the raw byte.
+            for allowed,call,code in (
+                    ('_read_allowed',
+                     lambda value: read_command(['orchestration','worker-show','--dispatch',value,'--json']),
+                     'unsupported_orca_read'),
+                    ('_mutate_allowed',
+                     lambda value: mutate_command(['orchestration','run-use','--id',value,'--json']),
+                     'unsupported_orca_mutation')):
+                with patch('pod.orca.executable',return_value=tool),patch('pod.orca.'+allowed,return_value=True):
+                    for bad in ('d\ud800','d\udcff','d\x00x'):
+                        with self.subTest(allowed=allowed,bad=ascii(bad)),self.assertRaises(PodError) as caught:
+                            call(bad)
+                        self.assertEqual(caught.exception.code,code)
+                        self.assertFalse(started.exists())  # No process started.
+                    self.assertEqual(call('d')['runtime'],'r')
+                    self.assertTrue(started.exists())
+                    started.unlink()
+            out.write_text(json.dumps({'ok':True,'result':{},'_meta':{'runtimeId':'r\ud800'}}))
+            with patch('pod.orca.executable',return_value=tool),self.assertRaises(PodError) as caught:
+                read_command(['orchestration','run-current','--json'])
+            self.assertEqual(caught.exception.code,'orca_contract')
+
+    def test_orca_identities_pod_records_or_passes_back_must_pass_exactly(self):
+        # Final audit 2 M1: a worker binding, the current Run and a Run's coordinator are recorded or sent to Orca.
+        from pod.operations import _binding_from_show
+        from pod.orca import run_show
+        admission={'run_id':'run','task_id':'task','runtime':'r'}
+        def shown(projection='w',worktree='wt',handle='h'):
+            return {'runtime':'r','result':{'dispatch':{'id':'d','runId':'run','taskId':'task'},
+                    'projection':{'id':projection,'dispatchId':'d','runId':'run','taskId':'task'},
+                    'worker':{'dispatchId':'d','worktreeId':worktree,'agentTerminalHandle':handle,'state':'ready'}}}
+        self.assertEqual(_binding_from_show(shown(),admission,'d')['workerId'],'w')
+        self.assertIsNone(_binding_from_show(shown(handle=None),admission,'d')['terminalHandle'])
+        def current(run_id): return {'runtime':'r','result':{'run':{'id':run_id,'coordinator_handle':'owner',
+                                                                     'consumer_generation':1}}}
+        def coordinated(handle): return {'runtime':'r','result':{'run':{'id':'run','coordinator_handle':handle,
+                                                                         'consumer_generation':1}}}
+        with patch('pod.orca.read_command',return_value=current('run')):
+            self.assertEqual(current_run()['run']['id'],'run')
+        with patch('pod.orca.read_command',return_value=coordinated('owner')):
+            self.assertEqual(run_show('run')['coordinator_handle'],'owner')
+        for bad in ('x\ud800','x\x00y'):
+            for field in ('projection','worktree','handle'):
+                with self.subTest(field=field,bad=ascii(bad)),self.assertRaises(PodError) as caught:
+                    _binding_from_show(shown(**{field:bad}),admission,'d')
+                self.assertEqual(caught.exception.code,'native_identity_unverified')
+            for read,call in ((current(bad),current_run),(coordinated(bad),lambda: run_show('run'))):
+                with (self.subTest(bad=ascii(bad)),patch('pod.orca.read_command',return_value=read),
+                      self.assertRaises(PodError) as caught): call()
+                self.assertEqual(caught.exception.code,'orca_contract')
+
     def test_read_allowlist_refuses_native_mutations_and_account_reads(self):
         with patch('pod.orca.subprocess.run') as runner:
             for argv in (['account','list','--json'],['host','list','--json'],

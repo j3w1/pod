@@ -44,8 +44,20 @@ def executable() -> Path:
     return path
 
 
+def _passable(value: object) -> bool:
+    """Whether native text can pass between Pod and Orca unchanged, as an argument or a recorded identity: UTF-8
+    without NUL. JSON can carry a lone surrogate, which neither an argument nor a record can hold (R18)."""
+    if not isinstance(value, str) or "\x00" in value:
+        return False
+    try:
+        value.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _argument(value: object, *, limit: int = 4096) -> bool:
-    return isinstance(value, str) and bool(value) and not value.startswith("-") and len(value) <= limit
+    return _passable(value) and bool(value) and not value.startswith("-") and len(value) <= limit
 
 
 def _read_allowed(argv: list[str]) -> bool:
@@ -81,6 +93,9 @@ def _read_allowed(argv: list[str]) -> bool:
 def read_command(argv: list[str], *, timeout: int = 10) -> dict:
     if not _read_allowed(argv):
         raise PodError("unsupported_orca_read", "Orca adapter accepts only known read operations")
+    if not all(_passable(value) for value in argv):
+        # Checked whatever the shape: Python would pass a surrogate-escaped argument to Orca as raw bytes (R18).
+        raise PodError("unsupported_orca_read", "Orca read arguments must be UTF-8 text without NUL")
     command = [str(executable()), *argv]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
@@ -118,8 +133,9 @@ def _envelope(stdout: str) -> dict:
         raise PodError("orca_contract", "Orca returned an unsupported result")
     meta = value.get("_meta")
     runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
-    if not isinstance(runtime, str) or not runtime:
-        raise PodError("orca_contract", "Orca runtime identity is unavailable")
+    # The runtime is an identity Pod compares and records, unlike free text such as a terminal preview.
+    if not _passable(runtime) or not runtime:
+        raise PodError("orca_contract", "Orca runtime identity is unavailable or cannot be encoded")
     mutation = value["result"].get("mutation")
     if not isinstance(mutation, dict):
         mutation = value.get("mutation")
@@ -249,7 +265,7 @@ def worktree_selector(value: object) -> str | None:
     """Accept an existing-worktree selector only; creation modes are refused here."""
     if value in ("current", "active"):
         return value
-    if not isinstance(value, str) or not value or len(value) > 4096:
+    if not _passable(value) or not value or len(value) > 4096:
         return None
     if value in ("new-child", "new-top-level"):
         return None
@@ -290,6 +306,8 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
     """Run one allowlisted state-changing Orca command and return its exact receipt."""
     if not _mutate_allowed(argv):
         raise PodError("unsupported_orca_mutation", "Orca adapter accepts only known mutations")
+    if not all(_passable(value) for value in argv):
+        raise PodError("unsupported_orca_mutation", "Orca mutation arguments must be UTF-8 text without NUL")
     command = [str(executable()), *argv]
     stdout, stderr, returncode, transport = None, None, None, "completed"
     try:
@@ -425,7 +443,8 @@ def current_run() -> dict:
     run_id = row.get("id")
     coordinator = row.get("coordinator_handle")
     generation = row.get("consumer_generation")
-    if (not isinstance(run_id, str) or not run_id
+    # The Run id is recorded as the objective's Run and passed back to Orca, so it must pass exactly.
+    if (not _passable(run_id) or not run_id
             or not isinstance(coordinator, str) or not coordinator
             or type(generation) is not int or generation < 0):
         raise PodError("orca_contract", "Current Run ownership proof is incomplete")

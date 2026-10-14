@@ -281,6 +281,23 @@ def _standing(place: str) -> list[tuple[tuple[int, int], tuple[str, ...]]]:
     return found
 
 
+def _placed(path: str) -> tuple[tuple[int, int], tuple[str, ...]] | None:
+    """The path's deepest existing directory and the folded names below it; None when it cannot be placed."""
+    try:
+        return _standing(path)[-1]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _walk(candidate: str) -> list[tuple[tuple[int, int], tuple[str, ...]]] | None:
+    """Every directory a location's walk passes, as spelled and with its links resolved; None when it cannot be
+    walked."""
+    try:
+        return [step for place in dict.fromkeys((candidate, os.path.realpath(candidate))) for step in _standing(place)]
+    except (OSError, ValueError):
+        return None
+
+
 def _within(candidate: object, path: str) -> bool:
     """Whether a location the registry or another inventory names is the path or lies beneath it on this host. The
     path is placed at its deepest existing directory; the location matches when its own walk, as spelled or with its
@@ -288,15 +305,21 @@ def _within(candidate: object, path: str) -> bool:
     link, even one left dangling by the path's removal, a bind mount or a case-insensitive directory cannot hide a
     match; over-matching only leaves the path unknown. Inventories admit only readable locations; should one still
     not resolve, it could be anywhere and counts as a match (R113)."""
+    return _passes(candidate, _placed(path), _walk)
+
+
+def _passes(candidate: object, placed: tuple | None, walk) -> bool:
+    """`_within` for a path already placed, taking the location's walk from `walk`: one sweep places the path once,
+    and one objective's host walks each location once (`_Host.walk`)."""
     if not isinstance(candidate, str) or not candidate.startswith("/"):
         return False
-    try:
-        anchor, below = _standing(path)[-1]
-        return any(key == anchor and names[:len(below)] == below
-                   for place in dict.fromkeys((candidate, os.path.realpath(candidate)))
-                   for key, names in _standing(place))
-    except (OSError, ValueError, IndexError):
+    if placed is None:
         return True
+    steps = walk(candidate)
+    if steps is None:
+        return True
+    anchor, below = placed
+    return any(key == anchor and names[:len(below)] == below for key, names in steps)
 
 
 def _filesystem(path: str) -> str:
@@ -350,11 +373,26 @@ def _places(row: dict, kind: str) -> list[str] | None:
 
 class _Host:
     """The repository's Git worktree registry and Orca's complete worktree and terminal inventories, each read at
-    most once for one objective. A failed, partial, host-incomplete or unlocatable read stays unavailable, never an
-    empty list."""
+    most once for one objective, as is each location they name walked. A failed, partial, host-incomplete or
+    unlocatable read stays unavailable, never an empty list."""
 
     def __init__(self, project: Path):
-        self.project, self._reads = project, {}
+        self.project, self._reads, self._walks = project, {}, {}
+
+    def walk(self, place: str) -> list | None:
+        """A location's walk, taken once for this objective: every path it is compared with is placed afresh, and
+        the filesystem checks before and after the reads (`_filesystem`, `_moved`) never use it."""
+        if place not in self._walks:
+            self._walks[place] = _walk(place)
+        return self._walks[place]
+
+    def registered(self, path: str) -> bool | None:
+        """Whether the registry names the path or anything beneath it; None while the registry is unusable."""
+        found = self.registry()
+        if found is None:
+            return None
+        placed = _placed(path)
+        return any(_passes(item, placed, self.walk) for item in found)
 
     def registry(self) -> list[str] | None:
         if "registry" not in self._reads:
@@ -388,8 +426,9 @@ class _Host:
         found = self.inventory(kind)
         if found is None:
             return None
+        placed = _placed(path)
         return [row for row, places in zip(found["rows"], found["places"])
-                if any(_within(place, path) for place in places)]
+                if any(_passes(place, placed, self.walk) for place in places)]
 
 
 def _exited(row: dict) -> bool:
@@ -486,11 +525,11 @@ def _absent(path: str, host: _Host) -> dict:
     repository's Git worktree registry, stale registrations included, and from Orca's complete worktree inventory;
     Orca's complete terminal inventory may name it only for terminals proven exited. The filesystem is read again
     after the other reads, so a path that appears meanwhile is never proven absent (R113)."""
-    registry = host.registry()
-    if registry is None:
+    registered = host.registered(path)
+    if registered is None:
         return _location(path, "unknown", "path_unverified", "Git's worktree registry of this repository could not "
                          "be read completely.", filesystem="absent")
-    if any(_within(item, path) for item in registry):
+    if registered:
         return _location(path, "unknown", "path_unverified", "Git still registers a worktree at or beneath this "
                          "path, though its directory is gone; resolve that stale registration through Git first.",
                          filesystem="absent", git="registered")
@@ -549,7 +588,7 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     from .handoff import unfinished
     from .ledger import _native_assignment_settled, _run_references, map_of
     from .obligations import TERMINAL
-    from .orca import run_show, terminal_identity, worker_rows
+    from .orca import _passable, run_show, terminal_identity, worker_rows
     verdict = {"objective": objective, "status": "refused", "condition": None,
                "facts": {"objective": objective, "owner": None, "runs": [], "release": list(release),
                          "locations": [], "retained": [], "unrecorded_locations": None, "records": []}}
@@ -644,12 +683,19 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
             return fail("generation_changed", "A recorded Run's consumer generation changed.")
         if fleet.get("complete") is not True:
             return fail("workers_unverified", "A Run's worker list is incomplete.")
+        # An identity Pod would record or pass back to Orca must be text it can hold exactly (R113).
+        if not _passable(fleet["runtime"]) or not _text(fleet["runtime"], 256):
+            return fail("workers_unverified", "A Run's worker list names an Orca runtime identity that is not UTF-8 "
+                        "text without NUL of at most 256 characters, so Pod cannot record it.")
         runtime = runtime or fleet["runtime"]
         runs.append({"run": run, "generation": shown["consumer_generation"]})
         for row in fleet["workers"]:
             dispatch = row.get("dispatchId") if isinstance(row, dict) else None
             if not isinstance(dispatch, str) or not dispatch:
                 return fail("workers_unverified", "A worker has no Dispatch identity.")
+            if not _passable(dispatch):
+                return fail("workers_unverified", "A worker's Dispatch identity cannot be encoded as UTF-8 text "
+                            "without NUL, so Pod cannot read it.")
             dispatches[dispatch] = None
     verdict["facts"]["runs"] = runs
     # Every remaining fact is read before any refusal, so a refusal from here on keeps complete facts.
