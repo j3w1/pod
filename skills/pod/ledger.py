@@ -1056,6 +1056,11 @@ def map_read(project: Path, objective: str) -> dict:
             actions.append(f"resolve {ob['id']} wait: {ob['wait']['class']} on {ob['wait']['referent']}")
         elif ob["state"] == "blocked_external":
             actions.append(f"wait for {ob['external']['party']}: {ob['external']['need']}")
+    from .governor import _read_journal, _record_path, finalization
+    try:
+        remaining = finalization(state, _read_journal(_record_path(project, objective)))
+    except PodError:
+        remaining = None
     return {"schema": "pod-map-view/v1", "seq": map_state["seq"], "next_seq": map_state["seq"] + 1,
             "revision": map_state["revision"], "candidate": state["checkpoint"].get("candidate"),
             "governance": map_state["governance"], "delivery": map_state.get("delivery"),
@@ -1064,7 +1069,8 @@ def map_read(project: Path, objective: str) -> dict:
                             if ob.get("acceptances")},
             "outstanding": outstanding, "settled_attempts": settled_attempts,
             "undispositioned": pending, "review_eligibility": eligibility,
-            "next_actions": actions[:MAX_RECORD // 128], "native_settlement": view["settlement"]}
+            "next_actions": actions[:MAX_RECORD // 128], "native_settlement": view["settlement"],
+            "finalization": remaining}
 
 
 def _require_open(state: dict) -> None:
@@ -1160,6 +1166,25 @@ def validate_checkpoint_snapshot(project: Path, state: dict) -> None:
     validate_map_record(value)
 
 
+def _closure_unrecorded(project: Path, objective: str, state: dict, *, delivered: bool) -> dict | None:
+    """What finalization still names before closure, for a write that closes (R117).
+
+    An unreadable journal is left to closure's own settlement check, which refuses it.
+    """
+    from .governor import _read_journal, _record_path, finalization, finalization_step
+    try:
+        view = finalization(state, _read_journal(_record_path(project, objective)))
+    except PodError:
+        return None
+    remaining = [name for name in view["remaining"]
+                 if name != "closure" and not (delivered and name == "delivery_record")]
+    if not remaining:
+        return None
+    return {"remaining": remaining,
+            "next_action": "record " + ", ".join(remaining) + " in that order before closure. Next: "
+                           + finalization_step(remaining[0], view["records"][remaining[0]])}
+
+
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict) -> tuple[dict, dict | None]:
@@ -1244,6 +1269,11 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                     raise refuse("obligation_unaccounted", "disposition_invalid",
                                  "a disposition names a recorded admission", record='checkpoint map transition')
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
+        if proposed.get("close") is True:
+            # A delivery recorded in the closing write itself does not count: closure is the last record, and
+            # its report is derived before that write adds the delivery.
+            ctx["closure_unrecorded"] = _closure_unrecorded(
+                project, objective, state, delivered=(prior_map or {}).get("delivery") is not None)
         map_state = accept_write(prior_map, proposed, ctx)
         if verified_delivery is not None:
             map_state["delivery"] = verified_delivery
@@ -1753,6 +1783,9 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                         "written": _report_written_ids(map_state, admission_id),
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
                         "report": report_projection(map_state, ctx)}
+            if value.get("close") is True:
+                ctx["closure_unrecorded"] = _closure_unrecorded(project, objective, state,
+                                                                delivered=map_state.get("delivery") is not None)
             new_map = accept_write(map_state, value, ctx, triaged=triaged)
         except PodError as exc:
             _map_refusal_context(exc, state)

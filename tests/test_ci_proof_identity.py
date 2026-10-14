@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import unittest
 
+from pod.errors import PodError
 from pod.governor import (GitHubPort, GhPort, _logical_key, _read_journal, _record_path, classify_failure,
                           decide, execute, reconcile, record_outcome, status)
 from tests.kernel_support import (COMMIT, RELEASE, action, authorization, diagnostic, dispatch,
@@ -92,13 +93,22 @@ class ExactRunReuseTests(ProofCase):
     def test_a_pass_without_pod_readback_is_not_proof(self):
         self.publish()
         manual = self.decide(dispatch(candidate=self.binding["id"], target=RELEASE))
-        record_outcome(self.project, "objective", owner="owner", record_id=manual["record_id"], outcome="PASS",
-                       provider={"run_id": "900", "event": "workflow_dispatch"})
-        self.assertNotIn("run_event", self.row(manual["record_id"]))
+        # R5: a reservation's PASS is what Pod's own readback shows, so neither a caller's receipt nor a
+        # bare claim records one, and the row stays a pending request rather than proof.
+        with self.assertRaises(PodError) as receipt:
+            record_outcome(self.project, "objective", owner="owner", record_id=manual["record_id"], outcome="PASS",
+                           provider={"run_id": "900", "event": "workflow_dispatch"})
+        self.assertEqual(receipt.exception.detail["detail"], "receipt_from_readback")
+        with self.assertRaises(PodError) as unread:
+            record_outcome(self.project, "objective", owner="owner", record_id=manual["record_id"], outcome="PASS",
+                           port=FakePort(), now=NOW)
+        self.assertEqual((unread.exception.code, unread.exception.detail["detail"]),
+                         ("outcome_evidence_required", "readback_disagrees"))
+        self.assertEqual((self.row(manual["record_id"])["outcome"], self.row(manual["record_id"]).get("run_event")),
+                         ("pending", None))
         again = self.decide(dispatch(candidate=self.binding["id"], target=RELEASE))
-        self.assertEqual((again["decision"], again["reuse"]), ("ALLOW", None))
-        self.assertIn("proof_not_exact", warnings_of(again))
-        self.assertEqual(self.row(again["record_id"])["attempt"], 2)
+        self.assertEqual((again["decision"], again["reuse"]["kind"], again["record_id"]),
+                         ("REUSE", "attach", manual["record_id"]))
 
 
 class SameRunRerunTests(ProofCase):
@@ -114,7 +124,12 @@ class SameRunRerunTests(ProofCase):
         classify_failure(self.project, "objective", owner="owner", record_id=run["record_id"], now=NOW,
                          classification={"class": "transient", "reason": "runner lost"})
         rerun = self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
-        self.assertEqual((rerun["decision"], rerun["receipt"]["provider"]), ("ALLOW", {"run_id": run_id, "rerun": True}))
+        # The rerun records its provenance before submitting, then binds the one new attempt that started after
+        # its submission (R115).
+        provider = rerun["receipt"]["provider"]
+        self.assertEqual((rerun["decision"], provider["run_id"], provider["rerun"], provider["before_attempt"],
+                          provider["submitted_at"], provider["attempt"]),
+                         ("ALLOW", run_id, True, 1, NOW.isoformat(), 2))
         self.assertEqual(port.calls[-1], ("rerun", run_id, True))
         attached = self.decide(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]))
         self.assertEqual((attached["decision"], attached["reuse"]["kind"]), ("REUSE", "attach"))
@@ -176,7 +191,7 @@ class UnclearEquivalenceTests(ProofCase):
 
     def test_unknown_and_other_events_are_allowed_when_the_checks_pass(self):
         pushed = self.decide(action(candidate=self.binding["id"]))
-        record_outcome(self.project, "objective", owner="owner", record_id=pushed["record_id"], outcome="PASS")
+        self.performed(pushed["record_id"])
         derived = self.derived(pushed["record_id"])
         self.assertIsNone(self.row(derived)["run_event"])
         unknown = self.decide(dispatch(candidate=self.binding["id"], target="ci.yml"))
@@ -243,8 +258,11 @@ class OldJournalTests(ProofCase):
 
     def port(self, *, listed=True):
         port = FakePort()
-        runs = {run_id: dict(run) for run_id, run in self.provider["runs"].items()}
+        # The captured answers predate the run attempt and head commit fields gh reports today: every run
+        # here is a first attempt on the candidate commit.
+        runs = {run_id: {"head_sha": COMMIT, "attempt": 1, **run} for run_id, run in self.provider["runs"].items()}
         port.run_status.update(runs)
+        port.attempts.update({run_id: {} for run_id in runs})
         if listed:
             for key, ids in self.provider["listed"].items():
                 workflow, commit = key.split(" ")

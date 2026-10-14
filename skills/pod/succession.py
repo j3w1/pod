@@ -145,14 +145,117 @@ def _started(project: Path, objective: str, state: dict) -> str | None:
     return None
 
 
+def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dict, fail, *, port,
+                        previous: dict | None = None) -> tuple[dict | None, list[str], list[str]]:
+    """The claim's checks of the predecessor's own record and native work, in the claim's order; read-only.
+
+    Returns the first refusal `fail` builds, else None with the unfinished obligations and unreported
+    settled admissions. `previous` is a read of the predecessor's coordinator terminal this call already made.
+    """
+    from .handoff import unfinished
+    from .ledger import _governor_pending, _native_assignment_settled, _run_references, map_of
+    from .orca import run_show, terminal_identity, worker_rows
+    from .obligations import TERMINAL
+
+    def refused(*args) -> tuple[dict, list, list]:
+        return fail(*args), [], []
+
+    map_state = map_of(prior)
+    if map_state is not None and map_state.get("closure"):
+        return refused("predecessor_closed", "The predecessor objective is closed; a closed objective needs no successor.")
+    if prior.get("checkpoint") is None or not prior.get("owner"):
+        return refused("predecessor_unclaimable", "The predecessor has no recorded coordinator to end.")
+    facts["predecessor_owner"] = prior["owner"]
+    if unfinished(prior) is not None:
+        return refused("predecessor_handoff_pending", "The predecessor has an unfinished owner handoff.")
+    try:
+        runs = sorted(_run_references(prior))
+    except PodError:
+        return refused("predecessor_unverified", "The predecessor's Run references are unreadable.")
+    facts["runs"] = runs
+    if not runs:
+        return refused("predecessor_unverified", "The predecessor records no Run to prove settled.")
+    previous = terminal_identity(prior["owner"]) if previous is None else previous
+    if previous["state"] == "live":
+        return refused("predecessor_live", "Orca reports the predecessor's coordinator live; the claim never steals.",
+                       "Continue in the predecessor's own terminal, or close it first.")
+    if previous["state"] != "lost" and not previous.get("exited"):
+        return refused("predecessor_unverified", "Orca cannot prove the predecessor's coordinator gone ("
+                       + (previous["code"] or previous["state"]) + ").")
+    dispatches = {}
+    for run in runs:
+        try:
+            shown = run_show(run)
+        except PodError as exc:
+            return refused("predecessor_unverified", f"A predecessor Run could not be read ({exc.code}).")
+        holder = shown["coordinator_handle"]
+        if holder is not None and holder != prior["owner"]:
+            other = terminal_identity(holder)
+            if other["state"] == "live":
+                return refused("predecessor_run_held", "Another live terminal coordinates a predecessor Run.",
+                               "Continue on the successor's own Run; same-Run continuation is an owner handoff.")
+            if other["state"] != "lost" and not other.get("exited"):
+                return refused("predecessor_unverified", "A predecessor Run's coordinator is unverified.")
+        try:
+            fleet = worker_rows(run)
+        except PodError as exc:
+            return refused("predecessor_unverified", f"A predecessor Run's workers could not be read ({exc.code}).")
+        if fleet.get("complete") is not True:
+            return refused("predecessor_unverified", "A predecessor Run's worker list is incomplete.")
+        for row in fleet["workers"]:
+            dispatch = row.get("dispatchId") if isinstance(row, dict) else None
+            if not isinstance(dispatch, str) or not dispatch:
+                return refused("predecessor_unverified", "A predecessor worker has no Dispatch identity.")
+            dispatches[dispatch] = run
+    if _governor_pending(project, predecessor):
+        return refused("predecessor_effect_pending", "The predecessor has a Governor effect whose outcome is pending.")
+    unreported = []
+    bound = {}
+    for key in sorted(prior["admissions"]):
+        row = prior["admissions"][key]
+        if row["state"] in ("closed", "deferred"):
+            continue
+        if row["state"] == "unresolved":
+            return refused("predecessor_work_unsettled", f"Predecessor admission {key[:12]} is unresolved.")
+        if row["state"] == "reserved":
+            try:
+                found = port.find_worker(run=row["run_id"], task=row["task_id"])
+            except PodError as exc:
+                return refused("predecessor_unverified", f"A reserved predecessor start could not be read ({exc.code}).")
+            if found:
+                return refused("predecessor_work_unsettled", f"Predecessor admission {key[:12]} has an unbound Dispatch.")
+            facts["ambiguity"].append(f"reserved admission {key}: no Dispatch found")
+            continue
+        bound[row["native_binding"]["dispatchId"]] = (key, row)
+    for dispatch in sorted(set(dispatches) | set(bound)):
+        try:
+            shown = port.show_worker(dispatch)
+        except PodError as exc:
+            return refused("predecessor_unverified", f"A predecessor worker could not be read ({exc.code}).")
+        result = shown.get("result") if isinstance(shown, dict) else None
+        if dispatch in bound:
+            key, row = bound[dispatch]
+            binding = row["native_binding"]
+            parts = [result.get(name) if isinstance(result, dict) else None for name in ("dispatch", "projection", "worker")]
+            if not all(isinstance(part, dict) for part in parts) or (
+                    parts[0].get("id"), parts[0].get("runId"), parts[0].get("taskId"), parts[1].get("id"),
+                    parts[2].get("worktreeId")) != (binding["dispatchId"], binding["runId"], binding["taskId"],
+                                                    binding["workerId"], binding["worktreeId"]):
+                return refused("predecessor_unverified", f"Predecessor admission {key[:12]} has a differing native identity.")
+            if (row.get("report") or {}).get("status") != "validated_observation":
+                unreported.append(key)
+        if not _native_assignment_settled(shown):
+            return refused("predecessor_work_live", "A predecessor worker is live or unsettled; the claim waits for it.",
+                           "Settle the predecessor's workers through Orca, then rerun the claim.")
+    unfinished_rows = [ob["id"] for ob in (map_state or {}).get("obligations", []) if ob["state"] not in TERMINAL]
+    return None, unfinished_rows, unreported
+
+
 def _predecessor_facts(project: Path, objective: str, predecessor: str, state: dict,
                        prior: dict | None, owner: str, *, port) -> dict:
     """Fresh facts, read-only; an unproven fact holds the claim."""
-    from .handoff import unfinished
-    from .ledger import _governor_pending, _native_assignment_settled, _run_references, map_of, record_name
+    from .ledger import record_name
     from .github import repository_context
-    from .orca import run_show, terminal_identity, worker_rows
-    from .obligations import TERMINAL
     facts = {"predecessor": predecessor, "predecessor_owner": None, "successor": objective,
              "successor_owner": owner, "runs": [], "ambiguity": []}
     verdict = {"status": "claim_unavailable", "condition": None, "facts": facts}
@@ -191,94 +294,9 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
     started = _started(project, objective, state)
     if started:
         return fail("successor_started", "Claim before the successor starts work: " + started + ".")
-    map_state = map_of(prior)
-    if map_state is not None and map_state.get("closure"):
-        return fail("predecessor_closed", "The predecessor objective is closed; a closed objective needs no successor.")
-    if prior.get("checkpoint") is None or not prior.get("owner"):
-        return fail("predecessor_unclaimable", "The predecessor has no recorded coordinator to end.")
-    facts["predecessor_owner"] = prior["owner"]
-    if unfinished(prior) is not None:
-        return fail("predecessor_handoff_pending", "The predecessor has an unfinished owner handoff.")
-    try:
-        runs = sorted(_run_references(prior))
-    except PodError:
-        return fail("predecessor_unverified", "The predecessor's Run references are unreadable.")
-    facts["runs"] = runs
-    if not runs:
-        return fail("predecessor_unverified", "The predecessor records no Run to prove settled.")
-    previous = terminal_identity(prior["owner"])
-    if previous["state"] == "live":
-        return fail("predecessor_live", "Orca reports the predecessor's coordinator live; the claim never steals.",
-                    "Continue in the predecessor's own terminal, or close it first.")
-    if previous["state"] != "lost" and not previous.get("exited"):
-        return fail("predecessor_unverified", "Orca cannot prove the predecessor's coordinator gone ("
-                    + (previous["code"] or previous["state"]) + ").")
-    dispatches = {}
-    for run in runs:
-        try:
-            shown = run_show(run)
-        except PodError as exc:
-            return fail("predecessor_unverified", f"A predecessor Run could not be read ({exc.code}).")
-        holder = shown["coordinator_handle"]
-        if holder is not None and holder != prior["owner"]:
-            other = terminal_identity(holder)
-            if other["state"] == "live":
-                return fail("predecessor_run_held", "Another live terminal coordinates a predecessor Run.",
-                            "Continue on the successor's own Run; same-Run continuation is an owner handoff.")
-            if other["state"] != "lost" and not other.get("exited"):
-                return fail("predecessor_unverified", "A predecessor Run's coordinator is unverified.")
-        try:
-            fleet = worker_rows(run)
-        except PodError as exc:
-            return fail("predecessor_unverified", f"A predecessor Run's workers could not be read ({exc.code}).")
-        if fleet.get("complete") is not True:
-            return fail("predecessor_unverified", "A predecessor Run's worker list is incomplete.")
-        for row in fleet["workers"]:
-            dispatch = row.get("dispatchId") if isinstance(row, dict) else None
-            if not isinstance(dispatch, str) or not dispatch:
-                return fail("predecessor_unverified", "A predecessor worker has no Dispatch identity.")
-            dispatches[dispatch] = run
-    if _governor_pending(project, predecessor):
-        return fail("predecessor_effect_pending", "The predecessor has a Governor effect whose outcome is pending.")
-    unreported = []
-    bound = {}
-    for key in sorted(prior["admissions"]):
-        row = prior["admissions"][key]
-        if row["state"] in ("closed", "deferred"):
-            continue
-        if row["state"] == "unresolved":
-            return fail("predecessor_work_unsettled", f"Predecessor admission {key[:12]} is unresolved.")
-        if row["state"] == "reserved":
-            try:
-                found = port.find_worker(run=row["run_id"], task=row["task_id"])
-            except PodError as exc:
-                return fail("predecessor_unverified", f"A reserved predecessor start could not be read ({exc.code}).")
-            if found:
-                return fail("predecessor_work_unsettled", f"Predecessor admission {key[:12]} has an unbound Dispatch.")
-            facts["ambiguity"].append(f"reserved admission {key}: no Dispatch found")
-            continue
-        bound[row["native_binding"]["dispatchId"]] = (key, row)
-    for dispatch in sorted(set(dispatches) | set(bound)):
-        try:
-            shown = port.show_worker(dispatch)
-        except PodError as exc:
-            return fail("predecessor_unverified", f"A predecessor worker could not be read ({exc.code}).")
-        result = shown.get("result") if isinstance(shown, dict) else None
-        if dispatch in bound:
-            key, row = bound[dispatch]
-            binding = row["native_binding"]
-            parts = [result.get(name) if isinstance(result, dict) else None for name in ("dispatch", "projection", "worker")]
-            if not all(isinstance(part, dict) for part in parts) or (
-                    parts[0].get("id"), parts[0].get("runId"), parts[0].get("taskId"), parts[1].get("id"),
-                    parts[2].get("worktreeId")) != (binding["dispatchId"], binding["runId"], binding["taskId"],
-                                                    binding["workerId"], binding["worktreeId"]):
-                return fail("predecessor_unverified", f"Predecessor admission {key[:12]} has a differing native identity.")
-            if (row.get("report") or {}).get("status") != "validated_observation":
-                unreported.append(key)
-        if not _native_assignment_settled(shown):
-            return fail("predecessor_work_live", "A predecessor worker is live or unsettled; the claim waits for it.",
-                        "Settle the predecessor's workers through Orca, then rerun the claim.")
-    unfinished_rows = [ob["id"] for ob in (map_state or {}).get("obligations", []) if ob["state"] not in TERMINAL]
+    failed, unfinished_rows, unreported = _predecessor_checks(project, predecessor, prior, facts, fail, port=port)
+    if failed is not None:
+        return failed
     question = (f"May Pod record objective {objective} as the successor of objective {predecessor}? "
                 "Orca reports the predecessor's coordinator gone and its work settled; the predecessor's record is "
                 "kept, and it will accept no further writes.")
@@ -288,6 +306,39 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
                    next_action="Confirm with the owner's direct instruction to continue the predecessor: "
                                + question + " Then rerun internal succession with that decision.")
     return verdict
+
+
+def claim_view(project: Path, objective: str, state: dict, *, port, previous: dict | None = None) -> dict:
+    """What a successor's claim would check of this objective now, with no successor: never writes (R114).
+
+    The predecessor's own checks in the claim's order, for a reader that is not the recorded coordinator;
+    the successor's checks (recorded, open, not started) wait for an actual claim.
+    """
+    facts = {"predecessor": objective, "predecessor_owner": None, "runs": [], "ambiguity": []}
+    view = {"status": "claim_unavailable", "condition": None, "facts": facts}
+
+    def fail(condition: str, message: str, action: str | None = None) -> dict:
+        view.update(condition=condition, message=message,
+                    next_action=action or "Resolve the named condition before a successor claims it.")
+        return view
+
+    link = state.get("continued_by")
+    if isinstance(link, dict):
+        return fail("predecessor_claimed", f"Successor objective {link['objective']} already continues it.",
+                    ACTION.format(link["objective"]))
+    if isinstance(state.get("historical_retirement"), dict):
+        return fail("predecessor_retired", "The owner's historical retirement covers this objective; it is not "
+                    "continued.")
+    failed, unfinished_rows, unreported = _predecessor_checks(project, objective, state, facts, fail, port=port,
+                                                              previous=previous)
+    if failed is not None:
+        return failed
+    view.update(status="claim_available", condition="claimable", unfinished=unfinished_rows[:MAX_LISTED],
+                unreported=unreported[:MAX_LISTED],
+                message="The coordinator is gone and its work settled.",
+                next_action="A successor objective, recorded and not yet started, may claim it through internal "
+                            "succession with the owner's direct instruction.")
+    return view
 
 
 def succession(project: Path, objective: str, *, owner: str, predecessor: str,

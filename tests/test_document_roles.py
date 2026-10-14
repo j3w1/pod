@@ -190,7 +190,7 @@ class ContainmentTests(unittest.TestCase):
                         action = case.action("cancel_validation", target=dispatched["record_id"])
                         decided = case.op("governor", action=action)
                         self.assertEqual(decided["decision"], "ALLOW", decided)
-                        case.op("governor-outcome", record_id=decided["record_id"], outcome="CANCELED")
+                        case.op("governor-outcome", record_id=decided["record_id"], outcome="CANCELED", detail="never performed")
                         executed = case.op("governor-execute", action=action)
                         self.assertEqual(executed["outcome"], "PASS", executed)
                         self.assertEqual(len([call for call in case.remote.calls if call[0] == "cancel"]), 1)
