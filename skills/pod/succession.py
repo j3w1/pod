@@ -636,9 +636,12 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                                    + blocker + "; no carried row is copied. Nothing was written.",
                                    {"next_action": "the owner decides how the predecessor's unsettled effects "
                                                    "settle, for example by historical retirement"})
+                completed = {**state, "continues": {"objective": predecessor, "record": verdict["record"],
+                                                    "at": prior["continued_by"]["at"]}}
+                _require_fit(project, objective, predecessor, prior, recorded[CARRIED], at=link["at"],
+                             records={"successor's record": completed}, linked=True)
                 _carry(project, objective, predecessor, prior, recorded[CARRIED], at=link["at"])
-                state["continues"] = {"objective": predecessor, "record": verdict["record"],
-                                      "at": prior["continued_by"]["at"]}
+                state["continues"] = completed["continues"]
                 _write(own, state)
             return {"status": "claimed", "replayed": True, "predecessor": predecessor, "successor": objective,
                     "continued_by": prior["continued_by"], CARRIED: recorded[CARRIED]}
@@ -675,22 +678,38 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                            "Governor facts. Nothing was written.",
                            {"succession": verdict, "next_action": verdict["next_action"]})
         at = datetime.now(timezone.utc).isoformat()
-        prior["continued_by"] = {"objective": objective, "record": own.parent.name, "owner": facts["successor_owner"],
-                                 "runs": list(verdict["facts"]["runs"]), "at": at,
-                                 "instruction": decision["instruction"], "unfinished": verdict["unfinished"],
-                                 "unreported": verdict["unreported"],
-                                 "ambiguity": list(verdict["facts"]["ambiguity"]), "orca_claim": "unavailable"}
+        link = {"objective": objective, "record": own.parent.name, "owner": facts["successor_owner"],
+                "runs": list(verdict["facts"]["runs"]), "at": at, "instruction": decision["instruction"],
+                "unfinished": verdict["unfinished"], "unreported": verdict["unreported"],
+                "ambiguity": list(verdict["facts"]["ambiguity"]), "orca_claim": "unavailable"}
+        reservation = {"objective": predecessor, "record": other.parent.name, "at": at, "state": CLAIMING,
+                       "decision": _scope(decision)}
+        completed = {"objective": predecessor, "record": other.parent.name, "at": at}
+        # Every record the claim writes must fit before the first is written, so a claim too large for the
+        # successor never freezes the predecessor or reserves the successor.
+        try:
+            _require_fit(project, objective, predecessor, prior, verdict["facts"][CARRIED], at=at, linked=False,
+                         records={"predecessor's record": {**prior, "continued_by": link},
+                                  "successor's reserved record": {**state, "continues": reservation},
+                                  "successor's record": {**state, "continues": completed}})
+        except PodError as exc:
+            if not (reserved and _scope(decision) == state["continues"]["decision"]):
+                raise
+            # An earlier reservation of this same claim cannot complete either: its decision releases it.
+            state.pop("continues")
+            _write(own, state)
+            raise PodError(exc.code, str(exc) + " The successor's reservation was released.", exc.detail) from exc
+        prior["continued_by"] = link
         # Order: the successor's reservation first, so it accepts no other write until the claim completes; then
         # the predecessor's link, which freezes its record and Governor journal; then the carried rows, read from
         # that frozen journal; then the successor's link without the reservation, which marks the claim complete.
         # A replay after any interruption recomputes the same rows and completes what is missing.
         if not reserved:
-            state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at, "state": CLAIMING,
-                                  "decision": _scope(decision)}
+            state["continues"] = reservation
             _write(own, state)
         _write_succession(other, prior)
         _carry(project, objective, predecessor, prior, verdict["facts"][CARRIED], at=at)
-        state["continues"] = {"objective": predecessor, "record": other.parent.name, "at": at}
+        state["continues"] = completed
         _write(own, state)
         return {"status": "claimed", "replayed": False, "predecessor": predecessor, "successor": objective,
                 "continued_by": prior["continued_by"], CARRIED: list(verdict["facts"][CARRIED])}
@@ -715,14 +734,48 @@ def _differs(decision: dict, facts: dict) -> bool:
             or decision.get(CARRIED, []) != facts.get(CARRIED, []))
 
 
+def _carried_journal(project: Path, objective: str, predecessor: str, prior: dict, record_ids: list[str], *,
+                     at: str) -> tuple[dict, bool]:
+    """The successor's own journal with the carried rows copied in, and whether that changed it; writes nothing."""
+    from .governor import _read_journal, _record_path, carry_into
+    from .ledger import map_of
+    journal = _read_journal(_record_path(project, objective))
+    changed = bool(record_ids) and carry_into(
+        journal, _read_journal(_record_path(project, predecessor)), record_ids, objective=predecessor,
+        governance=(map_of(prior) or {}).get("governance"), at=at)
+    return journal, changed
+
+
 def _carry(project: Path, objective: str, predecessor: str, prior: dict, record_ids: list[str], *, at: str) -> None:
     """Write the carried rows into the successor's own journal; the caller holds both objective locks."""
-    if not record_ids:
-        return
-    from .governor import _read_journal, _record_path, _write_journal, carry_into
-    from .ledger import map_of
-    journal_path = _record_path(project, objective)
-    journal = _read_journal(journal_path)
-    if carry_into(journal, _read_journal(_record_path(project, predecessor)), record_ids, objective=predecessor,
-                  governance=(map_of(prior) or {}).get("governance"), at=at):
-        _write_journal(journal_path, journal)
+    from .governor import _record_path, _write_journal
+    journal, changed = _carried_journal(project, objective, predecessor, prior, record_ids, at=at)
+    if changed:
+        _write_journal(_record_path(project, objective), journal)
+
+
+def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, record_ids: list[str], *, at: str,
+                 records: dict[str, dict], linked: bool) -> None:
+    """Refuse, before any write, a claim one of whose records would exceed its byte limit (R118).
+
+    `records` are the context records the claim still writes, as each will stand; the successor's journal is built
+    with every carried row and marker, exactly as the claim copies it. The limits never change.
+    """
+    from .governor import MAX_JOURNAL
+    from .ledger import CONTEXT_LIMIT
+    from .util import encoded
+    journal, _ = _carried_journal(project, objective, predecessor, prior, record_ids, at=at)
+    planned = [("successor's Governor journal", {**journal, "revision": journal["revision"] + 1}, MAX_JOURNAL)]
+    planned += [(name, {**value, "revision": value["revision"] + 2}, CONTEXT_LIMIT) for name, value in records.items()]
+    for name, value, limit in planned:
+        size = len(encoded(value, compact=True))
+        if size <= limit:
+            continue
+        route = ("no supported route completes a claim linked before this check: only unreleased 0.13.2 candidates "
+                 "could link one" if linked else
+                 "settle the predecessor's unsettled rows by readback first, through an owner handoff of the "
+                 "predecessor (R105) to a live coordinator, or end delivered work by historical retirement (R112)")
+        raise PodError("claim_capacity",
+                       f"The claim cannot fit: the {name} would be {size} bytes, over its {limit}-byte limit. "
+                       "Nothing was written.",
+                       {"record": name, "proposed_bytes": size, "limit_bytes": limit, "next_action": route})

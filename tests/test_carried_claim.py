@@ -485,6 +485,20 @@ class ReservationTests(CarriedCase):
         self.close_successor()
         self.assertTrue(read(self.project, "successor")["checkpoint"]["closure"])
 
+    def test_a_repeated_close_answers_from_the_recorded_closure(self):
+        """R117/A300: an unreadable record never changes the answer once closure is recorded."""
+        self.lost_with(lambda: None)
+        self.successor()
+        self.close_successor()
+        broken = state_root(self.project) / "zz-unreadable"
+        broken.mkdir()
+        (broken / "context.json").write_text("{")
+        before = self.snapshot()
+        repeated = self.refused(self.close_successor, code="objective_closed")
+        self.assertEqual((repeated.detail["finalization"]["finished"], repeated.detail["finalization"]["remaining"]),
+                         (True, []))
+        self.assertEqual(before, self.snapshot())
+
     def test_a_replay_refuses_a_successor_that_changed_without_a_reservation(self):
         """Synthetic control: an interrupted claim recorded without the reservation, then the successor closed by a
         Pod that did not check for it."""
@@ -507,6 +521,98 @@ class ReservationTests(CarriedCase):
         self.assertIn("the successor is closed or delivered", str(refused))
         self.assertEqual(before, self.snapshot())
         self.assertEqual(self.journal("successor")["actions"], [])
+
+
+class CapacityTests(CarriedCase):
+    """R118: a claim too large for the successor's journal is refused before any write, with a supported route."""
+
+    def near_limit(self, built):
+        """Requested dispatches with bounded valid inputs until the predecessor's journal nearly fills its limit."""
+        from pod.governor import MAX_JOURNAL
+        self.op("governor-execute", action=self.action("push"))
+        for index in range(40):
+            action = self.action("workflow_dispatch", target=f"capacity{index}.yml", reason="r" * 512)
+            action["evidence"] = ["e" * 512 for _ in range(16)]
+            action["inputs"] = {f"input{i}": "v" * 512 for i in range(8)}
+            try:
+                built.append(self.op("governor-execute", action=action)["record_id"])
+            except PodError as exc:
+                if exc.code != "record_too_large":
+                    raise
+                # The refused write preceded the provider call; trimming only caller evidence fits the last row.
+                excess = exc.detail["proposed_bytes"] - MAX_JOURNAL + 256
+                for position, item in enumerate(action["evidence"]):
+                    cut = min(excess, len(item) - 1)
+                    action["evidence"][position], excess = item[cut:], excess - cut
+                built.append(self.op("governor", action=action)["record_id"])
+                return built
+        raise AssertionError("the journal never reached its limit")
+
+    def test_a_claim_too_large_for_the_successor_writes_nothing(self):
+        built = self.lost_with(lambda: self.near_limit([]))
+        self.successor()
+        effects, before = self.writes(), self.snapshot()
+        decision = self.decide()
+        refused = self.refused(lambda: self.claim(decision), code="claim_capacity")
+        self.assertEqual((refused.detail["record"], refused.detail["limit_bytes"]),
+                         ("successor's Governor journal", 262144))
+        self.assertGreater(refused.detail["proposed_bytes"], 262144)
+        self.assertIn("owner handoff of the predecessor", refused.detail["next_action"])
+        self.assertEqual(before, self.snapshot())  # Neither frozen nor reserved.
+        self.assertNotIn("continued_by", read(self.project, "objective"))
+        self.assertNotIn("continues", read(self.project, "successor"))
+        self.assertEqual(self.writes(), effects)
+        self.assertEqual(len(built), len(decision["carried"]))
+
+    def test_settling_in_the_predecessor_lets_a_just_fitting_claim_complete(self):
+        built = self.lost_with(lambda: self.near_limit([]))
+        self.successor()
+        self.refused(lambda: self.claim(self.decide()), code="claim_capacity")
+        # The supported route: the predecessor's coordinator settles a row by readback, then is lost again.
+        self.returning()
+        settled = self.row(built[0], "objective")["receipt"]["provider"]["run_id"]
+        self.remote.complete(settled, "success")
+        self.assertEqual(self.op("governor-reconcile", record_id=built[0])["status"], "PASS")
+        self.lose()
+        self.act_successor()
+        decision = self.decide()
+        self.assertEqual(self.claim(decision)["status"], "claimed")
+        carried = [row["record_id"] for row in self.journal("successor")["actions"]]
+        self.assertEqual(sorted(carried), sorted(built[1:]))
+        size = _record_path(self.project, "successor").stat().st_size
+        self.assertGreater(size, 262144 * 0.9)  # It fits, and only just.
+
+    def act_successor(self):
+        os.environ["ORCA_TERMINAL_HANDLE"] = "next"
+        self.current = {"id": "run-s", "coordinator_handle": "next", "consumer_generation": 1}
+
+    def test_a_reservation_that_cannot_fit_is_released_by_its_decision(self):
+        """Synthetic control: a reservation made before the predecessor grew, resumed once the claim no longer fits."""
+        self.lost_with(self.publications)
+        self.successor()
+        decision = self.decide()
+        with patch("pod.ledger._write_succession", side_effect=KeyboardInterrupt("reserved")), \
+                self.assertRaises(KeyboardInterrupt):
+            self.claim(decision)
+        too_large = PodError("claim_capacity", "The claim cannot fit.", {"record": "successor's Governor journal"})
+        with patch("pod.succession._require_fit", side_effect=too_large):
+            refused = self.refused(lambda: self.claim(decision), code="claim_capacity")
+        self.assertIn("reservation was released", str(refused))
+        self.assertNotIn("continues", read(self.project, "successor"))
+        self.assertNotIn("continued_by", read(self.project, "objective"))
+
+    def test_a_claim_linked_before_the_check_refuses_its_replay_by_name(self):
+        """Synthetic control: an earlier candidate froze the predecessor and then failed to copy its rows."""
+        self.lost_with(lambda: self.near_limit([]))
+        self.successor()
+        decision = self.decide()
+        with patch("pod.succession._require_fit"):
+            self.refused(lambda: self.claim(decision), code="record_too_large")
+        self.assertEqual(read(self.project, "objective")["continued_by"]["objective"], "successor")
+        before = self.snapshot()
+        refused = self.refused(lambda: self.claim(decision), code="claim_capacity")
+        self.assertIn("no supported route completes a claim linked before this check", refused.detail["next_action"])
+        self.assertEqual(before, self.snapshot())
 
 
 class SettlementTests(CarriedCase):
@@ -1182,6 +1288,25 @@ class ShapeTableTests(GroupedTable):
     def test_current_after_rows_replay(self): self.rows()
     def test_current_after_rows_handoff(self): self.rows()
     def test_current_after_rows_rebind(self): self.rows()
+
+
+class PrelinkDecisionTests(ShapeCase):
+    """R118: before the link, a new direct owner decision naming the current owner also completes a reservation."""
+
+    def test_a_new_decision_naming_the_handed_over_owner_completes_the_reservation(self):
+        self.lost_with(self.publications)
+        self.successor()
+        self.interrupted("current", "before_link")
+        caller = self.handed_over()
+        fresh = self.claim(caller=caller)["facts"]
+        self.assertEqual(fresh["successor_owner"], caller)
+        renewed = {"provenance": "user_direct", "instruction": "A new owner decision", **fresh}
+        before = self.snapshot()
+        self.refused(lambda: self.claim({**renewed, "ambiguity": ["x"]}, caller=caller),
+                     code="succession_decision_mismatch")  # Neither the reserving decision nor the fresh facts.
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.claim(renewed, caller=caller)["status"], "claimed")
+        self.assertEqual(read(self.project, "objective")["continued_by"]["owner"], caller)
 
 
 class ShapeTableShapeTests(unittest.TestCase):

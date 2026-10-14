@@ -3871,7 +3871,8 @@
         "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_replay",
         "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_handoff",
         "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_rebind",
-        "tests.test_carried_claim.ShapeTableShapeTests.test_the_shape_table_runs_every_row_once"
+        "tests.test_carried_claim.ShapeTableShapeTests.test_the_shape_table_runs_every_row_once",
+        "tests.test_carried_claim.PrelinkDecisionTests.test_a_new_decision_naming_the_handed_over_owner_completes_the_reservation"
       ],
       "status": "NOT_RUN"
     },
@@ -3884,6 +3885,27 @@
         "tests.test_carried_claim.ReservationTests.test_closure_proves_no_claim_names_a_successor_that_already_started",
         "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_closure_but_not_work"
       ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A324",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.CapacityTests.test_a_claim_too_large_for_the_successor_writes_nothing",
+        "tests.test_carried_claim.CapacityTests.test_settling_in_the_predecessor_lets_a_just_fitting_claim_complete",
+        "tests.test_carried_claim.CapacityTests.test_a_reservation_that_cannot_fit_is_released_by_its_decision",
+        "tests.test_carried_claim.CapacityTests.test_a_claim_linked_before_the_check_refuses_its_replay_by_name"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A325",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.ReservationTests.test_a_repeated_close_answers_from_the_recorded_closure",
       "status": "NOT_RUN"
     }
   ]
