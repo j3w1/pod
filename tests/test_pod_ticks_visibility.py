@@ -35,6 +35,23 @@ class VisibilityTests(TickCase):
         self.assertEqual(row["blocked"]["reason"], "issue_access_unavailable")
         self.assertEqual(row["direction"], "untick")
 
+    def test_source_refusal_names_the_due_pod_direction_and_exact_request(self):
+        self.bind(); self.prove(); self.issue.unreadable = True
+        exc = self.failure("issue_access_unavailable", self.tick)
+        self.assertEqual((exc.detail["pod"], exc.detail["direction"]), (1, "tick"))
+        row = exc.detail["pod_ticks"]["lines"][0]
+        self.assertEqual(row["blocked"]["reason"], "issue_access_unavailable")
+        self.assertIn("pod internal pod-tick", row["command"])
+
+    def test_duplicate_refusal_names_the_due_pod_direction_and_readback(self):
+        self.bind("- [ ] **PoD#1\n- [ ] **PoD#1 duplicate"); self.prove()
+        exc = self.failure("line_duplicated", self.tick)
+        self.assertEqual((exc.detail["pod"], exc.detail["direction"]), (1, "tick"))
+        row = exc.detail["pod_ticks"]["lines"][0]
+        self.assertEqual(row["checkboxes"], [False, False])
+        self.assertEqual(row["blocked"]["reason"], "line_duplicated")
+        self.assertIn("pod internal pod-tick", row["command"])
+
     def test_render_gives_checkbox_authorship_proof_state_and_block_reason(self):
         self.bind(); self.prove(); self.issue.refuse_next = 403; self.tick()
         view = status(self.project, None, objective="objective")

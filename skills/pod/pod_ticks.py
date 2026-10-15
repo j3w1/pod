@@ -275,7 +275,7 @@ def require_closing(state: dict, post_map: dict, ctx: dict, *, project: Path, ob
         raise PodError("pod_ticks_due", STEPS,
                        {"pod_ticks": view, "codes": ["pod_ticks_due"], "steps": STEPS,
                         "next_action": STEPS})
-    if due:
+    if due or "pod_ticks" in state:
         state.setdefault("pod_ticks", empty())["closure_blocked"] = [
             {"pod": row["pod"], "direction": row["direction"], "block": deepcopy(row["blocked"]),
              "ticked": row["ticked"], "authorship": row["authorship"]} for row in due]
@@ -370,7 +370,12 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
             lines = pod_lines(live["body"]).get(pod, [])
             request["readback"] = {"body_sha256": _hash(live["body"]), "state": live["state"],
                                    "ticked": lines[0]["ticked"] if len(lines) == 1 else None}
-        _record(project, objective, owner, key, request, live=live)
+        recorded = _record(project, objective, owner, key, request, live=live)
+        ctx = store.kernel_context(project, objective, recorded, None)
+        exc.detail = {**(exc.detail or {}), "pod": pod, "direction": request["direction"],
+                      "blocked": request["block"],
+                      "pod_ticks": projection(recorded, store.map_of(recorded), ctx,
+                                              project=project, objective=objective)}
         raise
     body = live["body"]
     with store._lock(path):
@@ -401,9 +406,13 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
             request.update(intended=_hash(intended), phase="intent", readback=None)
         ledger["requests"][key] = request
         store._write(path, state)
+        if request["phase"] != "intent":
+            view = projection(state, store.map_of(state), ctx, project=project, objective=objective)
     if request["phase"] != "intent":
         if request["block"]:
-            raise PodError(request["block"]["code"], "No single writable proven PoD line", request["block"])
+            raise PodError(request["block"]["code"], "No single writable proven PoD line",
+                           {**request["block"], "pod": pod, "direction": request["direction"],
+                            "readback": request["readback"], "pod_ticks": view})
         return {"status": "current", "pod": pod, "pod_ticks": view}
     try:
         result = port.issue_body_write(source=source, body=intended)
@@ -425,7 +434,7 @@ def _require_admissions_settled(state: dict) -> None:
                         "next_action": "Replay the existing admission with its unchanged frozen packet; settle or reconcile its native request, then request pod-tick again"})
 
 
-def _record(project: Path, objective: str, owner: str, key: str, request: dict, *, live: dict | None = None) -> None:
+def _record(project: Path, objective: str, owner: str, key: str, request: dict, *, live: dict | None = None) -> dict:
     from . import ledger as store
     path = store._path(project, objective)
     with store._lock(path):
@@ -442,6 +451,7 @@ def _record(project: Path, objective: str, owner: str, key: str, request: dict, 
             observed_source = {**request["source"], "body_sha256": _hash(live["body"])}
             _facts(ticks, observed_source, live["body"])
         store._write(path, state)
+        return state
 
 
 def _readback(project: Path, objective: str, owner: str, key: str, request: dict, result: dict,

@@ -5306,7 +5306,9 @@
         "tests.test_pod_ticks_closure.ClosureTests.test_report_proof_tick_close_steps_make_exactly_one_issue_write",
         "tests.test_pod_ticks_protocol.ProtocolTests.test_one_tick_changes_one_checkbox_byte_E1",
         "tests.test_pod_ticks_visibility.VisibilityTests.test_due_ack_names_exact_tick_request_without_fresh_read",
-        "tests.test_pod_ticks_visibility.VisibilityTests.test_untick_ack_and_block_ack_use_ledger_without_fetch"
+        "tests.test_pod_ticks_visibility.VisibilityTests.test_untick_ack_and_block_ack_use_ledger_without_fetch",
+        "tests.test_pod_ticks_visibility.VisibilityTests.test_source_refusal_names_the_due_pod_direction_and_exact_request",
+        "tests.test_pod_ticks_visibility.VisibilityTests.test_duplicate_refusal_names_the_due_pod_direction_and_readback"
       ],
       "status": "NOT_RUN"
     },
@@ -5331,7 +5333,8 @@
         "tests.test_pod_ticks_closure.ClosureTests.test_fresh_refused_tick_permits_report_closure_E2",
         "tests.test_pod_ticks_closure.ClosureTests.test_fresh_refused_untick_permits_checkpoint_closure_E2",
         "tests.test_pod_ticks_closure.ClosureTests.test_fresh_refused_untick_permits_report_closure_E2",
-        "tests.test_pod_ticks_visibility.VisibilityTests.test_closure_report_bytes_match_existing_report_projection"
+        "tests.test_pod_ticks_visibility.VisibilityTests.test_closure_report_bytes_match_existing_report_projection",
+        "tests.test_pod_ticks_closure.ClosureTests.test_reopened_then_ticked_objective_recloses_without_old_blocked_limitations"
       ],
       "status": "NOT_RUN"
     },

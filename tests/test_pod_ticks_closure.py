@@ -263,6 +263,19 @@ class ClosureTests(TickCase):
         self.assertIsNotNone(result["checkpoint"]["closure"])
         self.assertEqual(self.issue.writes, [])
 
+    def test_reopened_then_ticked_objective_recloses_without_old_blocked_limitations(self):
+        self.bind(); self.prove(); self.issue.refuse_next = 403; self.tick()
+        self.write(close=True)
+        self.assertIn("blocked_at_closure", self.line())
+        self.write(reopen=True, revision_authority={"provenance": "user_direct",
+            "instruction": "reopen to complete the previously refused tick"})
+        self.tick()
+        result = self.write(close=True)
+        row = result["pod_ticks"]["lines"][0]
+        self.assertEqual(row["status"], "current")
+        self.assertNotIn("blocked_at_closure", row)
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["closure_blocked"], [])
+
     def test_direct_objective_still_closes_in_one_write(self):
         self.intake(); self.prove(close=True)
         self.assertEqual(self.issue.writes, [])
