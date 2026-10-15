@@ -23,7 +23,8 @@ from typing import Any, Callable
 
 from .errors import PodError
 from .gitio import OBJECT_ID
-from .util import digest, exact, _field_names
+from .util import (digest, exact, _field_names, owner_decision, decision_channel, channel_fields,
+                   CHANNEL_FIELDS, DECISION_FIELDS)
 import unicodedata
 
 KINDS = ("criterion", "delivery", "assurance", "correction", "steer", "subgoal")
@@ -78,7 +79,7 @@ MAP_INPUT = {"seq", "obligations", "proposals", "governance", "governance_refres
              "acceptances"}
 MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "governance_sources",
               "coordinator_slot", "quiescence", "closure", "observations", "reopened",
-              "governance_history", "delivery"}
+              "governance_history", "delivery", "revision_decisions"}
 
 
 def refuse(code: str, detail: str, message: str, *, next_action: str | None = None,
@@ -255,6 +256,13 @@ def governance_digest(sources: list[dict]) -> str:
     return digest(sources)
 
 
+def bound_governance_digest(state: dict) -> str:
+    """A derived adoption keeps the byte-identical sources' original proof identity."""
+    sources = state["governance_sources"]
+    base = state["governance"].get("proof_base")
+    return governance_digest([{**row, "base": base} for row in sources] if base is not None else sources)
+
+
 def _cite(source: Any, observed: dict | None, sources: list[dict], *, obligation: str | None = None) -> dict:
     record = _exact(source, {"path", "lines", "revision", "quote_sha256", "base", "gone"},
                     {"path", "lines"}, "policy citation", obligation=obligation)
@@ -402,9 +410,9 @@ def _structure(raw: Any) -> dict:
     return ob
 
 
-def _acceptance(raw: Any, fields: set[str], *, obligation: str | None) -> dict:
+def _acceptance(raw: Any, fields: set[str], *, obligation: str | None, stored: bool = True) -> dict:
     """One coordinator judgement of an outside result; the source is the caller's opaque id."""
-    row = _exact(raw, fields, fields, "acceptance", obligation=obligation)
+    row = _exact(raw, fields | DECISION_FIELDS, fields, "acceptance", obligation=obligation)
     if not isinstance(row["source"], str) or not _SOURCE.fullmatch(row["source"]):
         raise refuse("obligation_invalid", "malformed",
                      "an acceptance source is 1-128 printable characters without spaces",
@@ -414,7 +422,7 @@ def _acceptance(raw: Any, fields: set[str], *, obligation: str | None) -> dict:
                      field="verdict", **({"obligation": obligation} if obligation is not None else {}))
     _text(row["candidate"], "candidate", limit=128, obligation=obligation)
     _text(row["evidence"], "evidence", limit=1024, obligation=obligation)
-    return dict(row)
+    return owner_decision(row, kind="acceptance", stored=stored)
 
 
 def _acceptance_records(raw: Any, *, obligation: str) -> list[dict]:
@@ -456,10 +464,11 @@ def _write_acceptances(rows: dict[str, dict], prior_rows: dict[str, dict], reque
                          record="acceptances")
         ob = rows[key]
         request = _acceptance({name: item for name, item in raw.items() if name != "obligation"},
-                              _ACCEPTANCE_FIELDS, obligation=key)
+                              _ACCEPTANCE_FIELDS, obligation=key, stored=False)
         recorded = {row["source"]: row for row in ob.get("acceptances", [])}
         if request["source"] in recorded:
-            if {name: recorded[request["source"]][name] for name in _ACCEPTANCE_FIELDS} != request:
+            earlier = {name: item for name, item in recorded[request["source"]].items() if name != "seq"}
+            if owner_decision(earlier, kind="acceptance") != request:
                 raise refuse("obligation_invalid", "acceptance_conflict",
                              "a recorded acceptance is immutable; record a new result under a new source",
                              obligation=key, field="source")
@@ -481,15 +490,17 @@ def _proposal(raw: Any) -> dict:
     return dict(row)
 
 
-def _authority(value: Any) -> dict | None:
+def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> dict | None:
     if value is None:
         return None
-    record = _exact(value, {"provenance", "instruction"}, {"provenance", "instruction"}, "revision authority")
+    record = _exact(value, DECISION_FIELDS | {"question"}, {"provenance", "instruction"}, "revision authority")
     if record["provenance"] != "user_direct":
         raise refuse("obligation_invalid", "provenance_unauthorized",
                      "a map revision is authorized only by a direct user instruction", record='authority')
     _text(record["instruction"], "instruction", limit=1024)
-    return dict(record)
+    if "question" in record:
+        _text(record["question"], "question", limit=512)
+    return owner_decision(record, kind=kind, stored=stored)
 
 
 # --------------------------------------------------------------------------- facts
@@ -598,7 +609,7 @@ def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
         governance = prior_map["governance"]
         declared = value.get("governance")
         if declared is not None:
-            if not isinstance(declared, dict) or set(declared) - {"base_ref", "selection", "exclude", "base"}:
+            if not isinstance(declared, dict) or set(declared) - {"base_ref", "selection", "exclude", "base", "proof_base"}:
                 raise refuse("obligation_invalid", "governance_source_unrecognized",
                              "governance sources are fixed at intake", record='governance')
             if declared.get("exclude", governance["exclude"]) != governance["exclude"]:
@@ -607,14 +618,18 @@ def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
             if declared.get("base_ref", governance["base_ref"]) != governance["base_ref"] and not (user and refresh):
                 raise refuse("obligation_invalid", "governance_source_unrecognized",
                              "a target change needs a direct user revision and governance refresh", record='governance')
-        if refresh:
+        if refresh or ctx.get("derived_adoption"):
             target_ref = observed.get("target_ref") if isinstance(observed, dict) else None
             sources, base = bind_governance(observed, target_ref, governance["exclude"])
+            previous_base = governance.get("proof_base", governance["base"])
+            governance = {key: item for key, item in governance.items() if key != "proof_base"}
             governance = {**governance, "base_ref": target_ref,
                           "selection": observed.get("selection") if target_ref else None, "base": base}
+            if ctx.get("derived_adoption"):
+                governance["proof_base"] = previous_base
         else:
             sources = prior_map["governance_sources"]
-    gov = governance_digest(sources)
+    gov = bound_governance_digest({"governance": governance, "governance_sources": sources})
     rebind = value.get("rebind", [])
     if not isinstance(rebind, list) or len(rebind) > MAX_OBLIGATIONS:
         raise refuse("obligation_invalid", "malformed", "rebind is a bounded list of obligation ids", record='governance')
@@ -691,13 +706,16 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
                 if ob.get(key) != earlier.get(key):
                     raise refuse("obligation_invalid", "redefinition_unauthorized",
                                  f"an obligation's {key} is immutable", obligation=ob["id"])
-            if not user and any(ob.get(key) != earlier.get(key) for key in _DEFINITION if key not in ("scope", "proof_scope")) \
-                    or not user and ob["kind"] == "assurance" and ob["scope"] != earlier.get("scope"):
+            redefined = (any(ob.get(key) != earlier.get(key) for key in _DEFINITION if key not in ("scope", "proof_scope"))
+                         or ob["kind"] == "assurance" and ob["scope"] != earlier.get("scope"))
+            if redefined and user:
+                owner_decision(ctx["revision_authority"], kind="question" if ctx["authority_kind"] == "question" else "revision")
+            if not user and redefined:
                 raise refuse("obligation_invalid", "redefinition_unauthorized",
                              "only a direct user revision redefines an obligation's check", obligation=ob["id"])
             ob["introduced_seq"] = earlier["introduced_seq"]
             source = earlier.get("source")
-            if refresh and ob["provenance"] == "project_policy" and isinstance(source, dict):
+            if (refresh or ctx.get("derived_adoption")) and ob["provenance"] == "project_policy" and isinstance(source, dict):
                 source = _relocate(source, observed, sources)
             if source is not None:
                 ob["source"] = source
@@ -730,6 +748,16 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
             raise refuse("obligation_invalid", "malformed", "a new obligation is introduced at this write",
                          obligation=ob["id"], seq=seq)
         ob["introduced_seq"] = seq
+        if ob["provenance"] == "user_direct" and isinstance(ob.get("source"), dict):
+            authority = ctx.get("revision_authority") or {}
+            if CHANNEL_FIELDS & set(ob["source"]):
+                source_authority = owner_decision(ob["source"], kind="question" if "question" in authority else "revision")
+                if channel_fields(source_authority) != channel_fields(authority):
+                    raise refuse("obligation_invalid", "provenance_unauthorized", "obligation source channel must match its revision authority", obligation=ob["id"])
+            source = {**ob["source"], **channel_fields(authority)}
+            if "question" in authority:
+                source["question"] = authority["question"]
+            ob["source"] = owner_decision(source, kind="question" if "question" in authority else "revision")
         _introduce(ob, prior_map is None, user, observed, sources, criteria)
     for ob in rows.values():
         if "parent" in ob:
@@ -884,9 +912,31 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     if unknown:
         raise refuse("obligation_invalid", "malformed", "unsupported map fields: " + ", ".join(_field_names(unknown)[0]), record='obligation map')
     closed = bool(prior_map and prior_map.get("closure"))
-    authority = _authority(value.get("revision_authority"))
+    authority_kind = "revision"
+    raw_authority = value.get("revision_authority")
+    if isinstance(raw_authority, dict) and "question" in raw_authority:
+        reference = raw_authority["question"]
+        questions = ctx.get("recorded_questions", [])
+        if not isinstance(questions, list) or not any(
+                question == reference or isinstance(question, dict) and reference in (question.get("id"), question.get("reference"))
+                for question in questions):
+            raise refuse("decision_question_unrecorded", "unknown_referent", "the owner answer must name a currently recorded question",
+                         next_action="record the question first, or obtain the owner's instruction in the coordinator's session")
+        authority_kind = "question"
+    elif value.get("governance_refresh") is True:
+        authority_kind = "governance"
+    elif isinstance(raw_authority, dict) and prior_map is not None and not value.get("reopen"):
+        prior_rows = {row["id"]: row for row in prior_map["obligations"]}
+        changes = [row for row in value.get("obligations", []) if isinstance(row, dict)
+                   and (not isinstance(row.get("id"), str) or row != prior_rows.get(row["id"]))]
+        if changes and all(isinstance(row.get("id"), str) and row["id"] in prior_rows and row.get("state") == "withdrawn"
+                           and definition_id(row) == definition_id(prior_rows[row["id"]]) for row in changes):
+            authority_kind = "withdrawal"
+    authority = _authority(raw_authority, kind=authority_kind)
     user = authority is not None
     reopen = value.get("reopen") is True
+    if reopen and authority is not None:
+        owner_decision(authority, kind="question" if authority_kind == "question" else "reopen")
     if closed and not (user and reopen):
         raise refuse("objective_closed", "objective_closed", "the objective is closed",
                      closure_revision=prior_map["closure"]["revision"])
@@ -911,7 +961,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         raise refuse("obligation_invalid", "malformed", "governance_refresh is true when present", record='obligation map')
     if refresh and prior_map is None:
         raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed", record='obligation map')
-    ctx = {**ctx, "governance_refresh": refresh}
+    ctx = {**ctx, "governance_refresh": refresh, "revision_authority": authority, "authority_kind": authority_kind}
     revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
 
     observed, governance, sources, gov, rebind = _write_governance(prior_map, value, ctx, user, refresh)
@@ -952,8 +1002,18 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
              "proposals": list(proposals.values())}
     if prior_map is not None and "governance_history" in prior_map:
         state["governance_history"] = deepcopy(prior_map["governance_history"])
+    if ctx.get("derived_adoption") is not None:
+        history = state.setdefault("governance_history", {"candidates": [], "decisions": []})
+        history["decisions"].append({"seq": seq, **ctx["derived_adoption"]})
     if prior_map is not None and "delivery" in prior_map:
         state["delivery"] = deepcopy(prior_map["delivery"])
+    if authority is not None or (prior_map or {}).get("revision_decisions"):
+        decisions = deepcopy((prior_map or {}).get("revision_decisions", []))
+        if authority is not None:
+            decisions.append({"seq": seq, "kind": authority_kind, **authority})
+        if len(decisions) > 64:
+            raise refuse("obligation_invalid", "decision_history_full", "owner revision history is full")
+        state["revision_decisions"] = decisions
     for ob in rows.values():
         if ob["state"] == "satisfied":
             for item in ob["receipts"]:
@@ -1005,6 +1065,8 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     if closed:
         state["reopened"] = (state["reopened"] + [{"seq": seq, "revision": revision,
                                                    "instruction": authority["instruction"],
+                                                   **channel_fields(authority),
+                                                   **({"question": authority["question"]} if "question" in authority else {}),
                                                    "closed_revision": prior_map["closure"]["revision"]}])[-8:]
     state["observations"] = observations(prior_map, state, ctx)
     _persisted_rows(state, ctx)
@@ -1047,7 +1109,8 @@ def _introduce(ob: dict, intake: bool, user: bool, observed: dict | None, source
                          "objective provenance enters criteria and delivery obligations at intake",
                          obligation=ob["id"])
     elif provenance == "user_direct":
-        source = _exact(ob.get("source"), {"instruction", "ref"}, {"instruction"}, "user source", obligation=ob["id"])
+        source = _exact(ob.get("source"), {"instruction", "ref", "question", *CHANNEL_FIELDS}, {"instruction"}, "user source", obligation=ob["id"])
+        owner_decision(source, kind="question" if "question" in source else "revision", stored=True)
         _text(source["instruction"], "instruction", limit=1024, obligation=ob["id"])
         if "ref" in source:
             _text(source["ref"], "source ref", limit=256, obligation=ob["id"])
@@ -1080,7 +1143,7 @@ def _ancestry(rows: dict[str, dict]) -> None:
 
 
 def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
-    record = _exact(ob["withdrawal"], {"by", "reason", "instruction"}, {"by", "reason"}, "withdrawal", obligation=ob["id"])
+    record = _exact(ob["withdrawal"], {"by", "reason", "instruction", *CHANNEL_FIELDS}, {"by", "reason"}, "withdrawal", obligation=ob["id"])
     _text(record["reason"], "reason", limit=1024, obligation=ob["id"])
     by = record["by"]
     allowed = (by == "user_direct" and user
@@ -1093,6 +1156,11 @@ def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
     result = {"by": by, "reason": record["reason"]}
     if by == "user_direct":
         result["instruction"] = authority["instruction"]
+        result.update(channel_fields(owner_decision(authority, kind="withdrawal", stored="channel" not in authority)))
+        if CHANNEL_FIELDS & set(record) and channel_fields(record) != channel_fields(result):
+            raise refuse("obligation_invalid", "withdrawal_unauthorized", "withdrawal channel must match its revision authority", obligation=ob["id"])
+    elif CHANNEL_FIELDS & set(record):
+        raise refuse("obligation_invalid", "malformed", "only owner withdrawals carry an owner decision channel", obligation=ob["id"])
     return result
 
 
@@ -1444,7 +1512,7 @@ def p4_no_integration_deadlock(state: dict, ctx: dict) -> list[str]:
 
 def p5_assurance_binding(state: dict, ctx: dict) -> list[str]:
     """Assurance-binding integrity: every satisfied assurance is bound; not review truth."""
-    gov = governance_digest(state["governance_sources"])
+    gov = bound_governance_digest(state)
     found = [f"{ob['id']} is satisfied without a bound review attempt"
             for ob in state["obligations"]
             if ob["kind"] == "assurance" and ob["state"] == "satisfied" and not evidence_valid(ob, ctx, gov)]
@@ -1506,11 +1574,22 @@ def quiescence(state: dict) -> dict | None:
 def validate_map_record(state: dict) -> None:
     """The persisted map envelope used by ordinary writes and checkpoint reads."""
     value = _exact({key: value for key, value in state.items() if key in MAP_STORED},
-                   MAP_STORED, MAP_STORED - {"governance_history", "delivery"}, "persisted map")
+                   MAP_STORED, MAP_STORED - {"governance_history", "delivery", "revision_decisions"}, "persisted map")
     for field in ("seq", "revision"):
         if type(value[field]) is not int or value[field] < 1:
             raise refuse("obligation_invalid", "malformed", "persisted map sequence and revision are positive integers", record="persisted map")
-    governance = _exact(value["governance"], {"base_ref", "selection", "exclude", "base"},
+    if "revision_decisions" in value:
+        decisions = value["revision_decisions"]
+        if not isinstance(decisions, list) or len(decisions) > 64:
+            raise refuse("obligation_invalid", "malformed", "revision decisions are bounded", record="revision decisions")
+        for row in decisions:
+            _exact(row, DECISION_FIELDS | {"seq", "question", "kind"}, {"seq", "provenance", "instruction", "kind"}, "revision decision")
+            if type(row["seq"]) is not int or not 1 <= row["seq"] <= value["seq"]:
+                raise refuse("obligation_invalid", "malformed", "revision decision names its accepted sequence", record="revision decision")
+            if row["kind"] not in ("question", "governance", "withdrawal", "revision"):
+                raise refuse("obligation_invalid", "malformed", "revision decision kind is unsupported", record="revision decision")
+            owner_decision(row, kind=row["kind"], stored=True)
+    governance = _exact(value["governance"], {"base_ref", "selection", "exclude", "base", "proof_base"},
                         {"base_ref", "selection", "exclude", "base"}, "persisted governance")
     if governance["base_ref"] is not None:
         _text(governance["base_ref"], "base_ref", limit=256)
@@ -1521,6 +1600,20 @@ def validate_map_record(state: dict) -> None:
             or len(set(governance["exclude"])) != len(governance["exclude"])):
         raise refuse("obligation_invalid", "malformed", "persisted governance retains its target and source selection", record="persisted governance")
     governance_digest(value["governance_sources"])
+    if "proof_base" in governance:
+        if (not isinstance(governance["proof_base"], str) or _COMMIT.fullmatch(governance["proof_base"]) is None):
+            raise refuse("obligation_invalid", "malformed", "proof base retains the unchanged source identity", record="persisted governance")
+        from .governance import _governance_history
+        history = _governance_history(value)["decisions"]
+        revisions = [{"path": row["path"], "revision": row["revision"]} for row in value["governance_sources"]]
+        base, visited = governance["base"], set()
+        while base != governance["proof_base"]:
+            adoption = next((row for row in reversed(history) if row.get("provenance") == "derived"
+                             and row["base"] == base and row["base_ref"] == governance["base_ref"]), None)
+            if base in visited or adoption is None or adoption["sources"] != revisions:
+                raise refuse("obligation_invalid", "malformed", "proof base requires the unchanged-source adoption chain", record="persisted governance")
+            visited.add(base)
+            base = adoption["previous_base"]
     sources = value["governance_sources"]
     if (governance["selection"] not in (None, "default", "user_direct")
             or governance["exclude"] != sorted(governance["exclude"])
@@ -1557,7 +1650,8 @@ def validate_map_record(state: dict) -> None:
     if not isinstance(reopened, list) or len(reopened) > 8:
         raise refuse("obligation_invalid", "malformed", "reopen history is a bounded list", record="persisted map")
     for raw in reopened:
-        row = _exact(raw, {"seq", "revision", "instruction", "closed_revision"}, {"seq", "revision", "instruction", "closed_revision"}, "reopen")
+        row = _exact(raw, {"seq", "revision", "instruction", "closed_revision", "question", *CHANNEL_FIELDS}, {"seq", "revision", "instruction", "closed_revision"}, "reopen")
+        owner_decision(row, kind="question" if "question" in row else "reopen", stored=True)
         _text(row["instruction"], "instruction", limit=1024)
         if (type(row["seq"]) is not int or not 1 <= row["seq"] <= value["seq"]
                 or any(type(row[field]) is not int or not 1 <= row[field] <= value["revision"] for field in ("revision", "closed_revision"))):
@@ -1636,7 +1730,7 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
         if ob["state"] == "withdrawn":
             withdrawal = ob["withdrawal"]
             instruction = withdrawal.get("instruction") if isinstance(withdrawal, dict) else None
-            authority = _authority({"provenance": "user_direct", "instruction": instruction}) if isinstance(withdrawal, dict) and withdrawal.get("by") == "user_direct" else None
+            authority = _authority({"provenance": "user_direct", "instruction": instruction, **channel_fields(withdrawal)}, kind="withdrawal", stored=True) if isinstance(withdrawal, dict) and withdrawal.get("by") == "user_direct" else None
             if _withdrawal(ob, authority is not None, authority) != withdrawal:
                 raise refuse("obligation_invalid", "withdrawal_unauthorized", "persisted withdrawal retains its complete authority record", obligation=ob["id"])
         unknown = validate_receipts(ob, ctx, seq=state["seq"])
@@ -1682,13 +1776,20 @@ def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
     original = {ob["source"]["ref"] for ob in rows.values() if ob["provenance"] == "objective"}
     if not original <= criteria or not criteria <= _covered(rows):
         raise refuse("obligation_invalid", "malformed", "closure retains every original criterion and covers its recorded criteria", record="closure")
-    _account(state, rows, state["seq"], ctx, governance_digest(state["governance_sources"]))
+    _account(state, rows, state["seq"], ctx, bound_governance_digest(state))
     _waits(state, rows, ctx)
     if state["coordinator_slot"] is not None or state["quiescence"] != quiescence(state):
         raise refuse("obligation_invalid", "malformed", "closure retains its derived slot and quiescence", record="closure")
     if any(properties(state, ctx).values()):
         raise refuse("obligation_invalid", "malformed", "closure retains all map invariants", record="closure")
-    expected = _close(state, ctx)
+    legacy_report = "decision_channels" not in closure["report"]
+    if legacy_report:
+        from .util import map_decisions
+        if ("proof_base" in state["governance"] or "revision_decisions" in state
+                or any("channel" in row["decision"] and row["decision"].get("channel_recorded", True)
+                       for row in map_decisions(state))):
+            raise refuse("obligation_invalid", "malformed", "a channel-aware closure retains its decision report marker", record="closure")
+    expected = _close(state, {**ctx, "legacy_decision_report": legacy_report})
     if closure != expected:
         raise refuse("obligation_invalid", "malformed", "closure report matches the validated map and evidence", record="closure")
     return tuple(sorted(set(unverifiable)))
@@ -1757,7 +1858,7 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
         if ob["state"] in TERMINAL:
             raise refuse("unbound_assignment", ob["state"], f"the served obligation is {ob['state']}",
                          obligation=served)
-        if _accepted_assurance_current(ob, ctx, governance_digest(state["governance_sources"])):
+        if _accepted_assurance_current(ob, ctx, bound_governance_digest(state)):
             raise refuse("unbound_assignment", "assurance_still_bound",
                          "an accepted assurance receipt is still valid", obligation=served)
         busy = _serving(ctx, served, outstanding_only=True)
@@ -1808,7 +1909,7 @@ def admission_binding(body: dict, ctx: dict, state: dict) -> dict:
                  for ref in (body.get("context") or []) if ref.get("kind") in ("source", "instruction"))]
     return {"policy_revision": ctx.get("policy_revision"), "environment": verification.get("environment"),
             "dependencies": list(verification.get("dependencies", [])), "sources": sources,
-            "governance": governance_digest(state["governance_sources"]),
+            "governance": bound_governance_digest(state),
             "definitions": {ob["id"]: definition_id(ob) for ob in state["obligations"]
                             if ob["id"] in body["serves"]}}
 
@@ -1917,6 +2018,7 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
 def report_projection(state: dict, ctx: dict) -> dict:
     """R43 report content derived from the map: nothing here is asserted by a caller."""
     rows = state["obligations"]
+    legacy_report = ctx.get("legacy_decision_report", False)
     admissions = _admissions(ctx)
     status = ("closed" if state.get("closure") else
               "quiescent" if (state.get("quiescence") or {}).get("state") == "quiescent" else "open")
@@ -1929,7 +2031,8 @@ def report_projection(state: dict, ctx: dict) -> dict:
               "satisfied": [ob["id"] for ob in rows if ob["state"] == "satisfied"],
               "unfinished": [ob["id"] for ob in rows if ob["state"] not in TERMINAL],
               "blockers": blockers,
-              "withdrawn": [{"obligation": ob["id"], "provenance": ob["provenance"], **ob["withdrawal"]}
+              "withdrawn": [{"obligation": ob["id"], "provenance": ob["provenance"],
+                             **(decision_channel(ob["withdrawal"]) if not legacy_report and ob["withdrawal"]["by"] == "user_direct" else ob["withdrawal"])}
                             for ob in rows if ob["state"] == "withdrawn"],
               "triage_downgrades": downgrades,
               "boundary_exceeded": [{"admission": key, "paths": row["boundary_exceeded"],
@@ -1947,7 +2050,17 @@ def report_projection(state: dict, ctx: dict) -> dict:
             "unprepared": {"publish": "MISSING", "merge": "MISSING"}}
         result["hosted_checks"] = delivery_status.get("hosted_checks", "NOT_RUN")
     if state.get("governance_history", {}).get("decisions"):
-        result["governance_decisions"] = deepcopy(state["governance_history"]["decisions"])
+        result["governance_decisions"] = [deepcopy(row) if legacy_report or row.get("provenance") == "derived" else decision_channel(row)
+                                           for row in state["governance_history"]["decisions"]]
+        derived = [row for row in result["governance_decisions"] if row.get("provenance") == "derived"]
+        if derived and not legacy_report:
+            result["derived_governance_decisions"] = derived
+    from .util import map_decisions
+    decisions = ctx.get("owner_decisions", []) + map_decisions(state)
+    if decisions and not legacy_report:
+        result["owner_decisions"] = decisions
+    if not legacy_report:
+        result["decision_channels"] = 1
     if state.get("delivery") is not None:
         result["delivery"] = deepcopy(state["delivery"])
     if status == "quiescent":

@@ -106,33 +106,103 @@ Type: H · Scenarios: [A292](#a292), [A293](#a293), [A294](#a294), [A295](#a295)
 - <a id="a296"></a>**A296** — A release or deploy PASS or FAILED without a receipt or evidence reference refuses and with one records; CANCELED needs an attestation.
 - <a id="a297"></a>**A297** — A lost execution reply leaves UNKNOWN, which holds the repeated request until readback settles it and then answers REUSE; a repeated outcome after a lost reply writes nothing; each provider effect happens once.
 
-## Governance delivery baseline
+### R119 — Adopt unchanged governance at a checkpoint
 
-Governance binds the selected target identity and exact base snapshot. An explicit
-initial user selection is trusted input, including in a repository without a
-known default or on a maintained nondefault branch with its own policy. Git refs,
-ancestry and byte equality cannot prove pre-intake authorship or distinguish an
-accepted merge from manually moving a ref. Later updates that contain known
-objective candidate or result commits beyond the old base are guarded: they need
-a fresh direct user decision for the exact new snapshot. Ordinary independent
-target updates remain refreshable. Neither a repeated generic selector, stale
-snapshot decision, equal policy bytes nor an already bound ref bypasses that
-check. This is a bounded known-identity and authority check, not merge or
-policy-authorship proof.
+Type: B,H · Scenarios: [A331](#a331), [A332](#a332), [A333](#a333), [A334](#a334), [A335](#a335), [A336](#a336), [A337](#a337), [A338](#a338)
 
-A guarded refresh uses existing private map fields: `governance_refresh: true`,
-a fresh `revision_authority` with `provenance: user_direct` and its instruction,
-and `governance` with `base_ref` equal to the full canonical target ref and
-`base` equal to the full newly observed commit. Both snapshot fields must match
-Git observation; the supplied base never overrides it. The checkpoint's
-kernel-owned `governance_history` preserves up to 64 distinct candidate identities
-and 64 explicit user decisions, including the canonical ref, commit, instruction
-and map sequence. A mapped Git checkpoint requires its current candidate to
-resolve to a commit before any write; unresolved names cannot enter the history.
-History survives admission and report writes; caller omission or replacement
-cannot erase it. Capacity refuses rather than evicts. Shared
-ancestry outside the trusted base catches intermediate commits as well as tips.
-An exact new snapshot decision can proceed despite unavailable old Git objects;
-it preserves those records and grants no authority for a different future base.
-Without that decision, missing comparison evidence holds and identifies the
-missing identity and recovery action. Recorded decisions appear in the report.
+Governance binds the canonical selected target identity and exact base snapshot. An
+explicit initial user selection is trusted input, including on a nondefault branch
+or without a known default. Git cannot prove pre-intake authorship. The default
+selection continues to require the same symbolic `origin/HEAD` target.
+
+A checkpoint, including closure, first retains today's currency rules: the bound
+base passes, and the exact verified delivery result passes only for its recorded
+base and target, retaining the trusted baseline without adopting candidate policy
+(R93). Otherwise a target advanced beyond the bound base is adopted without `governance_refresh` or an owner
+question when every bound source has the identical byte revision, the recorded
+delivery result (if any) is an ancestor of that target, and the default branch is
+unchanged. The bound base must be an ancestor of the new target; backward and sideways ref moves keep today's refusal. Bound sources are `GOVERNANCE_PATHS` minus the intake exclusions;
+recorded absence participates, so appearing or disappearing is a change.
+
+Pod records a `derived` decision of kind `unchanged_sources`, with the previous and
+new bases, canonical target, sequence and unchanged path/revision table. It moves
+the bound base and citations, retaining the original `proof_base` and governance
+proof identity across the unchanged-source adoption chain. Existing receipts are
+unchanged; merge rows retain their admitted governance base (earlier rows use the
+pre-adoption proof base), so later outcome and delivery recording still verify that
+exact merge; candidate, definition, dependency, environment and other proof checks
+still apply. Adoption never rebinds proof to a changed candidate. Objective commits
+alone do not fire `candidate_policy_target`: only changed bound governance does.
+Admission and Governor effects may refuse until that checkpoint; their next action
+then names the plain checkpoint and says it needs no owner question.
+
+A changed or unreadable bound source, missing delivery ancestry or changed default
+branch retains `governance_changed` / `governance_unavailable` and existing recovery.
+Changed snapshots sharing known objective ancestry beyond the old base require a
+fresh owner decision through `governance_refresh: true`, `revision_authority`, and
+`governance` naming the exact newly observed canonical `base_ref` and full `base`.
+Generic or stale selectors cannot authorize that snapshot. Independent changed
+policy refreshes retain their existing rules. An exact new owner snapshot decision
+can proceed despite unavailable old objects, preserving their retained identities.
+
+Kernel-owned `governance_history` keeps up to 64 distinct candidate identities and
+64 owner or derived decisions. A mapped Git checkpoint needs a resolvable candidate;
+caller omission/replacement cannot erase history. Capacity refuses rather than
+evicts. Status and closure reports list derived adoptions distinctly from owner
+decisions, whose channels follow R120.
+
+- <a id="a331"></a>**A331** — After sibling merges with identical bound sources, a plain checkpoint passes, moves the governance base and records a derived adoption naming both bases and every unchanged digest, including absent sources.
+- <a id="a332"></a>**A332** — When only the objective's own merge advanced the target, a plain checkpoint passes without `candidate_policy_target` and records derived adoption when R93's exact-delivery exemption does not already apply.
+- <a id="a333"></a>**A333** — A changed bound source, an absent source appearing, or a present source disappearing refuses `governance_changed` without a write, retaining owner snapshot recovery. A backward or sideways target move also retains its refusal even with identical source bytes.
+- <a id="a334"></a>**A334** — A new target missing the recorded delivery result refuses `governance_changed` without a write even when all source revisions match.
+- <a id="a335"></a>**A335** — A changed default branch for `selection: default` refuses `governance_changed` without a write.
+- <a id="a336"></a>**A336** — An unreadable bound target source refuses `governance_unavailable` without a write; unavailable evidence is never inferred unchanged.
+- <a id="a337"></a>**A337** — A closing write adopts unchanged governance, relocates citations and retains receipts valid for its unchanged candidate without `rebind`; changing the candidate never rebinds that proof and closure refuses invalidated evidence.
+- <a id="a338"></a>**A338** — Excluded sources do not participate; admission/effect refusal names a plain adopting checkpoint without an owner question. An exact source-changing delivery retains R93's existing exemption and old base, while a later sibling merge still refuses because its policy differs from that bound base.
+
+### R120 — Record every owner decision's channel
+
+Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343)
+
+One shared validator checks owner-authority inputs: `provenance: user_direct`,
+`instruction`, optional `channel` (`session` by default, or `relayed`), and `relay`
+exactly when relayed. A relay contains bounded nonempty `reference` and
+`owner_source` text identifying the relay and the verified owner source. Existing
+kind-specific inputs that lacked provenance/instruction retain their fields and
+accept these common fields additively. Every new accepted decision stores its
+channel and, when relayed, the complete relay. Existing records without a channel
+read as `channel: session` with `channel_recorded: false` and text "session (earlier record)"; they are never rewritten on read.
+
+The exhaustive relayed list is: owner answers to an already recorded question,
+governance snapshot adoption/retarget, withdrawal, continuation and claim instructions
+(R110), and retirement (R112). A general `revision_authority` answer supplies
+`question`, resolving to a string or the `id`/`reference` of a question previously
+recorded in the checkpoint; Pod preserves that reference. A question added in the
+same write is not a previously recorded question. A relayed general revision
+without that binding refuses `relayed_decision_refused` with a next action.
+
+Every `pod-authorization/v1` scope (`publish`, `merge`, `release`, `deploy`) requires
+`session`; a relayed authorization refuses `relayed_authorization_refused` and names
+typed consent in the coordinator's session as its next action. Every other kind
+requires session too, including owner handoff R105, runtime continuity R98,
+direct-user route/delegation constraints, general revisions/reopen, external-result
+acceptance, user-cleared route failures and Governor efficiency exceptions. Such a relay refuses
+`relayed_decision_refused`. Missing/partial relay or relay alongside session refuses.
+A recorded question answer permits only the answer it conveys; a mailbox message
+alone is never a decision or authority. The coordinator classifies the channel
+honestly; Pod cannot prove where a keystroke came from or independently verify a
+relay's claimed owner source.
+
+Channels remain with revision history, governance decisions, obligation sources,
+withdrawals, reopens, constraints, continuity decisions, claims, retirement entries,
+acceptances, route-failure clear decisions and Governor authorization/exception rows. Status and closure reports
+show the channel of every owner decision they list, and distinguish derived
+adoption from owner decisions. Channel-bearing records that earlier readers cannot
+read faithfully refuse rather than silently becoming session decisions; earlier
+records, claims, closures and retirements retain their original meaning.
+
+- <a id="a339"></a>**A339** — Every decision surface uses the shared validator, stores default `session` or the supplied honest channel and includes it in status/report projections; derived decisions remain distinct.
+- <a id="a340"></a>**A340** — A complete verified-source relay is accepted for snapshot adoption, withdrawal, a recorded question answer, claim and retirement, preserving the reference/source and showing `relayed` in status and closure reports.
+- <a id="a341"></a>**A341** — All authorization scopes refuse relayed consent with `relayed_authorization_refused`; handoff, runtime continuity, constraints, acceptance, Governor exceptions and other unlisted kinds refuse `relayed_decision_refused`, naming session consent as the next action.
+- <a id="a342"></a>**A342** — Missing or partial relay, empty/oversized reference or owner source, a relay with session, unsupported channel or an unresolved question reference refuses without a write; newly supplied questions cannot authorize the same write.
+- <a id="a343"></a>**A343** — Genuine earlier-writer records, claims, closures and retirements read unchanged with session channels marked as earlier records; earlier readers accept fields they can read faithfully or refuse new records, preserving bytes, and never reinterpret a relay as session.

@@ -1704,23 +1704,27 @@ class ClosedReplayTableShapeTests(unittest.TestCase):
 
 
 class EarlierReaderTests(CarriedCase):
-    """R6 — the oldest and newest earlier versions, 0.12.0 and main's 0.13.2, read carried rows as recorded."""
+    """Earlier readers retain carried rows; R120's claim fields refuse rather than being discarded."""
 
     RELEASED = {"0.12.0": "5f7298bab47c4a3263496dc2a7fe50ecfcda0530",
                 "0.13.2": "1705da5ab84de38f6e6f1f7f745d6e46939643a2"}
 
-    def test_earlier_pods_load_the_carried_journal_and_the_continued_record_unchanged(self):
+    def test_earlier_pods_keep_carried_rows_and_refuse_new_decision_fields(self):
         self.lost_with(self.publications)
         self.carry()
         repository = Path(__file__).resolve().parents[1]
         journal = _record_path(self.project, "successor")
         before = self.snapshot()
         program = ("import json, sys\nfrom pathlib import Path\nfrom pod import __version__\n"
+                   "from pod.errors import PodError\n"
                    "from pod.governor import _read_journal, status_at\nfrom pod.ledger import _read\n"
                    "assert __version__ == sys.argv[3], __version__\n"
                    "root = Path(sys.argv[1])\nrows = _read_journal(root / 'governor.json')['actions']\n"
+                   "try:\n    _read(Path(sys.argv[2]) / 'context.json')\n"
+                   "except PodError as exc:\n    predecessor_error = exc.code\n"
+                   "else:\n    predecessor_error = None\n"
                    "print(json.dumps({'rows': rows, 'status': status_at(root)['actions'],\n"
-                   "                  'predecessor': _read(Path(sys.argv[2]) / 'context.json')['continued_by']}))\n")
+                   "                  'predecessor_error': predecessor_error}))\n")
         for version, commit in self.RELEASED.items():
             with self.subTest(version=version):
                 released = self.root / f"released-{version}"
@@ -1739,7 +1743,7 @@ class EarlierReaderTests(CarriedCase):
                 self.assertEqual(earlier["rows"], self.journal("successor")["actions"])
                 self.assertEqual([row["outcome"] for row in earlier["status"]],
                                  [row["outcome"] for row in self.journal("successor")["actions"]][-16:])
-                self.assertEqual(earlier["predecessor"], read(self.project, "objective")["continued_by"])
+                self.assertEqual(earlier["predecessor_error"], "state_unsupported")
         self.assertEqual(before, self.snapshot())
 
 

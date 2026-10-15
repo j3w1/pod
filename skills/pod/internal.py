@@ -321,14 +321,14 @@ def _op_constraint(request: dict) -> dict:
 
 def _op_route_failure(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "admission_id", "kind",
-                    "source", "retry_after", "clear", "cleared_by"},
+                    "source", "retry_after", "clear", "cleared_by", "decision"},
           {"project", "objective", "owner", "admission_id", "kind", "source"}, name="request")
     from .ledger import route_failure
     return route_failure(Path(request["project"]), request["objective"],
                          owner=request["owner"], admission_id=request["admission_id"],
                          kind=request["kind"], source=request["source"],
                          retry_after=request.get("retry_after"), clear=request.get("clear", False),
-                         cleared_by=request.get("cleared_by"))
+                         cleared_by=request.get("cleared_by"), decision=request.get("decision"))
 
 
 def _op_governor(request: dict) -> dict:

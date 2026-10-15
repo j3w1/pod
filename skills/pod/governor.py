@@ -168,8 +168,10 @@ def _read_journal(path: Path) -> dict:
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise PodError("state_unsupported",
                        f"Governor journal is not {SCHEMA}; archive or remove it before governed actions")
-    exact(value, {"schema", "revision", "units", "actions", "counters"},
+    exact(value, {"schema", "revision", "units", "actions", "counters", "decision_channels"},
           {"schema", "revision", "units", "actions", "counters"}, name="governor")
+    if "decision_channels" in value and (type(value["decision_channels"]) is not int or value["decision_channels"] != 1):
+        raise _malformed("decision channel representation")
     if (not isinstance(value["actions"], list) or len(value["actions"]) > MAX_ACTIONS
             or not isinstance(value["units"], dict) or len(value["units"]) > MAX_UNITS
             or not isinstance(value["counters"], dict)):
@@ -182,6 +184,8 @@ def _read_journal(path: Path) -> dict:
 
 
 def _write_journal(path: Path, journal: dict) -> None:
+    from .util import protect_decision_record
+    protect_decision_record(journal)
     journal["revision"] += 1
     atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
 
@@ -222,7 +226,9 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     """
     if value is None:
         return None
-    record = exact(value, AUTHORIZATION_FIELDS | {"target"}, AUTHORIZATION_FIELDS, name="authorization")
+    from .util import DECISION_FIELDS, owner_decision
+    record = exact(value, AUTHORIZATION_FIELDS | {"target"} | DECISION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
+    record = owner_decision(record, kind="authorization")
     if record["schema"] != AUTHORIZATION_SCHEMA:
         raise PodError("invalid_authorization", "Authorization schema is unsupported")
     for field in ("authorized_by", "reference", "target"):
@@ -380,10 +386,11 @@ def _proves(row: dict, action: dict) -> bool:
 def _validate_exception(value: object) -> dict | None:
     if value is None:
         return None
-    record = exact(value, {"grant", "reason", "by"}, {"grant", "reason", "by"}, name="exception")
+    from .util import DECISION_FIELDS, owner_decision
+    record = exact(value, {"grant", "reason", "by"} | DECISION_FIELDS, {"grant", "reason", "by"}, name="exception")
     for key in ("grant", "reason", "by"):
         bounded_text(record[key], name=key, limit=512)
-    return record
+    return owner_decision(record, kind="governor_exception")
 
 
 def _exception_grant(governor_policy: dict, supplied: dict | None, *, action: dict, objective: str,
@@ -1036,6 +1043,10 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
             if proposal["kind"] == "merge" and merge_target(verdict["unit"]) is not None:
                 # The admitted target, not the unit's later state, is what a delivery record must match.
                 row["target_binding"] = merge_target(verdict["unit"])
+                from .ledger import map_of
+                governance = (map_of(state) or {}).get("governance")
+                if governance is not None:
+                    row["governance_binding"] = {key: governance[key] for key in ("base_ref", "base")}
             if not managed and proposal["kind"] in EXECUTABLE_KINDS:
                 row["decision_reserved"] = True
             journal["actions"].append(row)
@@ -1222,6 +1233,8 @@ def readback_identity(row: dict, journal: dict, governance: dict | None) -> tupl
     elif kind == "merge":
         consent = row["action"].get("authorization") or {}
         unit = journal["units"].get(row["action"]["unit"]) or {}
+        from .governance import carried_merge_context
+        unit, governance = carried_merge_context(row, unit, governance)
         if (not isinstance(row.get("target_binding"), dict) or not isinstance(unit.get("branch"), dict)
                 or not row.get("commit") or not consent.get("tree")
                 or not isinstance(governance, dict) or not governance.get("base")):

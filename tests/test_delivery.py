@@ -181,8 +181,8 @@ class VerifiedDeliveryTests(KernelCase):
     def test_target_moved_after_verified_result_holds_future_work(self):
         self.prepare_result()
         delivered = self.write(self.stored(), delivery={"record": "merge-1"})["checkpoint"]
-        (self.project / "README.md").write_text("later target change\n")
-        git(self.project, "add", "README.md")
+        (self.project / "AGENTS.md").write_text("later governance change\n")
+        git(self.project, "add", "AGENTS.md")
         git(self.project, "commit", "-qm", "later target")
         git(self.project, "update-ref", "refs/remotes/origin/target", git(self.project, "rev-parse", "HEAD"))
         with self.assertRaises(PodError) as caught:
@@ -275,9 +275,9 @@ class VerifiedDeliveryTests(KernelCase):
             self.write(self.stored(), delivery={"record": "merge-1"})
         self.assertEqual(mismatch.exception.detail["detail"], "tree_mismatch")
 
-    def move_target(self) -> str:
-        (self.project / "README.md").write_text("later target change\n")
-        git(self.project, "add", "README.md")
+    def move_target(self, path="README.md") -> str:
+        (self.project / path).write_text("later target change\n")
+        git(self.project, "add", path)
         git(self.project, "commit", "-qm", "later target")
         moved = git(self.project, "rev-parse", "HEAD")
         git(self.project, "update-ref", "refs/remotes/origin/target", moved)
@@ -285,7 +285,7 @@ class VerifiedDeliveryTests(KernelCase):
 
     def test_moved_target_refuses_recording_a_stale_delivery(self):
         self.prepare_result()
-        self.move_target()
+        self.move_target("AGENTS.md")
         before = read(self.project, "objective")
         with self.assertRaises(PodError) as stale:
             self.write(self.stored(), delivery={"record": "merge-1"})
@@ -295,7 +295,7 @@ class VerifiedDeliveryTests(KernelCase):
     def test_replaying_the_delivery_never_skips_currency_or_closes(self):
         self.prepare_result()
         self.write(self.stored(), delivery={"record": "merge-1"})
-        self.move_target()
+        self.move_target("AGENTS.md")
         before = read(self.project, "objective")
         rows = self.stored()
         rows[0].pop("executor")

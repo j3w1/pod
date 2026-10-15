@@ -371,7 +371,24 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     continuity = checkpoint.get("continuity") if isinstance(checkpoint, dict) else None
     if isinstance(continuity, dict) and continuity.get("history"):
         # The objective's runtime rebind history only, read-only; status never rebinds (A2).
-        result["runtime_continuity"] = {"history": list(continuity["history"])}
+        from .util import decision_channel
+        result["runtime_continuity"] = {"history": [
+            {**row, "decision": decision_channel(row["decision"])} if isinstance(row.get("decision"), dict) else dict(row)
+            for row in continuity["history"]]}
+    if state is not None:
+        from .util import context_decisions, map_decisions
+        from .governor import _read_journal, _record_path
+        try:
+            journal = _read_journal(_record_path(project, objective)) if objective else None
+        except PodError:
+            journal = None
+        decisions = context_decisions(state, journal) + map_decisions(checkpoint or {})
+        if decisions:
+            result["owner_decisions"] = decisions
+        derived = [row for row in (checkpoint or {}).get("governance_history", {}).get("decisions", [])
+                   if row.get("provenance") == "derived"]
+        if derived:
+            result["derived_governance_decisions"] = derived
     if state is not None and checkpoint is not None:
         failure = settlement_failure(state, view, workers)
         if failure is not None:
@@ -537,6 +554,11 @@ def render(result: dict) -> None:
             label = "Owner handoff" if entry["provenance"] == "owner_handoff" else "Runtime rebind"
             print(f"{label}: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
                   f"{clean(entry['at'])} ({entry['provenance']})")
+        for row in result.get("owner_decisions", []):
+            channel = row["decision"]["channel"] + (" (earlier record)" if row["decision"].get("channel_recorded") is False else "")
+            print(f"Decision {clean(row['kind'])}: {clean(channel)} ({clean(row['reference'])})")
+        for row in result.get("derived_governance_decisions", []):
+            print(f"Derived governance adoption: {clean(row['previous_base'])} -> {clean(row['base'])}; unchanged sources")
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})"
                   + (f"; reason: {terminal.get('reason') or 'unknown'}" if "reason" in terminal else ""))

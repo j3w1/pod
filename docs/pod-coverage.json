@@ -3733,7 +3733,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_carried_claim.EarlierReaderTests.test_earlier_pods_load_the_carried_journal_and_the_continued_record_unchanged",
+      "offline_test": "tests.test_carried_claim.EarlierReaderTests.test_earlier_pods_keep_carried_rows_and_refuse_new_decision_fields",
       "status": "NOT_RUN"
     },
     {
@@ -3976,6 +3976,162 @@
         "unit"
       ],
       "offline_test": "tests.test_carried_claim.DoubleClaimTests.test_two_released_link_only_claims_hold_the_successor_after_one_completes",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A331",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_sibling_target_advance_records_derived_adoption",
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_sibling_merge_after_delivery_adopts_derived",
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_record_and_replay_at_unchanged_later_target_pass"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A332",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_only_objective_merge_adopts_derived",
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_merge_outcome_after_adoption_keeps_its_admitted_base"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A333",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_changed_source_refuses_without_record_write",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_previously_absent_source_appearing_refuses",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_previously_present_source_disappearing_refuses",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_backward_target_move_refuses_even_with_identical_sources",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_sideways_target_move_refuses_even_with_identical_sources"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A334",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_missing_from_new_target_refuses",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A335",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governance_adoption.GovernanceAdoptionTests.test_changed_default_branch_refuses",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A336",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governance_adoption.GovernanceAdoptionTests.test_unreadable_target_source_refuses_without_record_write",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A337",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_closing_write_preserves_unchanged_candidate_proof_and_citations",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_candidate_change_cannot_rebind_proof_during_adoption",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_adoption_preserves_bound_review_receipts_and_label"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A338",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_effect_boundary_names_plain_checkpoint_before_admission",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_excluded_sources_do_not_participate_in_adoption",
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_source_changing_exact_delivery_keeps_exemption_but_later_merge_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A339",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_decision_channels.DecisionChannelTests.test_new_governance_decision_records_default_session_channel",
+        "tests.test_decision_channels.DecisionChannelTests.test_session_revision_obligation_reopen_and_acceptance_records",
+        "tests.test_decision_channels.DecisionChannelTests.test_constraints_and_governor_exceptions_require_session",
+        "tests.test_decision_channels.DecisionChannelTests.test_user_route_failure_clear_records_channel",
+        "tests.test_decision_channels.ContinuityChannelTests.test_runtime_continuity_requires_session_and_records_it"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A340",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_decision_channels.DecisionChannelTests.test_relayed_snapshot_adoption_records_channel_and_verified_source",
+        "tests.test_decision_channels.DecisionChannelTests.test_relayed_withdrawal_is_stored_and_reported_with_its_channel",
+        "tests.test_decision_channels.DecisionChannelTests.test_relayed_general_revision_requires_previously_recorded_question",
+        "tests.test_decision_channels.ClaimChannelTests.test_relayed_claim_records_source_and_status_channel",
+        "tests.test_decision_channels.RetirementChannelTests.test_relayed_retirement_records_source_and_status_channel"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A341",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_decision_channels.SharedDecisionTests.test_all_authorization_scopes_require_session",
+        "tests.test_decision_channels.SharedDecisionTests.test_complete_relays_are_accepted_only_for_the_exhaustive_kind_list",
+        "tests.test_decision_channels.HandoffChannelTests.test_owner_handoff_requires_session_and_records_it",
+        "tests.test_decision_channels.DecisionChannelTests.test_constraints_and_governor_exceptions_require_session",
+        "tests.test_decision_channels.DecisionChannelTests.test_user_route_failure_clear_records_channel",
+        "tests.test_decision_channels.ContinuityChannelTests.test_runtime_continuity_requires_session_and_records_it"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A342",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_decision_channels.SharedDecisionTests.test_incomplete_or_misclassified_relays_refuse",
+        "tests.test_decision_channels.DecisionChannelTests.test_relayed_general_revision_requires_previously_recorded_question"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A343",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_closed_record_validates_without_rewrite",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_claim_reads_without_rewrite",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_retirement_reads_without_rewrite",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_derived_adoption",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_relay_instead_of_misreading_session",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_session_governance_fields",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_claim_relay",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_retirement_relay"
+      ],
       "status": "NOT_RUN"
     }
   ]

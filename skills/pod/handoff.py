@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from .errors import PodError
-from .util import bounded_text, exact
+from .util import bounded_text, exact, owner_decision, CHANNEL_FIELDS
 
 FACTS = {"objective", "from_owner", "to_owner", "run", "recorded_generation",
          "recorded_runtime", "current_runtime", "ambiguity"}
@@ -20,7 +20,7 @@ def validate_entry(row: dict) -> None:
     decision = row.get("decision")
     if (set(row) != ENTRY or row.get("state") not in ("pending", "done", "aborted")
             or not isinstance(row.get("verified"), dict)
-            or not isinstance(decision, dict) or set(decision) != DECISION
+            or not isinstance(decision, dict) or set(decision) - CHANNEL_FIELDS != DECISION
             or decision.get("provenance") != "user_direct"
             or any(not isinstance(decision.get(key), str) or not decision[key]
                    for key in DECISION - {"ambiguity", "recorded_generation"})
@@ -30,6 +30,7 @@ def validate_entry(row: dict) -> None:
             or any(not isinstance(item, str) for item in decision["ambiguity"])
             or row.get("abort_reason") is not None and not isinstance(row["abort_reason"], str)):
         raise PodError("state_unsupported", "Owner handoff history is malformed")
+    owner_decision(decision, kind="handoff", stored=True)
     # Presentation and pane identities are never accepted as authority or stored evidence.
     allowed = {"run", "coordinator", "generation", "admissions", "absent", "owner_code", "caller_runtime"}
     completion = row["completion"]
@@ -354,10 +355,11 @@ def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: st
 def owner_handoff(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:
     from .ledger import (_lock, _path, _read, _write, _require_open, CONTINUITY_HISTORY)
     from .orca import current_run, mutate_command, terminal_identity
-    value = exact(decision, DECISION, DECISION, name="handoff_decision")
+    value = exact(decision, DECISION | CHANNEL_FIELDS, DECISION, name="handoff_decision")
     bounded_text(value["instruction"], name="instruction", limit=1024)
     if value["provenance"] != "user_direct":
         raise PodError("handoff_decision_mismatch", "Only an exact direct Owner confirmation permits this handoff")
+    value = owner_decision(value, kind="handoff")
     path = _path(project, objective)
 
     def refusal(verdict, code="owner_handoff_refused"):
