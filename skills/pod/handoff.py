@@ -87,7 +87,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, closed_snapshot_context)
-    from .util import bounded_json
+    from .history import load_context
     root = state_root(project)
     if root.is_symlink():
         return {"objectives": [], "unreadable": 1}
@@ -120,7 +120,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
         if path == own:
             continue
         try:
-            raw = bounded_json(path, limit=CONTEXT_LIMIT)
+            raw = load_context(path, validate=False)
         except PodError:
             unknown += 1
             continue

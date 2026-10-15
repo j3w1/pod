@@ -12,9 +12,10 @@ import re
 from typing import Callable, Iterator
 
 from .errors import PodError
+from .history import load_context, prepare_context, publish_context
 from . import gitio
 from .installer import STATE_SCHEMAS, superseded_objectives, superseded_schemas
-from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
+from .util import MAX_RECORD, bounded_text, digest, exact, explicit_home, native_home
 
 ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred")
 CONTEXT_SCHEMA = STATE_SCHEMAS["context"]
@@ -236,7 +237,7 @@ def _validate_context(value: object) -> dict:
 def _read(path: Path) -> dict:
     if not _record_exists(path):
         return _empty()
-    return _validate_context(bounded_json(path, limit=CONTEXT_LIMIT))
+    return load_context(path)
 
 
 def read(project: Path, objective: str) -> dict | None:
@@ -244,7 +245,7 @@ def read(project: Path, objective: str) -> dict | None:
     return _read(path) if _record_exists(path) else None
 
 
-def _write(path: Path, value: dict) -> None:
+def _write(path: Path, value: dict, *, native: dict | None = None, protected=()) -> None:
     from .succession import refuse_continued
     # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
     # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
@@ -253,7 +254,8 @@ def _write(path: Path, value: dict) -> None:
     protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+    record, chunks = prepare_context(path, value, native=native, protected=protected)
+    publish_context(path, record, chunks)
 
 
 def _write_succession(path: Path, value: dict) -> None:
@@ -262,7 +264,8 @@ def _write_succession(path: Path, value: dict) -> None:
     protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+    record, chunks = prepare_context(path, value)
+    publish_context(path, record, chunks)
 
 
 def _write_retirement(path: Path, value: dict) -> None:
@@ -271,7 +274,8 @@ def _write_retirement(path: Path, value: dict) -> None:
     protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+    record, chunks = prepare_context(path, value, purpose="retirement")
+    publish_context(path, record, chunks)
 
 
 def _run_references(state: dict) -> dict[str, str]:
@@ -1379,7 +1383,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                "pod_version": identity["version"],
                                "bundle_digest": identity["bundle_digest"],
                                **({"continuity": continuity} if continuity else {})}
-        _write(path, state)
+        _write(path, state, native=authority.get("native"))
         result = dict(state)
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx)
@@ -1683,7 +1687,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
-        _write(path, state)
+        _write(path, state, native=native)
         return {**row, "existing": False}
 
 
@@ -1845,7 +1849,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                             and failure.get("recorded_at", "") <= row["created_at"]):
                         failure["cleared_at"] = row["report"]["consumed_at"]
                         failure["cleared_by"] = admission_id
-        _write(path, state)
+        _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
         return {"ingestion": ingestion, "settled": settled,
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
@@ -1861,7 +1865,7 @@ def state_inventory(project: Path) -> dict:
         return result
     for path in root.glob("*/context.json"):
         try:
-            _validate_context(bounded_json(path, limit=CONTEXT_LIMIT))
+            load_context(path)
             result["current"] += 1
         except PodError as exc:
             result["unsupported" if exc.code == "state_unsupported" else "unreadable"] += 1
@@ -1875,13 +1879,12 @@ def state_inventory(project: Path) -> dict:
 
 def superseded_for_run(run_id: str) -> list[dict]:
     """Superseded objective records that name this Run; read-only, for status."""
-    import json
     root = state_root()
     rows = []
     for row in superseded_objectives(root):
         try:
-            value = json.loads((root / row["record"] / "context.json").read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, ValueError):
+            value = load_context(root / row["record"] / "context.json", validate=False)
+        except (OSError, PodError):
             continue
         checkpoint_value = value.get("checkpoint") if isinstance(value, dict) else None
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []

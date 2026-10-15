@@ -517,6 +517,12 @@ def _op_historical_retirement(request: dict) -> dict:
                                  decision=request.get("decision"))
 
 
+def _op_record_compaction(request: dict) -> dict:
+    exact(request, {"project", "objective", "decision"}, {"project", "objective"}, name="request")
+    from .history import record_compaction
+    return record_compaction(Path(request["project"]), request["objective"], decision=request.get("decision"))
+
+
 def _op_cleanup_plan(request: dict) -> dict:
     exact(request, {"project", "objective", "expect", "archives"}, {"project", "objective"}, name="request")
     from .cleanup import plan
@@ -559,6 +565,7 @@ _OPERATIONS = {
     'owner-handoff': _op_owner_handoff,
     'succession': _op_succession,
     'historical-retirement': _op_historical_retirement,
+    'record-compaction': _op_record_compaction,
     'cleanup-plan': _op_cleanup_plan,
     'map': _op_map,
 }

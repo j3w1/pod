@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from .errors import PodError
-from .util import bounded_json
+from .history import load_context
 
 MAX_SCAN = 1024
 MAX_ROWS = 128
@@ -138,7 +138,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
                 unattributed.append(entry.name)  # Pod files without the record that names them.
             continue
         try:
-            raw = bounded_json(Path(entry.path) / "context.json", limit=CONTEXT_LIMIT)
+            raw = load_context(Path(entry.path) / "context.json", validate=False)
         except PodError as exc:
             unreadable.append({"record": entry.name, "code": exc.code})
             continue

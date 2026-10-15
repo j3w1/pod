@@ -15,13 +15,15 @@ from tests.test_historical_retirement import RetirementCase
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("destination", type=Path)
-    parser.add_argument("kind", choices=("closed", "claim", "retirement"))
+    parser.add_argument("kind", choices=("admission", "closed", "claim", "retirement"))
     args = parser.parse_args()
     assert __version__ == "0.13.3", __version__
-    case = {"closed": KernelCase, "claim": SuccessionCase, "retirement": RetirementCase}[args.kind]()
+    case = {"admission": RetirementCase, "closed": KernelCase, "claim": SuccessionCase, "retirement": RetirementCase}[args.kind]()
     case.setUp()
     try:
-        if args.kind == "closed":
+        if args.kind == "admission":
+            case.establish()
+        elif args.kind == "closed":
             case.intake(governance_policy(case, "A"), revision_authority=USER)
             review = case.stored()[1]
             review.pop("wait")

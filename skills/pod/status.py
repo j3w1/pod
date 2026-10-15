@@ -269,9 +269,17 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             superseded = []
     except PodError as exc:
         result.update({"status": "blocked", "blocker": exc.code,
-                       "next_safe_action": "inspect the objective state"})
+                       "next_safe_action": ("Run internal record-compaction for this exact project and objective; "
+                                            "owner-scoped detection can read an over-limit record." if exc.code == "record_too_large"
+                                            else "inspect the objective state")})
         if objective is not None:
             result["readiness"] = unavailable(exc.code, f"the objective record cannot be read ({exc.code})")
+        if exc.code == "record_too_large":
+            from .history import CONTEXT_LIMIT, WARN_AT, COMPACT_AT
+            result["record_capacity"] = {"status": "unavailable", "physical_bytes": (exc.detail or {}).get("current_bytes"),
+                                         "logical_bytes": None, "limit_bytes": CONTEXT_LIMIT,
+                                         "warning_bytes": WARN_AT, "compaction_bytes": COMPACT_AT, "warning": True,
+                                         "next_action": result["next_safe_action"]}
         return result
     result["run"] = run
     native_error = None
@@ -447,6 +455,13 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         error = result["obligations"].get("error") if isinstance(result.get("obligations"), dict) else None
         result.update(assess(project, objective, state, record_root, view=view, map_error=error,
                              failure=result.get("native_settlement_failure"), owner_reader=handoff is None))
+    if state is not None and record_root is not None:
+        from .history import capacity
+        try:
+            result["record_capacity"] = capacity(record_root / "context.json", state)
+        except PodError as exc:
+            result["record_capacity"] = {"status": "unavailable", "code": exc.code}
+            result["readiness"] = unavailable(exc.code, f"the objective history cannot be read ({exc.code})")
     return result
 
 
@@ -471,6 +486,10 @@ def project_for_state(checkpoint: dict, project: Path) -> Path:
 def render(result: dict) -> None:
         if isinstance(result.get("readiness"), dict):
             print(clean(result["readiness"]["summary"]))
+        capacity = result.get("record_capacity") or {}
+        if capacity.get("warning"):
+            print(f"Record capacity: {capacity['physical_bytes']}/{capacity['limit_bytes']} bytes. "
+                  + clean(capacity["next_action"]))
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
         for choice in result.get("choices", []):
             print(f"  Choose {choice['objective']} | {choice['worktree'] or 'unbound'} | "

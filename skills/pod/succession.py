@@ -829,13 +829,30 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
     with every carried row and marker, exactly as the claim copies it. The limits never change.
     """
     from .governor import MAX_JOURNAL
-    from .ledger import CONTEXT_LIMIT
-    from .util import encoded
+    from .ledger import CONTEXT_LIMIT, _path
+    from .history import prepare_context
+    from .util import encoded, protect_decision_record
     journal, _ = _carried_journal(project, objective, predecessor, prior, record_ids, at=at)
     planned = [("successor's Governor journal", {**journal, "revision": journal["revision"] + 1}, MAX_JOURNAL)]
-    planned += [(name, {**value, "revision": value["revision"] + 2}, CONTEXT_LIMIT) for name, value in records.items()]
-    for name, value, limit in planned:
-        size = len(encoded(value, compact=True))
+    for name, value in records.items():
+        candidate = {**value, "revision": value["revision"] + 2}
+        protect_decision_record(candidate)
+        path = _path(project, predecessor if name.startswith("predecessor") else objective)
+        try:
+            physical, _ = prepare_context(path, candidate,
+                                          journal=None if name.startswith("predecessor") else journal)
+        except PodError as exc:
+            if exc.code != "record_too_large":
+                raise
+            # Keep the established claim refusal and remedy; nothing has been published.
+            physical = None
+            size = exc.detail["proposed_bytes"]
+        else:
+            size = len(encoded(physical, compact=True))
+        planned.append((name, physical, CONTEXT_LIMIT, size))
+    for entry in planned:
+        name, value, limit = entry[:3]
+        size = entry[3] if len(entry) == 4 else len(encoded(value, compact=True))
         if size <= limit:
             continue
         route = ("no supported route completes a claim linked before this check: only unreleased candidates of it "

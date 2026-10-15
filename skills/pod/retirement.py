@@ -217,7 +217,7 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
-    from .util import bounded_json
+    from .history import load_context
     context = repository_context(project)
     root = state_root(project)
     try:
@@ -239,7 +239,7 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
                 continue
             if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
                 continue
-            raw = bounded_json(Path(entry.path) / "context.json", limit=CONTEXT_LIMIT)
+            raw = load_context(Path(entry.path) / "context.json", validate=False)
         except (OSError, PodError):
             unreadable.append(entry.path)
             continue
@@ -685,7 +685,9 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
             return fail("workers_unverified", f"A Run or its worker list could not be read ({exc.code}).")
         if shown["coordinator_handle"] not in (None, owner):
             return fail("generation_changed", "A recorded Run is now bound to another coordinator.")
-        if binding.get("run") == run and binding.get("generation") != shown["consumer_generation"]:
+        changed = binding.get("run") == run and binding.get("generation") != shown["consumer_generation"]
+        explicitly_unbound = shown.get("coordinator_known") is True and shown["coordinator_handle"] is None
+        if changed and not explicitly_unbound:
             return fail("generation_changed", "A recorded Run's consumer generation changed.")
         if fleet.get("complete") is not True:
             return fail("workers_unverified", "A Run's worker list is incomplete.")
@@ -908,7 +910,9 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                      "locations": [], "retained": [], "unrecorded_locations": None,
                                      "records": []},
                            "message": f"The objective's record is unreadable or unsupported ({exc.code}).",
-                           "next_action": "Historical retirement needs a readable current record."}
+                           "next_action": ("Run internal record-compaction for this exact project and objective first; "
+                                           "its owner-scoped maintenance preserves the logical facts." if exc.code == "record_too_large"
+                                           else "Historical retirement needs a readable current record.")}
             else:
                 # Each objective reads the host afresh: an earlier objective's inventory is never its proof.
                 verdict = _detect(project, name, row["release"], state, port=port, repository=repository,
