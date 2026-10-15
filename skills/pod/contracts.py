@@ -13,6 +13,7 @@ from functools import wraps
 import re
 
 from .errors import FieldRefusal, PodError
+from .installer import STATE_SCHEMAS
 
 IDENTIFIER = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z"
 UNIT = re.compile(IDENTIFIER)
@@ -28,6 +29,10 @@ WAIT_CLASSES = ("dependency", "contract_unsettled", "sequenced", "ownership", "c
 PARTIES = ("owner", "user", "provider", "third_party")
 ROLES = ("implement", "investigate", "review")
 VERDICTS = ("accepted", "rejected")
+EVIDENCE_STATUSES = ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE")
+PROPOSAL_SOURCES = ("worker_report", "reviewer_advisory", "issue", "repository",
+                    "fetched_documentation", "coordinator_caution")
+EFFECT_PREFIXES = ("workflow:", "deploy:", "release:")
 ACTION_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "remote_diagnostic",
                 "merge", "release", "deploy", "cancel_validation")
 PURPOSES = ("validation", "diagnostic", "checkpoint", "release", "cancellation")
@@ -99,7 +104,7 @@ TABLE = {
     }, ("schema", "assignment", "attempt", "candidate", "outcome", "scope", "files", "checks", "failures",
         "evidence", "uncertainty", "questions")),
     "checkpoint": definition({
-        **_MAP_FIELDS, "schema": choice(("pod-checkpoint/v3",)),
+        **_MAP_FIELDS, "schema": choice((STATE_SCHEMAS["checkpoint"],)),
         "criteria": items(64, {"type": "text", "nonempty": True}), "candidate": _GIT,
         **{key: _ANY for key in ("plan_revision", "policy_revision", "assignments", "questions",
                                   "verification_gaps", "next_safe_action", "route_decisions", "objective", "blocker", "remaining_gates")},
@@ -138,12 +143,12 @@ TABLE = {
     "evidence": definition({"schema": choice(("pod-evidence/v1",)),
                             **{key: _ANY for key in ("criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "reference", "reviewer_attempt")},
                             "definition": _DIGEST, "timestamp": {"type": "text", "form": "timezone-aware ISO timestamp"},
-                            "status": choice(("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"))},
+                            "status": choice(EVIDENCE_STATUSES)},
                            ("schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference")),
     "short evidence": definition({**{key: text() for key in ("check", "command", "result", "reference", "environment")},
                                   "sources": items(64, record("source")), "dependencies": items(64, text()),
                                   "timestamp": {"type": "text", "form": "timezone-aware ISO timestamp"},
-                                  "status": choice(("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"))},
+                                  "status": choice(EVIDENCE_STATUSES)},
                                  ("check", "command", "result", "reference")),
     "acceptance": definition({"source": ident(SOURCE), "verdict": choice(VERDICTS),
                               "candidate": text(128), "evidence": text(1024)},
@@ -156,7 +161,7 @@ TABLE = {
     "admission map": definition({"seq": _MAP_FIELDS["seq"], "obligations": _MAP_FIELDS["obligations"],
                                  "proposals": _MAP_FIELDS["proposals"]}),
     "action": definition({"kind": choice(ACTION_KINDS), **{key: text() for key in ("candidate", "target", "reason")},
-                          "unit": ident(), "purpose": choice(PURPOSES), "effects": {**items(16, {"type": "text", "max_length": 256, "form": "nonempty workflow:, deploy: or release: effect"}), "unique": True},
+                          "unit": ident(), "purpose": choice(PURPOSES), "effects": {**items(16, {"type": "text", "max_length": 256, "prefixes": list(EFFECT_PREFIXES), "nonempty_suffix": True}), "unique": True},
                           "authorization": {"type": "object"}, "diagnostic": record("diagnostic"),
                           "evidence": items(16, text()),
                           "inputs": {"type": "object", "max_items": 8,
@@ -165,7 +170,7 @@ TABLE = {
                          ("kind", "candidate", "target", "reason")),
     "diagnostic": definition({key: text() for key in ("question", "local_limitation", "check", "stopping_condition")},
                              ("question", "local_limitation", "check", "stopping_condition")),
-    "proposal": definition({"id": ident(), "source": choice(("worker_report", "reviewer_advisory", "issue", "repository", "fetched_documentation", "coordinator_caution")),
+    "proposal": definition({"id": ident(), "source": choice(PROPOSAL_SOURCES),
                             "origin_ref": text(256), "summary": text(), "status": choice(("open", "adopted"))},
                            ("id", "source", "origin_ref", "summary", "status")),
     "context_reference": definition({"kind": choice(("source", "instruction", "summary")), "path": _PATH,

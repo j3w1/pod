@@ -26,7 +26,10 @@ def observe(bundle):
 class RefusalCompatibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temporary = tempfile.TemporaryDirectory(prefix="refusal-previous-")
+        parent = Path(os.environ["POD_CACHE_HOME"]) if "POD_CACHE_HOME" in os.environ else None
+        if parent is not None:
+            parent.mkdir(parents=True, exist_ok=True)
+        cls.temporary = tempfile.TemporaryDirectory(prefix="refusal-previous-", dir=parent)
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.bundle = Path(cls.temporary.name)
         archive = cls.bundle / "source.tar"

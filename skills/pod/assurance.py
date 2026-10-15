@@ -19,7 +19,7 @@ def _source_entries(value: Any, name: str, *, obligation: str | None = None) -> 
     for item in value:
         entry = _exact(item, {"path", "state", "sha256"}, {"path", "state"}, "evidence source", obligation=obligation)
         _path(entry["path"], code="obligation_invalid", obligation=obligation)
-        if entry["state"] not in ("present", "absent", "unavailable"):
+        if entry["state"] not in TABLE["source"]["fields"]["state"]["allowed"]:
             raise refuse("obligation_invalid", "malformed", "evidence source state allowed: present, absent, unavailable", record='source entries',
                          **({"obligation": obligation} if obligation is not None else {}))
         rows.append(dict(entry))

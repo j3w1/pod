@@ -22,7 +22,7 @@ import re
 from typing import Any, Callable
 
 from .contracts import (TABLE, UNIT, IDENTIFIER, SURFACE, SOURCE, LINES, GOVERNANCE_PATHS, KINDS, PROVENANCES, STATES,
-                        WAIT_CLASSES, PARTIES, ROLES, VERDICTS, bound, fields, required,
+                        WAIT_CLASSES, PARTIES, ROLES, VERDICTS, PROPOSAL_SOURCES, bound, fields, required,
                         input_record, annotate, current)
 from .errors import PodError
 from .gitio import OBJECT_ID
@@ -34,8 +34,6 @@ TERMINAL = ("satisfied", "withdrawn")
 EXTERNAL_WAITS = ("authority", "user_hold", "input_unavailable")
 SEVERITIES = ("blocker", "major", "minor", "info")
 TRIAGE = ("required_correction", "advisory")
-PROPOSAL_SOURCES = ("worker_report", "reviewer_advisory", "issue", "repository",
-                    "fetched_documentation", "coordinator_caution")
 AUTHORIZED_SCOPES = ("publish", "merge", "release", "deploy")
 MAX_OBLIGATIONS = bound("map", "obligations", "max_items")
 MAX_PROPOSALS = bound("map", "proposals", "max_items")
@@ -490,7 +488,7 @@ def _write_acceptances(rows: dict[str, dict], prior_rows: dict[str, dict], reque
 def _proposal(raw: Any) -> dict:
     row = _exact(raw, fields("proposal"), required("proposal"), "proposal")
     _ident(row["id"], "proposal id")
-    if row["source"] not in PROPOSAL_SOURCES or row["status"] not in ("open", "adopted"):
+    if row["source"] not in PROPOSAL_SOURCES or row["status"] not in TABLE["proposal"]["fields"]["status"]["allowed"]:
         raise refuse("obligation_invalid", "malformed", "proposal source allowed: " + ", ".join(PROPOSAL_SOURCES) + "; status allowed: open, adopted", proposal=row["id"])
     _text(row["origin_ref"], "origin_ref", limit=bound("proposal", "origin_ref"))
     _text(row["summary"], "summary")
@@ -507,7 +505,7 @@ def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> d
                      "a map revision is authorized only by a direct user instruction", record='authority')
     _text(record["instruction"], "instruction", limit=bound("revision authority", "instruction"))
     if "question" in record:
-        _text(record["question"], "question", limit=512)
+        _text(record["question"], "question", limit=bound("revision authority", "question"))
     return owner_decision(record, kind=kind, stored=stored)
 
 

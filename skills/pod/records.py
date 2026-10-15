@@ -11,7 +11,7 @@ import os
 import stat
 from typing import Any
 
-from .contracts import TABLE, bound, fields, required, input_record
+from .contracts import TABLE, bound, fields, required, input_record, annotate
 from .errors import PodError
 from .util import bounded_text, digest, exact
 
@@ -111,6 +111,21 @@ def _source(item: Any) -> dict:
     return ref
 
 
+@input_record("packet_route")
+def _packet_route(route_value: Any) -> dict:
+    required_fields = set(TABLE["packet_route"]["required_by_agent"][
+        "direct" if isinstance(route_value, dict) and route_value.get("agent") == "direct" else "other"])
+    try:
+        route = exact(route_value, fields("packet_route"), required_fields, name="packet_route")
+        for key, value in route.items():
+            if value is not None:
+                bounded_text(value, name="route " + key, limit=bound("packet_route", key))
+    except PodError as exc:
+        annotate(exc, "packet_route", optional=fields("packet_route") - required_fields)
+        raise
+    return route
+
+
 @input_record("packet")
 def packet(value: Any) -> dict:
     p = exact(value, PACKET_FIELDS, PACKET_REQUIRED, name="packet")
@@ -139,14 +154,7 @@ def packet(value: Any) -> dict:
     for field in ("worktree", "placement"):
         if field in p:
             worktree_binding(p[field])
-    route_value = p["route"]
-    route = exact(route_value, fields("packet_route"),
-                  set(TABLE["packet_route"]["required_by_agent"][
-                      "direct" if isinstance(route_value, dict) and route_value.get("agent") == "direct" else "other"]),
-                  name="packet_route")
-    for key, value in route.items():
-        if value is not None:
-            bounded_text(value, name="route " + key, limit=bound("packet_route", key))
+    _packet_route(p["route"])
     if len(str(p)) > TABLE["packet"]["max_repr_length"]:
         raise PodError("invalid_packet", "Packet is too large")
     return {"packet_id": digest(p), "body": p, "title": title(p)}
@@ -173,7 +181,7 @@ def worktree_binding(value: Any) -> dict:
 def report_record(value: Any) -> dict:
     """Complete report observation shape, shared by consumption and stored reads."""
     r = exact(value, REPORT_FIELDS, REPORT_FIELDS, name="report")
-    if r["schema"] != "pod-report/v1":
+    if r["schema"] != TABLE["report"]["fields"]["schema"]["allowed"][0]:
         raise PodError("report_binding_mismatch", "Report does not bind the frozen packet")
     for key in ("assignment", "attempt", "candidate"):
         bounded_text(r[key], name=key, limit=bound("report", key))
@@ -190,7 +198,7 @@ def report(value: Any, frozen: dict, native_binding: dict) -> dict:
         raise PodError("report_binding_mismatch", "Frozen packet content identity changed")
     packet(frozen["body"])
     r = exact(value, REPORT_FIELDS, REPORT_FIELDS, name="report")
-    if r["schema"] != "pod-report/v1" or r["candidate"] != frozen["body"]["candidate"] or r["assignment"] != frozen["packet_id"]:
+    if r["schema"] != TABLE["report"]["fields"]["schema"]["allowed"][0] or r["candidate"] != frozen["body"]["candidate"] or r["assignment"] != frozen["packet_id"]:
         raise PodError("report_binding_mismatch", "Report does not bind the frozen packet")
     r = report_record(r)
     binding = exact(native_binding, {"runtime", "runId", "taskId", "dispatchId", "workerId"},
@@ -219,7 +227,7 @@ def evidence_record(value: Any) -> dict:
     within its obligation, so a new observation needs a new reference.
     """
     e = exact(value, EVIDENCE_FIELDS, EVIDENCE_FIELDS - {"reviewer_attempt", "definition"}, name="evidence")
-    if e["schema"] != "pod-evidence/v1" or e["status"] not in ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+    if e["schema"] != TABLE["evidence"]["fields"]["schema"]["allowed"][0] or e["status"] not in TABLE["evidence"]["fields"]["status"]["allowed"]:
         raise PodError("invalid_evidence", "Invalid evidence schema or status")
     if "definition" in e and not _sha256(e["definition"]):
         raise PodError("invalid_evidence", "Evidence definition is a SHA256 fingerprint")
@@ -232,13 +240,13 @@ def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str
              sources: list | None = None, dependencies: list | None = None,
              environment: str | None = None) -> dict:
     e = evidence_record(value)
-    if e["schema"] != "pod-evidence/v1" or e["criterion"] != criterion or e["candidate"] != candidate or e["policy_revision"] != policy_revision:
+    if e["schema"] != TABLE["evidence"]["fields"]["schema"]["allowed"][0] or e["criterion"] != criterion or e["candidate"] != candidate or e["policy_revision"] != policy_revision:
         raise PodError("stale_evidence", "Evidence does not bind current criterion, candidate and policy")
     if (sources is not None and e["sources"] != sources or
             dependencies is not None and e["dependencies"] != dependencies or
             environment is not None and e["environment"] != environment):
         raise PodError("stale_evidence", "Evidence source, dependency or environment binding changed")
-    if e["status"] not in ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+    if e["status"] not in TABLE["evidence"]["fields"]["status"]["allowed"]:
         raise PodError("invalid_evidence", "Invalid evidence status")
     return e
 

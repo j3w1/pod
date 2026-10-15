@@ -151,6 +151,7 @@ class DiscoveryTests(CallerCase):
         for record, operation, request in (
             ("packet", "packet", {**self.raw_packet(), "responsibility": SENTINEL * 300}),
             ("packet", "packet", {**self.raw_packet(), "unknown": SENTINEL}),
+            ("packet_route", "packet", {**self.raw_packet(), "route": {**self.raw_packet()["route"], "reason": SENTINEL * 20}}),
             ("obligation", "checkpoint", self.owned(value=self.core(obligations=[self.criterion(check=SENTINEL * 50)]))),
             ("external", "checkpoint", self.owned(value=self.core(obligations=[self.criterion(state="blocked_external",
                 external={"party": "user", "need": SENTINEL * 50, "unblocks_when": "provided"}), self.sub("S"), self.sub("T")], seq=2))),
@@ -160,7 +161,8 @@ class DiscoveryTests(CallerCase):
                 detail = error["detail"].get("referent", error["detail"])
                 contract = self.contracts[record]
                 self.assertEqual(detail["accepted"], contract["accepted"])
-                self.assertEqual(detail["optional"], contract["optional"])
+                optional = sorted(set(contract["accepted"]) - set(contract["required_by_agent"]["other"])) if record == "packet_route" else contract["optional"]
+                self.assertEqual(detail["optional"], optional)
                 self.assertEqual(detail["bounded_fields"], {key: spec for key, spec in contract["fields"].items()
                                                            if list(limits(spec)) or "allowed" in spec or "pattern" in spec})
         self.assertGreater(len(self.contracts["obligation"]["accepted"]), 8)

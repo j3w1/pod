@@ -25,7 +25,7 @@ from typing import Any, Iterator
 import yaml
 
 from .catalog import by_id, route_keys, supported_route
-from .contracts import ACTION_KINDS, bound
+from .contracts import ACTION_KINDS, EFFECT_PREFIXES, bound
 from .errors import PodError
 from .util import digest, exact, explicit_home, native_home
 
@@ -47,7 +47,6 @@ BACKUP_SUFFIX = ".pod-v1"
 SETUP_ACTION = "open pod in a terminal and confirm the route setup"
 GOVERNED_KINDS = ACTION_KINDS
 TRIGGER_KINDS = ("push", "pr_update")
-EFFECT_PREFIXES = ("workflow:", "deploy:", "release:")
 WASTE_GOVERNOR_FIELDS = {"mode", "cancel_superseded_validation", "preflight", "triggers",
                          "transient_retries", "host_control", "exceptions"}
 DEFAULT_GOVERNOR = {"mode": "enforce", "cancel_superseded_validation": True,

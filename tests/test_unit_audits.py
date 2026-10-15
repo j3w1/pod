@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -137,7 +138,10 @@ class SingleUnitCompatibilityTests(ks.KernelCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.previous_home = tempfile.TemporaryDirectory(prefix="unit-audit-previous-")
+        parent = Path(os.environ["POD_CACHE_HOME"]) if "POD_CACHE_HOME" in os.environ else None
+        if parent is not None:
+            parent.mkdir(parents=True, exist_ok=True)
+        cls.previous_home = tempfile.TemporaryDirectory(prefix="unit-audit-previous-", dir=parent)
         cls.addClassCleanup(cls.previous_home.cleanup)
         cls.bundle = Path(cls.previous_home.name)
         archive = cls.bundle / "source.tar"
@@ -145,15 +149,18 @@ class SingleUnitCompatibilityTests(ks.KernelCase):
                         "skills", "VERSION"], check=True)
         with tarfile.open(archive) as source:
             source.extractall(cls.bundle, filter="data")
+        cls.recorded = cls.bundle / "recorded"
+        cls.recorded.mkdir()
+        completed = subprocess.run([sys.executable, str(REPOSITORY / "tests/unit_audit_previous_writer.py"),
+                                    str(cls.recorded)], cwd=REPOSITORY,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join((str(cls.bundle / "skills"), str(REPOSITORY)))},
+            capture_output=True, text=True, timeout=15)
+        if completed.returncode:
+            raise AssertionError(completed.stderr)
 
     def test_genuine_0150_single_unit_decisions_codes_and_journal_rows_match(self):
         destination = self.root / "previous"
-        destination.mkdir()
-        completed = subprocess.run([sys.executable, str(REPOSITORY / "tests/unit_audit_previous_writer.py"),
-                                    str(destination)], cwd=REPOSITORY,
-            env={**os.environ, "PYTHONPATH": os.pathsep.join((str(self.bundle / "skills"), str(REPOSITORY)))},
-            capture_output=True, text=True, timeout=15)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        shutil.copytree(self.recorded, destination)
         self.assertEqual(json.loads((destination / "provenance.json").read_text())["version"], "0.15.0")
         self.project = destination / "project"
         self.base = self.candidate = ks.git(self.project, "rev-parse", "HEAD")
