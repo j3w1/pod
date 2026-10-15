@@ -4,6 +4,8 @@ A direct objective uses the same proportionate workflow as an issue. Retrieve th
 
 Bind repository/issue identity, locator, body digest and amendments. Recheck at continuation, affected admission and final verification; reconcile body changes; metadata alone does not invalidate proof. Preserve unaffected proof and unresolved attempts.
 
+The introducing checkpoint reports the bound PES's PoD mapping gaps and duplicate lines. Check that intake acknowledgement before delegating; a not-read result is not evidence that there are no PoD lines.
+
 An Evidence Evaluation Ledger (EEL), title `EEL:…` or first nonempty unindented body line `**Format:** Evidence Evaluation Ledger v1` (optional `<br>`), is evidence only. Never execute it or restate it as a direct objective; implementation needs a separate PES citing it.
 
 A SEAL (`SEAL:` title or first-line `**Format:** SEAL v1`, same line rules) supplies requirements, not whole-initiative execution. Use read-only SEAL delivery planning, a bounded Pod Execution Spec citing selected SEAL requirements, or an explicitly scoped analysis request; analysis grants no implementation authority. Intake identifies either role even from another repository or a directory without GitHub repository identity.

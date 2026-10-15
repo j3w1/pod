@@ -1079,6 +1079,8 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     _persisted_rows(state, ctx)
     if value.get("close") is True:
         closure = _close(state, ctx)
+        if callable(ctx.get("pod_tick_gate")):
+            ctx["pod_tick_gate"](state)
         # Closure is the last record (R117). Only a new closure write checks this; a recorded closure is
         # re-validated by _close alone, so it stays valid whatever was recorded around it.
         unrecorded = ctx.get("closure_unrecorded")

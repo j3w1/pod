@@ -406,6 +406,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         result["worker_tabs"] = ((view or {}).get("worker_tabs") if view is not None else None)
         if result["worker_tabs"] is None:
             result["worker_tabs"] = tab_rows(state, {}, failure=(failure or {}).get("code") or "worker_terminal_unverified")
+        from .pod_ticks import projection as tick_projection
+        result["pod_ticks"] = ((view or {}).get("pod_ticks") if view else None)
+        if result["pod_ticks"] is None:
+            result["pod_ticks"] = tick_projection(state, checkpoint, (view or {}).get("ctx") or {},
+                                                  project=project, objective=objective)
     if result["installed_version_drift"]:
         result["blocker"] = "installed_version_changed"
         result["next_safe_action"] = RELOAD_ACTION
@@ -593,6 +598,12 @@ def render(result: dict) -> None:
                   f"({clean(terminal['state'])}, dispatch {clean(terminal['dispatch'])}); {clean(terminal['wording'])}")
         for line in result.get("progress", []):
             print(f"Progress: {line}")
+        for row in result.get("pod_ticks", {}).get("lines", []):
+            block = row.get("blocked")
+            reason = (f"; {clean(block['code'])}: {clean(block['reason'])}" if block else "")
+            print(f"PoD#{row['pod']}: checkbox {row['ticked']}; {clean(row['authorship'])}; "
+                  f"{clean(row['status'])}{reason}; criteria "
+                  + ", ".join(f"{clean(item['id'])}={clean(item['state'])}" for item in row['criteria']))
         if result.get("gates"):
             gates = result["gates"]
             print(f"Gates: {len(gates['remaining'])} remaining, "

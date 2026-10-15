@@ -33,7 +33,8 @@ def _check_objective_source(project: Path, binding: dict | None, *, issue_port=N
         if allow_closed and result.get("reason") == "closed_issue_requires_intent_reconciliation":
             return
         raise PodError("issue_reconciliation_required",
-                       "Execution Spec issue changed or closed; reconcile before another effect")
+                       "Execution Spec issue changed or closed; reconcile before another effect",
+                       {"reason": result.get("reason")})
 
 
 def _check_worktree_binding(project: Path, binding: dict | None, current: dict | None = None) -> None:
@@ -1016,6 +1017,17 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
                                       worktree=worktree, port=native_port, issue_port=issue_port)
         return {**recovered, "decision": recovered["admission"]["route_decision"]}
+    # A tick rebind changes only objective_source. Name that stale packet before
+    # rechecking its old source; every other pre-existing refusal keeps its order.
+    checkpoint_value = existing_state.get("checkpoint") or {}
+    if (body.get("objective_source") != checkpoint_value.get("objective_source")
+            and existing_state.get("pod_ticks")):
+        differing = [key for key in ("candidate", "criteria", "objective_source", "worktree")
+                     if body.get(key) != checkpoint_value.get(key)]
+        action = "read the named fields from pod internal map; freeze the corrected packet with pod internal packet and retry"
+        raise PodError("packet_plan_mismatch", "Packet differs in fields: " + ", ".join(differing),
+                       {"fields": differing, "reads": {key: "pod internal map: " + key for key in differing},
+                        "next_action": action})
     _check_objective_source(project, body.get("objective_source"), issue_port=issue_port)
     from .github import repository_context
     current_worktree = repository_context(project, fresh=True)  # Bound right before the start.
