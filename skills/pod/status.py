@@ -364,7 +364,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         except PodError as exc:
             result["obligations"] = {"error": exc.code}
             # Recorded judgements stay readable when the map cannot be projected (R109).
-            recorded = {ob.get("id"): ob["acceptances"] for ob in checkpoint.get("obligations") or []
+            from .util import decision_channel
+            recorded = {ob.get("id"): [decision_channel(row) if isinstance(row, dict) else row for row in ob["acceptances"]]
+                        for ob in checkpoint.get("obligations") or []
                         if isinstance(ob, dict) and isinstance(ob.get("acceptances"), list)}
             if recorded:
                 result["obligations"]["acceptances"] = recorded

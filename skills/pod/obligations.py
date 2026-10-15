@@ -2156,6 +2156,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
             detail = f"{ob['external']['party']}: {ob['external']['need']}"
         elif ob["state"] == "withdrawn":
             detail = f"by {ob['withdrawal']['by']}: {ob['withdrawal']['reason']}"
+            if ob["withdrawal"]["by"] == "user_direct":
+                channel = decision_channel(ob["withdrawal"])
+                detail += " (" + channel["channel"] + ("; earlier record" if channel.get("channel_recorded") is False else "") + ")"
         else:
             detail = ob.get("check") or ob.get("resolves") or ""
         lines.append(f"  {ob['id']:<4} {ob['state']:<16} {detail}"[:160])
@@ -2181,15 +2184,20 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
         lines.append("Flag       governance base moved; refresh before new admission")
     if state.get("delivery") is not None:
         lines.append(f"Delivery   {state['delivery']['method']} {state['delivery']['result'][:12]}")
+    def referent(ob):
+        value = ob.get("executor") or ob.get("wait") or ob.get("external") or ob.get("withdrawal")
+        return decision_channel(value) if isinstance(value, dict) and value.get("by") == "user_direct" else value
+
     return {"map": {"seq": state["seq"], "revision": state["revision"], "counts": counts,
                     "coordinator_slot": state.get("coordinator_slot"),
                     "quiescence": state.get("quiescence"), "closure": state.get("closure"),
                     "delivery": state.get("delivery"),
                     "observations": state.get("observations"), "label": label,
                     "obligations": [{"id": ob["id"], "state": ob["state"],
-                                     "referent": ob.get("executor") or ob.get("wait") or ob.get("external")
-                                     or ob.get("withdrawal"),
-                                     **({"acceptances": deepcopy(ob["acceptances"])} if ob.get("acceptances") else {})}
+                                     "referent": referent(ob),
+                                     **({"acceptances": [decision_channel(row) if isinstance(row, dict) else deepcopy(row)
+                                                         for row in ob["acceptances"]]}
+                                        if ob.get("acceptances") else {})}
                                     for ob in rows]},
             "lines": lines}
 

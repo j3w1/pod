@@ -11,7 +11,7 @@ import tempfile
 from unittest.mock import patch
 
 from pod.ledger import _validate_context, closed_snapshot_context, map_of
-from pod.obligations import validate_closed_snapshot
+from pod.obligations import validate_closed_snapshot, report_projection, status_projection
 from pod.util import context_decisions, map_decisions
 from tests.kernel_support import KernelCase, USER, git, governance_commit
 
@@ -61,7 +61,17 @@ class DecisionCompatibilityTests(KernelCase):
     def test_genuine_earlier_closed_record_validates_without_rewrite(self):
         destination, state = self.released("closed")
         project = destination / "project"
-        self.assertEqual(validate_closed_snapshot(map_of(state), closed_snapshot_context(project, "objective", state)), ())
+        before = deepcopy(state)
+        ctx = closed_snapshot_context(project, "objective", state)
+        self.assertEqual(validate_closed_snapshot(map_of(state), ctx), ())
+        report = report_projection(map_of(state), ctx)
+        waiver = report["label"]["withdrawn"][0]
+        self.assertEqual((waiver["channel"], waiver["channel_recorded"]), ("session", False))
+        rows = {row["id"]: row for row in status_projection(map_of(state), ctx)["map"]["obligations"]}
+        self.assertEqual((rows["A"]["referent"]["channel"], rows["A"]["referent"]["channel_recorded"]), ("session", False))
+        acceptance = rows["O1"]["acceptances"][0]
+        self.assertEqual((acceptance["channel"], acceptance["channel_recorded"]), ("session", False))
+        self.assertEqual(state, before)
 
     def test_genuine_earlier_claim_reads_without_rewrite(self):
         destination, state = self.released("claim")

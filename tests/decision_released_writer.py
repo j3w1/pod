@@ -7,7 +7,7 @@ import shutil
 
 from pod import __version__
 from pod.ledger import objective_root
-from tests.kernel_support import KernelCase, USER
+from tests.kernel_support import KernelCase, USER, governance_policy
 from tests.test_succession import SuccessionCase
 from tests.test_historical_retirement import RetirementCase
 
@@ -22,8 +22,14 @@ def main():
     case.setUp()
     try:
         if args.kind == "closed":
-            case.intake(revision_authority=USER)
-            case.write([case.criterion("satisfied", evidence=[case.proof("O1")])], close=True)
+            case.intake(governance_policy(case, "A"), revision_authority=USER)
+            review = case.stored()[1]
+            review.pop("wait")
+            review.update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "scoped owner waiver"})
+            case.write([case.criterion("satisfied", evidence=[case.proof("O1")]), review], close=True,
+                       revision_authority={**USER, "instruction": "Waive this review for the disposable objective"},
+                       acceptances=[{"obligation": "O1", "source": "owner-answer", "verdict": "accepted",
+                                     "candidate": case.candidate, "evidence": "external result"}])
         elif args.kind == "claim":
             case.predecessor()
             case.successor()

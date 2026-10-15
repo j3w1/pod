@@ -665,7 +665,10 @@ def label_qualification(state: dict | None, ctx: dict, candidate: str | None) ->
             gaps.append({"obligation": ob["id"], "gap": "unbound"})
         elif candidate is None or candidate != ctx.get("candidate") or not evidence_valid(ob, ctx, gov, candidate):
             gaps.append({"obligation": ob["id"], "gap": "invalidated"})
-    withdrawn = [{"obligation": ob["id"], "provenance": ob["provenance"], **ob["withdrawal"]}
+    from .util import decision_channel
+    withdrawn = [{"obligation": ob["id"], "provenance": ob["provenance"],
+                  **(decision_channel(ob["withdrawal"]) if ob["withdrawal"]["by"] == "user_direct"
+                     and not ctx.get("legacy_decision_report") else ob["withdrawal"])}
                  for ob in rows if ob["state"] == "withdrawn"]
     # Recorded, non-withdrawn assurance obligations are themselves a review requirement; a
     # caller cannot declare them not required.
