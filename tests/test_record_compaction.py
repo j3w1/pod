@@ -98,6 +98,14 @@ class RecordCompactionTests(KernelCase):
         self.arrange()
         self.operate(self.decide())
         first = self.files()
+        # Newly consumed settled history makes the second maintenance useful.
+        state = _read(self.path)
+        row = deepcopy(state["admissions"]["attempt-048"])
+        row["admission_id"] = "later-settled"
+        state["admissions"]["later-settled"] = row
+        physical = json.loads(self.path.read_bytes())
+        physical["admissions"]["later-settled"] = row
+        self.path.write_bytes(encoded(physical, compact=True))
         second = self.decide()
         second["instruction"] += " again"
         self.operate(second)
@@ -105,6 +113,64 @@ class RecordCompactionTests(KernelCase):
         for key, value in first.items():
             if "/history/" in key:
                 self.assertEqual(self.files()[key], value)
+
+    def test_repeated_maintenance_without_savings_writes_no_receipt_or_chunk(self):
+        self.arrange()
+        self.operate(self.decide())
+        before = self.files()
+        second = self.decide()
+        second["instruction"] += " again"
+        result = self.operate(second)
+        self.assertEqual((result["status"], result["written"]), ("unchanged", False))
+        self.assertEqual(self.files(), before)
+        self.assertEqual(len(capacity(self.path, _read(self.path))["maintenance"]), 1)
+
+    def test_receipt_overhead_cannot_turn_a_saving_into_a_larger_record(self):
+        self.check_receipt_overhead()
+
+    def test_receipt_overhead_at_limit_still_returns_unchanged_without_write(self):
+        self.check_receipt_overhead(near_limit=True)
+
+    def check_receipt_overhead(self, *, near_limit=False):
+        from pod.ledger import read
+        from pod.util import encoded
+        self.intake()
+        path = objective_root(self.project, "objective") / "context.json"
+        state = read(self.project, "objective")
+        # A synthetic earlier revision is just large enough to save less than a receipt reference.
+        state["checkpoint"]["revision_decisions"] = [
+            {"seq": 1, "kind": "revision", "provenance": "user_direct", "instruction": "x" * 180},
+            {"seq": 1, "kind": "revision", "provenance": "user_direct", "instruction": "latest"}]
+        if near_limit:
+            state["source_rejections"] = {"synthetic-unsettled": ""}
+            state["source_rejections"]["synthetic-unsettled"] = "x" * (CONTEXT_LIMIT - size(state) - 8)
+        path.write_bytes(encoded(state, compact=True))
+        request = {"project": str(self.project), "objective": "objective"}
+        found = run("record-compaction", request)
+        self.assertLess(found["proposed_bytes"], found["current_bytes"])
+        decision = found["next_action"]["request"]["decision"]
+        decision["instruction"] = "Compact this exact record if useful"
+        before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
+        result = run("record-compaction", {**request, "decision": decision})
+        self.assertEqual((result["status"], result["written"]), ("unchanged", False))
+        self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, before)
+
+    def test_over_limit_record_without_savings_returns_unchanged_without_write(self):
+        from pod.ledger import read
+        self.intake()
+        path = objective_root(self.project, "objective") / "context.json"
+        state = read(self.project, "objective")
+        state["source_rejections"] = {"synthetic-unsettled": "x" * CONTEXT_LIMIT}
+        path.write_bytes(encoded(state, compact=True))
+        request = {"project": str(self.project), "objective": "objective"}
+        before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
+        found = run("record-compaction", request)
+        self.assertEqual(found["status"], "unchanged")
+        decision = found["next_action"]["request"]["decision"]
+        decision["instruction"] = "Compact this exact record if useful"
+        result = run("record-compaction", {**request, "decision": decision})
+        self.assertEqual((result["status"], result["written"]), ("unchanged", False))
+        self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, before)
 
     def test_stale_input_digest_revision_objective_repository_refuse(self):
         self.arrange()
@@ -188,13 +254,45 @@ class RecordCompactionTests(KernelCase):
         self.assertTrue(all(p.read_bytes() == value for p, value in files.items()))
 
     def test_small_record_noop_preserves_bytes_without_metadata(self):
+        from tests.kernel_support import governance_commit
         self.intake()
+        for index in range(6):
+            self.candidate = governance_commit(self, "README.md", f"Candidate {index}\n", f"work {index}")
+            self.write(self.stored())
         path = objective_root(self.project, "objective") / "context.json"
         request = {"project": str(self.project), "objective": "objective"}
         detected = run("record-compaction", request)
         decision = detected["next_action"]["request"]["decision"]
         decision["instruction"] = "Compact this exact record if useful"
         before = path.read_bytes()
-        self.assertEqual(run("record-compaction", {**request, "decision": decision})["status"], "unchanged")
+        files = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
+        result = run("record-compaction", {**request, "decision": decision})
+        self.assertEqual((result["status"], result["written"]), ("unchanged", False))
         self.assertEqual(path.read_bytes(), before)
+        self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, files)
         self.assertNotIn("history", json.loads(before))
+
+    def test_automatic_and_retirement_compaction_keep_short_candidates_inline(self):
+        from pod.ledger import read
+        self.intake()
+        state = read(self.project, "objective")
+        state["checkpoint"]["governance_history"]["candidates"] = [f"{index + 1:040x}" for index in range(7)]
+        path = objective_root(self.project, "objective") / "context.json"
+        for purpose in ("ordinary", "retirement"):
+            with self.subTest(purpose=purpose):
+                logical = deepcopy(state)
+                # Trigger ordinary compaction without adding movable rows.
+                logical["source_rejections"] = {"synthetic-unsettled": "x" * 328000}
+                record, chunks = prepare_context(path, logical, purpose=purpose)
+                self.assertEqual((record, chunks), (logical, {}))
+
+    def test_metadata_overhead_cannot_make_forced_compaction_larger(self):
+        from pod.ledger import read
+        self.intake()
+        state = read(self.project, "objective")
+        # Synthetic short revision: a reference saves fewer bytes than the history discriminator costs.
+        state["checkpoint"]["revision_decisions"] = [
+            {"seq": 1, "kind": "revision", "provenance": "user_direct", "instruction": "x" * 120},
+            {"seq": 1, "kind": "revision", "provenance": "user_direct", "instruction": "latest"}]
+        record, chunks = compact(state, force=True)
+        self.assertEqual((record, chunks), (state, {}))

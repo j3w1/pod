@@ -129,6 +129,33 @@ print(json.dumps(outcomes))
         from pod.ledger import read
         self.assert_earlier_refuses(read(self.project, "objective"))
 
+    def test_genuine_earlier_reader_refuses_closure_without_owner_decisions(self):
+        from pod.ledger import objective_root, read
+        self.intake()
+        self.write([self.criterion("satisfied", evidence=[self.proof("O1")])], close=True)
+        path = objective_root(self.project, "objective") / "context.json"
+        before = path.read_bytes()
+        state = read(self.project, "objective")
+        self.assertNotIn('"channel"', before.decode())
+        self.assertNotIn('"relay"', before.decode())
+        self.assertEqual(validate_closed_snapshot(map_of(state), closed_snapshot_context(self.project, "objective", state)), ())
+        result = self.earlier('''import json, sys
+from pathlib import Path
+from pod import __version__
+from pod.errors import PodError
+from pod.ledger import _read
+assert __version__ == "0.13.3"
+try:
+    _read(Path(sys.argv[1]))
+except PodError as exc:
+    print(json.dumps({"refused": exc.code}))
+else:
+    print(json.dumps({"context": "readable"}))
+''', path)
+        self.assertEqual(json.loads(result), {"refused": "invalid_context"})
+        self.assertEqual(state["decision_channels"], 1)
+        self.assertEqual(path.read_bytes(), before)
+
     def test_genuine_earlier_reader_refuses_session_carried_consent(self):
         from pod.governor import _check_carried_consent, _read_journal, _record_path, validate_authorization
         from tests.test_carried_claim import CarriedCase

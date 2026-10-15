@@ -149,12 +149,17 @@ policy refreshes retain their existing rules. An exact new owner snapshot decisi
 can proceed despite unavailable old objects, preserving their retained identities.
 
 Kernel-owned `governance_history` keeps up to 64 distinct candidate identities and
-64 owner or derived decisions. A mapped Git checkpoint needs a resolvable candidate;
+64 owner decisions. Derived adoptions have no count cap and retain every row unchanged;
+R121 relocates earlier rows, and the record byte capacity contract governs fit.
+A mapped Git checkpoint needs a resolvable candidate;
 caller omission/replacement cannot erase history. Capacity refuses rather than
-evicts. Status and closure reports list derived adoptions distinctly from owner
+evicts: a well-formed history beyond either remaining count bound refuses
+`governance_unavailable` / `governance_history_full` on checkpoint, closure and
+validation alike, naming the exhausted candidate or owner-decision history and
+preservation/reporting as the next action. Status and closure reports list derived adoptions distinctly from owner
 decisions, whose channels follow R120.
 
-- <a id="a331"></a>**A331** — After sibling merges with identical bound sources, a plain checkpoint passes, moves the governance base and records a derived adoption naming both bases and every unchanged digest, including absent sources.
+- <a id="a331"></a>**A331** — After sibling merges with identical bound sources, a plain checkpoint passes, moves the governance base and records a derived adoption naming both bases and every unchanged digest, including absent sources. Eighty such moves pass and validate with every adoption unchanged, including after R121 relocation; derived rows spend no owner-decision slots. The sixty-fifth owner decision still refuses `governance_unavailable` / `governance_history_full` without a write; well-formed owner or candidate overflow gives that capacity refusal and its preservation/reporting next action through checkpoint, closure and validation, never a malformed-state refusal.
 - <a id="a332"></a>**A332** — When only the objective's own merge advanced the target, a plain checkpoint passes without `candidate_policy_target` and records derived adoption when R93's exact-delivery exemption does not already apply.
 - <a id="a333"></a>**A333** — A changed bound source, an absent source appearing, or a present source disappearing refuses `governance_changed` without a write, retaining owner snapshot recovery. A backward or sideways target move also retains its refusal even with identical source bytes.
 - <a id="a334"></a>**A334** — A new target missing the recorded delivery result refuses `governance_changed` without a write even when all source revisions match.
@@ -202,17 +207,18 @@ route-failure clear decisions and Governor authorization/exception rows. Status 
 show the channel of every owner decision they list, and distinguish derived
 adoption from owner decisions. Channel-bearing records that earlier readers cannot
 read faithfully carry the `decision_channels` discriminator whenever a stored channel
-or relay key is present, in contexts and Governor journals alike, so those readers
-refuse rather than misread carried consent or relay provenance; earlier
+or relay key is present, or a stored closure report carries `decision_channels`,
+in contexts and Governor journals alike, so those readers
+refuse rather than misread carried consent, relay provenance or the closure format; earlier
 records, claims, closures and retirements retain their original meaning.
 
 Owner revision decisions have no count cap. R121 moves earlier rows unchanged and
 the record's byte capacity contract governs fit; `governance_history` retains its
-separate 64-candidate and 64-decision bounds.
+separate 64-candidate and 64-owner-decision bounds; derived adoptions spend no owner-decision slots.
 
 - <a id="a339"></a>**A339** — Every owner-decision surface uses the shared validator, stores default `session` or the supplied honest channel and includes it in status/report projections; derived decisions remain distinct.
 - <a id="a340"></a>**A340** — A complete verified-source relay is accepted for snapshot adoption, withdrawal, a recorded question answer, claim and retirement, preserving the reference/source and showing `relayed` in status and closure reports.
 - <a id="a341"></a>**A341** — All authorization scopes refuse relayed consent with `relayed_authorization_refused`; handoff, runtime continuity, constraints, Governor exceptions and other unlisted kinds refuse `relayed_decision_refused`, naming session consent as the next action.
-- <a id="a342"></a>**A342** — Missing or partial relay, empty/oversized reference or owner source, a relay with session, unsupported channel or an unresolved question reference refuses without a write; newly supplied questions cannot authorize the same write. Through public `internal governor` merge/publish and `governor-execute` publish, a declared relay missing its complete relay or session consent carrying a relay refuses `invalid_decision_relay`, names consent typed in the coordinator's own session and writes no journal row.
-- <a id="a343"></a>**A343** — Genuine earlier-writer records, claims, closures and retirements read unchanged with session channels marked as earlier records; earlier readers refuse contexts and journals with stored channel or relay keys, preserving bytes. Genuine 0.13.3 refuses a candidate-written carried journal rather than losing carried-consent recognition; the current reader still detects its carried consent, and R118 preflight counts the marker before any claim write. A pre-channel retirement replays the same decision with omitted or explicit default `session` and no relay; other decisions still refuse `objective_retired`.
+- <a id="a342"></a>**A342** — Missing or partial relay, empty/oversized reference or owner source, a relay with session, unsupported channel or an unresolved question reference refuses without a write; newly supplied questions cannot authorize the same write. Through public `internal governor` merge/publish and `governor-execute` publish, a declared relay missing its complete relay or session consent carrying a relay refuses `invalid_decision_relay`, and an unsupported authorization channel refuses `invalid_decision_channel`; each names consent typed in the coordinator's own session and writes no journal row.
+- <a id="a343"></a>**A343** — Genuine earlier-writer records, claims, closures and retirements read unchanged with session channels marked as earlier records; earlier readers refuse contexts and journals with stored channel or relay keys, and contexts whose stored closure report carries `decision_channels`, preserving bytes. Genuine 0.13.3 refuses a candidate closure without any owner decision at the context marker, and a candidate-written carried journal rather than losing carried-consent recognition; the current reader still validates that closure and detects carried consent, and R118 preflight counts the marker before any claim write. A pre-channel retirement replays the same decision with omitted or explicit default `session` and no relay; other decisions still refuse `objective_retired`.
 - <a id="a356"></a>**A356** — Eighty successive owner-authorized writes are accepted and read back with every revision decision, without a count refusal; the record byte capacity contract and R121 relocation still govern fit.

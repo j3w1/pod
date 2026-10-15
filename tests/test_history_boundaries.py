@@ -138,6 +138,21 @@ class HistoryScanTests(KernelCase):
         self.assertFalse(block["warning"])
         self.assertEqual(block["largest_sections"][0]["section"], "admissions")
 
+    def test_warning_before_trigger_describes_compaction_conditionally(self):
+        self.path = objective_root(self.project, "synthetic-capacity") / "context.json"
+        state = synthetic_state(count=1)
+        state["source_rejections"] = {"synthetic-unsettled": "x" * (WARN_AT - size(state) + 1000)}
+        _write(self.path, state)
+        before = self.path.read_bytes()
+        block = capacity(self.path, state)
+        self.assertTrue(block["warning"])
+        self.assertLess(len(before), COMPACT_AT)
+        self.assertNotIn("history", json.loads(before))
+        _write(self.path, _read(self.path))
+        self.assertNotIn("history", json.loads(self.path.read_bytes()))
+        self.assertIn("327680", block["next_action"])
+        self.assertIn("once", block["next_action"])
+
 
 class PublicHistoryProjectionTests(ProductionCase):
     def compact_current(self):
@@ -145,11 +160,17 @@ class PublicHistoryProjectionTests(ProductionCase):
         logical = _read(path)
         record, chunks = compact(logical, force=True)
         self.assertTrue(chunks)
+        self.assertTrue(is_reference(record["checkpoint"]["revision_decisions"][0]))
+        self.assertLess(size(record), size(logical))
         publish_context(path, record, chunks)
         return path
 
     def arrange(self):
         self.prepare()
+        # Genuine earlier revision rows save bytes; short candidate IDs stay inline.
+        for index in range(2):
+            self.write(self.stored(), revision_authority={"provenance": "user_direct",
+                "instruction": f"Owner revision {index}: " + "preserve this recorded instruction; " * 12})
         self.move()
         self.write(self.stored())
 
@@ -259,6 +280,9 @@ class HistoryContinuityTests(ContinuityCase):
         from tests.kernel_support import git
         self.intake()
         self.checkpoint_op()
+        for index in range(2):
+            self.checkpoint_op(revision_authority={"provenance": "user_direct",
+                "instruction": f"Owner revision {index}: " + "preserve this recorded instruction; " * 12})
         (self.project / "README.md").write_text("new candidate\n")
         git(self.project, "add", "README.md")
         git(self.project, "commit", "-qm", "new candidate")
@@ -267,11 +291,13 @@ class HistoryContinuityTests(ContinuityCase):
         state = _read(self.context)
         record, chunks = compact(state, force=True)
         self.assertTrue(chunks)
+        self.assertTrue(is_reference(record["checkpoint"]["revision_decisions"][0]))
         publish_context(self.context, record, chunks)
         before = state["checkpoint"]["governance_history"]
         self.change_runtime()
         self.checkpoint_op()
         after = _read(self.context)
         self.assertEqual(after["checkpoint"]["governance_history"], before)
+        self.assertEqual(after["checkpoint"]["revision_decisions"], state["checkpoint"]["revision_decisions"])
         self.assertEqual(after["checkpoint"]["native_refs"][0]["runtime"], "runtime-2")
         self.assertEqual(len(self.history()), 1)

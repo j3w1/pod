@@ -367,11 +367,23 @@ def _history_limit() -> int:
     return ledger.MAX_GOVERNANCE_HISTORY
 
 
+def _require_history_capacity(history: dict) -> None:
+    counts = {"candidate": len(history["candidates"]),
+              "owner decision": sum(row.get("provenance") != "derived" for row in history["decisions"])}
+    full = [kind for kind, count in counts.items() if count > _history_limit()]
+    if full:
+        raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
+                       {"detail": "governance_history_full",
+                        "next_action": "preserve the objective and report its " + " and ".join(full)
+                                       + " history capacity; retained evidence cannot be evicted or replaced",
+                        "referent": {"limit": _history_limit(), "counts": counts}})
+
+
 def _governance_history(prior: dict | None) -> dict:
     """Kernel-owned bounded history; never accept a caller's replacement."""
     history = (prior or {}).get("governance_history", {"candidates": [], "decisions": []})
     if (not isinstance(history, dict) or set(history) != {"candidates", "decisions"}
-            or any(not isinstance(history[key], list) or len(history[key]) > _history_limit()
+            or any(not isinstance(history[key], list)
                    for key in ("candidates", "decisions"))
             or any(not isinstance(value, str) or not value or len(value) > 512
                    for value in history["candidates"])):
@@ -403,6 +415,7 @@ def _governance_history(prior: dict | None) -> dict:
                 or not isinstance(row["instruction"], str) or not 1 <= len(row["instruction"]) <= 1024):
             raise PodError("state_unsupported", "Governance decision history is malformed")
         owner_decision(row, kind="governance", stored=True)
+    _require_history_capacity(history)
     return {"candidates": list(history["candidates"]),
             "decisions": [dict(row) for row in history["decisions"]]}
 
@@ -443,11 +456,7 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
             history["decisions"].append({"seq": map_state["seq"], **decision})
     if derived_adoption is not None:
         history["decisions"].append({"seq": map_state["seq"], **derived_adoption})
-    if any(len(history[key]) > _history_limit() for key in ("candidates", "decisions")):
-        raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
-                       {"detail": "governance_history_full",
-                        "next_action": "preserve the objective and report its governance history capacity",
-                        "referent": {"limit": _history_limit()}})
+    _require_history_capacity(history)
     map_state["governance_history"] = history
 
 

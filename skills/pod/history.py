@@ -115,7 +115,7 @@ def _positions(state):
 
 def compact(logical_state, *, protected_admissions=(), force=False,
             archive_retirement=False, trigger_bytes=COMPACT_AT, current_bytes=0,
-            protect_receipts=False, protected_candidates=(), maintenance=()):
+            protect_receipts=False, protected_candidates=(), maintenance=(), require_fit=True):
     """Return (physical record, {file_digest: exact_file_bytes}); never mutate input.
 
     Once triggered, move every eligible slot (hysteresis without a second arbitrary
@@ -130,7 +130,12 @@ def compact(logical_state, *, protected_admissions=(), force=False,
     chunks = {}
 
     def reference(value):
-        return _reference(value, chunks)
+        proposed = {}
+        ref = _reference(value, proposed)
+        if len(_bytes(ref)) >= len(_bytes(value)):
+            return deepcopy(value)
+        chunks.update(proposed)
+        return ref
 
     protected = frozenset(protected_admissions)
     movable = set()
@@ -171,8 +176,11 @@ def compact(logical_state, *, protected_admissions=(), force=False,
     if chunks:
         record["history"] = dict(FORMAT)
     if maintenance:
-        record.setdefault("history", dict(FORMAT))["maintenance"] = reference(list(maintenance))
-    _require_size(record, current_bytes=current_bytes)
+        record.setdefault("history", dict(FORMAT))["maintenance"] = _reference(list(maintenance), chunks)
+    if not maintenance and len(_bytes(record)) >= len(_bytes(logical_state)):
+        record, chunks = deepcopy(logical_state), {}
+    if require_fit:
+        _require_size(record, current_bytes=current_bytes)
     return record, chunks
 
 
@@ -489,7 +497,8 @@ def protections(path, state, *, native=None, protected=(), journal=None):
         return set(admissions), None
 
 
-def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(), force=False, maintenance=None, journal=None):
+def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(), force=False, maintenance=None, journal=None,
+                    require_fit=True):
     """Pure physical planner, including R118's all-context capacity preflight."""
     current = path.stat().st_size if path.exists() else 0
     receipts = maintenance
@@ -498,7 +507,7 @@ def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(
     keep, hold_receipts = protections(path, state, native=native, protected=protected, journal=journal)
     kwargs = {"protected_admissions": keep, "protect_receipts": hold_receipts is None,
               "protected_candidates": hold_receipts or (), "maintenance": receipts,
-              "force": force or purpose == "retirement", "current_bytes": current}
+              "force": force or purpose == "retirement", "current_bytes": current, "require_fit": require_fit}
     try:
         return compact(state, **kwargs)
     except PodError as exc:
@@ -545,13 +554,13 @@ def capacity(path, state):
             if exc.code != "record_too_large":
                 raise
             useful = False
-        result["next_action"] = ("The next permitted write compacts settled history automatically; internal "
+        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; internal "
                                  "record-compaction permits owner-scoped maintenance now." if useful else
                                  "Consume or triage reports, record implementation dispositions, or settle governed "
                                  "effects through their supported paths; largest sections: "
                                  + ", ".join(row["section"] for row in result["largest_sections"][:3]))
     else:
-        result["next_action"] = "Continue through the existing objective operations; settled history compacts on write."
+        result["next_action"] = f"Continue through the existing objective operations; settled history compacts once the record reaches {COMPACT_AT} bytes."
     return result
 
 
@@ -597,9 +606,14 @@ def record_compaction(project, objective, *, decision=None):
                 return {"status": "replayed", "facts": facts, "written": False}
             if not same_scope or decision["facts"] != binding:
                 _fail("compaction_decision_mismatch", "The decision differs from the exact physical or logical record; detect again")
-        record, chunks = prepare_context(path, state, force=True, maintenance=receipts)
-        result = {"status": "compaction_available", "facts": facts, "current_bytes": len(raw),
-                  "proposed_bytes": len(_bytes(record)), "limit_bytes": CONTEXT_LIMIT, "moved": _moved(record)}
+        # Maintenance compares bytes before asking whether a useful plan fits;
+        # a no-op needs no write capacity, even when the existing record is full.
+        record, chunks = prepare_context(path, state, force=True, maintenance=receipts, require_fit=False)
+        useful = len(_bytes(record)) < len(raw)
+        if useful:
+            _require_size(record, current_bytes=len(raw))
+        result = {"status": "compaction_available" if useful else "unchanged", "facts": facts, "current_bytes": len(raw),
+                  "proposed_bytes": len(_bytes(record)), "limit_bytes": CONTEXT_LIMIT, "moved": _moved(record), "written": False}
         if decision is None:
             result["question"] = (f"May Pod compact settled history for objective {objective}, preserving all recorded "
                                   "work and decisions and keeping unsettled items in its record?")
@@ -607,10 +621,12 @@ def record_compaction(project, objective, *, decision=None):
                 "decision": {"provenance": "user_direct", "instruction": "<owner instruction>", "channel": "session",
                              "repository": repository, "objective": objective, "facts": binding}}}
             return result
-        if not chunks and not receipts:
+        if not useful:
             return {**result, "status": "unchanged", "written": False}
         receipt = {"authority": {key: decision[key] for key in ("provenance", "instruction", "channel")},
                    "decision": digest(decision), "input_sha256": binding["input_sha256"], "logical_sha256": logical}
-        record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, receipt])
+        record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, receipt], require_fit=False)
+        if len(_bytes(record)) >= len(raw):
+            return {**result, "status": "unchanged", "proposed_bytes": len(_bytes(record)), "written": False}
         publish_context(path, record, chunks)
         return {**result, "status": "compacted", "proposed_bytes": len(_bytes(record)), "written": True}

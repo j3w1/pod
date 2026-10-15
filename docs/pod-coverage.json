@@ -3709,7 +3709,8 @@
       ],
       "offline_test": [
         "tests.test_carried_claim.SettlementTests.test_carried_rows_are_never_canceled_and_their_absence_waits_for_the_margin",
-        "tests.test_carried_claim.SettlementTests.test_a_successor_never_cancels_a_carried_validation"
+        "tests.test_carried_claim.SettlementTests.test_a_successor_never_cancels_a_carried_validation",
+        "tests.test_carried_claim.MergeTests.test_carried_authorization_is_omitted_from_successor_owner_inventory_and_closure"
       ],
       "status": "NOT_RUN"
     },
@@ -3996,7 +3997,12 @@
       "offline_test": [
         "tests.test_governance_adoption.GovernanceAdoptionTests.test_sibling_target_advance_records_derived_adoption",
         "tests.test_governance_adoption.DeliveredAdoptionTests.test_sibling_merge_after_delivery_adopts_derived",
-        "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_record_and_replay_at_unchanged_later_target_pass"
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_record_and_replay_at_unchanged_later_target_pass",
+        "tests.test_governance_capacity.LongAdoptionTests.test_eighty_plain_checkpoints_preserve_the_complete_adoption_chain",
+        "tests.test_governance_capacity.LongAdoptionTests.test_owner_bound_still_refuses_after_eighty_derived_adoptions",
+        "tests.test_governance_capacity.GovernanceCapacityTests.test_sixty_fifth_owner_decision_refuses_checkpoint_and_closure_without_write",
+        "tests.test_governance_capacity.GovernanceCapacityTests.test_well_formed_owner_overflow_uses_capacity_refusal_on_every_path",
+        "tests.test_governance_capacity.GovernanceCapacityTests.test_well_formed_candidate_overflow_uses_capacity_refusal_on_every_path"
       ],
       "status": "NOT_RUN"
     },
@@ -4158,7 +4164,8 @@
         "tests.test_issue41.ReleasedWriterTests.test_071_validator_loads_new_marked_journal",
         "tests.test_owner_handoff.CompatibilityTests.test_genuine_080_reader_blocks_objective_and_skips_run_without_conversion",
         "tests.test_succession.ClaimTests.test_detection_writes_nothing_and_a_matching_decision_claims",
-        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_reserved_dispatch_found_needs_the_owner_then_separate_recovery_binds_it"
+        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_reserved_dispatch_found_needs_the_owner_then_separate_recovery_binds_it",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_reader_refuses_closure_without_owner_decisions"
       ],
       "status": "NOT_RUN"
     },
@@ -4280,7 +4287,14 @@
         "tests.test_record_compaction.RecordCompactionTests.test_unknown_objective_and_unsafe_record_create_nothing",
         "tests.test_record_compaction.RecordCompactionTests.test_maintenance_bound_and_unsupported_schema_remain_unavailable",
         "tests.test_record_compaction.RecordCompactionTests.test_impossible_fit_publishes_no_chunks",
-        "tests.test_record_compaction.RecordCompactionTests.test_crash_after_chunks_before_context_keeps_readable_old_record_and_orphans"
+        "tests.test_record_compaction.RecordCompactionTests.test_crash_after_chunks_before_context_keeps_readable_old_record_and_orphans",
+        "tests.test_record_compaction.RecordCompactionTests.test_small_record_noop_preserves_bytes_without_metadata",
+        "tests.test_record_compaction.RecordCompactionTests.test_repeated_maintenance_without_savings_writes_no_receipt_or_chunk",
+        "tests.test_record_compaction.RecordCompactionTests.test_receipt_overhead_cannot_turn_a_saving_into_a_larger_record",
+        "tests.test_record_compaction.RecordCompactionTests.test_automatic_and_retirement_compaction_keep_short_candidates_inline",
+        "tests.test_record_compaction.RecordCompactionTests.test_metadata_overhead_cannot_make_forced_compaction_larger",
+        "tests.test_record_compaction.RecordCompactionTests.test_receipt_overhead_at_limit_still_returns_unchanged_without_write",
+        "tests.test_record_compaction.RecordCompactionTests.test_over_limit_record_without_savings_returns_unchanged_without_write"
       ],
       "status": "NOT_RUN"
     },
@@ -4301,7 +4315,8 @@
         "tests.test_history_boundaries.HistoryScanTests.test_claim_capacity_preflight_uses_planner_and_publishes_nothing",
         "tests.test_history_boundaries.HistoryScanTests.test_capacity_thresholds_and_largest_sections_are_additive_observations",
         "tests.test_history_boundaries.PublicHistoryProjectionTests.test_status_by_run_and_objective_preserve_every_existing_key",
-        "tests.test_history_boundaries.PublicHistoryProjectionTests.test_governor_map_and_checkpoint_rewrite_hydrated_history"
+        "tests.test_history_boundaries.PublicHistoryProjectionTests.test_governor_map_and_checkpoint_rewrite_hydrated_history",
+        "tests.test_history_boundaries.HistoryScanTests.test_warning_before_trigger_describes_compaction_conditionally"
       ],
       "status": "NOT_RUN"
     },
@@ -4367,7 +4382,10 @@
         "hosted_ci",
         "independent_review"
       ],
-      "offline_test": "tests.test_decision_compatibility.DecisionCompatibilityTests.test_combined_channel_revision_and_derived_decisions_survive_history",
+      "offline_test": [
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_combined_channel_revision_and_derived_decisions_survive_history",
+        "tests.test_governance_capacity.LongAdoptionTests.test_every_derived_row_survives_relocation_and_validation"
+      ],
       "status": "NOT_RUN"
     },
     {

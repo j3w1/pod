@@ -1601,11 +1601,11 @@ def validate_map_record(state: dict) -> None:
             or len(set(governance["exclude"])) != len(governance["exclude"])):
         raise refuse("obligation_invalid", "malformed", "persisted governance retains its target and source selection", record="persisted governance")
     governance_digest(value["governance_sources"])
+    from .governance import _governance_history
+    history = _governance_history(value)["decisions"]
     if "proof_base" in governance:
         if (not isinstance(governance["proof_base"], str) or _COMMIT.fullmatch(governance["proof_base"]) is None):
             raise refuse("obligation_invalid", "malformed", "proof base retains the unchanged source identity", record="persisted governance")
-        from .governance import _governance_history
-        history = _governance_history(value)["decisions"]
         revisions = [{"path": row["path"], "revision": row["revision"]} for row in value["governance_sources"]]
         base, visited = governance["base"], set()
         while base != governance["proof_base"]:

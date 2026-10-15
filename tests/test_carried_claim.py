@@ -873,6 +873,25 @@ class CarriedUnconfirmedRerunTests(CarriedCase):
 class MergeTests(CarriedCase):
     """PoD#4 — a carried merge stays pending while its pull request is open and settles PASS only by R93."""
 
+    def test_carried_authorization_is_omitted_from_successor_owner_inventory_and_closure(self):
+        built = self.lost_with(self.merge_decision)
+        effects = self.writes()
+        self.carry()
+        merge = built["merge"]
+        self.assertEqual(self.row(merge)["carried_from"]["objective"], "objective")
+        status = self.status(objective="successor")
+        self.assertFalse([row for row in status.get("owner_decisions", []) if row["kind"] == "authorization"])
+        self.assertFalse([row for row in status["report"].get("owner_decisions", []) if row["kind"] == "authorization"])
+        result = self.merged(fetched=True)
+        self.pull_request("MERGED", result)
+        self.assertEqual(self.mine("governor-reconcile", record_id=merge)["status"], "PASS")
+        self.mine("checkpoint", value=self.core(obligations=read(self.project, "successor")["checkpoint"]
+                                                ["obligations"], delivery={"record": merge}))
+        self.close_successor()
+        report = read(self.project, "successor")["checkpoint"]["closure"]["report"]
+        self.assertFalse([row for row in report.get("owner_decisions", []) if row["kind"] == "authorization"])
+        self.assertEqual(self.writes(), effects)
+
     def test_open_then_merged_pull_request_settles_by_r93_and_closes_the_successor(self):
         built = self.lost_with(self.merge_decision)
         effects = self.writes()

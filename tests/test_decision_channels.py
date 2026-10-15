@@ -209,6 +209,7 @@ class PublicAuthorizationChannelTests(unittest.TestCase):
             ({"channel": "relayed", "relay": {"reference": "message", "owner_source": ""}}, "invalid_decision_relay"),
             ({"channel": "relayed", "relay": {"reference": "r" * 513, "owner_source": "verified"}}, "invalid_decision_relay"),
             ({"channel": "session", "relay": RELAY}, "invalid_decision_relay"),
+            ({"channel": "relay"}, "invalid_decision_channel"),
         )
         for fields, code in shapes:
             with self.subTest(fields=fields):

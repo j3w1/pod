@@ -231,9 +231,10 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     try:
         record = owner_decision(record, kind="authorization")
     except PodError as exc:
-        if exc.code in ("invalid_decision_relay", "invalid_reference", "invalid_owner_source"):
+        if exc.code in ("invalid_decision_channel", "invalid_decision_relay", "invalid_reference", "invalid_owner_source"):
             action = "obtain the owner's consent typed in the coordinator's own session for this exact candidate and scope"
-            raise PodError("invalid_decision_relay", f"{exc}. Next: {action}",
+            code = "invalid_decision_channel" if exc.code == "invalid_decision_channel" else "invalid_decision_relay"
+            raise PodError(code, f"{exc}. Next: {action}",
                            {**(exc.detail or {}), "next_action": action}) from None
         raise
     if record["schema"] != AUTHORIZATION_SCHEMA:
@@ -577,7 +578,7 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
             authorized = validate_authorization(action.get("authorization"),
                                                 candidate=candidate, tree=tree, kind=scope, target=target)
         except PodError as exc:
-            if exc.code in ("relayed_authorization_refused", "invalid_decision_relay"):
+            if exc.code in ("relayed_authorization_refused", "invalid_decision_channel", "invalid_decision_relay"):
                 raise
             authorized = None
         if authorized is None:

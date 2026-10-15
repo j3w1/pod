@@ -113,7 +113,7 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
     for value in (journal or {}).get("actions", []):
         for field, kind in (("authorization", "authorization"),):
             decision = value.get("action", {}).get(field)
-            if isinstance(decision, dict):
+            if isinstance(decision, dict) and "carried_from" not in value:
                 add(kind, f"governor/{value['record_id']}/{field}", decision)
         if isinstance(value.get("exception"), dict):
             add("governor_exception", f"governor/{value['record_id']}/exception", value["exception"])
@@ -121,9 +121,9 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
 
 
 def protect_decision_record(value: dict) -> None:
-    """Earlier readers must refuse channel fields they cannot read faithfully, including session."""
+    """Earlier readers must refuse channel fields and closure reports they cannot read faithfully."""
     def carries_channel(item):
-        return (isinstance(item, dict) and (bool(CHANNEL_FIELDS & item.keys()) or any(carries_channel(v) for v in item.values()))
+        return (isinstance(item, dict) and (bool((CHANNEL_FIELDS | {"decision_channels"}) & item.keys()) or any(carries_channel(v) for v in item.values()))
                 or isinstance(item, list) and any(carries_channel(v) for v in item))
     if carries_channel(value):
         value["decision_channels"] = 1
