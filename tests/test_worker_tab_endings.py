@@ -91,7 +91,7 @@ class ContinuedTabTests(EndedTabAssertions, TabCase, SuccessionCase):
 
 
 class RetiredTabTests(EndedTabAssertions, TabCase, RetirementCase):
-    def retired(self, case, *, discarded=False):
+    def under_retirement(self, case, *, discarded=False):
         runtime = self.port.runtime
         self.delivered(unknown_start=False)
         # Lose the coordinator without changing the native assignment runtime.
@@ -111,19 +111,19 @@ class RetiredTabTests(EndedTabAssertions, TabCase, RetirementCase):
         self.assert_report_refused_without_write("objective_retired")
 
     def test_unreported_user_owned_retired_record_names_owner_decision(self):
-        self.retired("user_owned")
+        self.under_retirement("user_owned")
 
     def test_discarded_user_owned_retired_record_names_owner_decision(self):
-        self.retired("user_owned", discarded=True)
+        self.under_retirement("user_owned", discarded=True)
 
     def test_unreported_external_retired_record_names_owner_decision(self):
-        self.retired("external")
+        self.under_retirement("external")
 
     def test_discarded_external_retired_record_names_owner_decision(self):
-        self.retired("external", discarded=True)
+        self.under_retirement("external", discarded=True)
 
     def test_owned_retired_record_release_is_still_owed_without_closure_timing(self):
-        self.retired("owned")
+        self.under_retirement("owned")
 
 
 class RouteMismatchTabTests(EndedTabAssertions, TabCase):

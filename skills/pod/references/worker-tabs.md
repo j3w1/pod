@@ -22,8 +22,8 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   followed by those arguments unchanged, adding or altering no flags. The leading
   `orca` in Pod's displayed command names that selected executable. Pod never builds
   a release command. If Orca gives none, repeat the named `worker-show` read.
-  On a continued or historically retired record, release is still owed; do not
-  describe it as due before closure.
+  On a continued record or one ended by historical retirement, release is
+  still owed; do not describe it as due before closure.
 - For a release pending or unknown, follow Orca's next action or repeat that
   read until release or disconnection is confirmed. Never substitute close.
 - For unreadable facts, repeat the failed read; its code stays a limitation.
