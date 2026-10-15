@@ -218,6 +218,15 @@ class TitleTests(TabCase):
             self.packet(["S"], **{name: "a" * limit})
             with self.assertRaises(PodError): self.packet(["S"], **{name: "a" * (limit + 1)})
 
+    def test_unresolved_start_returns_title_and_honest_uncertainty(self):
+        self.intake(self.sub("S"))
+        self.port.receipt = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST,
+                             "error": {"code": "runtime_error", "message": "uncertain"}}
+        result = self.start("worker", self.packet(["S"], purpose="Repair parser"))
+        self.assertEqual(result["title"], "Implementer: Repair parser")
+        self.assertIsNone(result["rename_command"])
+        self.assertEqual(result["rename_reason"], "worker start is not verified")
+
 
 class TableTests(TabCase):
     def table(self, cases):
@@ -252,9 +261,11 @@ class TableTests(TabCase):
         self.table((("owned", "owned", True, True), ("retained", "retained_owned", True, True),
                     ("no_command", "owned", True, True)))
 
-    def test_user_owned_external_pending_unknown_and_unreadable(self):
-        self.table((("user_owned", "user_owned", True, False), ("external", "external", True, False),
-                    ("release_pending", "release_pending", True, True),
+    def test_user_owned_and_external(self):
+        self.table((("user_owned", "user_owned", True, False), ("external", "external", True, False)))
+
+    def test_pending_unknown_and_unreadable(self):
+        self.table((("release_pending", "release_pending", True, True),
                     ("release_unknown", "release_pending", True, True), ("unreadable", "unreadable", True, True)))
 
     def test_excluded_and_absent_rows(self):
@@ -389,6 +400,8 @@ class ClosureTests(TabCase):
                 self.assertTrue(ready["finalization"]["finished"])
                 self.assertEqual(ready["finalization"]["remaining"], [])
                 self.assertEqual(ready["finalization"]["records"], {})
+                if case in ("owned", "retained"):
+                    self.assertIn("Release still owed after recorded closure", ready["summary"])
                 self.assertIn(view["worker_tabs"][0]["wording"], ready["summary"])
                 self.assertNotIn("safe to retire", json.dumps(ready))
                 self.assertNotIn("Pod needs nothing more", json.dumps(ready))
@@ -406,6 +419,23 @@ class ClosureTests(TabCase):
                 else: self.write(closing, close=True)
             self.assertEqual(caught.exception.code, "native_assignment_unverified")
             self.assertEqual(before, self.saved())
+
+    def test_closed_refusals_use_known_rows_or_name_the_status_read(self):
+        frozen, admission = self.worker(); self.tab_case = "not_materialized"
+        self.report(admission, frozen, map={"obligations": self.finished_rows(), "close": True})
+        self.tab_case = "owned"; before = self.saved()
+        first = len(self.calls)
+        with self.assertRaises(PodError) as early:
+            self.op("governor-outcome", record_id="unused", outcome="FAILED")
+        self.assertEqual(self.calls[first:], [], "an early refusal added a native read")
+        self.assertIn("Read status", early.exception.detail["finalization"]["next_action"])
+        with self.assertRaises(PodError) as observed:
+            self.report(admission, frozen)
+        self.assertIn("Release still owed", observed.exception.detail["finalization"]["next_action"])
+        for error in (early.exception, observed.exception):
+            self.assertNotIn("safe to retire", json.dumps(error.detail))
+            self.assertNotIn("Pod needs nothing more", json.dumps(error.detail))
+        self.assertEqual(before, self.saved())
 
 
 class OwnerKeepTests(TabCase):

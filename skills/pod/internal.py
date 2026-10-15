@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 
 from .errors import FieldRefusal, PodError
@@ -344,9 +345,22 @@ def _op_governor(request: dict) -> dict:
     project = Path(request["project"])
     projection = _governor_projection(project, request["objective"], request["owner"],
                                       mutating=True, forward_action=request["action"])
-    return decide(project, request["objective"], owner=request["owner"],
-                  action=request["action"], exception=request.get("exception"),
-                  native_projection=projection, pull_request=request.get("pull_request"))
+    with _tab_failure(projection):
+        return decide(project, request["objective"], owner=request["owner"],
+                      action=request["action"], exception=request.get("exception"),
+                      native_projection=projection, pull_request=request.get("pull_request"))
+
+
+@contextmanager
+def _tab_failure(projection: dict | None):
+    """Keep already-read tab facts on an effect's refusal, without another read."""
+    try:
+        yield
+    except PodError as exc:
+        tabs = (projection or {}).get("worker_tabs")
+        if tabs:
+            exc.detail = {**(exc.detail or {}), "worker_tabs": tabs}
+        raise
 
 
 def _finalization_view(request: dict, tabs: list | None = None) -> dict | None:
@@ -354,7 +368,17 @@ def _finalization_view(request: dict, tabs: list | None = None) -> dict | None:
     from .governor import objective_finalization
     from .worker_tabs import finalization
     try:
-        return finalization(objective_finalization(Path(request["project"]), request["objective"]), tabs or [])
+        value = objective_finalization(Path(request["project"]), request["objective"])
+        if value and tabs is None:
+            # Early refusals have not read worker tabs. Their record projection
+            # cannot claim terminal disposition or add a native read to find it.
+            from .governor import finalization_step
+            pending = value["remaining"]
+            wording = ("Record " + ", ".join(pending) + " in that order. Next: "
+                       + finalization_step(pending[0], value["records"][pending[0]])
+                       if pending else "Finished recording: no records remain.")
+            return {**value, "next_action": wording + " Read status for current worker-tab steps."}
+        return finalization(value, tabs or [])
     except Exception:
         return None
 
@@ -366,10 +390,11 @@ def _op_governor_outcome(request: dict) -> dict:
     project = Path(request["project"])
     projection = _governor_projection(project, request["objective"], request["owner"],
                                       mutating=True, version_exempt=True)
-    result = record_outcome(project, request["objective"], owner=request["owner"],
-                            record_id=request["record_id"], outcome=request["outcome"],
-                            provider=request.get("provider"), evidence=request.get("evidence"),
-                            detail=request.get("detail"))
+    with _tab_failure(projection):
+        result = record_outcome(project, request["objective"], owner=request["owner"],
+                                record_id=request["record_id"], outcome=request["outcome"],
+                                provider=request.get("provider"), evidence=request.get("evidence"),
+                                detail=request.get("detail"))
     return {**result, "finalization": _finalization_view(request, (projection or {}).get("worker_tabs"))}
 
 
@@ -437,9 +462,10 @@ def _op_governor_execute(request: dict) -> dict:
     projection = _governor_projection(project, request["objective"], request["owner"],
                                       mutating=True, forward_action=request["action"])
     # The production port is the installed gh and git; request JSON cannot supply one.
-    result = execute(project, request["objective"], owner=request["owner"],
-                     action=request["action"], exception=request.get("exception"),
-                     pull_request=request.get("pull_request"), native_projection=projection)
+    with _tab_failure(projection):
+        result = execute(project, request["objective"], owner=request["owner"],
+                         action=request["action"], exception=request.get("exception"),
+                         pull_request=request.get("pull_request"), native_projection=projection)
     return {**result, "finalization": _finalization_view(request, (projection or {}).get("worker_tabs"))}
 
 
@@ -450,8 +476,9 @@ def _op_governor_reconcile(request: dict) -> dict:
     project = Path(request["project"])
     projection = _governor_projection(project, request["objective"], request["owner"],
                                       mutating=True, version_exempt=True)
-    result = reconcile(project, request["objective"], owner=request["owner"],
-                       record_id=request["record_id"])
+    with _tab_failure(projection):
+        result = reconcile(project, request["objective"], owner=request["owner"],
+                           record_id=request["record_id"])
     return {**result, "finalization": _finalization_view(request, (projection or {}).get("worker_tabs"))}
 
 
@@ -485,9 +512,12 @@ def _op_admission(request: dict) -> dict:
                          reuse_of=request.get("reuse_of"), accompanying=request.get("map"))
     from .worker_tabs import title, rename
     row = result["admission"]
-    return {**result, **rename(title(request["packet"].get("body", request["packet"])),
-                             (row.get("native_binding") or {}).get("terminalHandle"),
-                             started=row["state"] == "bound")}
+    naming = rename(title(request["packet"].get("body", request["packet"])),
+                    (row.get("native_binding") or {}).get("terminalHandle"),
+                    started=row["state"] == "bound")
+    if row["state"] in ("reserved", "unresolved"):
+        naming["rename_reason"] = "worker start is not verified"
+    return {**result, **naming}
 
 
 def _op_runtime_continuity(request: dict) -> dict:
@@ -744,9 +774,8 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
             acknowledgement["next_safe_action"] = checkpoint["next_safe_action"]
     acknowledgement["objective"] = request["objective"]
     if operation in ("checkpoint", "report"):
-        from .worker_tabs import finalization
         acknowledgement["worker_tabs"] = result.get("worker_tabs", [])
-        acknowledgement["finalization"] = finalization(_finalization_view(request), acknowledgement["worker_tabs"])
+        acknowledgement["finalization"] = _finalization_view(request, acknowledgement["worker_tabs"])
     if "runtime_continuity" in result and operation != "runtime-continuity":
         acknowledgement["runtime_continuity"] = result["runtime_continuity"]
     for key in ("warnings", "invalidations", "source_rejections"):

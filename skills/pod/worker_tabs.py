@@ -149,8 +149,9 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                  "Orca gives no next command; repeat " + shlex.join(repeat))
     row["command"] = command
     row["state"] = "releasable"
+    timing = "after recorded closure" if (state.get("checkpoint") or {}).get("closure") else "before closure"
     if row["release_state"] not in ("none", "not_requested", "unreleased", "retained", "released"):
-        return finish("release_pending", f"Confirm this tab's release before closure: {next_step}.",
+        return finish("release_pending", f"Confirm this tab's release {timing}: {next_step}.",
                       blocks_closure=True)
     keep = _keep(state, objective, dispatch, handle)
     reason = retention_reason(state, admission, keep)
@@ -164,8 +165,9 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         row.update(owner_kept=True, owner_instruction={key: keep[key] for key in
                    ("id", "instruction", "channel", "relay") if key in keep})
     if owned:
+        debt = "Release still owed" if (state.get("checkpoint") or {}).get("closure") else "Release owed"
         wording = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
-                   if keep else f"Release owed before closure: {next_step}.")
+                   if keep else f"{debt} {timing}: {next_step}.")
         if reason in ("corrections", "delta review"):
             wording += f" Retain only while {reason} of this result are pending; release when the cycle ends."
         wording += " After an accepted report choose exactly one: immediate supported reuse, permitted retention, or release."
@@ -188,13 +190,14 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
 
 def rows(state: dict, placements: dict, *, outstanding=(), failure: str | None = None) -> list[dict]:
     result = []
-    closed = bool((state.get("checkpoint") or {}).get("closure"))
+    recorded_settlement = bool((state.get("checkpoint") or {}).get("closure")
+                               or state.get("continued_by") or state.get("historical_retirement"))
     for key, admission in state.get("admissions", {}).items():
         if admission.get("state") != "bound":
             continue
         # A failed read cannot prove settlement; an accepted report or recorded
         # closure can identify a finished worker whose tab still needs readback.
-        settled = key not in outstanding if not failure else bool(admission.get("report") or closed)
+        settled = key not in outstanding if not failure else bool(admission.get("report") or recorded_settlement)
         row = project(state, admission, placements.get(key, {}), settled=settled, failure=failure)
         if row["listed"]:
             result.append(row)

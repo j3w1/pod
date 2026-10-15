@@ -4577,7 +4577,8 @@
         "tests.test_worker_tabs.TitleTests.test_headless_start_and_empty_safe_title_have_reason_without_command",
         "tests.test_worker_tabs.TitleTests.test_deferred_start_returns_title_without_rename",
         "tests.test_worker_tabs.TitleTests.test_reuse_gets_a_new_title_and_exact_same_handle",
-        "tests.test_worker_tabs.TitleTests.test_adapter_refuses_terminal_rename"
+        "tests.test_worker_tabs.TitleTests.test_adapter_refuses_terminal_rename",
+        "tests.test_worker_tabs.TitleTests.test_unresolved_start_returns_title_and_honest_uncertainty"
       ],
       "status": "NOT_RUN"
     },
@@ -4597,7 +4598,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_worker_tabs.TableTests.test_user_owned_external_pending_unknown_and_unreadable",
+        "tests.test_worker_tabs.TableTests.test_user_owned_and_external",
         "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change"
       ],
       "status": "NOT_RUN"
@@ -4622,7 +4623,7 @@
       ],
       "offline_test": [
         "tests.test_worker_tabs.ClosureTests.test_native_read_failure_names_the_read_without_writing",
-        "tests.test_worker_tabs.TableTests.test_user_owned_external_pending_unknown_and_unreadable",
+        "tests.test_worker_tabs.TableTests.test_pending_unknown_and_unreadable",
         "tests.test_worker_tabs.OwnerKeepTests.test_revocation_disconnection_reuse_and_pending_precedence"
       ],
       "status": "NOT_RUN"
@@ -4673,7 +4674,8 @@
       "offline_test": [
         "tests.test_worker_tabs.ClosureTests.test_existing_closure_keeps_its_bytes_but_names_every_open_tab",
         "tests.test_finalization.ClosureOrderTests.test_a_closure_recorded_before_this_rule_still_validates",
-        "tests.test_worker_tabs.OwnerKeepTests.test_owner_can_revoke_after_closure_without_changing_the_closure_report"
+        "tests.test_worker_tabs.OwnerKeepTests.test_owner_can_revoke_after_closure_without_changing_the_closure_report",
+        "tests.test_worker_tabs.ClosureTests.test_closed_refusals_use_known_rows_or_name_the_status_read"
       ],
       "status": "NOT_RUN"
     },

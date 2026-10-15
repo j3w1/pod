@@ -1896,6 +1896,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             new_map = accept_write(map_state, value, ctx, triaged=triaged)
         except PodError as exc:
             _map_refusal_context(exc, state)
+            if ctx["worker_tabs"]:
+                exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
             raise
         state["checkpoint"] = {**state["checkpoint"], **new_map}
         if observation.get("status") == "validated_observation" and report_value.get("outcome") == "succeeded":
