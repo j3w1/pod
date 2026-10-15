@@ -28,8 +28,9 @@ class SealMarkerTests(unittest.TestCase):
                 issue_intake(self.worktree, LOCATOR, port=port)
             self.assertEqual(caught.exception.code, "issue_is_requirements_spec")
             self.assertIn("requirements input", str(caught.exception))
+            self.assertIn("read-only SEAL delivery planning", caught.exception.detail["next_action"])
             self.assertIn("bounded Pod Execution Spec", caught.exception.detail["next_action"])
-            self.assertIn("analysis", caught.exception.detail["next_action"])
+            self.assertIn("explicitly scoped analysis request", caught.exception.detail["next_action"])
 
     def test_restrictive_identity_wins_and_eel_diagnostic_is_preserved(self):
         cases = [("PES: export", SEAL_FORMAT, "issue_is_requirements_spec"),
@@ -213,8 +214,9 @@ class ParentTraceabilityTests(ProductionCase):
             self.assertEqual(checkpoint["objective_source"], child)
             self.assertEqual(checkpoint["verification"]["dependencies"], [dependency])
             # A requirements read is permitted; it is never executable intake.
-            with self.assertRaises(PodError):
+            with self.assertRaises(PodError) as caught:
                 issue_intake(self.project, observation["url"], port=parent)
+            self.assertEqual(caught.exception.code, "issue_is_requirements_spec")
 
     def test_relevant_dependency_change_invalidates_only_affected_proof(self):
         self.prepare()

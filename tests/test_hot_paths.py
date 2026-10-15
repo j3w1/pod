@@ -89,12 +89,15 @@ class RepositoryReadsTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.project), "remote", "add", "origin",
                         "https://github.com/acme/example.git"], check=True)
         offline = SimpleNamespace(issue=lambda **kwargs: self.fail("the target check must refuse before GitHub"))
+        readable = SimpleNamespace(issue=lambda **kwargs: {
+            "number": 7, "url": "https://github.com/acme/example/issues/7", "state": "OPEN",
+            "title": "PES: implement example", "body": "Complete executable scope"})
         with github.repository_reads():
             github.repository_context(self.project)
             subprocess.run(["git", "-C", str(self.project), "remote", "set-url", "origin",
                             "https://github.com/other/elsewhere.git"], check=True)
             for check in (lambda: github.issue_intake(self.project, "https://github.com/acme/example/issues/7",
-                                                      port=offline),
+                                                      port=readable),
                           lambda: github.issue_recheck(self.project, {
                               "schema": "pod-issue-source/v1", "locator": "https://github.com/acme/example/issues/7",
                               "repository": "acme/example", "number": 7, "body_sha256": "0" * 64,
