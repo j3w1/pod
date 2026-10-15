@@ -1368,6 +1368,9 @@ class UnreadableScanTests(ShapeCase):
         self.assertEqual(sorted(row["record_id"] for row in self.journal("successor")["actions"]),
                          sorted(built.values()))
         self.refresh()  # The refresh route opens once the claim is complete.
+        # Closure still asks that no unreadable record hides another claimant; once it is gone the rows hold it.
+        self.refused(lambda: self.close("successor", "next", "run-s"), code="claim_unverified")
+        (broken / "context.json").unlink()
         self.assertEqual(self.refused(lambda: self.close("successor", "next", "run-s")).detail["detail"],
                          "closure_unfinished")
         self.assertEqual(self.writes(), effects)
@@ -1500,6 +1503,106 @@ class ContinuityCapacityTests(ShapeCase):
         self.assertNotIn("continues", read(self.project, "successor"))
         self.fresh_successor_claims(built)
         self.assertEqual(self.writes(), effects)
+
+
+class DoubleClaimTests(ShapeCase):
+    """R118: earlier writers never checked for an incoming claim, so two of their interrupted claims can name one
+    successor. That ambiguity never resolves by completing one: the successor neither works nor closes, and no
+    answer reads it closed or finished, while the other predecessor's effects stay unsettled."""
+
+    def earlier(self, writer, predecessor, decision=None):
+        return self.routine(writer).succession(self.project, "successor", owner="next", predecessor=predecessor,
+                                               decision=decision)
+
+    def claims(self, writer, predecessors, *, completed=None):
+        """`writer`'s genuine routine links each predecessor to the successor, each stopped after the link, then
+        optionally completes one; its bundle's authority join had no incoming-claim check (`refuse_incomplete`)."""
+        from pod import ledger
+        real = ledger._write
+
+        def completing(path, value):
+            if "state" not in value.get("continues", {"state": None}):
+                raise KeyboardInterrupt("after the link")
+            return real(path, value)
+        decisions = {}
+        with patch("pod.succession.refuse_incomplete"):
+            for predecessor in predecessors:
+                facts = self.earlier(writer, predecessor)
+                self.assertEqual(facts["status"], "claim_available", facts.get("message"))
+                decisions[predecessor] = {"provenance": "user_direct", "instruction": "Continue the lost objective",
+                                          **facts["facts"]}
+                stopped = (patch("pod.ledger._write", side_effect=completing) if writer == "pod-0.13.1" else
+                           patch.object(self.routine(writer), "_carry", side_effect=KeyboardInterrupt("after link")))
+                with stopped, self.assertRaises(KeyboardInterrupt):
+                    self.earlier(writer, predecessor, decisions[predecessor])
+            if completed is not None:
+                self.assertEqual(self.earlier(writer, completed, decisions[completed])["status"], "claimed")
+        for predecessor in predecessors:
+            self.assertEqual(read(self.project, predecessor)["continued_by"]["objective"], "successor")
+        return decisions
+
+    def setting(self, build):
+        """Predecessor `objective` with what `build` leaves, a second lost predecessor `empty`, and the successor."""
+        built = self.lost_with(build)
+        self.successor(name="empty", caller="empty-owner", run_id="run-empty")
+        self.terminals["empty-owner"] = "stale"
+        self.run_holders["run-empty"] = "empty-owner"
+        self.successor()
+        return built
+
+    def held(self, decisions):
+        """The current reader: every write, replay and further claim refuses `claim_ambiguous`; nothing changes."""
+        self.successor(name="other", caller="other", run_id="run-o")
+        further = self.claim(name="other", caller="other", predecessor="successor")
+        self.assertEqual(further["condition"], "claim_ambiguous", further.get("message"))
+        self.act("next", "run-s")
+        source = {name: (objective_root(self.project, name) / "context.json").read_bytes() for name in decisions}
+        journal = _record_path(self.project, "objective").read_bytes()
+        effects, before = self.writes(), self.snapshot()
+        names = sorted(decisions)
+        for predecessor, decision in decisions.items():
+            refused = self.refused(lambda: self.claim(decision, predecessor=predecessor), code="claim_ambiguous")
+            self.assertEqual(refused.detail["predecessors"], names)
+            self.assertIn("no supported route merges", refused.detail["next_action"])
+        for call in (lambda: self.mine("checkpoint", value=self.core(
+                         obligations=read(self.project, "successor")["checkpoint"]["obligations"])),
+                     lambda: self.mine("governor-prepare", unit="own",
+                                       branch={"remote": "origin", "branch": "own", "base": "target"}),
+                     lambda: self.close("successor", "next", "run-s")):
+            self.refused(call, code="claim_ambiguous")
+        readiness = self.status(objective="successor")["readiness"]
+        self.assertNotEqual(readiness["state"], "closed")
+        self.assertIs(readiness["finalization"]["finished"], False)
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(source, {name: (objective_root(self.project, name) / "context.json").read_bytes()
+                                  for name in decisions})
+        self.assertEqual(journal, _record_path(self.project, "objective").read_bytes())
+        self.assertEqual(self.writes(), effects)
+
+    def test_two_genuine_earlier_claims_hold_the_successor(self):
+        built = self.setting(self.publications)
+        self.held(self.claims("candidate-2b613c8", ("empty", "objective")))
+        self.assertEqual(sorted(row["record_id"] for row in self.journal("objective")["actions"]
+                                if row["outcome"] in ("pending", "UNKNOWN")), sorted(built.values()))
+
+    def test_a_claim_an_earlier_writer_completed_never_hides_the_other(self):
+        self.setting(self.publications)
+        decisions = self.claims("candidate-2b613c8", ("empty", "objective"), completed="empty")
+        self.assertNotIn("state", read(self.project, "successor")["continues"])
+        self.held(decisions)
+
+    def test_two_released_link_only_claims_hold_the_successor_after_one_completes(self):
+        self.setting(lambda: {})
+        decisions = self.claims("pod-0.13.1", ("empty", "objective"), completed="empty")
+        self.assertEqual(read(self.project, "successor")["continues"]["objective"], "empty")
+        self.held(decisions)
+
+    def test_a_single_earlier_claim_still_completes_and_closes(self):
+        self.setting(self.publications)
+        decision = self.claims("candidate-2b613c8", ("empty",))["empty"]
+        self.assertEqual(self.claim(decision, predecessor="empty")["status"], "claimed")
+        self.close("successor", "next", "run-s")
+        self.assertIs(self.status(objective="successor")["readiness"]["finalization"]["finished"], True)
 
 
 class EarlierReaderTests(CarriedCase):

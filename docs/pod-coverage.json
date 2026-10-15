@@ -3948,6 +3948,26 @@
         "tests.test_carried_claim.ContinuityCapacityTests.test_a_reservation_whose_last_entry_went_to_a_handoff_is_released_unlinked"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A329",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.DoubleClaimTests.test_two_genuine_earlier_claims_hold_the_successor",
+        "tests.test_carried_claim.DoubleClaimTests.test_a_claim_an_earlier_writer_completed_never_hides_the_other",
+        "tests.test_carried_claim.DoubleClaimTests.test_a_single_earlier_claim_still_completes_and_closes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A330",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.DoubleClaimTests.test_two_released_link_only_claims_hold_the_successor_after_one_completes",
+      "status": "NOT_RUN"
     }
   ]
 }

@@ -103,29 +103,36 @@ def incoming_claim(project: Path, objective: str, state: dict | None, *, full: b
     `continues` is missing, which retirement's claimant scan of the repository's records finds.
 
     Rows or units the earlier candidate copied before stopping name their predecessor in the objective's own
-    journal. The scan runs only where this objective's records cannot prove there is none: a completed `continues`
-    proves it, and so does work it already started, since every writer refuses to begin a claim of a started
-    successor; an objective with no checkpoint yet is named by no claim, since every writer claims only a recorded
-    successor. An unreadable journal of its own proves nothing. `full` scans anyway, for closure and for continuing
-    it as a predecessor, which also cover a claim an earlier Pod left before the objective started. Returns
-    `{"predecessor": name}` for a readable claim, which an unreadable record never hides, or
-    `{"predecessor": None, "unreadable": paths}` when no readable claim is found and a record that could hold one
-    is unreadable.
+    journal. Earlier writers never checked for an incoming claim, so two of their claims can name one successor:
+    every claimant counts, and a predecessor other than the one this objective's own records name makes the claims
+    ambiguous, even after one of them completed. No supported route merges two claims, so an ambiguous successor
+    stays held rather than closing over the other predecessor's effects.
+
+    The scan therefore always runs for an objective whose own records name a predecessor. Otherwise it runs only
+    where they cannot prove there is no claim: work it already started proves it, since every writer refuses to
+    begin a claim of a started successor; an objective with no checkpoint yet is named by no claim, since every
+    writer claims only a recorded successor. An unreadable journal of its own proves nothing. `full` scans anyway,
+    for closure and for continuing it as a predecessor, which also cover a claim an earlier Pod left before the
+    objective started. Returns `{"predecessor": name}` for one readable incomplete claim, which an unreadable record
+    never hides; `{"predecessor": None, "ambiguous": names}` for more than one predecessor; or
+    `{"predecessor": None, "unreadable": paths}` when no readable incomplete claim is found and a record that could
+    hold one is unreadable, which a completed claim of its own answers only where `full` asks for proof.
     """
     if not isinstance(state, dict) or state.get("checkpoint") is None:
         return None
     back = state.get("continues")
-    if isinstance(back, dict):
-        return {"predecessor": back["objective"]} if back.get("state") == CLAIMING else None
-    copied = _copied_from(project, objective)
-    if copied is not None:
-        return {"predecessor": copied}
-    if not full and _started(project, objective, state, unreadable=None):
+    named = back["objective"] if isinstance(back, dict) else _copied_from(project, objective)
+    if named is None and not full and _started(project, objective, state, unreadable=None):
         return None
     from .retirement import _claimants
     claimants, unreadable = _claimants(project, objective)
-    if claimants:
-        return {"predecessor": claimants[0]}
+    found = sorted({*claimants, *([named] if named is not None else [])})
+    if len(found) > 1:
+        return {"predecessor": None, "ambiguous": found[:MAX_LISTED]}
+    if isinstance(back, dict) and back.get("state") != CLAIMING:
+        return {"predecessor": None, "unreadable": unreadable[:MAX_LISTED]} if full and unreadable else None
+    if found:
+        return {"predecessor": found[0]}
     return {"predecessor": None, "unreadable": unreadable[:MAX_LISTED]} if unreadable else None
 
 
@@ -149,10 +156,15 @@ def refuse_incomplete(project: Path, objective: str, state: dict | None, *, clai
 
     While a record that could hold such a claim is unreadable, an objective whose own records cannot prove it has
     none refuses every write: work would start it, and a started successor can no longer complete the claim.
-    Closure and continuing it as a predecessor (`full`) ask that proof even of a started objective.
+    Closure and continuing it as a predecessor (`full`) ask that proof even of a started objective. Claims of more
+    than one predecessor refuse every write, their replays included.
     """
     found = incoming_claim(project, objective, state, full=full)
-    if found is None or claim is not None and found["predecessor"] == claim:
+    if found is None:
+        return
+    if "ambiguous" in found:
+        raise _claim_ambiguous(found["ambiguous"])
+    if claim is not None and found["predecessor"] == claim:
         return
     if found["predecessor"] is None:
         named = found["unreadable"]
@@ -162,6 +174,18 @@ def refuse_incomplete(project: Path, objective: str, state: dict | None, *, clai
                        {"unreadable": named,
                         "next_action": "repair or remove the unreadable record, then retry"})
     raise _claim_incomplete(found["predecessor"])
+
+
+AMBIGUOUS_ACTION = ("no supported route merges claims of two predecessors: the owner decides outside Pod how each "
+                    "predecessor's unsettled effects settle; historical retirement does not apply to a claimed "
+                    "successor or a continued predecessor")
+
+
+def _claim_ambiguous(predecessors: list[str]) -> PodError:
+    return PodError("claim_ambiguous",
+                    "More than one predecessor objective names this objective as its successor ("
+                    + ", ".join(predecessors) + "); it accepts no write, and nothing was written",
+                    {"predecessors": predecessors, "next_action": AMBIGUOUS_ACTION})
 
 
 def _read(project: Path, objective: str) -> dict | None:
@@ -446,6 +470,10 @@ def _incomplete_claim(project: Path, objective: str, state: dict) -> tuple | Non
     found = incoming_claim(project, objective, state, full=True)
     if found is None:
         return None
+    if "ambiguous" in found:
+        return ("claim_ambiguous", "More than one predecessor objective names the predecessor as its successor ("
+                + ", ".join(found["ambiguous"]) + "); it is not continued.", AMBIGUOUS_ACTION[0].upper()
+                + AMBIGUOUS_ACTION[1:] + ".")
     if found["predecessor"] is None:
         return ("predecessor_unverified", "A Pod record that could name the predecessor as a claimed successor is "
                 "unreadable: " + ", ".join(found["unreadable"][:3]) + ".",
