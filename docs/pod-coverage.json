@@ -3912,7 +3912,16 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_carried_claim.ReservationTests.test_a_repeated_close_answers_from_the_recorded_closure",
+      "offline_test": [
+        "tests.test_carried_claim.ReservationTests.test_a_repeated_close_answers_from_the_recorded_closure",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_pod_0_13_1_two_completed",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_two",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_two_completed",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_after_link",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_after_rows",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_current_unreadable",
+        "tests.test_carried_claim.ClosedReplayTableShapeTests.test_the_closed_replay_table_runs_every_row_once"
+      ],
       "status": "NOT_RUN"
     },
     {

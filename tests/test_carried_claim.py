@@ -18,7 +18,8 @@ from unittest.mock import patch
 from pod.errors import PodError
 from pod.governor import CHAIN_FIELDS, _read_journal, _record_path, _write_journal, reconcile, record_outcome
 from pod.internal import run
-from pod.ledger import objective_root, read, state_root
+from pod.ledger import closed_snapshot_context, map_of, objective_root, read, state_root
+from pod.obligations import validate_closed_snapshot
 from tests.common import GroupedTable, assert_grouped_table
 from tests.kernel_support import git
 from tests.test_succession import SuccessionCase
@@ -1505,10 +1506,8 @@ class ContinuityCapacityTests(ShapeCase):
         self.assertEqual(self.writes(), effects)
 
 
-class DoubleClaimTests(ShapeCase):
-    """R118: earlier writers never checked for an incoming claim, so two of their interrupted claims can name one
-    successor. That ambiguity never resolves by completing one: the successor neither works nor closes, and no
-    answer reads it closed or finished, while the other predecessor's effects stay unsettled."""
+class DoubleClaimCase(ShapeCase):
+    """Two interrupted claims an earlier writer's genuine routine leaves on one successor."""
 
     def earlier(self, writer, predecessor, decision=None):
         return self.routine(writer).succession(self.project, "successor", owner="next", predecessor=predecessor,
@@ -1579,6 +1578,12 @@ class DoubleClaimTests(ShapeCase):
         self.assertEqual(journal, _record_path(self.project, "objective").read_bytes())
         self.assertEqual(self.writes(), effects)
 
+
+class DoubleClaimTests(DoubleClaimCase):
+    """R118: earlier writers never checked for an incoming claim, so two of their interrupted claims can name one
+    successor. That ambiguity never resolves by completing one: the successor neither works nor closes, and no
+    answer reads it closed or finished, while the other predecessor's effects stay unsettled."""
+
     def test_two_genuine_earlier_claims_hold_the_successor(self):
         built = self.setting(self.publications)
         self.held(self.claims("candidate-2b613c8", ("empty", "objective")))
@@ -1603,6 +1608,99 @@ class DoubleClaimTests(ShapeCase):
         self.assertEqual(self.claim(decision, predecessor="empty")["status"], "claimed")
         self.close("successor", "next", "run-s")
         self.assertIs(self.status(objective="successor")["readiness"]["finalization"]["finished"], True)
+
+
+# Each state in which the incoming-claim predicate would refuse the successor's write, and the code a closure it
+# has not recorded yet still refuses with.
+CLOSED_REPLAY_ROWS = [("pod-0.13.1", "two_completed", "claim_ambiguous"),
+                      ("candidate-2b613c8", "two", "claim_ambiguous"),
+                      ("candidate-2b613c8", "two_completed", "claim_ambiguous"),
+                      ("candidate-2b613c8", "after_link", "claim_incomplete"),
+                      ("candidate-2b613c8", "after_rows", "claim_incomplete"),
+                      ("current", "unreadable", "claim_unverified")]
+
+
+class ClosedReplayCase(DoubleClaimCase):
+    """A closure recorded over an incoming-claim state answers its own repeated close (R117, R118)."""
+
+    def closing(self):
+        rows = read(self.project, "successor")["checkpoint"]["obligations"]
+        for row in rows:
+            row.pop("executor", None)
+            row.update(state="satisfied", evidence=[{"check": "criterion", "command": "unit", "result": "passed",
+                                                     "reference": "successor-proof"}])
+        return lambda: run("checkpoint", {"project": str(self.project), "objective": "successor", "owner": "next",
+                                          "value": self.core(obligations=rows, close=True)})
+
+    def closed_row(self, writer, shape, refused):
+        """Build the state, see an unrecorded closure still refused, record one, then repeat the close."""
+        if shape == "unreadable":
+            built = self.lost_with(self.publications)
+            self.successor()
+            self.claim(self.decide())  # A current claim; its rows read back below.
+        elif shape.startswith("two"):
+            built = self.setting(self.publications if writer != "pod-0.13.1" else lambda: {})
+            self.claims(writer, ("empty", "objective"), completed="empty" if shape == "two_completed" else None)
+        else:
+            built = self.lost_with(self.publications)
+            self.successor()
+            self.interrupted(writer, shape)
+        self.act("next", "run-s")
+        if shape == "after_rows":
+            with patch("pod.succession.refuse_incomplete"):  # Its bundle's own readback, which did not check.
+                settled, expected = self.read_back_all("publications", built, "successor", "next")
+            self.assertEqual(settled, expected)
+        if shape == "unreadable":
+            settled, expected = self.read_back_all("publications", built, "successor", "next")
+            self.assertEqual(settled, expected)
+            broken = state_root(self.project) / "zz-unreadable"
+            broken.mkdir()
+            (broken / "context.json").write_text("{")
+        self.act("next", "run-s")
+        self.refused(self.closing(), code=refused)  # The open objective's refusal is unchanged.
+        if shape == "unreadable":
+            (broken / "context.json").unlink()
+            self.closing()()  # This version records the closure, then the record becomes unreadable again.
+            (broken / "context.json").write_text("{")
+        else:
+            with patch("pod.succession.refuse_incomplete"):  # A closing write that did not check (R118's writers).
+                self.closing()()
+        state = read(self.project, "successor")
+        self.assertEqual(validate_closed_snapshot(map_of(state), closed_snapshot_context(self.project, "successor",
+                                                                                           state)), ())
+        effects, before = self.writes(), self.snapshot()
+        repeated = self.refused(self.closing(), code="objective_closed")
+        self.assertEqual((repeated.detail["finalization"]["finished"], repeated.detail["finalization"]["remaining"]),
+                         (True, []))
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.writes(), effects)
+
+
+class ClosedReplayTableTests(GroupedTable):
+    """R117: one named group method per incoming-claim state over a recorded closure."""
+    GROUPS = {f"test_{writer.replace('-', '_').replace('.', '_')}_{shape}": [(writer, shape, refused)]
+              for writer, shape, refused in CLOSED_REPLAY_ROWS}
+
+    def row(self, item):
+        case = ClosedReplayCase()
+        case.setUp()
+        try:
+            with self.subTest(row=item):
+                case.closed_row(*item)
+        finally:
+            case.doCleanups()
+
+    def test_pod_0_13_1_two_completed(self): self.rows()
+    def test_candidate_2b613c8_two(self): self.rows()
+    def test_candidate_2b613c8_two_completed(self): self.rows()
+    def test_candidate_2b613c8_after_link(self): self.rows()
+    def test_candidate_2b613c8_after_rows(self): self.rows()
+    def test_current_unreadable(self): self.rows()
+
+
+class ClosedReplayTableShapeTests(unittest.TestCase):
+    def test_the_closed_replay_table_runs_every_row_once(self):
+        assert_grouped_table(self, ClosedReplayTableTests, CLOSED_REPLAY_ROWS, limit=1)
 
 
 class EarlierReaderTests(CarriedCase):

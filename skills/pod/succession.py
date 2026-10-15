@@ -157,8 +157,12 @@ def refuse_incomplete(project: Path, objective: str, state: dict | None, *, clai
     While a record that could hold such a claim is unreadable, an objective whose own records cannot prove it has
     none refuses every write: work would start it, and a started successor can no longer complete the claim.
     Closure and continuing it as a predecessor (`full`) ask that proof even of a started objective. Claims of more
-    than one predecessor refuse every write, their replays included.
+    than one predecessor refuse every write, their replays included. An objective whose closure is recorded and
+    valid is answered from that closure before any of this (R117): a repeated close refuses `objective_closed`
+    with its finished finalization, whatever an incoming claim would say.
     """
+    if _closure_recorded(project, objective, state):
+        return
     found = incoming_claim(project, objective, state, full=full)
     if found is None:
         return
@@ -174,6 +178,19 @@ def refuse_incomplete(project: Path, objective: str, state: dict | None, *, clai
                        {"unreadable": named,
                         "next_action": "repair or remove the unreadable record, then retry"})
     raise _claim_incomplete(found["predecessor"])
+
+
+def _closure_recorded(project: Path, objective: str, state: dict | None) -> bool:
+    """Whether this objective's closure is recorded and still validates, so it answers its own replay (R117)."""
+    from .ledger import closed_snapshot_context, map_of
+    from .obligations import validate_closed_snapshot
+    closed = map_of(state)
+    if closed is None or not closed.get("closure"):
+        return False
+    try:
+        return validate_closed_snapshot(closed, closed_snapshot_context(project, objective, state)) == ()
+    except (PodError, KeyError, TypeError, ValueError, OSError):
+        return False
 
 
 AMBIGUOUS_ACTION = ("no supported route merges claims of two predecessors: the owner decides outside Pod how each "
