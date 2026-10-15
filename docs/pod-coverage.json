@@ -3181,7 +3181,9 @@
         "tests.test_historical_retirement.WriteTests.test_the_question_names_a_late_refused_objective_a_decision_could_retire_later",
         "tests.test_historical_retirement.WriteTests.test_an_early_refusal_is_named_as_never_retired_by_these_facts",
         "tests.test_retirement_absent.NativeIdentityTests.test_a_decided_batch_retires_the_others_and_refuses_that_objective_alone",
-        "tests.test_decision_channels.RetirementChannelTests.test_earlier_retirement_replays_explicit_default_session_only"
+        "tests.test_decision_channels.RetirementChannelTests.test_earlier_retirement_replays_explicit_default_session_only",
+        "tests.test_retirement_absent.PreservationTests.test_retiring_an_absent_path_keeps_history_and_reads_back_its_reservations",
+        "tests.test_retirement_capacity.RetirementCapacityTests.test_full_record_compacts_settled_history_before_entry_pointer"
       ],
       "status": "NOT_RUN"
     },
@@ -4151,7 +4153,9 @@
         "tests.test_decision_channels.SharedDecisionTests.test_earlier_session_consent_cannot_become_fresh_by_default_channel",
         "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_reader_refuses_session_carried_consent",
         "tests.test_decision_channels.RetirementChannelTests.test_earlier_retirement_replays_explicit_default_session_only",
-        "tests.test_carried_claim.CapacityTests.test_preflight_counts_session_channel_marker_before_any_claim_write"
+        "tests.test_carried_claim.CapacityTests.test_preflight_counts_session_channel_marker_before_any_claim_write",
+        "tests.test_owner_handoff.TransitionTableTests.test_transition_outcome_table_preserves_every_other_field_and_journal",
+        "tests.test_issue41.ReleasedWriterTests.test_071_validator_loads_new_marked_journal"
       ],
       "status": "NOT_RUN"
     },

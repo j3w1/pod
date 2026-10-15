@@ -90,6 +90,7 @@ class RetirementCapacityTests(RetirementCase):
         validate_entry(after["historical_retirement"])
         after.pop("historical_retirement")
         state["revision"] += 1
+        state["decision_channels"] = 1
         self.assertEqual(after, state)
         self.assertEqual(journal, self.journal())
 

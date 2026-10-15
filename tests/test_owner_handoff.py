@@ -312,6 +312,8 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
 
     def assert_only_handoff_changes(self, before, after, *, completed):
         # One invariant covers every phase and failure sibling, independent of code structure.
+        self.assertEqual(after["decision_channels"], 1)
+        before["decision_channels"] = 1
         for state in (before, after):
             state.pop("revision")
             state["checkpoint"].pop("continuity")

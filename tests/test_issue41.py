@@ -248,10 +248,41 @@ class ReleasedWriterTests(ProductionCase):
         source,_ = self.released(abbreviated=True)
         self.prepare(); self.op("governor",action=self.action())
         journal=objective_root(self.project,"objective") / "governor.json"
-        result=subprocess.run([sys.executable,"-c",
-          "from pathlib import Path; import sys; from pod.governor import _read_journal; print(_read_journal(Path(sys.argv[1]))['actions'][0]['decision_reserved'])",
-          str(journal)],cwd=source,env={**os.environ,"PYTHONPATH":str(source / "skills")},capture_output=True,text=True)
-        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(result.stdout.strip(),"True")
+        before = journal.read_bytes()
+        # Synthetic pre-channel control: reservations require consent, so no genuine
+        # candidate-written reservation can omit its authorization's session channel.
+        control = json.loads(before)
+        control.pop("decision_channels")
+        for row in control["actions"]:
+            consent = row["action"].get("authorization")
+            if consent is not None:
+                self.assertEqual(consent.pop("channel"), "session")
+                self.assertNotIn("relay", consent)
+        self.assertNotIn('"channel"', json.dumps(control))
+        control_path = self.root / "synthetic-pre-channel-reservation.json"
+        control_path.write_text(json.dumps(control))
+        control_before = control_path.read_bytes()
+        program = '''import json, sys
+from pathlib import Path
+from pod import __version__
+from pod.errors import PodError
+from pod.governor import _read_journal
+assert __version__ == "0.7.1"
+try:
+    _read_journal(Path(sys.argv[1]))
+except PodError as exc:
+    actual = exc.code
+else:
+    actual = None
+control = _read_journal(Path(sys.argv[2]))['actions'][0]['decision_reserved']
+print(json.dumps({"actual": actual, "control": control}))
+'''
+        result=subprocess.run([sys.executable,"-c",program,str(journal),str(control_path)],
+            cwd=source,env={**os.environ,"PYTHONPATH":str(source / "skills")},capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"actual": "invalid_governor", "control": True})
+        self.assertEqual(journal.read_bytes(), before)
+        self.assertEqual(control_path.read_bytes(), control_before)
 
 
 class DiagnosticsBoundaryTests(ProductionCase):

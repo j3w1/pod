@@ -778,6 +778,7 @@ class PreservationTests(AbsentCase):
         after = self.state()
         entry = after.pop("historical_retirement")
         state["revision"] += 1
+        state["decision_channels"] = 1
         self.assertEqual(after, state)
         self.assertEqual(self.journal(), journal)
         self.assertEqual({key for key, value in self.snapshot().items() if before.get(key) != value} - {own}, set())
