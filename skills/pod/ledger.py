@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 from typing import Callable, Iterator
 
+from .contracts import bound, fields, required, input_record, policy_mismatch
 from .errors import PodError
 from .history import load_context, prepare_context, publish_context
 from . import gitio
@@ -914,16 +915,17 @@ def _authorization_granted(project: Path, objective: str):
     return granted
 
 
+@input_record("verification")
 def validate_verification(value: object) -> dict:
     """The checkpoint's current verification context: dependencies and environment (R41)."""
     record = exact(value, {"dependencies", "environment"}, {"dependencies", "environment"},
                    name="verification")
-    if (not isinstance(record["dependencies"], list) or len(record["dependencies"]) > 64
+    if (not isinstance(record["dependencies"], list) or len(record["dependencies"]) > bound("verification", "dependencies", "max_items")
             or len(set(map(str, record["dependencies"]))) != len(record["dependencies"])):
         raise PodError("invalid_checkpoint", "Verification dependencies are a bounded unique list")
     for item in record["dependencies"]:
-        bounded_text(item, name="dependency", limit=512)
-    bounded_text(record["environment"], name="environment", limit=512)
+        bounded_text(item, name="dependency", limit=bound("verification", "dependencies", "items")["max_length"])
+    bounded_text(record["environment"], name="environment", limit=bound("verification", "environment"))
     return {"dependencies": list(record["dependencies"]), "environment": record["environment"]}
 
 
@@ -1106,6 +1108,8 @@ def map_read(project: Path, objective: str) -> dict:
     remaining = tab_finalization(remaining, view.get("worker_tabs", []))
     return {"schema": "pod-map-view/v1", "seq": map_state["seq"], "next_seq": map_state["seq"] + 1,
             "revision": map_state["revision"], "candidate": state["checkpoint"].get("candidate"),
+            **{key: state["checkpoint"].get(key) for key in
+               ("criteria", "plan_revision", "objective_source", "worktree", "policy_revision")},
             "governance": map_state["governance"], "delivery": map_state.get("delivery"),
             "closure": map_state.get("closure"), "obligations": restatable_rows(map_state),
             "acceptances": {ob["id"]: ob["acceptances"] for ob in map_state["obligations"]
@@ -1135,6 +1139,7 @@ def _map_refusal_context(exc: PodError, state: dict) -> PodError:
     return exc
 
 
+@input_record("checkpoint")
 def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
                       native: dict, previous: dict | None = None) -> tuple[dict, dict, list]:
     from .config import effective
@@ -1149,16 +1154,12 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
         value = {**{key: previous[key] for key in carried if key in previous}, **value}
         value.setdefault("native_refs", [])
         value.setdefault("policy_revision", effective(project)["revision"])
-    allowed = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
-               "assignments", "questions", "verification_gaps", "next_safe_action",
-               "route_decisions", "objective", "objective_source", "worktree", "blocker",
-               "remaining_gates", "verification"} | MAP_INPUT
-    required = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
-                "assignments", "questions", "verification_gaps", "next_safe_action"}
-    exact(value, allowed, required, name="checkpoint")
+    allowed = fields("checkpoint")
+    required_fields = required("checkpoint")
+    exact(value, allowed, required_fields, name="checkpoint")
     if value["schema"] != CHECKPOINT_SCHEMA or not isinstance(native.get("runtime"), str):
         raise PodError("invalid_checkpoint", f"Checkpoint needs {CHECKPOINT_SCHEMA} and current native runtime readback")
-    if (not isinstance(value["criteria"], list) or len(value["criteria"]) > 64
+    if (not isinstance(value["criteria"], list) or len(value["criteria"]) > bound("checkpoint", "criteria", "max_items")
             or any(not isinstance(item, str) or not item for item in value["criteria"])
             or not isinstance(value["candidate"], str) or not value["candidate"]):
         raise PodError("invalid_checkpoint", "Checkpoint criteria and candidate are bounded text")
@@ -1184,7 +1185,7 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     proposed = {key: value[key] for key in MAP_INPUT if key in value}
     core = {key: item for key, item in value.items() if key not in MAP_INPUT}
     dispositions = proposed.pop("dispositions", [])
-    if not isinstance(dispositions, list) or len(dispositions) > 16:
+    if not isinstance(dispositions, list) or len(dispositions) > bound("map", "dispositions", "max_items"):
         raise refuse("obligation_unaccounted", "disposition_invalid", "dispositions are a bounded list", record='checkpoint')
     return core, proposed, dispositions
 
@@ -1302,6 +1303,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
                              verification=core.get("verification"))
+        ctx["operation"] = "checkpoint"
         ctx["governance_refresh"] = refresh
         ctx["derived_adoption"] = derived_adoption
         ctx["recorded_questions"] = previous.get("questions", [])
@@ -1342,6 +1344,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     return map_state, ctx
 
 
+@input_record("checkpoint")
 def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
     """Persist one validated checkpoint; while a map exists, every write is a map transition."""
     from .bundle import running_identity
@@ -1370,7 +1373,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if native["runtime"] != authority["runtime"]:
             raise PodError("native_authority_unverified", "Checkpoint runtime differs from current Run")
         supplied = core["native_refs"]
-        if (not isinstance(supplied, list) or len(supplied) > 32
+        if (not isinstance(supplied, list) or len(supplied) > bound("checkpoint", "native_refs", "max_items")
                 or any(not isinstance(row, dict) or not isinstance(row.get("runId"), str)
                        or not isinstance(row.get("runtime"), str) for row in supplied)):
             raise PodError("native_authority_unverified", "Checkpoint Run references are malformed")
@@ -1502,9 +1505,13 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
     # The personal file is read after every other check under the objective lock.
     snapshot = load(project)
     if snapshot["policy_revision"] != checkpoint_value.get("policy_revision"):
-        raise PodError("policy_revision_mismatch", "Governor policy changed since checkpoint")
+        raise policy_mismatch("Governor policy changed since checkpoint",
+                              checkpoint=checkpoint_value.get("policy_revision"),
+                              packet=body.get("policy_revision"), effective=snapshot["policy_revision"])
     if body.get("policy_revision") != snapshot["policy_revision"]:
-        raise PodError("policy_revision_mismatch", "Packet Governor policy changed")
+        raise policy_mismatch("Packet Governor policy changed",
+                              checkpoint=checkpoint_value.get("policy_revision"),
+                              packet=body.get("policy_revision"), effective=snapshot["policy_revision"])
     revision_changed = body.get("route", {}).get("preference_revision") != snapshot["revision"]
     if snapshot.get("setup"):
         # A kept 0.6.x file names its route setup rather than an empty worker ceiling.
@@ -1661,13 +1668,24 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             raise PodError("native_authority_unverified", "Admission Run runtime differs from objective")
         checkpoint_value = state.get("checkpoint")
         body = frozen_packet.get("body") if isinstance(frozen_packet, dict) else None
-        if (not isinstance(body, dict) or frozen_packet.get("packet_id") != packet_id
-                or body.get("candidate") != checkpoint_value.get("candidate")
-                or body.get("criteria") != checkpoint_value.get("criteria")
-                or body.get("plan_revision") != plan_revision
-                or body.get("objective_source") != checkpoint_value.get("objective_source")
-                or body.get("worktree") != checkpoint_value.get("worktree")):
-            raise PodError("packet_plan_mismatch", "Packet differs from current checkpoint")
+        differing = []
+        if not isinstance(body, dict):
+            differing.append("packet_id")
+        else:
+            if frozen_packet.get("packet_id") != packet_id:
+                differing.append("packet_id")
+            differing.extend(key for key in ("candidate", "criteria", "objective_source", "worktree")
+                             if body.get(key) != checkpoint_value.get(key))
+            if body.get("plan_revision") != plan_revision:
+                differing.append("plan_revision")
+        if differing:
+            reads = {key: ("pod internal packet: freeze the corrected body; use its packet_id" if key == "packet_id"
+                           else "pod internal map: " + key) for key in differing}
+            action = ("read the named fields from pod internal map in the objective's project; correct the packet body "
+                      "and the admission plan_revision, then call pod internal packet to freeze it and retry this admission")
+            raise PodError("packet_plan_mismatch", "Packet differs in fields: " + ", ".join(differing)
+                           + ". Next: " + action,
+                           {"fields": differing, "reads": reads, "next_action": action})
         bound_sources = [*body["sources"], *({"path": ref["path"], "state": "present",
                           "sha256": ref["sha256"]} for ref in body["context"]
                          if ref["kind"] in ("source", "instruction"))]
@@ -1699,6 +1717,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         # The caller verified launch-preference capability for this runtime before reserving.
         ctx = kernel_context(project, objective, state, native, candidate=checkpoint_value.get("candidate"),
                              delegation="available")
+        ctx["operation"] = "admission"
         admission_refusal(map_state, body, ctx, admission_id=admission_id)
         require_governance_current(project, map_state)
         snapshot = _reserve_route(project, checkpoint_value, body, state, requested, task_id,
@@ -1815,6 +1834,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         if map_state is None:
             raise refuse("unbound_assignment", "no_map", "a report joins an obligation map", record='consume report')
         ctx = kernel_context(project, objective, state, authority.get("native"))
+        ctx["operation"] = "report"
         try:
             _require_open(state)
         except PodError as exc:

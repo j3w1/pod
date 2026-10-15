@@ -9,6 +9,7 @@ import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
+from .contracts import TABLE, describe, input_record, fields, required
 from .errors import FieldRefusal, PodError
 from .records import (acceptance, integration_observation, packet, report, source_identity,
                       verify_sources)
@@ -491,11 +492,9 @@ def _op_governor_status(request: dict) -> dict:
     return status(project, request["objective"], native_projection=projection)
 
 
+@input_record("admission")
 def _op_admission(request: dict) -> dict:
-    exact(request, {"project", "objective", "owner", "run", "task",
-                    "plan_revision", "packet", "worktree", "reuse_of", "map"},
-          {"project", "objective", "owner", "run", "task",
-           "plan_revision", "packet"}, name="request")
+    exact(request, fields("admission"), required("admission"), name="request")
     from .ledger import read
     from .handoff import refuse_nonowner
     state = read(Path(request["project"]), request["objective"])
@@ -579,7 +578,18 @@ def _op_map(request: dict) -> dict:
 
 
 
+def _op_contract(request: dict) -> dict:
+    exact(request, {"record"}, {"record"}, name="request")
+    name = request["record"]
+    if not isinstance(name, str) or name not in (*TABLE, "all"):
+        raise PodError("invalid_contract", "record must name an available input contract",
+                       {"accepted": sorted(TABLE), "next_action": "read pod internal contract with record all"})
+    names = TABLE if name == "all" else (name,)
+    return {"records": {key: describe(key) for key in sorted(names)}}
+
+
 _OPERATIONS = {
+    'contract': _op_contract,
     'brief': _op_brief,
     'packet': _op_packet,
     'report': _op_report,

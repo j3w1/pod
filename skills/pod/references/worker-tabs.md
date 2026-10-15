@@ -17,7 +17,10 @@ list does not prove finished tabs are closed: `worker_tabs` is the objective's
 list, based on terminal readback and resource ownership, independently of agent
 liveness. Pod never infers a physical event from Orca's user-ownership mark.
 
-- For an Orca-owned tab, relay Orca's exact `nextAction.argv`. Pod never builds
+- For an Orca-owned tab, keep `native_next_action` verbatim. Orca's argv is
+  arguments to the CLI, without an executable: run the selected Orca executable
+  followed by those arguments unchanged, adding or altering no flags. The leading
+  `orca` in Pod's displayed command names that selected executable. Pod never builds
   a release command. If Orca gives none, repeat the named `worker-show` read.
 - For a release pending or unknown, follow Orca's next action or repeat that
   read until release or disconnection is confirmed. Never substitute close.

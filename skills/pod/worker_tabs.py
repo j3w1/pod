@@ -9,12 +9,13 @@ from __future__ import annotations
 import re
 import shlex
 
+from .contracts import bound
 from .errors import PodError
 from .readiness import STATES
 
 TITLE_LIMIT = 96
-ROLE_LABEL_LIMIT = 48
-PURPOSE_LIMIT = 160
+ROLE_LABEL_LIMIT = bound("packet", "role_label")
+PURPOSE_LIMIT = bound("packet", "purpose")
 _ROLES = {"implement": "Implementer", "investigate": "Investigator", "review": "Reviewer"}
 _OMIT = frozenset("""status progress outcome pending running working ready completed complete done
     succeeded success failed failure blocked stopped active retained released approved authorized
@@ -110,6 +111,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
            "ownership": resource.get("ownershipState") or release.get("state"),
            "release_state": resource.get("releaseState") or release.get("releaseState"),
            "reason": facts.get("retained_reason"), "next_action": facts.get("native_next_action"),
+           "native_next_action": facts.get("native_next_action"),
            "command": None, "wording": "", "blocks_closure": False, "listed": False}
 
     def finish(kind, wording="", **fields):
@@ -143,8 +145,8 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     row["listed"] = True
     action = row["next_action"]
     argv = action.get("argv") if isinstance(action, dict) else None
-    # Relay the native argv without changing even its executable or flags.
-    command = list(argv) if isinstance(argv, list) and argv and all(isinstance(x, str) for x in argv) else None
+    # Orca supplies arguments to the selected CLI, without an executable.
+    command = ["orca", *argv] if isinstance(argv, list) and argv and all(isinstance(x, str) for x in argv) else None
     next_step = (shlex.join(command) if command else
                  "Orca gives no next command; repeat " + shlex.join(repeat))
     row["command"] = command

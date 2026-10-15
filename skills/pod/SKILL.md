@@ -35,7 +35,8 @@ Never infer physical capacity or count other objectives' workers.
 
 Use `pod config --json`, `pod doctor --json`, `pod status --objective ID`, `pod internal <op> --input FILE` (or `-`); fallback `~/.local/bin/pod`; missing launcher: `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh`.
 Do not run source-checkout helpers or create another configuration source.
-Acknowledgements retain next-request/recovery facts; refusals list accepted/optional fields and next action.
+Before writing a packet, report, checkpoint/map, admission or Governor action, read `internal contract` with `record` naming that input record or `all` for the bounded field table.
+Acknowledgements retain next-request/recovery facts; shape/text refusals list every bounded field, complete accepted/optional names and next action.
 Read config at intake, new-session continuation, preference-change notice and after `preference_changed`, `preference_revision_stale`, `policy_revision_mismatch`, `setup_required`, `installed_version_changed`.
 Every map-bearing write, including full checkpoint/report and admission maps, carries next `seq`; read map on resume/`map_stale`.
 `internal brief` is an optional read-only uncertain-input dry run for checkpoints.

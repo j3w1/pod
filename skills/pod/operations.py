@@ -9,6 +9,7 @@ import re
 from typing import Protocol
 from uuid import UUID
 
+from .contracts import policy_mismatch
 from .errors import PodError
 from .ledger import (admission_identity, binding_valid, bound_assignments as _bound_assignments,
                      objective_root, read, reserve,
@@ -768,8 +769,11 @@ def _current_authority(project: Path, objective: str, admission: dict, *, issue_
     if not isinstance(expected, dict) or not isinstance(checkpoint_value, dict):
         raise PodError("checkpoint_binding_changed", "Checkpoint binding is unavailable")
     from .config import effective
-    if effective(project)["revision"] != checkpoint_value.get("policy_revision"):
-        raise PodError("policy_revision_mismatch", "Governor policy changed before replay")
+    effective_revision = effective(project)["revision"]
+    if effective_revision != checkpoint_value.get("policy_revision"):
+        raise policy_mismatch("Governor policy changed before replay",
+                              checkpoint=checkpoint_value.get("policy_revision"),
+                              packet=expected.get("policy_revision"), effective=effective_revision, replay=True)
     if any(expected.get(key) != checkpoint_value.get(key) for key in keys):
         raise PodError("checkpoint_binding_changed", "Checkpoint semantics changed before replay")
     _check_objective_source(project, expected.get("objective_source"), issue_port=issue_port)

@@ -30,7 +30,7 @@ class TabCase(ProductionCase):
         self.tab_case = "owned"
         self.tab_cases = {}
         self.live = "unverifiable"
-        self.release_argv = ["orca", "orchestration", "worker-release", "--dispatch", "dispatch-1", "--json"]
+        self.release_argv = ["orchestration", "worker-release", "--dispatch", "dispatch-1"]
         self.original_show = self.port.show_worker
         self.port.show_worker = self.shown
         replacement = patch.object(OrcaPort, "show_worker", side_effect=self.shown)
@@ -51,7 +51,7 @@ class TabCase(ProductionCase):
         handle, worktree = worker["agentTerminalHandle"], worker["worktreeId"]
         ownership = "user_owned" if case == "user_owned" else "external" if case == "external" else "owned"
         release = ("retained" if case in ("retained", "owner_request", "user_owned", "external") else
-                   case if case in ("release_pending", "release_unknown") else "none")
+                   case if case in ("release_pending", "release_unknown") else "not_requested")
         resource = {"terminalHandle": handle, "worktreeId": worktree, "ownerDispatchId": dispatch,
                     "originDispatchId": dispatch, "ownershipState": ownership, "releaseState": release,
                     "retainedReason": "user_takeover" if case == "user_owned" else "owner_request" if case == "owner_request"
@@ -61,7 +61,7 @@ class TabCase(ProductionCase):
         result.update(terminalResource=resource, terminal=terminal)
         projection = result["projection"]
         projection.update(role="worker", resource={"state": ownership, "releaseState": release,
-            "ownerDispatchId": dispatch, "terminalState": release},
+            "ownerDispatchId": dispatch, "terminalState": "reclaimable"},
             liveness={"verdict": self.live, "reason": "synthetic_observation"},
             nextAction={"kind": "release", "argv": list(self.release_argv)})
         if case == "no_command":
@@ -249,6 +249,12 @@ class TableTests(TabCase):
                         row = view["worker_tabs"][0]
                         self.assertEqual(row["row"], expected)
                         self.assertEqual(row["command"], ack["worker_tab"]["command"])
+                        self.assertEqual(row["native_next_action"], self.shown(admission["native_binding"]["dispatchId"])["result"]["projection"]["nextAction"])
+                        if case in ("owned", "retained", "release_pending", "release_unknown"):
+                            self.assertEqual(row["command"], ["orca", *self.release_argv])
+                        if case == "no_command":
+                            self.assertIsNone(row["command"])
+                            self.assertIn("Orca gives no next command", row["wording"])
                         text = view["readiness"]["summary"] + view["readiness"]["finalization"]["next_action"]
                         self.assertIn(row["wording"], text)
                         self.assertNotIn("safe to retire", text); self.assertNotIn("Pod needs nothing more", text)
@@ -492,7 +498,7 @@ class OwnerKeepTests(TabCase):
                     self.assertIsNone(row["command"])
                     self.assertIn("Do not reuse", row["wording"])
                 else:
-                    self.assertEqual(row["command"], self.release_argv)
+                    self.assertEqual(row["command"], ["orca", *self.release_argv])
                     if report_route:
                         self.assertEqual(ack["worker_tab"]["retained_title"]["title"], frozen["title"] + " (retained: owner request)")
                 status_row = self.status()["worker_tabs"][0]

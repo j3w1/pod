@@ -24,6 +24,7 @@ from typing import Protocol
 import yaml
 
 from .config import GOVERNED_KINDS, effective, validate_effects
+from .contracts import UNIT, PURPOSES, bound, fields, required, input_record
 from .errors import PodError
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
@@ -41,13 +42,12 @@ EXECUTABLE_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun"
                     "remote_diagnostic", "cancel_validation")
 # The kinds a successor's claim may carry from a lost coordinator (R118): each one Pod can read back.
 CARRIED_KINDS = (*EXECUTABLE_KINDS, "merge")
-PURPOSES = ("validation", "diagnostic", "checkpoint", "release", "cancellation")
 DECISIONS = ("ALLOW", "REUSE", "DEFER")
 OUTCOMES = ("pending", "PASS", "FAILED", "UNKNOWN", "CANCELED")
 CLASSES = ("authorization", "correctness", "efficiency")
 FAILURE_CLASSES = ("code_defect", "remote_only", "transient", "external")
 PREFLIGHT_STATUSES = ("PASS", "FAILED", "UNAVAILABLE")
-DIAGNOSTIC_FIELDS = {"question", "local_limitation", "check", "stopping_condition"}
+DIAGNOSTIC_FIELDS = fields("diagnostic")
 DEFAULT_UNIT = "default"
 # Mirrors the ledger's own threshold: a third correction needs a discriminating diagnosis.
 CORRECTION_THRESHOLD = 2
@@ -58,7 +58,7 @@ MAX_JOURNAL = 2 * MAX_RECORD
 MAX_UNITS = 32
 MAX_HISTORY = 16
 MAX_WORKFLOWS = 32
-_UNIT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_UNIT = UNIT
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
 _GIT_ID = gitio.OBJECT_ID
@@ -262,22 +262,22 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     return {**record, "utc": utc}
 
 
+@input_record("diagnostic")
 def _validate_diagnostic(value: object) -> dict:
     record = exact(value, DIAGNOSTIC_FIELDS, DIAGNOSTIC_FIELDS, name="diagnostic")
     for key in DIAGNOSTIC_FIELDS:
-        bounded_text(record[key], name=key, limit=512)
+        bounded_text(record[key], name=key, limit=bound("diagnostic", key))
     return record
 
 
+@input_record("action")
 def validate_action(value: object) -> dict:
     """Normalise one action request. Purpose is derived from what the action triggers."""
-    action = exact(value, {"kind", "candidate", "target", "reason", "unit", "purpose", "effects",
-                           "authorization", "diagnostic", "evidence", "inputs"},
-                   {"kind", "candidate", "target", "reason"}, name="action")
+    action = exact(value, fields("action"), required("action"), name="action")
     if action["kind"] not in KINDS:
         raise PodError("invalid_action", "Unsupported governed action kind")
     for key in ("candidate", "target", "reason"):
-        bounded_text(action[key], name=key, limit=512)
+        bounded_text(action[key], name=key, limit=bound("action", key))
     unit = action.get("unit", DEFAULT_UNIT)
     if not isinstance(unit, str) or not _UNIT.fullmatch(unit):
         raise PodError("invalid_action", "Delivery unit names are bounded identifiers")
@@ -290,14 +290,14 @@ def validate_action(value: object) -> dict:
     if diagnostic is not None:
         diagnostic = _validate_diagnostic(diagnostic)
     evidence = action.get("evidence", [])
-    if not isinstance(evidence, list) or len(evidence) > 16:
+    if not isinstance(evidence, list) or len(evidence) > bound("action", "evidence", "max_items"):
         raise PodError("invalid_action", "Evidence references are a bounded list")
     for item in evidence:
-        bounded_text(item, name="evidence", limit=512)
+        bounded_text(item, name="evidence", limit=bound("action", "evidence", "items")["max_length"])
     inputs = action.get("inputs", {})
-    if (not isinstance(inputs, dict) or len(inputs) > 8
-            or any(not isinstance(k, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", k)
-                   or not isinstance(v, str) or len(v) > 512 for k, v in inputs.items())):
+    if (not isinstance(inputs, dict) or len(inputs) > bound("action", "inputs", "max_items")
+            or any(not isinstance(k, str) or not re.fullmatch(bound("action", "inputs", "keys")["pattern"], k)
+                   or not isinstance(v, str) or len(v) > bound("action", "inputs", "values")["max_length"] for k, v in inputs.items())):
         raise PodError("invalid_action", "Dispatch inputs are a bounded string mapping")
     if inputs and action["kind"] not in DISPATCH_KINDS:
         raise PodError("invalid_action", "Only a workflow dispatch or diagnostic carries inputs")
@@ -1009,7 +1009,8 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         if verdict["purpose"] == "release":
             required_audits = {ob["id"] for ob in (map_of(state) or {}).get("obligations", [])
                               if ob["kind"] == "assurance" and ob["provenance"] == "project_policy"
-                              and ob["state"] != "withdrawn" and not ob.get("source", {}).get("gone")}
+                              and ob["state"] != "withdrawn" and not ob.get("source", {}).get("gone")
+                              and ob.get("unit") in (None, proposal["unit"])}
             if required_audits:
                 from .ledger import kernel_view
                 qualification = kernel_view(project, objective, state=state,

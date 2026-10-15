@@ -5,13 +5,14 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Callable
 
+from .contracts import TABLE, bound, fields as contract_fields, required, input_record
 from .errors import PodError
 from .util import digest
 
 
 def _source_entries(value: Any, name: str, *, obligation: str | None = None) -> list[dict]:
     from .obligations import _exact, _path, refuse
-    if not isinstance(value, list) or len(value) > 64:
+    if not isinstance(value, list) or len(value) > bound("map evidence", "sources", "max_items"):
         raise refuse("obligation_invalid", "malformed", f"{name} sources are a bounded list", record='source entries',
                      **({"obligation": obligation} if obligation is not None else {}))
     rows = []
@@ -27,12 +28,13 @@ def _source_entries(value: Any, name: str, *, obligation: str | None = None) -> 
 
 def _dependencies(value: Any, name: str, *, obligation: str | None = None) -> list[str]:
     from .obligations import _text, refuse
-    if not isinstance(value, list) or len(value) > 64:
+    if not isinstance(value, list) or len(value) > bound("map evidence", "dependencies", "max_items"):
         raise refuse("obligation_invalid", "malformed", f"{name} dependencies are a bounded list", record='dependencies',
                      **({"obligation": obligation} if obligation is not None else {}))
-    return [_text(item, "dependency", limit=512, obligation=obligation) for item in value]
+    return [_text(item, "dependency", limit=bound("map evidence", "dependencies", "items")["max_length"], obligation=obligation) for item in value]
 
 
+@input_record("map evidence")
 def _evidence_record(ob: dict, raw: Any, ctx: dict) -> dict:
     """The detailed pod-evidence/v1 record, structurally joined to this obligation (R41).
 
@@ -45,10 +47,7 @@ def _evidence_record(ob: dict, raw: Any, ctx: dict) -> dict:
     from .obligations import _exact, _text, definition_id, refuse
     from .records import evidence_record
     if isinstance(raw, dict) and "schema" not in raw:
-        fields = {"check", "command", "result", "reference", "status", "sources",
-                  "dependencies", "environment", "timestamp"}
-        required = {"check", "command", "result", "reference"}
-        _exact(raw, fields, required, "short evidence", obligation=ob["id"])
+        _exact(raw, contract_fields("short evidence"), required("short evidence"), "short evidence", obligation=ob["id"])
         verification = ctx.get("verification") or {}
         raw = {"schema": "pod-evidence/v1", "criterion": ob["id"],
                "candidate": ctx.get("candidate"), "policy_revision": ctx.get("policy_revision"),

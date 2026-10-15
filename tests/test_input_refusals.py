@@ -19,6 +19,7 @@ SENTINEL = "SENTINEL-VALUE-7f3c9e"
 OWNED = ("project", "objective", "owner")
 # Required request fields of every `pod internal` operation; a new operation needs its row.
 REQUIRED = {
+    "contract": ("record",),
     "brief": ("criteria", "coverage"),
     "packet": tuple(sorted(PACKET_REQUIRED)),
     "report": ("report", "packet", "project", "objective", "admission_id"),
@@ -82,7 +83,10 @@ class OperationFieldRefusalTests(unittest.TestCase):
                                  {"operation": operation, "record": record, "missing": [dropped],
                                   "unsupported": ["unexpected_field"], "omitted": 0,
                                   "accepted": envelope["error"]["detail"]["accepted"],
-                                  "optional": envelope["error"]["detail"]["optional"]})
+                                  "optional": envelope["error"]["detail"]["optional"],
+                                  **({"bounded_fields": envelope["error"]["detail"]["bounded_fields"],
+                                      "next_action": envelope["error"]["detail"]["next_action"]}
+                                     if operation in ("packet", "admission") else {})})
                 shape = envelope["error"]["detail"]
                 self.assertEqual(set(shape["accepted"]) - set(shape["optional"]), set(required))
                 self.assertEqual(shape["accepted"], sorted(shape["accepted"]))

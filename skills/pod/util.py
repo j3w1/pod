@@ -34,7 +34,8 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
     if "provenance" in value and value["provenance"] != "user_direct":
         raise PodError("invalid_decision", "Owner decision provenance must be user_direct")
     if "instruction" in value:
-        bounded_text(value["instruction"], name="instruction", limit=1024)
+        from .contracts import bound
+        bounded_text(value["instruction"], name="instruction", limit=bound("revision authority", "instruction"))
         try:
             value["instruction"].encode("utf-8")
         except UnicodeEncodeError:
@@ -317,6 +318,10 @@ def exact(value: Any, fields: set[str], required: set[str] | None = None, *,
             raise error(name)
         shape = {"accepted": _field_names(fields, complete=True)[0],
                  "optional": _field_names(fields - (required or set()), complete=True)[0]}
+        from .contracts import TABLE, bounded_fields, input_action
+        if name in TABLE:
+            shape["bounded_fields"] = bounded_fields(name)
+            shape["next_action"] = input_action(name)
         if not isinstance(value, dict):
             raise FieldRefusal("invalid_" + name, f"{name} must be a JSON object",
                                {"record": name, "expected": "object", **shape})
@@ -345,7 +350,10 @@ def route_summary(rows: list[dict], *, unknown_states: tuple[str, ...] | None = 
                 for row, flags in flagged))
 
 
-def bounded_text(value: Any, *, name: str, limit: int = 4096) -> str:
+def bounded_text(value: Any, *, name: str, limit: int | None = None) -> str:
+    if limit is None:
+        from .contracts import bound
+        limit = bound("packet", "objective")
     if not isinstance(value, str) or not value.strip() or len(value) > limit or "\x00" in value:
         code_name = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
         length = len(value) if isinstance(value, str) else None
