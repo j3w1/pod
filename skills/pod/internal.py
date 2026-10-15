@@ -277,6 +277,12 @@ def _op_issue_recheck(request: dict) -> dict:
     return issue_recheck(Path(request["project"]), request["source"])
 
 
+def _op_pod_tick(request: dict) -> dict:
+    exact(request, fields("pod-tick"), required("pod-tick"), name="request")
+    from .pod_ticks import tick
+    return tick(Path(request["project"]), request["objective"], owner=request["owner"], pod=request["pod"])
+
+
 def _op_project_context(request: dict) -> dict:
     exact(request, {"project"}, {"project"}, name="request")
     from .github import repository_context
@@ -315,7 +321,7 @@ def _op_acceptance(request: dict) -> dict:
         current = issue_recheck(Path(request["project"]), objective_source)
         if current["status"] != "current":
             raise PodError("issue_reconciliation_required",
-                           "Execution Spec issue changed before final verification")
+                           "Execution Spec issue changed before final verification", {"reason": current.get("reason")})
     # Whether a candidate is merged or released is read from Git here. A caller cannot
     # hand in that answer, because it is the one the final report rests on.
     if "project" in request:
@@ -637,6 +643,7 @@ _OPERATIONS = {
     'verify-sources': _op_verify_sources,
     'issue-intake': _op_issue_intake,
     'issue-recheck': _op_issue_recheck,
+    'pod-tick': _op_pod_tick,
     'project-context': _op_project_context,
     'acceptance': _op_acceptance,
     'integration-observe': _op_integration_observe,
@@ -665,7 +672,7 @@ _OPERATIONS = {
 
 _FINALIZATION_OPERATIONS = {"checkpoint", "report", "governor", "governor-outcome", "governor-execute",
                             "governor-reconcile"}
-_FINALIZATION_REFUSALS = {"objective_closed", "outcome_evidence_required", "outcome_conflict",
+_FINALIZATION_REFUSALS = {"objective_closed", "pod_ticks_due", "outcome_evidence_required", "outcome_conflict",
                           "delivery_unverified", "delivery_recorded", "governance_changed"}
 
 
@@ -825,6 +832,9 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
     acknowledgement["objective"] = request["objective"]
     if operation in ("checkpoint", "report"):
         acknowledgement["worker_tabs"] = result.get("worker_tabs", [])
+        acknowledgement["pod_ticks"] = result.get("pod_ticks", {"status": "not_applicable", "lines": []})
+        if "pod_tick_intake" in result:
+            acknowledgement["pod_tick_intake"] = result["pod_tick_intake"]
         acknowledgement["finalization"] = _finalization_view(request, acknowledgement["worker_tabs"])
     if "runtime_continuity" in result and operation != "runtime-continuity":
         acknowledgement["runtime_continuity"] = result["runtime_continuity"]

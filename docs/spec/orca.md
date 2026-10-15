@@ -84,9 +84,9 @@ Before implementation select or create the exact Orca-managed objective worktree
 
 ### R67 — Normal delegated workers use native worker-start
 
-Type: B,H · Scenarios: [A107](#a107), [A108](#a108), [A109](#a109), [A170](delivery.md#a170), [A171](delivery.md#a171)
+Type: B,H · Scenarios: [A107](#a107), [A108](#a108), [A109](#a109), [A170](delivery.md#a170), [A171](delivery.md#a171), [A386](interface.md#a386)
 
-Normal delegated workers use native worker-start and Orca's new-agent-tab setting. Status exposes exact native Dispatch/Task/worktree and observed terminal/tab identities, placement surfaces and discoverability warnings without claiming rendered visibility or focus. Diagnose missing tabs through the existing worker; focus only on explicit user request. R123 supplies worker titles, R124 owns the report-acceptance decision and R126 lists finished tabs independently of liveness. Objective cleanup is planned read-only and executed through native/host operations with scoped consent; uncertain or protected resources remain.
+Normal delegated workers use native worker-start and Orca's new-agent-tab setting. Status exposes exact native Dispatch/Task/worktree and observed terminal/tab identities, placement surfaces and discoverability warnings without claiming rendered visibility or focus. Diagnose missing tabs through the existing worker; focus only on explicit user request. R123 supplies worker titles, R124 owns the report-acceptance decision and R126 lists finished tabs independently of liveness. Objective cleanup is planned read-only and executed through native/host operations with scoped consent; uncertain or protected resources remain. The separate GitHub-only PoD tick operation in R131 adds no native lifecycle operation.
 
 ### R68 — Discover Orca progressively and bound recognized update opt-out
 

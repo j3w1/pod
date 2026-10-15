@@ -20,6 +20,8 @@ Close only with every obligation satisfied or validly withdrawn with reason, a f
 
 Worker tabs are done when no releasable finished tab remains except an owner-kept one; every other kept tab is closed under the standing authorization or named with Orca's close failure or its need for an owner decision; the final report names every owner-kept tab, including one Orca has since marked user-owned.
 
+The final report lists each bound PES PoD's tick state against its criteria, ticks without Pod proof, ambiguous ticks and due ticks or unticks left blocked at closure, with their reasons; none of those limitations counts as ticked by Pod.
+
 Continue through implementation, verification and corrections. Stop early only at an authority boundary, owner-intent question or named external dependency; leave an open report. Use direct work when sufficient. Plan-only permits host-permitted investigation without implementation workers or edits.
 
 ## Boundaries
@@ -46,6 +48,7 @@ Every map-bearing write, including full checkpoint/report and admission maps, ca
 Read a reference when the current action, or a necessary prerequisite of it, needs it. Never preload the reference directory, and never read a reference merely because it is linked. Read an authoring template only to author or revise that kind of document. Reload guidance when it is lost, changed or insufficient. Trivial work reads none.
 
 - Issue intake: [intake](references/issue-intake.md).
+- Ticking, a due tick or untick, confirming its readback, or closing an issue-bound objective: [PoD ticks](references/pod-ticks.md).
 - SEAL link or SEAL delivery planning: [delivery planning](references/seal-delivery.md).
 - SEAL authoring/revision: [template](references/seal-template.md).
 - PES authoring/revision: [template](references/pes-template.md).

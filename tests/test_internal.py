@@ -13,7 +13,7 @@ from pod.internal import main, run
 
 
 OPERATIONS = ("brief", "packet", "report", "source", "verify-sources", "acceptance",
-              "integration-observe", "issue-intake", "issue-recheck", "project-context",
+              "integration-observe", "issue-intake", "issue-recheck", "pod-tick", "project-context",
               "checkpoint", "admission", "constraint", "route-failure", "governor",
               "governor-outcome", "governor-prepare", "governor-preflight",
               "governor-classify", "governor-correct", "governor-execute",

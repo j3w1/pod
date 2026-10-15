@@ -83,6 +83,9 @@ _MAP_FIELDS = {
 }
 
 TABLE = {
+    "pod-tick": definition({"project": text(4096), "objective": text(4096), "owner": text(4096),
+                             "pod": {"type": "integer", "minimum": 0, "maximum": 999999999}},
+                            ("project", "objective", "owner", "pod")),
     "packet": definition({
         "schema": choice(("pod-packet/v3",)),
         **{key: text(4096) for key in ("objective", "responsibility", "candidate", "policy_revision",

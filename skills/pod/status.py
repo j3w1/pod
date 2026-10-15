@@ -217,7 +217,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             return result
         if run is None:
             return result
-    from .ledger import _read, kernel_view, read, superseded_for_run
+    from .ledger import _read, kernel_view, map_of, read, superseded_for_run
     from .readiness import assess, unavailable
     record_root = None
     try:
@@ -406,6 +406,13 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         result["worker_tabs"] = ((view or {}).get("worker_tabs") if view is not None else None)
         if result["worker_tabs"] is None:
             result["worker_tabs"] = tab_rows(state, {}, failure=(failure or {}).get("code") or "worker_terminal_unverified")
+        from .pod_ticks import projection as tick_projection
+        result["pod_ticks"] = ((view or {}).get("pod_ticks") if view else None)
+        if result["pod_ticks"] is None:
+            tick_error = result.get("obligations", {}).get("error")
+            result["pod_ticks"] = ({"status": "unavailable", "error": tick_error, "lines": []}
+                                   if tick_error and checkpoint.get("objective_source") else
+                                   tick_projection(state, map_of(state), {}, project=project, objective=objective))
     if result["installed_version_drift"]:
         result["blocker"] = "installed_version_changed"
         result["next_safe_action"] = RELOAD_ACTION
@@ -593,6 +600,27 @@ def render(result: dict) -> None:
                   f"({clean(terminal['state'])}, dispatch {clean(terminal['dispatch'])}); {clean(terminal['wording'])}")
         for line in result.get("progress", []):
             print(f"Progress: {line}")
+        for row in result.get("pod_ticks", {}).get("lines", []):
+            block = row.get("blocked")
+            reason = (f"; {clean(block['code'])}: {clean(block['reason'])}" if block else "")
+            if block and "status" in block:
+                reason += f" (GitHub {block['status']}: {clean(block.get('message', ''))})"
+            hold = row.get("hold")
+            if hold:
+                reason += f"; hold {clean(hold['code'])}: {clean(hold['reason'])}"
+            request = row.get("request", {})
+            if "retry_after" in request:
+                wait = "in flight until" if request["status"] == "in_flight" else "recovery ready since"
+                reason += (f"; intent_at={request['intent_at']}, {wait} "
+                           f"retry_after={request['retry_after']} (Unix seconds)")
+            direction = row.get("direction") or row.get("blocked_at_closure", {}).get("direction")
+            checkbox = (f"checkboxes {row['checkboxes']}" if len(row.get("checkboxes", [])) > 1
+                        else f"checkbox {row['ticked']}")
+            print(f"PoD#{row['pod']}: {checkbox}; {clean(row['authorship'])}; "
+                  f"{clean(row['status'])}" + (f" ({direction})" if direction else "") + f"{reason}; criteria "
+                  + ", ".join(f"{clean(item['id'])}={clean(item['state'])}"
+                              + (" (stale)" if item['state'] == 'satisfied' and not item['current'] else "")
+                              for item in row['criteria']))
         if result.get("gates"):
             gates = result["gates"]
             print(f"Gates: {len(gates['remaining'])} remaining, "

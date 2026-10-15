@@ -192,7 +192,10 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels"}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "pod_ticks"}, _CONTEXT_FIELDS, name="context")
+    if "pod_ticks" in state:
+        from .pod_ticks import validate
+        validate(state["pod_ticks"])
     if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] != 1):
         raise PodError("state_unsupported", "Decision channel representation is unsupported")
     from .succession import validate_link
@@ -1041,6 +1044,8 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
     from .worker_tabs import rows as tab_rows
     view["worker_tabs"] = tab_rows(state, view["placements"], outstanding=ctx["outstanding"], failure=failure,
                                    runtime_changed=runtime_changed)
+    from .pod_ticks import projection as tick_projection
+    view["pod_ticks"] = tick_projection(state, map_state, ctx, project=project, objective=objective)
     return view
 
 
@@ -1331,8 +1336,10 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                  "a disposition names a recorded admission", record='checkpoint map transition')
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
         if proposed.get("close") is True and not (prior_map or {}).get("closure"):
-            from .worker_tabs import require_closed_tabs
-            require_closed_tabs(ctx["worker_tabs"])
+            from .pod_ticks import closing_context, require_tabs
+            closing_context(state, prior_map, ctx, project=project, objective=objective,
+                            source=core.get("objective_source"))
+            require_tabs(ctx["worker_tabs"], prior_map, proposed, ctx)
             from .succession import refuse_incomplete
             # A new closure proves that no incomplete claim, from any writer, names this objective as successor
             # (R118); a repeated one answers from the recorded closure as before (R117).
@@ -1395,6 +1402,15 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if "verification" not in core and "verification" in previous:
             # Like the map, the verification context carries forward until it is restated.
             core["verification"] = previous["verification"]
+        from .pod_ticks import refresh as refresh_ticks
+        prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
+        raw_obligations = proposed.get("obligations")
+        introducing = isinstance(raw_obligations, list) and any(
+            isinstance(row, dict) and row.get("kind") == "criterion" and row.get("id") not in prior_criteria
+            for row in raw_obligations)
+        rebound = core.get("objective_source") != previous.get("objective_source")
+        if core.get("objective_source") is not None and (introducing or rebound):
+            refresh_ticks(state, project, core["objective_source"])
         try:
             map_state, ctx = _checkpoint_map_transition(
                 project, objective, state, authority, core, previous, proposed, dispositions, native)
@@ -1428,6 +1444,10 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                       for item in authority.get("native", {}).get("assignments", [])
                       if isinstance(item.get("placement"), dict)}
         result["worker_tabs"] = tab_rows(state, placements, outstanding=(ctx or {}).get("outstanding", []))
+        from .pod_ticks import intake as tick_intake, projection as tick_projection
+        result["pod_ticks"] = tick_projection(state, map_state, ctx or {}, project=project, objective=objective)
+        if introducing or rebound:
+            result["pod_tick_intake"] = tick_intake(state, map_state)
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx)
         return result
@@ -1651,6 +1671,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                for row in state["admissions"].values()):
             raise PodError("unresolved_prior_attempt", "An unsettled Task cannot be replaced")
         _require_open(state)
+        if any(row["phase"] != "completed" for row in state.get("pod_ticks", {}).get("requests", {}).values()):
+            raise PodError("pod_tick_pending", "Recover the pending pod internal pod-tick request before admission")
         map_state = map_of(state)
         if map_state is None:
             from .obligations import refuse
@@ -1878,9 +1900,11 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             if ctx["worker_tabs"]:
                 exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
             raise
-        from .worker_tabs import require_closed_tabs, project as tab_project, rows as tab_rows
+        from .worker_tabs import project as tab_project, rows as tab_rows
         if closing:
-            require_closed_tabs(ctx["worker_tabs"])
+            from .pod_ticks import closing_context, require_tabs
+            closing_context(state, map_state, ctx, project=project, objective=objective)
+            require_tabs(ctx["worker_tabs"], map_state, accompanying, ctx)
         if route_refresh:
             row["route_decision"].update(effective=route_refresh["effective"], effective_unknown=False)
             row["effective_evidence"]["effective"] = route_refresh["effective"]
@@ -1899,7 +1923,9 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             worker = tab_project(state, row, placements.get(admission_id, {}), settled=True,
                                  packet_body=packet_body, acknowledgement=True)
             tabs = [worker if item["admission"] == admission_id else item for item in tabs]
-            return {"worker_tabs": tabs, "worker_tab": worker}
+            from .pod_ticks import projection as tick_projection
+            return {"worker_tabs": tabs, "worker_tab": worker,
+                    "pod_ticks": tick_projection(state, map_of(state), ctx, project=project, objective=objective)}
         settled = admission_id not in ctx["outstanding"]
         if not settled:
             raise PodError("report_attempt_unverified", "The exact Dispatch has not settled natively. Next: read its native settlement before consuming the report")

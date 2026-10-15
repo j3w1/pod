@@ -70,6 +70,8 @@ Temporary readiness failures remain local observations with unknown cause. Pod h
 
 ## Delivery and cleanup
 
+Pod ticks proven PoDs on its bound PES issue and removes its own ticks when proof lapses; status names ambiguous ticks and blocked requests, and closure waits for writable due ticks.
+
 Before the first remote Git change without applicable authorization, Pod asks once whether to merge remotely, keep the result local, or defer. The decision shows the repository, target and exact candidate commit/tree. Merge consent includes publication, required CI, merge of that candidate and the stated post-merge verification. A changed candidate or target needs a new decision. Local-only performs no remote mutation and reports hosted checks as not run.
 
 After an authorized merge, Pod verifies the exact delivery record before closing the objective. Before saying an objective is finished, the coordinator records the merge outcome, the delivery record, every validation readback, report consumption and closure, in that order; helper results name what still remains, and a closing write waits until the rest are recorded. For cleanup, `pod internal cleanup-plan` reports this objective's integrated, unique and protected resources without deleting them. Deletion needs scoped consent and a fresh guarded plan; unique work is retained or archived and verified first, unless separately confirmed for discard. Worker release is an explicit coordinator step. Finished tabs that Orca can release hold closure unless you have recorded an instruction to keep them; report acknowledgements name the exact release or close step.

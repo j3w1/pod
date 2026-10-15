@@ -41,6 +41,49 @@ ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
 _ISSUE_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)/?\Z")
 _COMMENT_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)\Z")
+POD_REF = re.compile(r"PoD#([0-9]{1,9})(?![0-9])")
+_POD_LINE = re.compile(r"- \[([ xX])\] \*\*PoD#([0-9]{1,9})(?![0-9])")
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)\Z")
+
+
+def pod_ref_number(ref: object) -> int | None:
+    """The bounded PoD number at the start of a criterion reference, if present."""
+    match = POD_REF.match(ref) if isinstance(ref, str) else None
+    return int(match[1]) if match else None
+
+
+def pod_lines(body: str) -> dict[int, list[dict]]:
+    """Recognize only column-zero PoD lines outside CommonMark fenced code blocks."""
+    found: dict[int, list[dict]] = {}
+    fence_char, fence_length = "", 0
+    offset = 0
+    # Only LF and CRLF delimit this bounded line rule.
+    for raw in body.split("\n"):
+        line = raw.removesuffix("\r")
+        fence = _FENCE.fullmatch(line)
+        if fence_char:
+            if (fence and fence[1][0] == fence_char and len(fence[1]) >= fence_length
+                    and not fence[2].strip(" \t")):
+                fence_char, fence_length = "", 0
+        elif fence and (fence[1][0] == "~" or "`" not in fence[2]):
+            fence_char, fence_length = fence[1][0], len(fence[1])
+        else:
+            match = _POD_LINE.match(line)
+            if match:
+                found.setdefault(int(match[2]), []).append(
+                    {"offset": offset + 3, "ticked": match[1] != " "})
+        offset += len(raw) + 1
+    return found
+
+
+def flip_pod_checkbox(body: str, offset: int, ticked: bool) -> str:
+    """Change exactly one recognized checkbox character, preserving every other byte."""
+    target = "x" if ticked else " "
+    if (type(offset) is not int or type(ticked) is not bool
+            or not any(row["offset"] == offset for rows in pod_lines(body).values() for row in rows)
+            or body[offset] == target):
+        raise PodError("internal_error", "PoD edit must change exactly one recognized checkbox character")
+    return body[:offset] + target + body[offset + 1:]
 
 
 def _name(value: object) -> bool:
@@ -82,8 +125,29 @@ def git_allowed(argv: list[str]) -> bool:
             and _name(target[len("refs/heads/"):]))
 
 
-def gh_allowed(argv: list[str]) -> bool:
+def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
+               stdin: str | None = None) -> bool:
     """The exact `gh` shapes the port issues. Anything else is refused before a process starts."""
+    if argv[:3] == ["api", "--method", "PATCH"]:
+        if (not isinstance(bound_issue, tuple) or len(bound_issue) != 2
+                or not isinstance(bound_issue[0], str) or type(bound_issue[1]) is not int
+                or bound_issue[1] < 1
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", bound_issue[0])
+                or argv != ["api", "--method", "PATCH", "--include",
+                            f"repos/{bound_issue[0]}/issues/{bound_issue[1]}", "--input", "-"]
+                or not isinstance(stdin, str)):
+            return False
+        # Exact spelling deliberately binds the path, including repository case.
+        try:
+            payload = json.loads(stdin)
+            return (isinstance(payload, dict) and set(payload) == {"body"}
+                    and isinstance(payload["body"], str)
+                    and len(payload["body"].encode()) <= 512 * 1024
+                    and stdin == json.dumps({"body": payload["body"]}))
+        except (ValueError, UnicodeEncodeError):
+            return False
+    if stdin is not None:
+        return False
     if (len(argv) == 12 and argv[:2] == ["pr", "list"] and argv[2] == "--head" and _name(argv[3])
             and argv[4] == "--base" and _name(argv[5]) and argv[6:] == [
                 "--state", "open", "--json", PR_FIELDS, "--limit", "5"]):
@@ -425,6 +489,12 @@ def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
 
 
 def issue_recheck(project: Path, binding: dict, *, port: "GhPort | None" = None) -> dict:
+    return issue_recheck_live(project, binding, port=port)[0]
+
+
+def issue_recheck_live(project: Path, binding: dict, *,
+                       port: "GhPort | None" = None) -> tuple[dict, dict | None]:
+    """The unchanged recheck result together with the issue row read for that check."""
     source = validate_issue_binding(binding)
     context = repository_context(project, fresh=True)  # A100 binds the target now
     if context["repository"] is None or context["repository"].casefold() != source["repository"].casefold():
@@ -455,13 +525,14 @@ def issue_recheck(project: Path, binding: dict, *, port: "GhPort | None" = None)
             "state": row["state"], "updated_at": row.get("updatedAt"),
             "reason": ("issue_body_changed" if changed else
                        "issue_amendment_changed" if amendment_changed else
-                       "closed_issue_requires_intent_reconciliation" if closed else None)}
+                       "closed_issue_requires_intent_reconciliation" if closed else None)}, row
 
 
-def _run(command: list[str], *, cwd: Path, timeout: int, mutation: bool) -> subprocess.CompletedProcess:
+def _run(command: list[str], *, cwd: Path, timeout: int, mutation: bool,
+         input: str | None = None) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False,
-                              cwd=str(cwd))
+                              cwd=str(cwd), **({"input": input} if input is not None else {}))
     except (OSError, subprocess.TimeoutExpired) as exc:
         code = "remote_effect_uncertain" if mutation else "remote_read_failed"
         raise PodError(code, "The remote command gave no response") from exc
@@ -482,6 +553,23 @@ def _normalise_run(row: dict) -> dict:
             "attempt": attempt if type(attempt) is int and attempt >= 1 else None}
 
 
+def _http_response(output: str) -> tuple[int | None, str]:
+    """Read complete --include header blocks, skipping interim 1xx responses only."""
+    remaining = output.replace("\r\n", "\n")
+    while True:
+        headers, separator, payload = remaining.partition("\n\n")
+        lines = headers.split("\n")
+        match = re.fullmatch(r"HTTP/[0-9]+(?:\.[0-9]+)? ([1-5][0-9]{2})(?: [^\r\n]*)?", lines[0])
+        if (not separator or match is None
+                or any(re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+:[^\r\n]*", line) is None
+                       for line in lines[1:])):
+            return None, ""
+        status = int(match[1])
+        if status >= 200:
+            return status, payload
+        remaining = payload
+
+
 class GhPort:
     """The installed `gh` and `git` executables, driven only through the allowlist."""
 
@@ -494,11 +582,13 @@ class GhPort:
         return _run([str(git_executable()), *argv], cwd=self.project,
                     timeout=MUTATION_TIMEOUT_S if mutation else 30, mutation=mutation)
 
-    def _gh(self, argv: list[str], *, mutation: bool) -> subprocess.CompletedProcess:
-        if not gh_allowed(argv):
+    def _gh(self, argv: list[str], *, mutation: bool,
+            bound_issue: tuple[str, int] | None = None, stdin: str | None = None) -> subprocess.CompletedProcess:
+        if not gh_allowed(argv, bound_issue=bound_issue, stdin=stdin):
             raise PodError("unsupported_gh_operation", "The GitHub port accepts only known gh operations")
         completed = _run([str(gh_executable()), *argv], cwd=self.project,
-                         timeout=MUTATION_TIMEOUT_S if mutation else 60, mutation=mutation)
+                         timeout=MUTATION_TIMEOUT_S if mutation else 60, mutation=mutation,
+                         **({"input": stdin} if stdin is not None else {}))
         if len(completed.stdout) > MAX_OUTPUT:
             raise PodError("gh_contract", "gh output exceeds bounded size")
         return completed
@@ -546,6 +636,32 @@ class GhPort:
             raise
         return _validate_amendment_observation(row, repository=repository,
                                                number=number, comment=comment)
+
+    def issue_body_write(self, *, source: dict, body: str) -> dict:
+        """Send one bound issue PATCH; distinguish a held refusal from an uncertain effect."""
+        binding = validate_issue_binding(source)
+        argv = ["api", "--method", "PATCH", "--include",
+                f"repos/{binding['repository']}/issues/{binding['number']}", "--input", "-"]
+        try:
+            completed = self._gh(argv, mutation=True,
+                                 bound_issue=(binding["repository"], binding["number"]),
+                                 stdin=json.dumps({"body": body}))
+        except PodError as exc:
+            if exc.code == "gh_contract":
+                raise PodError("remote_effect_uncertain", "Issue write response exceeded its bound") from exc
+            raise
+        status, payload = _http_response(completed.stdout)
+        if status is not None and 200 <= status < 300 and completed.returncode == 0:
+            return {"result": "accepted", "status": status}
+        if status is not None and 400 <= status < 500 and completed.returncode > 0:
+            try:
+                row = json.loads(payload)
+            except ValueError:
+                row = None
+            message = row.get("message") if isinstance(row, dict) else None
+            return {"result": "refused", "status": status,
+                    "message": message[:512] if isinstance(message, str) else ""}
+        raise PodError("remote_effect_uncertain", "Issue write gave no unambiguous success or refusal")
 
     def branch_head(self, *, remote: str, branch: str) -> str | None:
         completed = self._git(["ls-remote", "--heads", remote, "refs/heads/" + branch], mutation=False)
