@@ -4636,7 +4636,9 @@
       "offline_test": [
         "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command",
         "tests.test_worker_tabs.TableTests.test_pending_unknown_and_unreadable",
-        "tests.test_worker_tabs.TableTests.test_owned_report_ack_leads_with_exactly_one_and_relays_native_release"
+        "tests.test_worker_tabs.TableTests.test_owned_report_ack_leads_with_exactly_one_and_relays_native_release",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_owned_predecessor_release_is_still_owed_without_closure_timing",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_owned_retired_record_release_is_still_owed_without_closure_timing"
       ],
       "status": "NOT_RUN"
     },
@@ -4654,7 +4656,17 @@
         "tests.test_worker_tabs.TableTests.test_unreported_user_owned_closing_ack_and_status_name_owner_decision",
         "tests.test_worker_tabs.TableTests.test_unreported_external_closing_ack_and_status_name_owner_decision",
         "tests.test_worker_tabs.TableTests.test_unreported_discarded_user_owned_ack_and_status_allow_late_report",
-        "tests.test_worker_tabs.TableTests.test_unreported_discarded_external_ack_and_status_allow_late_report"
+        "tests.test_worker_tabs.TableTests.test_unreported_discarded_external_ack_and_status_allow_late_report",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_unreported_user_owned_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_discarded_user_owned_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_unreported_external_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_discarded_external_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_unreported_user_owned_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_discarded_user_owned_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_unreported_external_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_discarded_external_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_user_owned_route_mismatch_names_owner_decision_before_and_after_discard",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_external_route_mismatch_names_owner_decision_before_and_after_discard"
       ],
       "status": "NOT_RUN"
     },

@@ -22,6 +22,8 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   followed by those arguments unchanged, adding or altering no flags. The leading
   `orca` in Pod's displayed command names that selected executable. Pod never builds
   a release command. If Orca gives none, repeat the named `worker-show` read.
+  On a continued or historically retired record, release is still owed; do not
+  describe it as due before closure.
 - For a release pending or unknown, follow Orca's next action or repeat that
   read until release or disconnection is confirmed. Never substitute close.
 - For unreadable facts, repeat the failed read; its code stays a limitation.
@@ -33,10 +35,13 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   standing authorization. This never applies to active, coordinator, setup,
   reused-later, other-objective or owner-kept terminals. If Orca refuses, name
   the tab and failure in the final report.
-  While the objective is open, recording its report makes the authorized close
-  available, even if its result was discarded. Until then, give no close command.
-  After closure without its report, the standing close authorization does not
-  cover it; name the tab in the final report for the owner's decision.
+  Once closure, continuation or historical retirement is recorded without its
+  report, or while its reports are refused `route_mismatch` as recorded in the
+  admission's route decision, the standing close authorization does not cover
+  it; name the tab in the final report for the owner's decision.
+  Otherwise, while the objective is open, recording its report makes the
+  authorized close available, even if its result was discarded. Until then,
+  give no close command.
 - A disconnected or not-materialized terminal needs nothing. A terminal reused
   for a later Dispatch belongs to that assignment alone.
 

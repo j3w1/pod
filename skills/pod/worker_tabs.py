@@ -167,9 +167,11 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                  "Orca gives no next command; repeat " + shlex.join(repeat))
     row["command"] = command
     row["state"] = "releasable"
-    timing = "after recorded closure" if (state.get("checkpoint") or {}).get("closure") else "before closure"
+    closed = bool((state.get("checkpoint") or {}).get("closure"))
+    recorded_settlement = bool(closed or state.get("continued_by") or state.get("historical_retirement"))
+    timing = " after recorded closure" if closed else "" if recorded_settlement else " before closure"
     if row["release_state"] not in ("none", "not_requested", "unreleased", "retained", "released"):
-        return finish("release_pending", f"Confirm this tab's release {timing}: {next_step}.",
+        return finish("release_pending", f"Confirm this tab's release{timing}: {next_step}.",
                       blocks_closure=True)
     keep = _keep(state, objective, dispatch, handle)
     reason = retention_reason(state, admission, keep)
@@ -183,9 +185,9 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         row.update(owner_kept=True, owner_instruction={key: keep[key] for key in
                    ("id", "instruction", "channel", "relay") if key in keep})
     if owned:
-        debt = "Release still owed" if (state.get("checkpoint") or {}).get("closure") else "Release owed"
+        debt = "Release still owed" if recorded_settlement else "Release owed"
         wording = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
-                   if keep else f"{debt} {timing}: {next_step}.")
+                   if keep else f"{debt}{timing}: {next_step}.")
         cycle = (f" Retain only while {reason} of this result are pending; release when the cycle ends."
                  if reason in ("corrections", "delta review") else "")
         decision = "After an accepted report choose exactly one: immediate supported reuse, permitted retention, or release."
@@ -207,9 +209,9 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if keep:
         return finish("owner_kept_unowned", f"Owner-kept by instruction {keep['id']}. " + wording, command=None)
     if admission.get("report") is None:
-        closed = bool((state.get("checkpoint") or {}).get("closure"))
+        report_unavailable = recorded_settlement or (admission.get("route_decision") or {}).get("route_mismatch")
         next_step = ("The owner's standing close authorization does not cover this tab because its report "
-                     "was not recorded; name it in the final report for the owner's decision." if closed else
+                     "was not recorded; name it in the final report for the owner's decision." if report_unavailable else
                      "The authorized close becomes available once its report is recorded.")
         return finish("user_owned" if row["ownership"] == "user_owned" else "external",
                       wording + " " + next_step, command=None)
