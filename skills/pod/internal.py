@@ -159,14 +159,18 @@ def _prepare_report(request, state, admission, shown, *, closing):
     if (not route_mismatch and admission["route_decision"].get("effective_unknown")
             and all(effective[key] != "unknown" for key in ("agent", "model", "effort"))):
         route_refresh = {"effective": effective, "inherited": inherited}
+    from .ledger import update_admission, _update_admission_locked
+    if route_mismatch:
+        # Closing preparation already holds the consume lock. The mismatch
+        # update still precedes body/map/open/tab validation, as on 0.15.0.
+        update = _update_admission_locked if closing else update_admission
+        update(Path(request["project"]), request["objective"],
+               **({"state": state} if closing else {}),
+               owner=admission["owner"], admission_id=admission["admission_id"],
+               update=lambda row: row["route_decision"].update(route_mismatch=True),
+               expected_runtime=admission["runtime"])
+        raise PodError("route_mismatch", "Native effective route changed after start")
     if not closing:
-        from .ledger import update_admission
-        if route_mismatch:
-            update_admission(Path(request["project"]), request["objective"],
-                             owner=admission["owner"], admission_id=admission["admission_id"],
-                             update=lambda row: row["route_decision"].update(route_mismatch=True),
-                             expected_runtime=admission["runtime"])
-            raise PodError("route_mismatch", "Native effective route changed after start")
         if route_refresh:
             def refresh(row):
                 row["route_decision"].update(effective=effective, effective_unknown=False)
@@ -216,8 +220,8 @@ def _op_report(request: dict) -> dict:
             admission = state["admissions"][request["admission_id"]]
             binding = admission["native_binding"]
             shown = port.show_worker(binding["dispatchId"])
-    # Closing preparation and runtime rebind are in the consume transaction so
-    # every refusal leaves the recorded state unchanged, including continuity.
+    # Closing preparation and runtime rebind share the consume lock. Tab
+    # refusals write nothing; route mismatches keep their earlier update path.
     from .ledger import consume_report, _continuity_step
     prepared = {}
     if closing:

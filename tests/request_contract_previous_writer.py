@@ -1,12 +1,69 @@
 """Observe refusal codes through either complete bundle, with recording ports."""
 
 import json
+import sys
 
 from pod import __version__
 from pod.errors import PodError
 from pod.internal import run
 from pod.ledger import read, update_admission
 from tests.issue41_support import ProductionCase
+
+
+def closing(scenario):
+    case = ProductionCase()
+    case.setUp()
+    try:
+        case.intake(case.sub("S"))
+        fields = ({"boundary": {"paths": ["src"]}} if scenario == "discard" else
+                  {"role": "investigate", "resolves": "which result?", "stop_condition": "answer"})
+        packet = case.packet(["S"], **fields)
+        admission = case.start("work", packet)["admission"]
+        case.settle(admission)
+
+        def finished():
+            rows = case.stored()
+            for row in rows:
+                row.pop("executor", None); row.pop("wait", None)
+                row.update(state="satisfied", evidence=[case.proof(row["id"])])
+            return rows
+
+        if scenario == "closed":
+            case.report(admission, packet, map={"obligations": finished(), "close": True})
+        case.port.effective = {"agent": "codex", "model": "gpt-6-luna", "effort": "medium"}
+        try:
+            case.report(admission, packet, outcome="bogus" if scenario == "malformed" else "succeeded",
+                        map={"obligations": finished(), "close": True})
+        except PodError as exc:
+            code = exc.code
+        else:
+            code = "ACCEPTED"
+        if scenario == "discard":
+            case.write(finished(), close=True, dispositions=[{
+                "admission": admission["admission_id"], "discarded": True, "reason": "superseded"}])
+        state = read(case.project, "objective")
+        result = {"version": __version__, "code": code,
+                  "route_mismatch": state["admissions"][admission["admission_id"]]["route_decision"]["route_mismatch"],
+                  "closed": bool(state["checkpoint"].get("closure"))}
+        if scenario == "discard":
+            passing = {"schema": "pod-evidence/v1", "criterion": "PoD#1", "candidate": case.candidate,
+                       "sources": [], "policy_revision": "p", "dependencies": [], "environment": "fixture",
+                       "check": "unit", "command": "unit", "result": "passed", "timestamp": "2026-09-24T00:00:00Z",
+                       "status": "PASS", "reference": "log"}
+            owner = {"schema": "pod-acceptance-authorization/v1", "candidate": case.candidate,
+                     "policy_revision": "p", "utc": "2026-09-24T00:00:00Z", "accepted_by": "owner"}
+            acceptance = run("acceptance", {
+                "project": str(case.project), "objective": "objective", "criteria": ["PoD#1"],
+                "evidence_rows": [passing], "candidate": case.candidate, "policy_revision": "p", "sources": [],
+                "dependencies": [], "environment": "fixture", "review_required": False, "hosted_required": False,
+                "owner_acceptance": owner})
+            result.update(accepted=acceptance["accepted"],
+                          checks_pass=acceptance["required_checks_pass"],
+                          owner_granted=not acceptance["project_assessment_required"],
+                          route_holds=[row["reason"] for row in acceptance["route_holds"]])
+        print(json.dumps(result, sort_keys=True))
+    finally:
+        case.doCleanups()
 
 
 def main():
@@ -62,4 +119,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1:
+        closing(sys.argv[1])
+    else:
+        main()

@@ -18,7 +18,7 @@ Keep this conversation, model, effort and settings as coordinator; pool edits ne
 
 Close only with every obligation satisfied or validly withdrawn with reason, a final report, final-candidate gates and independent review required by work/project, and Governor-recorded delivery. Withdrawal is not passing verification. Separate implementation, local checks, independent review, hosted CI, live native proof, project acceptance and merge; name uncertainty, unresolved native references and next safe action.
 
-Worker tabs are done when no releasable finished tab remains except an owner-kept one; every other kept tab is closed under the standing authorization or named with Orca's close failure; the final report names every owner-kept tab, including one Orca has since marked user-owned.
+Worker tabs are done when no releasable finished tab remains except an owner-kept one; every other kept tab is closed under the standing authorization or named with Orca's close failure or its need for an owner decision; the final report names every owner-kept tab, including one Orca has since marked user-owned.
 
 Continue through implementation, verification and corrections. Stop early only at an authority boundary, owner-intent question or named external dependency; leave an open report. Use direct work when sufficient. Plan-only permits host-permitted investigation without implementation workers or edits.
 

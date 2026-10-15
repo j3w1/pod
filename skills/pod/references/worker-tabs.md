@@ -25,16 +25,25 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
 - For a release pending or unknown, follow Orca's next action or repeat that
   read until release or disconnection is confirmed. Never substitute close.
 - For unreadable facts, repeat the failed read; its code stays a limitation.
+- If the authority read reports a changed runtime, the tab stays unknown with
+  that code. The next Pod write rebinds when continuity is proven, or the owner
+  decides when it is ambiguous; repeating worker-show cannot repair continuity.
 - For a finished user-owned or external tab of this objective, after its report
   is recorded, run the exact close command Pod supplies under the owner's
   standing authorization. This never applies to active, coordinator, setup,
   reused-later, other-objective or owner-kept terminals. If Orca refuses, name
   the tab and failure in the final report.
+  If closure or disposal leaves no recorded report for that tab, the standing
+  close authorization does not cover it. Give no close command; name the tab in
+  the final report for the owner's decision.
 - A disconnected or not-materialized terminal needs nothing. A terminal reused
   for a later Dispatch belongs to that assignment alone.
 
 Retain only while required corrections or a delta review of that worker's result
-are pending, or on a recorded owner request. The acknowledgement supplies
+are pending, or on a recorded owner request. An implementer's cycle follows
+required findings from the review of its recorded integrated candidate, even
+when the assurance moves to the corrected candidate for delta review.
+The acknowledgement supplies
 `<title> (retained: <reason>)` and its rename, with `corrections`, `delta review`
 or `owner request`. Run the rename when retaining. Release when the correction
 cycle ends: a retained-owned tab remains releasable, and holds closure.

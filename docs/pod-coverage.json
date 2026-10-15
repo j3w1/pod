@@ -4650,7 +4650,11 @@
         "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change",
         "tests.test_worker_tabs.TableTests.test_unreported_user_owned_status_and_checkpoint_ack_wait_for_report",
         "tests.test_worker_tabs.TableTests.test_unreported_external_status_and_checkpoint_ack_wait_for_report",
-        "tests.test_worker_tabs.TableTests.test_report_ack_waits_for_another_workers_unrecorded_report"
+        "tests.test_worker_tabs.TableTests.test_report_ack_waits_for_another_workers_unrecorded_report",
+        "tests.test_worker_tabs.TableTests.test_unreported_user_owned_closing_ack_and_status_name_owner_decision",
+        "tests.test_worker_tabs.TableTests.test_unreported_external_closing_ack_and_status_name_owner_decision",
+        "tests.test_worker_tabs.TableTests.test_unreported_discarded_user_owned_ack_and_status_name_owner_decision",
+        "tests.test_worker_tabs.TableTests.test_unreported_discarded_external_ack_and_status_name_owner_decision"
       ],
       "status": "NOT_RUN"
     },
@@ -4678,7 +4682,8 @@
       "offline_test": [
         "tests.test_worker_tabs.ClosureTests.test_native_read_failure_names_the_read_without_writing",
         "tests.test_worker_tabs.TableTests.test_pending_unknown_and_unreadable",
-        "tests.test_worker_tabs.OwnerKeepTests.test_revocation_disconnection_reuse_and_pending_precedence"
+        "tests.test_worker_tabs.OwnerKeepTests.test_revocation_disconnection_reuse_and_pending_precedence",
+        "tests.test_worker_tabs.TableTests.test_status_runtime_change_names_continuity_instead_of_an_unreadable_tab"
       ],
       "status": "NOT_RUN"
     },
@@ -4701,9 +4706,13 @@
       "offline_test": [
         "tests.test_worker_tabs.ClosureTests.test_checkpoint_refuses_owned_retained_and_pending",
         "tests.test_worker_tabs.ClosureTests.test_report_refuses_own_owned_retained_pending_and_unreadable_tab",
-        "tests.test_worker_tabs.ClosureTests.test_route_refresh_and_mismatch_cannot_write_before_tab_refusal",
+        "tests.test_worker_tabs.ClosureTests.test_effective_refresh_cannot_write_before_tab_refusal",
         "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal",
-        "tests.test_worker_tabs.ClosureTests.test_unrecorded_owner_request_is_retained_and_still_blocks_both_routes"
+        "tests.test_worker_tabs.ClosureTests.test_unrecorded_owner_request_is_retained_and_still_blocks_both_routes",
+        "tests.test_worker_tabs.ClosureTests.test_closing_route_mismatch_precedes_tab_body_and_map_validation",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_malformed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold"
       ],
       "status": "NOT_RUN"
     },
@@ -4871,7 +4880,10 @@
         "tests.test_request_contract.RepairTests.test_reservation_packet_id_mismatch_names_the_freeze_without_echoing_it",
         "tests.test_request_contract.RepairTests.test_invalid_frozen_packet_id_keeps_the_prior_entry_code",
         "tests.test_request_contract.RepairTests.test_plan_mismatch_names_all_differences",
-        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_same_requests_keep_genuine_0150_refusal_codes"
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_same_requests_keep_genuine_0150_refusal_codes",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_malformed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold"
       ],
       "status": "NOT_RUN"
     },

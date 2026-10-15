@@ -90,8 +90,12 @@ def _check_native_placement(native_port, selector: str, binding: dict | None) ->
 def _assignment_evidence(shown: dict, admission: dict) -> dict:
     """Project settlement for one already-bound assignment, never terminal ownership."""
     binding = admission.get("native_binding")
-    if not binding_valid(binding) or shown.get("runtime") != admission.get("runtime"):
+    if not binding_valid(binding):
         raise PodError("native_assignment_unverified", "Exact assignment runtime or binding differs")
+    if shown.get("runtime") != admission.get("runtime"):
+        detail = ({"reason": "runtime_changed"} if isinstance(shown.get("runtime"), str)
+                  and shown["runtime"] else None)
+        raise PodError("native_assignment_unverified", "Exact assignment runtime or binding differs", detail)
     result = shown.get("result") if isinstance(shown, dict) else None
     dispatch = result.get("dispatch") if isinstance(result, dict) else None
     projection = result.get("projection") if isinstance(result, dict) else None

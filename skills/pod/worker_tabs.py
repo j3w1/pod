@@ -85,15 +85,19 @@ def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | N
         return "owner request"
     obligations = (state.get("checkpoint") or {}).get("obligations") or []
     integrated = admission.get("disposition") or {}
-    reviewed = {ob["id"] for ob in obligations if ob.get("kind") == "assurance"
-                and admission.get("role") == "implement" and integrated.get("kind") == "integrated_into"
-                and ob.get("candidate") == integrated.get("candidate")}
-    # The reviewer and an implementer whose integrated result is reviewed can
-    # both remain in this correction cycle.
+    review_attempts = {key for key, row in state.get("admissions", {}).items()
+                       if admission.get("role") == "implement" and integrated.get("kind") == "integrated_into"
+                       and row.get("role") == "review" and row.get("candidate") == integrated.get("candidate")}
+    reviewed_corrections = {finding.get("correction") for ob in obligations if ob.get("kind") == "assurance"
+                            for finding in ob.get("findings", [])
+                            if finding.get("triage") == "required_correction"
+                            and finding.get("attempt") in review_attempts}
+    # Findings bind the cycle to the review attempt's candidate. The parent
+    # assurance may move to the corrected candidate while delta review is due.
     children = [ob for ob in obligations if ob.get("kind") == "correction"
                 and (ob.get("id") in admission.get("serves", [])
                      or (ob.get("finding") or {}).get("attempt") == admission["admission_id"]
-                     or ob.get("parent") in reviewed)]
+                     or ob.get("id") in reviewed_corrections)]
     if any(ob["state"] not in ("satisfied", "withdrawn") for ob in children):
         return "corrections"
     parents = {ob.get("parent") for ob in children}
@@ -105,7 +109,7 @@ def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | N
 
 def project(state: dict, admission: dict, facts: dict, *, settled: bool,
             failure: str | None = None, packet_body: dict | None = None,
-            acknowledgement: bool = False) -> dict:
+            acknowledgement: bool = False, runtime_changed: bool = False) -> dict:
     """Apply the finished worker table, including exclusions and keep precedence."""
     binding = admission.get("native_binding") or {}
     objective = (state.get("checkpoint") or {}).get("objective")
@@ -139,6 +143,11 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         return finish("reused_later")
     if not failure and not resource and not release and not terminal:
         return finish("not_materialized", "This worker has no tab.")
+    if failure and runtime_changed:
+        return finish("runtime_changed", f"Orca's runtime changed ({failure}); the next Pod write rebinds "
+                      "when continuity is proven, or the owner decides when it is ambiguous.",
+                      state="unknown", listed=True, blocks_closure=True,
+                      failed_read={"code": failure, "command": None})
     repeat = read_command(dispatch)
     if (failure or not handle or terminal.get("connected") is not True
             or ("worker_terminal" in facts and facts["worker_terminal"] != handle)
@@ -198,15 +207,20 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if keep:
         return finish("owner_kept_unowned", f"Owner-kept by instruction {keep['id']}. " + wording, command=None)
     if admission.get("report") is None:
+        unavailable = bool((state.get("checkpoint") or {}).get("closure") or admission.get("disposition"))
+        next_step = ("The owner's standing close authorization does not cover this tab because its report "
+                     "was not recorded; name it in the final report for the owner's decision." if unavailable else
+                     "The authorized close becomes available once its report is recorded.")
         return finish("user_owned" if row["ownership"] == "user_owned" else "external",
-                      wording + " The authorized close becomes available once its report is recorded.", command=None)
+                      wording + " " + next_step, command=None)
     close = ["orca", "terminal", "close", "--terminal", handle]
     return finish("user_owned" if row["ownership"] == "user_owned" else "external",
                   wording + " Under the owner's standing authorization, close this finished worker tab before the final report: "
                   + shlex.join(close) + ".", command=close)
 
 
-def rows(state: dict, placements: dict, *, outstanding=(), failure: str | None = None) -> list[dict]:
+def rows(state: dict, placements: dict, *, outstanding=(), failure: str | None = None,
+         runtime_changed: bool = False) -> list[dict]:
     result = []
     recorded_settlement = bool((state.get("checkpoint") or {}).get("closure")
                                or state.get("continued_by") or state.get("historical_retirement"))
@@ -216,7 +230,8 @@ def rows(state: dict, placements: dict, *, outstanding=(), failure: str | None =
         # A failed read cannot prove settlement; an accepted report or recorded
         # closure can identify a finished worker whose tab still needs readback.
         settled = key not in outstanding if not failure else bool(admission.get("report") or recorded_settlement)
-        row = project(state, admission, placements.get(key, {}), settled=settled, failure=failure)
+        row = project(state, admission, placements.get(key, {}), settled=settled, failure=failure,
+                      runtime_changed=runtime_changed)
         if row["listed"]:
             result.append(row)
     return result

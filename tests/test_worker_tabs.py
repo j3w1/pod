@@ -250,6 +250,64 @@ class TableTests(TabCase):
     def test_unreported_external_status_and_checkpoint_ack_wait_for_report(self):
         self.unreported("external")
 
+    def test_status_runtime_change_names_continuity_instead_of_an_unreadable_tab(self):
+        frozen, admission = self.worker()
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        self.port.runtime = "changed-runtime"
+        result = self.status()
+        row = result["worker_tabs"][0]
+        self.assertEqual((row["row"], row["state"]), ("runtime_changed", "unknown"))
+        self.assertEqual(row["failed_read"], {"code": "native_assignment_unverified", "command": None})
+        self.assertIsNone(row["command"])
+        self.assertIn("Orca's runtime changed", row["wording"])
+        self.assertIn("the next Pod write rebinds when continuity is proven", row["wording"])
+        self.assertIn("the owner decides when it is ambiguous", row["wording"])
+        for text in (row["wording"], result["readiness"]["summary"],
+                     result["readiness"]["finalization"]["next_action"]):
+            self.assertIn(row["wording"], text)
+            self.assertNotIn("Terminal facts unreadable", text)
+            self.assertNotIn("worker-show", text)
+        self.assertEqual(result["native_settlement"], "unverified")
+        self.write(self.waiting_rows())
+        self.assertEqual(self.status()["worker_tabs"][0]["state"], "releasable")
+
+    def disposed_unreported(self, case, *, close):
+        self.intake(self.sub("S"))
+        frozen = self.packet(["S"], purpose="Repair parser", boundary={"paths": ["src"]})
+        admission = self.start("implement", frozen)["admission"]; self.settle(admission)
+        self.tab_case = case
+        result = self.write(self.finished_rows() if close else self.waiting_rows(), **({"close": True} if close else {}),
+                            dispositions=[{"admission": admission["admission_id"], "discarded": True,
+                                           "reason": "superseded"}])
+        ack = self.ack("checkpoint", {}, result)
+        for output in (ack, self.status()):
+            row = output["worker_tabs"][0]
+            self.assertEqual((row["row"], row["state"]), (case, "kept"))
+            self.assertIsNone(row["command"])
+            self.assertIn("Do not reuse", row["wording"])
+            self.assertIn("standing close authorization does not cover this tab", row["wording"])
+            self.assertIn("because its report was not recorded", row["wording"])
+            self.assertIn("name it in the final report for the owner's decision", row["wording"])
+            self.assertNotIn("once its report is recorded", json.dumps(output))
+            self.assertNotIn("terminal close", json.dumps(output))
+            finalization = output.get("finalization") or output["readiness"]["finalization"]
+            self.assertIn(row["wording"], finalization["next_action"])
+        if close:
+            with self.assertRaises(PodError) as caught: self.report(admission, frozen)
+            self.assertEqual(caught.exception.code, "objective_closed")
+
+    def test_unreported_user_owned_closing_ack_and_status_name_owner_decision(self):
+        self.disposed_unreported("user_owned", close=True)
+
+    def test_unreported_external_closing_ack_and_status_name_owner_decision(self):
+        self.disposed_unreported("external", close=True)
+
+    def test_unreported_discarded_user_owned_ack_and_status_name_owner_decision(self):
+        self.disposed_unreported("user_owned", close=False)
+
+    def test_unreported_discarded_external_ack_and_status_name_owner_decision(self):
+        self.disposed_unreported("external", close=False)
+
     def test_report_ack_waits_for_another_workers_unrecorded_report(self):
         self.intake(self.sub("S"), self.sub("T"))
         packets = [self.packet([key], role="investigate", resolves="question", stop_condition="answer")
@@ -429,21 +487,33 @@ class ClosureTests(TabCase):
         self.closing(tuple((case, False) for case in ("reused_later", "coordinator", "setup", "other_objective")),
                      report_route=True)
 
-    def test_route_refresh_and_mismatch_cannot_write_before_tab_refusal(self):
+    def test_effective_refresh_cannot_write_before_tab_refusal(self):
         from pod.ledger import update_admission
         frozen, admission = self.worker()
-        for mismatch in (False, True):
-            def change(row):
-                row["route_decision"]["effective_unknown"] = not mismatch
-                row["route_decision"]["effective"] = {"agent": "codex", "model": "other" if mismatch else "unknown",
-                                                      "effort": "unknown", "context": "unknown"}
-                row["effective_evidence"]["effective"] = deepcopy(row["route_decision"]["effective"])
-            update_admission(self.project, "objective", owner="owner", admission_id=admission["admission_id"], update=change)
-            before = self.saved()
-            with self.assertRaises(PodError) as caught:
-                self.report(admission, frozen, map={"obligations": self.finished_rows(), "close": True})
-            self.assertEqual(caught.exception.code, "worker_tabs_open")
-            self.assertEqual(before, self.saved())
+        def change(row):
+            row["route_decision"]["effective_unknown"] = True
+            row["route_decision"]["effective"] = {"agent": "codex", "model": "unknown",
+                                                  "effort": "unknown", "context": "unknown"}
+            row["effective_evidence"]["effective"] = deepcopy(row["route_decision"]["effective"])
+        update_admission(self.project, "objective", owner="owner", admission_id=admission["admission_id"], update=change)
+        before = self.saved()
+        with self.assertRaises(PodError) as caught:
+            self.report(admission, frozen, map={"obligations": self.finished_rows(), "close": True})
+        self.assertEqual(caught.exception.code, "worker_tabs_open")
+        self.assertEqual(before, self.saved())
+
+    def test_closing_route_mismatch_precedes_tab_body_and_map_validation(self):
+        frozen, admission = self.worker()
+        self.port.effective = {"agent": "codex", "model": "gpt-6-luna", "effort": "medium"}
+        before = read(self.project, "objective")
+        for outcome, rows in (("bogus", self.finished_rows()), ("succeeded", "invalid-map")):
+            with self.subTest(outcome=outcome), self.assertRaises(PodError) as caught:
+                self.report(admission, frozen, outcome=outcome, map={"obligations": rows, "close": True})
+            self.assertEqual(caught.exception.code, "route_mismatch")
+            after = read(self.project, "objective")
+            self.assertTrue(after["admissions"][admission["admission_id"]]["route_decision"]["route_mismatch"])
+            self.assertIsNone(after["admissions"][admission["admission_id"]]["report"])
+            self.assertEqual(before["checkpoint"], after["checkpoint"])
 
     def test_native_read_failure_names_the_read_without_writing(self):
         frozen, admission = self.worker()
@@ -702,7 +772,7 @@ class RetentionTests(TabCase):
             "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}})
         frozen = self.packet(["S"], purpose="Repair parser", boundary={"paths": ["src"]})
         implementer = self.start("implement", frozen)["admission"]; self.settle(implementer)
-        self.move("src/old.py")
+        integrated = self.move("src/old.py")
         self.report(implementer, frozen, map={"obligations": self.waiting_rows()}, result_commit=self.candidate)
         rows = self.stored()
         next(row for row in rows if row["id"] == "A")["candidate"] = self.candidate
@@ -720,7 +790,7 @@ class RetentionTests(TabCase):
             "summary": "parser defect", "correction": "K"}])
         for reason in ("corrections", "delta review"):
             with self.subTest(reason=reason):
-                result = self.report(implementer, frozen, result_commit=self.candidate)
+                result = self.report(implementer, frozen, result_commit=integrated)
                 row = result["worker_tab"]
                 self.assertEqual(row["retention_reason"], reason)
                 self.assertEqual(row["retained_title"]["title"], f"Implementer: Repair parser (retained: {reason})")
@@ -729,10 +799,28 @@ class RetentionTests(TabCase):
                 self.assertEqual(status_row["retention_reason"], reason)
                 self.assertIn(reason, status_row["wording"])
             if reason == "corrections":
+                self.move("src/old.py")
                 rows = self.stored()
-                next(row for row in rows if row["id"] == "K").update(state="satisfied", evidence=[self.proof("K")])
-                next(row for row in rows if row["id"] == "A")["wait"] = {"class": "sequenced", "referent": "O1"}
-                self.write(rows)
+                audit = next(row for row in rows if row["id"] == "A")
+                audit["candidate"] = self.candidate
+                next(row for row in rows if row["id"] == "K").update(
+                    state="waiting", wait={"class": "sequenced", "referent": "O1"})
+                self.write(rows, candidate=self.candidate)
+                retained = next(row for row in self.status()["worker_tabs"]
+                                if row["admission"] == implementer["admission_id"])
+                self.assertEqual(retained["retention_reason"], "corrections")
+                rows = self.stored()
+                correction = next(row for row in rows if row["id"] == "K")
+                correction.pop("wait")
+                correction.update(state="satisfied", evidence=[self.proof("K")])
+                audit = next(row for row in rows if row["id"] == "A")
+                audit.update(wait={"class": "sequenced", "referent": "O1"}, candidate=self.candidate)
+                self.write(rows, candidate=self.candidate)
+        self.assertNotEqual(integrated, self.candidate)
+        self.review("delta-review", delta_from=reviewer["admission_id"])
+        for row in self.status()["worker_tabs"]:
+            self.assertIsNone(row["retention_reason"])
+            self.assertIn("Release owed", row["wording"])
 
     def test_required_correction_delta_review_then_release(self):
         self.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",

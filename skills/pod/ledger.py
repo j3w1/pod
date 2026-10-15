@@ -1016,7 +1016,7 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
     if state is None:
         return {"state": None, "map": None, "ctx": None, "status": status_projection(None, {}),
                 "label": label_qualification(None, {}, candidate), "report": None, "settlement": "none"}
-    settlement, failure = "observed", None
+    settlement, failure, runtime_changed = "observed", None, False
     if native is None:
         from .operations import OrcaPort
         bound = tuple(row for row in state["admissions"].values()
@@ -1026,6 +1026,7 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
         except PodError as exc:
             # The exact read is all-or-nothing; keep its code so status can name it (A1).
             native, settlement, failure = None, "unverified", exc.code
+            runtime_changed = (exc.detail or {}).get("reason") == "runtime_changed"
     ctx = kernel_context(project, objective, state, native)
     map_state = map_of(state)
     view = {"state": state, "map": map_state, "ctx": ctx, "settlement": settlement,
@@ -1038,7 +1039,8 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
                           if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
                           and isinstance(row.get("placement"), dict)}
     from .worker_tabs import rows as tab_rows
-    view["worker_tabs"] = tab_rows(state, view["placements"], outstanding=ctx["outstanding"], failure=failure)
+    view["worker_tabs"] = tab_rows(state, view["placements"], outstanding=ctx["outstanding"], failure=failure,
+                                   runtime_changed=runtime_changed)
     return view
 
 
@@ -1419,7 +1421,13 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if isinstance(proposed, dict) and proposed.get("close") is True:
             _record_continuity_event(authority.get("continuity"))
         result = dict(state)
-        result["worker_tabs"] = (ctx or {}).get("worker_tabs", [])
+        # Acknowledgements use the accepted closure/dispositions with the same
+        # native facts; the pre-write rows can still promise a future report.
+        from .worker_tabs import rows as tab_rows
+        placements = {item["admission_id"]: item["placement"]
+                      for item in authority.get("native", {}).get("assignments", [])
+                      if isinstance(item.get("placement"), dict)}
+        result["worker_tabs"] = tab_rows(state, placements, outstanding=(ctx or {}).get("outstanding", []))
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx)
         return result
@@ -1752,26 +1760,34 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
     """
     path = _path(project, objective)
     with _lock(path):
-        state = _read(path)
-        if state["owner"] != owner or admission_id not in state["admissions"]:
-            from .handoff import refuse_nonowner
-            refuse_nonowner(project, objective, state, owner, code="unknown_admission")
-            raise PodError("unknown_admission", "No owned admission identity")
-        if open_required:
-            _require_open(state)
-        authority = require_authority(project, objective, owner=owner, state=state,
-                                      run_id=state["admissions"][admission_id]["run_id"],
-                                      expected_runtime=expected_runtime)
-        if expected_runtime is not None and authority["runtime"] != expected_runtime:
-            raise PodError("native_authority_unverified", "Update evidence was read at another runtime")
-        row = state["admissions"][admission_id]
-        admitted = ("admitted_seq" in row, row.get("admitted_seq"))
-        update(row)
-        if admitted != ("admitted_seq" in row, row.get("admitted_seq")):
-            raise PodError("admission_conflict", "The admission's reservation sequence is immutable")
-        row["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _write(path, state)
-        return row
+        return _update_admission_locked(project, objective, state=_read(path), owner=owner,
+                                        admission_id=admission_id, update=update,
+                                        open_required=open_required, expected_runtime=expected_runtime)
+
+
+def _update_admission_locked(project: Path, objective: str, *, state: dict, owner: str,
+                             admission_id: str, update: Callable[[dict], None],
+                             open_required: bool = False, expected_runtime: str | None = None) -> dict:
+    """The existing admission update, for a caller already holding the objective lock."""
+    if state["owner"] != owner or admission_id not in state["admissions"]:
+        from .handoff import refuse_nonowner
+        refuse_nonowner(project, objective, state, owner, code="unknown_admission")
+        raise PodError("unknown_admission", "No owned admission identity")
+    if open_required:
+        _require_open(state)
+    authority = require_authority(project, objective, owner=owner, state=state,
+                                  run_id=state["admissions"][admission_id]["run_id"],
+                                  expected_runtime=expected_runtime)
+    if expected_runtime is not None and authority["runtime"] != expected_runtime:
+        raise PodError("native_authority_unverified", "Update evidence was read at another runtime")
+    row = state["admissions"][admission_id]
+    admitted = ("admitted_seq" in row, row.get("admitted_seq"))
+    update(row)
+    if admitted != ("admitted_seq" in row, row.get("admitted_seq")):
+        raise PodError("admission_conflict", "The admission's reservation sequence is immutable")
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write(_path(project, objective), state)
+    return row
 
 
 def _stored_ingestion(row: dict) -> dict:
@@ -1838,6 +1854,12 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             route_refresh, route_mismatch = prepared["route_refresh"], prepared["route_mismatch"]
             report_placement = prepared["report_placement"]
             prepared_continuity = prepared["continuity"]
+        if route_mismatch:
+            _update_admission_locked(project, objective, state=state, owner=owner,
+                                     admission_id=admission_id,
+                                     update=lambda item: item["route_decision"].update(route_mismatch=True),
+                                     expected_runtime=row["runtime"])
+            raise PodError("route_mismatch", "Native effective route changed after start")
         # The report path read its fresh identity at the observation's runtime (A2).
         observed_runtime = (observation.get("native_binding") or {}).get("runtime")
         closing = isinstance(accompanying, dict) and accompanying.get("close") is True
@@ -1859,11 +1881,6 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         from .worker_tabs import require_closed_tabs, project as tab_project, rows as tab_rows
         if closing:
             require_closed_tabs(ctx["worker_tabs"])
-        if route_mismatch:
-            if not closing:
-                row["route_decision"]["route_mismatch"] = True
-                _write(path, state, native=authority.get("native"))
-            raise PodError("route_mismatch", "Native effective route changed after start")
         if route_refresh:
             row["route_decision"].update(effective=route_refresh["effective"], effective_unknown=False)
             row["effective_evidence"]["effective"] = route_refresh["effective"]
