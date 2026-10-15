@@ -976,7 +976,8 @@
       "offline_test": [
         "tests.test_orca_adapter.OrcaAdapterTests.test_three_exact_worker_argv_shapes",
         "tests.test_operations.AdmissionTests.test_status_exposes_native_discoverability_without_ui_claim_or_write",
-        "tests.test_operations.AdmissionTests.test_missing_native_terminal_keeps_visibility_unknown"
+        "tests.test_operations.AdmissionTests.test_missing_native_terminal_keeps_visibility_unknown",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -985,7 +986,9 @@
       "required_evidence": [
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -993,7 +996,9 @@
       "required_evidence": [
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1697,7 +1702,8 @@
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_branch_shared_with_another_worktree_is_protected_and_changes_expect",
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_prepared_but_unpublished_remote_branch_is_not_offered",
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_retargeted_publication_never_claims_a_foreign_remote_branch",
-        "tests.test_cleanup_plan.CleanupPlanTests.test_an_older_publication_row_never_settles_on_a_retargeted_branch"
+        "tests.test_cleanup_plan.CleanupPlanTests.test_an_older_publication_row_never_settles_on_a_retargeted_branch",
+        "tests.test_skill_validation.SkillValidationTests.test_repository_bundle_is_valid"
       ],
       "status": "NOT_RUN"
     },
@@ -2938,7 +2944,8 @@
         "tests.test_output_acknowledgements.GovernorAcknowledgementTests.test_classification_drives_correction_without_echoing_the_stored_row",
         "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_triage_and_generated_proposal_ids_drive_real_adoption_and_replay",
         "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_bindings_support_reload_without_echoing_future_stored_fields",
-        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_delivery_and_closure_acknowledgements_support_real_followup"
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_delivery_and_closure_acknowledgements_support_real_followup",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3355,7 +3362,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_working_reads_the_same_for_the_owner_a_live_peer_and_a_reader_outside_orca",
-        "tests.test_status_selection.StatusSelectionTests.test_a_run_that_selects_one_objective_carries_the_same_readiness"
+        "tests.test_status_selection.StatusSelectionTests.test_a_run_that_selects_one_objective_carries_the_same_readiness",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3366,7 +3374,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_waiting_names_the_party_and_what_it_must_supply",
-        "tests.test_readiness.ProjectionTests.test_wait_classes_name_their_party_or_none"
+        "tests.test_readiness.ProjectionTests.test_wait_classes_name_their_party_or_none",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3380,7 +3389,8 @@
         "tests.test_readiness.StateTests.test_a_merged_candidate_with_a_pending_readback_never_reads_safe",
         "tests.test_readiness.StateTests.test_merge_decided_but_unrecorded_names_the_merge_outcome",
         "tests.test_readiness.ProjectionTests.test_delivery_under_way_finalizes_and_the_line_stays_short",
-        "tests.test_readiness.ProjectionTests.test_the_plain_line_names_each_record_by_its_kind"
+        "tests.test_readiness.ProjectionTests.test_the_plain_line_names_each_record_by_its_kind",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3391,7 +3401,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_closed_reads_closed_after_main_advances",
-        "tests.test_readiness.StateTests.test_a_closed_objective_still_reads_closed_after_its_worktree_is_removed"
+        "tests.test_readiness.StateTests.test_a_closed_objective_still_reads_closed_after_its_worktree_is_removed",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3402,7 +3413,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_closed_with_external_work_names_each_gate_and_who_acts",
-        "tests.test_readiness.ProjectionTests.test_gate_parties_decide_who_acts_after_closure"
+        "tests.test_readiness.ProjectionTests.test_gate_parties_decide_who_acts_after_closure",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3413,7 +3425,10 @@
         "live_native",
         "independent_review"
       ],
-      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_names_its_recovery_routes_for_every_non_owner_reader",
+      "offline_test": [
+        "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_names_its_recovery_routes_for_every_non_owner_reader",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3423,7 +3438,10 @@
         "live_native",
         "independent_review"
       ],
-      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_with_a_pending_effect_names_the_carry_or_the_exact_refusal",
+      "offline_test": [
+        "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_with_a_pending_effect_names_the_carry_or_the_exact_refusal",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3434,7 +3452,8 @@
       "offline_test": [
         "tests.test_readiness.EndedTests.test_an_owner_retirement_says_why_pod_needs_no_coordinator",
         "tests.test_readiness.EndedTests.test_a_continued_record_names_its_successor_and_the_successor_reads_its_own_work",
-        "tests.test_readiness.EndedTests.test_unknown_and_unreadable_objectives_are_unavailable_with_the_reason"
+        "tests.test_readiness.EndedTests.test_unknown_and_unreadable_objectives_are_unavailable_with_the_reason",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3449,7 +3468,8 @@
         "tests.test_readiness.CompatibilityTests.test_a_lost_coordinator_and_its_handoff_fields",
         "tests.test_readiness.CompatibilityTests.test_a_closed_objective",
         "tests.test_readiness.CompatibilityTests.test_a_claimed_predecessor_and_its_successor",
-        "tests.test_readiness.CompatibilityTests.test_a_retired_objective"
+        "tests.test_readiness.CompatibilityTests.test_a_retired_objective",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3458,7 +3478,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_readiness.ListLabelTests.test_the_list_carries_a_record_only_label_without_orca",
+      "offline_test": [
+        "tests.test_readiness.ListLabelTests.test_the_list_carries_a_record_only_label_without_orca",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3614,7 +3637,8 @@
         "tests.test_finalization.FinalizationTests.test_the_next_action_follows_the_first_remaining_record",
         "tests.test_finalization.FinalizationTests.test_closure_ends_finalization_and_only_then_reports_finished",
         "tests.test_finalization.FinalizationTests.test_a_mapless_objective_has_no_delivery_record_or_closure_to_write",
-        "tests.test_finalization.FinalizationTests.test_the_projection_reads_and_changes_nothing"
+        "tests.test_finalization.FinalizationTests.test_the_projection_reads_and_changes_nothing",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -4529,6 +4553,149 @@
         "independent_review"
       ],
       "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A359",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TitleTests.test_investigator_and_optional_purpose",
+        "tests.test_worker_tabs.TitleTests.test_reviewer_and_finer_role",
+        "tests.test_worker_tabs.TitleTests.test_optional_title_fields_obey_their_bounds"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A360",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TitleTests.test_implementer_omits_identifier_path_credential_status_and_route_shapes",
+        "tests.test_worker_tabs.TitleTests.test_headless_start_and_empty_safe_title_have_reason_without_command",
+        "tests.test_worker_tabs.TitleTests.test_deferred_start_returns_title_without_rename",
+        "tests.test_worker_tabs.TitleTests.test_reuse_gets_a_new_title_and_exact_same_handle",
+        "tests.test_worker_tabs.TitleTests.test_adapter_refuses_terminal_rename"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A361",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A362",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_user_owned_external_pending_unknown_and_unreadable",
+        "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A363",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_excluded_and_absent_rows",
+        "tests.test_worker_tabs.ClosureTests.test_active_report_never_relays_close",
+        "tests.test_worker_tabs.ClosureTests.test_checkpoint_accepts_kept_absent_and_excluded",
+        "tests.test_worker_tabs.ClosureTests.test_report_accepts_own_kept_absent_and_excluded"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A364",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_native_read_failure_names_the_read_without_writing",
+        "tests.test_worker_tabs.TableTests.test_user_owned_external_pending_unknown_and_unreadable",
+        "tests.test_worker_tabs.OwnerKeepTests.test_revocation_disconnection_reuse_and_pending_precedence"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A365",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_connected_tabs_ignore_stale_liveness_and_preserve_retained_terminals",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A366",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_checkpoint_refuses_owned_retained_and_pending",
+        "tests.test_worker_tabs.ClosureTests.test_report_refuses_own_owned_retained_pending_and_unreadable_tab",
+        "tests.test_worker_tabs.ClosureTests.test_route_refresh_and_mismatch_cannot_write_before_tab_refusal",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A367",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.OwnerKeepTests.test_checkpoint_keep_survives_ownership_change",
+        "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change",
+        "tests.test_worker_tabs.OwnerKeepTests.test_revocation_disconnection_reuse_and_pending_precedence",
+        "tests.test_worker_tabs.OwnerKeepTests.test_keep_needs_recorded_instruction_and_exact_objective",
+        "tests.test_worker_tabs.OwnerKeepTests.test_recorded_revocation_gives_close_on_both_closing_routes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A368",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_existing_closure_keeps_its_bytes_but_names_every_open_tab",
+        "tests.test_finalization.ClosureOrderTests.test_a_closure_recorded_before_this_rule_still_validates",
+        "tests.test_worker_tabs.OwnerKeepTests.test_owner_can_revoke_after_closure_without_changing_the_closure_report"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A369",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.RetentionTests.test_required_correction_delta_review_then_release"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A370",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_skill_validation.SkillValidationTests.test_repository_bundle_is_valid"
+      ],
       "status": "NOT_RUN"
     }
   ]

@@ -151,6 +151,12 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
         terminal_readback={key: observed_terminal[key] for key in ("handle", "tabId", "worktreeId", "connected",
                            "writable", "orphaned") if key in observed_terminal} or None,
         retained_reason=ownership.get("retainedReason") or worker.get("retainedReason") or worker.get("retainReason"))
+    if "role" in projection:
+        facts["native_role"] = projection["role"]
+    if isinstance(projection.get("nextAction"), dict):
+        facts["native_next_action"] = projection["nextAction"]
+    if resource is not None or result.get("terminal") is not None:
+        facts["worker_terminal"] = worker.get("agentTerminalHandle")
     if worker.get("agentTerminalHandle") != handle:
         facts.update(tab=None, placement_readback="unavailable")
         return facts
@@ -210,8 +216,18 @@ class OrcaPort:
         if not isinstance(assignments, tuple) or any(not isinstance(row, dict) for row in assignments):
             raise PodError("native_assignment_unverified", "Assignment evidence request is malformed")
         binding_before = current_run() if expected_runs else None
-        evidence = [_assignment_evidence(self.show_worker(row["native_binding"]["dispatchId"]), row)
-                    for row in assignments]
+        evidence = []
+        for row in assignments:
+            try:
+                evidence.append(_assignment_evidence(self.show_worker(row["native_binding"]["dispatchId"]), row))
+            except PodError as exc:
+                # Preserve the native read's code, with the precise read to repeat.
+                # This adds no observation and never promotes unknown settlement.
+                from .worker_tabs import project as tab_project
+                failed = tab_project({"owner": owner, "checkpoint": {"objective": row.get("objective")}},
+                                     row, {}, settled=True, failure=exc.code)
+                exc.detail = {**(exc.detail or {}), "worker_tabs": [failed], "next_action": failed["wording"]}
+                raise
         binding_after = current_run() if expected_runs else None
         observed = binding_before or binding_after
         if observed is not None:

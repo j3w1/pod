@@ -24,9 +24,9 @@ PACKET_FIELDS = {"schema", "objective", "criteria", "responsibility", "scope", "
                  "candidate", "context", "dependencies", "route", "policy_revision",
                  "plan_revision", "report_contract", "sources", "objective_source", "worktree",
                  "placement", "serves", "role", "boundary", "map_revision", "resolves",
-                 "stop_condition", "delta_from"}
+                 "stop_condition", "delta_from", "role_label", "purpose"}
 PACKET_REQUIRED = PACKET_FIELDS - {"objective_source", "worktree", "placement", "resolves",
-                                   "stop_condition", "delta_from"}
+                                   "stop_condition", "delta_from", "role_label", "purpose"}
 REPORT_FIELDS = {"schema", "assignment", "attempt", "candidate", "outcome", "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"}
 EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt", "definition"}
 
@@ -90,6 +90,10 @@ def packet(value: Any) -> dict:
     packet_binding(p)
     for key in ("objective", "responsibility", "candidate", "policy_revision", "plan_revision", "report_contract"):
         bounded_text(p[key], name=key)
+    from .worker_tabs import ROLE_LABEL_LIMIT, PURPOSE_LIMIT, title
+    for key, limit in (("role_label", ROLE_LABEL_LIMIT), ("purpose", PURPOSE_LIMIT)):
+        if key in p:
+            bounded_text(p[key], name=key, limit=limit)
     for key in ("criteria", "actions", "dependencies"):
         _strings(p[key], key)
     for item in _list(p["scope"], "scope"):
@@ -132,7 +136,7 @@ def packet(value: Any) -> dict:
             bounded_text(value, name="route " + key, limit=256)
     if len(str(p)) > 65536:
         raise PodError("invalid_packet", "Packet is too large")
-    return {"packet_id": digest(p), "body": p}
+    return {"packet_id": digest(p), "body": p, "title": title(p)}
 
 
 def worktree_binding(value: Any) -> dict:
