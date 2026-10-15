@@ -890,9 +890,9 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
         raise PodError("retirement_scope_unavailable", "Historical retirement needs a Git repository",
                        {"next_action": "run it from the repository's canonical checkout"})
     if decision is not None:
-        legacy_input = isinstance(decision, dict) and "channel" not in decision
         decision = _decision(decision, requested, repository)
-        legacy_digest = digest({key: value for key, value in decision.items() if key != "channel"}) if legacy_input else None
+        legacy_digest = (digest({key: value for key, value in decision.items() if key != "channel"})
+                         if decision["channel"] == "session" and "relay" not in decision else None)
     port = port or OrcaPort(project)
     paths = {row["objective"]: _path(project, row["objective"]) for row in requested}
     results = []

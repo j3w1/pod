@@ -833,6 +833,7 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
     from .history import prepare_context
     from .util import encoded, protect_decision_record
     journal, _ = _carried_journal(project, objective, predecessor, prior, record_ids, at=at)
+    protect_decision_record(journal)
     planned = [("successor's Governor journal", {**journal, "revision": journal["revision"] + 1}, MAX_JOURNAL)]
     for name, value in records.items():
         candidate = {**value, "revision": value["revision"] + 2}

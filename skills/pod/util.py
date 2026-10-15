@@ -18,7 +18,7 @@ from .errors import FieldRefusal, PodError
 MAX_RECORD = 128 * 1024
 DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"}
 CHANNEL_FIELDS = {"channel", "relay"}
-RELAYED_DECISIONS = {"question", "governance", "withdrawal", "continuation", "claim", "retirement"}
+RELAYED_DECISIONS = {"question", "governance", "withdrawal", "claim", "retirement"}
 
 
 def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
@@ -72,7 +72,7 @@ def channel_fields(value: dict) -> dict:
 
 
 def map_decisions(state: dict) -> list[dict]:
-    """Owner/coordinator decision records on the map, with stable location references."""
+    """Owner decision records on the map, with stable location references."""
     rows = []
     def add(kind, reference, value):
         rows.append({"kind": kind, "reference": reference, "decision": decision_channel(value)})
@@ -88,8 +88,6 @@ def map_decisions(state: dict) -> list[dict]:
             add("obligation", f"obligations/{ob['id']}/source", ob["source"])
         if ob.get("withdrawal", {}).get("by") == "user_direct":
             add("withdrawal", f"obligations/{ob['id']}/withdrawal", ob["withdrawal"])
-        for index, value in enumerate(ob.get("acceptances", [])):
-            add("acceptance", f"obligations/{ob['id']}/acceptances/{index}", value)
     return rows
 
 
@@ -123,9 +121,9 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
 
 
 def protect_decision_record(value: dict) -> None:
-    """An earlier reader must refuse a relay it would otherwise read as a session decision."""
+    """Earlier readers must refuse channel fields they cannot read faithfully, including session."""
     def carries_channel(item):
-        return (isinstance(item, dict) and (item.get("channel") == "relayed" or any(carries_channel(v) for v in item.values()))
+        return (isinstance(item, dict) and (bool(CHANNEL_FIELDS & item.keys()) or any(carries_channel(v) for v in item.values()))
                 or isinstance(item, list) and any(carries_channel(v) for v in item))
     if carries_channel(value):
         value["decision_channels"] = 1

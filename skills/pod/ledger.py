@@ -975,7 +975,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "governance": governance,
             "bound_governance": lambda bound: governance_observation(
                 project, bound["base_ref"], at=bound["base"], bound_ref=bound["base_ref"],
-                selection=bound["selection"], paths=[row["path"] for row in (map_state or {}).get("governance_sources", [])]),
+                selection=bound["selection"]),
             "governance_current": (governance or {}).get("current") if governance is not None
             else (_resolve_commit(project, base_ref) if base_ref else None),
             "source_state": source_state,
@@ -1268,8 +1268,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             else:
                 at = None if refresh else prior_map["governance"]["base"]
                 observed = (governance_observation(project, base_ref, at=at, bound_ref=base_ref,
-                                                   selection=prior_map["governance"].get("selection"),
-                                                   paths=[row["path"] for row in prior_map["governance_sources"]])
+                                                   selection=prior_map["governance"].get("selection"))
                             if base_ref is not None
                         else governance_observation(project, None))
         if adopted_observation is not None:

@@ -542,11 +542,7 @@ def unchanged_governance(project: Path, map_state: dict) -> tuple[dict, dict] | 
     observed = governance_observation(project, governance["base_ref"], bound_ref=governance["base_ref"],
                                       selection=governance["selection"], paths=[row["path"] for row in map_state["governance_sources"]])
     if observed.get("status") != "observed":
-        if observed.get("reason") == "default_target_changed":
-            return None
-        from .obligations import refuse
-        raise refuse("governance_unavailable", "governance_unavailable",
-                     "the target governance sources cannot be read; new work holds", reason=observed.get("reason"))
+        return None
     if observed["commit"] == governance["base"]:
         return None
     if git_is_ancestor(project, governance["base"], observed["commit"]) is not True:

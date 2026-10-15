@@ -3180,7 +3180,8 @@
         "tests.test_historical_retirement.WriteTests.test_an_objective_detection_already_refused_never_blocks_the_others",
         "tests.test_historical_retirement.WriteTests.test_the_question_names_a_late_refused_objective_a_decision_could_retire_later",
         "tests.test_historical_retirement.WriteTests.test_an_early_refusal_is_named_as_never_retired_by_these_facts",
-        "tests.test_retirement_absent.NativeIdentityTests.test_a_decided_batch_retires_the_others_and_refuses_that_objective_alone"
+        "tests.test_retirement_absent.NativeIdentityTests.test_a_decided_batch_retires_the_others_and_refuses_that_objective_alone",
+        "tests.test_decision_channels.RetirementChannelTests.test_earlier_retirement_replays_explicit_default_session_only"
       ],
       "status": "NOT_RUN"
     },
@@ -3513,7 +3514,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_governor_evidence.EarlierReaderTests.test_pod_0_12_0_loads_new_rows_and_reads_them_as_recorded",
+      "offline_test": [
+        "tests.test_governor_evidence.EarlierReaderTests.test_pod_0_12_0_loads_new_rows_and_reads_them_as_recorded",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_reader_refuses_session_carried_consent"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3733,7 +3737,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_carried_claim.EarlierReaderTests.test_earlier_pods_keep_carried_rows_and_refuse_new_decision_fields",
+      "offline_test": [
+        "tests.test_carried_claim.EarlierReaderTests.test_earlier_pods_keep_carried_rows_and_refuse_new_decision_fields",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_reader_refuses_session_carried_consent"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3903,7 +3910,8 @@
         "tests.test_carried_claim.CapacityTests.test_a_claim_too_large_for_the_successor_writes_nothing",
         "tests.test_carried_claim.CapacityTests.test_settling_in_the_predecessor_lets_a_just_fitting_claim_complete",
         "tests.test_carried_claim.CapacityTests.test_a_reservation_that_cannot_fit_is_released_by_its_decision",
-        "tests.test_carried_claim.CapacityTests.test_a_claim_linked_before_the_check_refuses_its_replay_by_name"
+        "tests.test_carried_claim.CapacityTests.test_a_claim_linked_before_the_check_refuses_its_replay_by_name",
+        "tests.test_carried_claim.CapacityTests.test_preflight_counts_session_channel_marker_before_any_claim_write"
       ],
       "status": "NOT_RUN"
     },
@@ -4059,7 +4067,10 @@
       "offline_test": [
         "tests.test_governance_adoption.GovernanceAdoptionTests.test_effect_boundary_names_plain_checkpoint_before_admission",
         "tests.test_governance_adoption.GovernanceAdoptionTests.test_excluded_sources_do_not_participate_in_adoption",
-        "tests.test_governance_adoption.DeliveredAdoptionTests.test_source_changing_exact_delivery_keeps_exemption_but_later_merge_refuses"
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_source_changing_exact_delivery_keeps_exemption_but_later_merge_refuses",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_owner_refresh_still_observes_unreadable_excluded_source",
+        "tests.test_governance_adoption.GovernanceAdoptionTests.test_bound_base_observation_still_reads_excluded_source",
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_earlier_shaped_merge_keeps_original_base_through_adoption_and_delivery"
       ],
       "status": "NOT_RUN"
     },
@@ -4070,7 +4081,7 @@
       ],
       "offline_test": [
         "tests.test_decision_channels.DecisionChannelTests.test_new_governance_decision_records_default_session_channel",
-        "tests.test_decision_channels.DecisionChannelTests.test_session_revision_obligation_reopen_and_acceptance_records",
+        "tests.test_decision_channels.DecisionChannelTests.test_session_revision_obligation_and_reopen_records",
         "tests.test_decision_channels.DecisionChannelTests.test_constraints_and_governor_exceptions_require_session",
         "tests.test_decision_channels.DecisionChannelTests.test_user_route_failure_clear_records_channel",
         "tests.test_decision_channels.ContinuityChannelTests.test_runtime_continuity_requires_session_and_records_it"
@@ -4102,7 +4113,10 @@
         "tests.test_decision_channels.HandoffChannelTests.test_owner_handoff_requires_session_and_records_it",
         "tests.test_decision_channels.DecisionChannelTests.test_constraints_and_governor_exceptions_require_session",
         "tests.test_decision_channels.DecisionChannelTests.test_user_route_failure_clear_records_channel",
-        "tests.test_decision_channels.ContinuityChannelTests.test_runtime_continuity_requires_session_and_records_it"
+        "tests.test_decision_channels.ContinuityChannelTests.test_runtime_continuity_requires_session_and_records_it",
+        "tests.test_decision_channels.PublicAuthorizationChannelTests.test_internal_governor_merge_refuses_relay_without_journal_write",
+        "tests.test_decision_channels.PublicAuthorizationChannelTests.test_internal_governor_publish_refuses_relay_without_journal_write",
+        "tests.test_decision_channels.PublicAuthorizationChannelTests.test_governor_execute_publish_refuses_relay_without_journal_write"
       ],
       "status": "NOT_RUN"
     },
@@ -4113,7 +4127,10 @@
       ],
       "offline_test": [
         "tests.test_decision_channels.SharedDecisionTests.test_incomplete_or_misclassified_relays_refuse",
-        "tests.test_decision_channels.DecisionChannelTests.test_relayed_general_revision_requires_previously_recorded_question"
+        "tests.test_decision_channels.DecisionChannelTests.test_relayed_general_revision_requires_previously_recorded_question",
+        "tests.test_decision_channels.PublicAuthorizationChannelTests.test_internal_governor_merge_refuses_relay_without_journal_write",
+        "tests.test_decision_channels.PublicAuthorizationChannelTests.test_internal_governor_publish_refuses_relay_without_journal_write",
+        "tests.test_decision_channels.PublicAuthorizationChannelTests.test_governor_execute_publish_refuses_relay_without_journal_write"
       ],
       "status": "NOT_RUN"
     },
@@ -4131,7 +4148,10 @@
         "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_session_governance_fields",
         "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_claim_relay",
         "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_retirement_relay",
-        "tests.test_decision_channels.SharedDecisionTests.test_earlier_session_consent_cannot_become_fresh_by_default_channel"
+        "tests.test_decision_channels.SharedDecisionTests.test_earlier_session_consent_cannot_become_fresh_by_default_channel",
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_genuine_earlier_reader_refuses_session_carried_consent",
+        "tests.test_decision_channels.RetirementChannelTests.test_earlier_retirement_replays_explicit_default_session_only",
+        "tests.test_carried_claim.CapacityTests.test_preflight_counts_session_channel_marker_before_any_claim_write"
       ],
       "status": "NOT_RUN"
     },
@@ -4417,6 +4437,14 @@
         "tests.test_history_boundaries.PublicHistoryProjectionTests.test_status_by_run_and_objective_preserve_every_existing_key",
         "tests.test_history_boundaries.PublicHistoryProjectionTests.test_governor_map_and_checkpoint_rewrite_hydrated_history"
       ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A356",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_decision_channels.SharedDecisionTests.test_eighty_owner_authorized_writes_have_no_revision_count_cap",
       "status": "NOT_RUN"
     }
   ]

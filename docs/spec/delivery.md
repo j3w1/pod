@@ -98,7 +98,7 @@ Type: H · Scenarios: [A292](#a292), [A293](#a293), [A294](#a294), [A295](#a295)
 - <a id="a288"></a>**A288** — With no listed run, or a list truncated at its limit, whether or not a visible run matches and whether it failed or passed, the derived row stays pending; the result states scope, limit, truncation and retention, and the row keeps the reason. A row already bound to a run that stays visible in the truncated list holds too, failing or passing. A publication landing on a truncated list binds no run; a reservation's PASS refuses while its readback, of a visible bound run included, sees only a truncated list; and a merge PASS's readback sweep leaves such a row pending.
 - <a id="a289"></a>**A289** — A completed matching run settles its row with that run's event and first attempt.
 - <a id="a290"></a>**A290** — A later attempt never settles the first. A rerun records its run, pre-read attempt and submission start before submitting and binds only the single new attempt that started after it, so another actor's later passing attempt never settles it; a rerun whose run cannot be read reruns nothing. Interrupted after its accepted submission and before its result write, it resumes from that record and binds its own attempt, even when another actor's attempt preceded the pre-read, and holds when another actor's attempt followed it. Interrupted inside its call, or with its reply lost, it never binds the new attempt it cannot prove its own; with no attempt after the pre-read past the call's time limit and margin it reads FAILED as not taken effect. An actor between the pre-read and the submission, or a single new attempt that started before the submission, holds the row. One table runs every attribution state through readback and execution: the accepted single attempt binds whether it starts the next second or within the submission's own second, including a whole-second start within a fractional submission's second (01 against 01.8), and a bound attempt is read by number past a later actor's and within that second; a pending row an earlier 0.13.0 candidate bound without provenance, a rerun recorded with only its run, a caller-performed reservation, an unaccepted attempt, several new attempts, a start in a whole second earlier than the submission's (including 00 against 01.8), no reported start, an acceptance contradicted by no new attempt, and a bound attempt without acceptance, not the next one or started in an earlier second all hold with their reason; execution binds a start within the submission's second and never one in an earlier second; only an unaccepted rerun with no new attempt past the floor reads FAILED. A bound run of another event (a synthetic control of the binding 0.12.0 made), on another head commit, created before the publication or of another workflow (both bound by the genuine 0.12.0 writer) never binds, and the row's own run binds once listed.
-- <a id="a291"></a>**A291** — The released 0.12.0 source, extracted from Git objects, loads a journal holding R115's `readback`, `attempt` and `rejected_run` fields and reads every row and its outcome as recorded, without a write.
+- <a id="a291"></a>**A291** — The released 0.12.0 source, extracted from Git objects, reads channel-free candidate-written validation rows holding R115's `readback`, `attempt` and `rejected_run` fields and their outcomes exactly as recorded. It refuses the actual channel-bearing journal under R120; both reads preserve bytes.
 - <a id="a292"></a>**A292** — For a row Pod performed (an executed dispatch and a derived validation), PASS, FAILED and CANCELED refuse `performed_by_pod` and UNKNOWN with a provider receipt refuses; UNKNOWN records, its identical restatement writes nothing, another receipt refuses, and the row never becomes CANCELED.
 - <a id="a293"></a>**A293** — For a decision reservation, PASS with a caller receipt, PASS or FAILED that readback does not show, CANCELED without an attestation, CANCELED when readback sees the effect, and an unreadable provider each refuse without a write; PASS that readback shows records Pod's receipt and the caller's evidence reference.
 - <a id="a294"></a>**A294** — A fresh reservation offers "cancel, then execute"; once readback bound a run to it, an attaching execute is told to reconcile instead, and CANCELED refuses.
@@ -137,7 +137,10 @@ Admission and Governor effects may refuse until that checkpoint; their next acti
 then names the plain checkpoint and says it needs no owner question.
 
 A changed or unreadable bound source, missing delivery ancestry or changed default
-branch retains `governance_changed` / `governance_unavailable` and existing recovery.
+branch retains today's `governance_changed` refusal and owner snapshot recovery.
+An unresolved target retains `governance_unavailable`. Only derived adoption limits
+observation to bound sources; owner refresh and bound-base observation still read
+every governance path, including excluded paths, and hold on unreadable sources.
 Changed snapshots sharing known objective ancestry beyond the old base require a
 fresh owner decision through `governance_refresh: true`, `revision_authority`, and
 `governance` naming the exact newly observed canonical `base_ref` and full `base`.
@@ -156,13 +159,13 @@ decisions, whose channels follow R120.
 - <a id="a333"></a>**A333** — A changed bound source, an absent source appearing, or a present source disappearing refuses `governance_changed` without a write, retaining owner snapshot recovery. A backward or sideways target move also retains its refusal even with identical source bytes.
 - <a id="a334"></a>**A334** — A new target missing the recorded delivery result refuses `governance_changed` without a write even when all source revisions match.
 - <a id="a335"></a>**A335** — A changed default branch for `selection: default` refuses `governance_changed` without a write.
-- <a id="a336"></a>**A336** — An unreadable bound target source refuses `governance_unavailable` without a write; unavailable evidence is never inferred unchanged.
+- <a id="a336"></a>**A336** — An unreadable bound source at a moved target refuses `governance_changed`, "the target branch moved since governance was bound", with next action `write a checkpoint with governance_refresh` and no write; unavailable evidence is never inferred unchanged.
 - <a id="a337"></a>**A337** — A closing write adopts unchanged governance, relocates citations and retains receipts valid for its unchanged candidate without `rebind`; changing the candidate never rebinds that proof and closure refuses invalidated evidence.
-- <a id="a338"></a>**A338** — Excluded sources do not participate; admission/effect refusal names a plain adopting checkpoint without an owner question. An exact source-changing delivery retains R93's existing exemption and old base, while a later sibling merge still refuses because its policy differs from that bound base.
+- <a id="a338"></a>**A338** — Excluded sources do not participate in derived adoption; owner refresh and bound-base observation still read every governance path, so an unreadable excluded source holds a refresh as before. Admission/effect refusal names a plain adopting checkpoint without an owner question. An exact source-changing delivery retains R93's existing exemption and old base, while a later sibling merge still refuses because its policy differs from that bound base. A 0.13.3-shaped merge row without `governance_binding` keeps its original base through adoption, outcome and delivery.
 
 ### R120 — Record every owner decision's channel
 
-Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343)
+Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343), [A356](#a356)
 
 One shared validator checks owner-authority inputs: `provenance: user_direct`,
 `instruction`, optional `channel` (`session` by default, or `relayed`), and `relay`
@@ -174,8 +177,8 @@ channel and, when relayed, the complete relay. Existing records without a channe
 read as `channel: session` with `channel_recorded: false` and text "session (earlier record)"; they are never rewritten on read.
 
 The exhaustive relayed list is: owner answers to an already recorded question,
-governance snapshot adoption/retarget, withdrawal, continuation and claim instructions
-(R110), and retirement (R112). A general `revision_authority` answer supplies
+governance snapshot adoption/retarget, withdrawal, R110 continuation instructions
+recorded as `claim`, and retirement (R112). A general `revision_authority` answer supplies
 `question`, resolving to a string or the `id`/`reference` of a question previously
 recorded in the checkpoint; Pod preserves that reference. A question added in the
 same write is not a previously recorded question. A relayed general revision
@@ -185,8 +188,8 @@ Every `pod-authorization/v1` scope (`publish`, `merge`, `release`, `deploy`) req
 `session`; a relayed authorization refuses `relayed_authorization_refused` and names
 typed consent in the coordinator's session as its next action. Every other kind
 requires session too, including owner handoff R105, runtime continuity R98,
-direct-user route/delegation constraints, general revisions/reopen without a recorded-question answer, external-result
-acceptance, user-cleared route failures and Governor efficiency exceptions. Such a relay refuses
+direct-user route/delegation constraints, general revisions/reopen without a recorded-question answer,
+user-cleared route failures and Governor efficiency exceptions. Such a relay refuses
 `relayed_decision_refused`. Missing/partial relay or relay alongside session refuses.
 A recorded question answer permits only the answer it conveys; a mailbox message
 alone is never a decision or authority. The coordinator classifies the channel
@@ -195,14 +198,21 @@ relay's claimed owner source.
 
 Channels remain with revision history, governance decisions, obligation sources,
 withdrawals, reopens, constraints, continuity decisions, claims, retirement entries,
-acceptances, route-failure clear decisions and Governor authorization/exception rows. Status and closure reports
+route-failure clear decisions and Governor authorization/exception rows. Status and closure reports
 show the channel of every owner decision they list, and distinguish derived
 adoption from owner decisions. Channel-bearing records that earlier readers cannot
-read faithfully refuse rather than silently becoming session decisions; earlier
+read faithfully carry the `decision_channels` discriminator whenever a stored channel
+or relay key is present, in contexts and Governor journals alike, so those readers
+refuse rather than misread carried consent or relay provenance; earlier
 records, claims, closures and retirements retain their original meaning.
 
-- <a id="a339"></a>**A339** — Every decision surface uses the shared validator, stores default `session` or the supplied honest channel and includes it in status/report projections; derived decisions remain distinct.
+Owner revision decisions have no count cap. R121 moves earlier rows unchanged and
+the record's byte capacity contract governs fit; `governance_history` retains its
+separate 64-candidate and 64-decision bounds.
+
+- <a id="a339"></a>**A339** — Every owner-decision surface uses the shared validator, stores default `session` or the supplied honest channel and includes it in status/report projections; derived decisions remain distinct.
 - <a id="a340"></a>**A340** — A complete verified-source relay is accepted for snapshot adoption, withdrawal, a recorded question answer, claim and retirement, preserving the reference/source and showing `relayed` in status and closure reports.
-- <a id="a341"></a>**A341** — All authorization scopes refuse relayed consent with `relayed_authorization_refused`; handoff, runtime continuity, constraints, acceptance, Governor exceptions and other unlisted kinds refuse `relayed_decision_refused`, naming session consent as the next action.
-- <a id="a342"></a>**A342** — Missing or partial relay, empty/oversized reference or owner source, a relay with session, unsupported channel or an unresolved question reference refuses without a write; newly supplied questions cannot authorize the same write.
-- <a id="a343"></a>**A343** — Genuine earlier-writer records, claims, closures and retirements read unchanged with session channels marked as earlier records; earlier readers accept fields they can read faithfully or refuse new records, preserving bytes, and never reinterpret a relay as session.
+- <a id="a341"></a>**A341** — All authorization scopes refuse relayed consent with `relayed_authorization_refused`; handoff, runtime continuity, constraints, Governor exceptions and other unlisted kinds refuse `relayed_decision_refused`, naming session consent as the next action.
+- <a id="a342"></a>**A342** — Missing or partial relay, empty/oversized reference or owner source, a relay with session, unsupported channel or an unresolved question reference refuses without a write; newly supplied questions cannot authorize the same write. Through public `internal governor` merge/publish and `governor-execute` publish, a declared relay missing its complete relay or session consent carrying a relay refuses `invalid_decision_relay`, names consent typed in the coordinator's own session and writes no journal row.
+- <a id="a343"></a>**A343** — Genuine earlier-writer records, claims, closures and retirements read unchanged with session channels marked as earlier records; earlier readers refuse contexts and journals with stored channel or relay keys, preserving bytes. Genuine 0.13.3 refuses a candidate-written carried journal rather than losing carried-consent recognition; the current reader still detects its carried consent, and R118 preflight counts the marker before any claim write. A pre-channel retirement replays the same decision with omitted or explicit default `session` and no relay; other decisions still refuse `objective_retired`.
+- <a id="a356"></a>**A356** — Eighty successive owner-authorized writes are accepted and read back with every revision decision, without a count refusal; the record byte capacity contract and R121 relocation still govern fit.

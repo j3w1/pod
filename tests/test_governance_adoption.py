@@ -6,7 +6,7 @@ from unittest.mock import patch
 from pod import ledger
 from pod.governance import require_governance_current
 from pod.ledger import read
-from tests.kernel_support import KernelCase, git, governance_commit, governance_policy, assurance_review
+from tests.kernel_support import KernelCase, USER, git, governance_commit, governance_policy, assurance_review
 from tests import test_delivery as delivery
 
 
@@ -140,8 +140,38 @@ class GovernanceAdoptionTests(KernelCase):
         def unreadable(project, argv, **kwargs):
             return None if argv[:2] == ["cat-file", "blob"] else original(project, argv, **kwargs)
         with patch("pod.ledger._git", side_effect=unreadable):
-            self.refused("governance_unavailable", "governance_unavailable", self.write, self.stored())
+            error = self.refused("governance_changed", "governance_changed", self.write, self.stored())
+        self.assertIn("the target branch moved since governance was bound", str(error))
+        self.assertIn("write a checkpoint with governance_refresh", error.detail["next_action"])
         self.assertEqual(read(self.project, "objective"), before)
+
+    def test_owner_refresh_still_observes_unreadable_excluded_source(self):
+        self.write([self.criterion()], governance={"base_ref": "target", "exclude": ["CLAUDE.md"]},
+                   revision_authority=USER)
+        self.commit("CLAUDE.md", "x" * (1_048_576 + 1), "oversized excluded source")
+        target = self.advance("AGENTS.md", "changed policy\n")
+        before = read(self.project, "objective")
+        self.refused("governance_unavailable", "governance_unavailable", self.write, self.stored(),
+                     governance_refresh=True, governance={"base_ref": "refs/remotes/origin/target", "base": target},
+                     revision_authority=USER)
+        self.assertEqual(read(self.project, "objective"), before)
+
+    def test_bound_base_observation_still_reads_excluded_source(self):
+        from pod.ledger import kernel_context
+        self.write([self.criterion()], governance={"base_ref": "target", "exclude": ["CLAUDE.md"]},
+                   revision_authority=USER)
+        state = read(self.project, "objective")
+        original = ledger._git
+        seen = []
+        def observe(project, argv, **kwargs):
+            if argv[:2] == ["ls-tree", "-z"] and argv[-1] == "CLAUDE.md":
+                seen.append(argv)
+                return None
+            return original(project, argv, **kwargs)
+        with patch("pod.ledger._git", side_effect=observe):
+            observed = kernel_context(self.project, "objective", state, None)["bound_governance"](state["checkpoint"]["governance"])
+        self.assertTrue(seen)
+        self.assertNotEqual(observed["status"], "observed")
 
     def test_excluded_sources_do_not_participate_in_adoption(self):
         self.write([self.criterion()], governance={"base_ref": "target", "exclude": ["CLAUDE.md"]},
@@ -220,5 +250,34 @@ class DeliveredAdoptionTests(KernelCase):
             case.checkpoint()
             case.op("governor-outcome", record_id=decided["record_id"], outcome="PASS", provider={"merge_commit": result})
             self.assertEqual(case.checkpoint(delivery={"record": decided["record_id"]})["checkpoint"]["delivery"]["base"], case.base)
+        finally:
+            case.doCleanups()
+
+    def test_earlier_shaped_merge_keeps_original_base_through_adoption_and_delivery(self):
+        """Synthetic 0.13.3 shape: its merge rows lack governance_binding."""
+        import json
+        from pod.governor import _record_path
+        from tests.test_finalization import ResumeTests
+        patch.stopall()
+        case = ResumeTests()
+        case.setUp()
+        try:
+            decided = case.op("governor", action=case.merge())
+            path = _record_path(case.project, "objective")
+            journal = json.loads(path.read_bytes())
+            row = next(row for row in journal["actions"] if row["record_id"] == decided["record_id"])
+            self.assertIsNotNone(row.pop("governance_binding"))
+            path.write_text(json.dumps(journal))
+            git(case.project, "checkout", "-q", "target")
+            git(case.project, "merge", "--no-ff", "-qm", "merge", "candidate")
+            result = git(case.project, "rev-parse", "HEAD")
+            git(case.project, "update-ref", "refs/remotes/origin/target", result)
+            case.checkpoint()
+            adopted = read(case.project, "objective")["checkpoint"]
+            self.assertEqual(adopted["governance"]["proof_base"], case.base)
+            case.op("governor-outcome", record_id=decided["record_id"], outcome="PASS", provider={"merge_commit": result})
+            delivery_row = case.checkpoint(delivery={"record": decided["record_id"]})["checkpoint"]["delivery"]
+            self.assertEqual((delivery_row["base"], delivery_row["result"], delivery_row["method"]),
+                             (case.base, result, "merge"))
         finally:
             case.doCleanups()

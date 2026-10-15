@@ -38,7 +38,7 @@ class AcceptanceTests(AcceptanceCase):
     def test_accepted_and_rejected_sources_are_recorded_with_their_sequence(self):
         written = self.accept(ACCEPTED, REJECTED)["checkpoint"]
         seq = written["seq"]
-        self.assertEqual(self.recorded(), [{**ACCEPTED, "channel": "session", "seq": seq}, {**REJECTED, "channel": "session", "seq": seq}])
+        self.assertEqual(self.recorded(), [{**ACCEPTED, "seq": seq}, {**REJECTED, "seq": seq}])
         self.assertEqual(self.public_rows()["O1"]["acceptances"], self.recorded())
         self.assertEqual(map_read(self.project, "objective")["acceptances"], {"O1": self.recorded()})
         self.assertNotIn("acceptances", map_read(self.project, "objective")["obligations"][0])
@@ -49,7 +49,7 @@ class AcceptanceTests(AcceptanceCase):
         self.write(map_read(self.project, "objective")["obligations"])  # Restatable rows omit it.
         self.accept(ACCEPTED)  # An identical restatement adds nothing.
         later = self.accept(REJECTED)["checkpoint"]["seq"]
-        self.assertEqual(self.recorded(), [{**ACCEPTED, "channel": "session", "seq": first}, {**REJECTED, "channel": "session", "seq": later}])
+        self.assertEqual(self.recorded(), [{**ACCEPTED, "seq": first}, {**REJECTED, "seq": later}])
 
     def test_a_recorded_source_is_immutable_and_rows_cannot_forge_records(self):
         self.accept(ACCEPTED)
@@ -90,7 +90,16 @@ class AcceptanceTests(AcceptanceCase):
         self.assertIsNotNone(closed["closure"])
         self.assertEqual([row["source"] for row in self.public_rows()["O1"]["acceptances"]],
                          [ACCEPTED["source"], REJECTED["source"]])
-        self.assertEqual([row["decision"]["channel"] for row in closed["closure"]["report"]["owner_decisions"]], ["session", "session"])
+        self.assertNotIn("acceptances", json.dumps(closed["closure"]["report"]))
+        from pod.status import status
+        from pod.util import map_decisions
+        self.assertFalse(map_decisions(closed))
+        with patch.object(OrcaPort, "read_native", autospec=True,
+                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
+            observed = status(self.project, None, objective="objective", current_run_fn=lambda: {"run": None})
+        self.assertNotIn("owner_decisions", observed)
+        self.assertEqual([row["source"] for row in observed["obligations"]["obligations"][0]["acceptances"]],
+                         [ACCEPTED["source"], REJECTED["source"]])
         self.refused("objective_closed", None, self.accept, {**ACCEPTED, "source": "op-later"})
 
     def test_only_the_recorded_coordinator_writes_records(self):

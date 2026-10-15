@@ -73,7 +73,8 @@ class DecisionCompatibilityTests(KernelCase):
         rows = {row["id"]: row for row in status_projection(map_of(state), ctx)["map"]["obligations"]}
         self.assertEqual((rows["A"]["referent"]["channel"], rows["A"]["referent"]["channel_recorded"]), ("session", False))
         acceptance = rows["O1"]["acceptances"][0]
-        self.assertEqual((acceptance["channel"], acceptance["channel_recorded"]), ("session", False))
+        self.assertEqual(acceptance, state["checkpoint"]["obligations"][0]["acceptances"][0])
+        self.assertNotIn("channel", acceptance)
         self.assertEqual(state, before)
 
     def test_genuine_earlier_claim_reads_without_rewrite(self):
@@ -127,6 +128,41 @@ print(json.dumps(outcomes))
         self.intake(revision_authority=USER)
         from pod.ledger import read
         self.assert_earlier_refuses(read(self.project, "objective"))
+
+    def test_genuine_earlier_reader_refuses_session_carried_consent(self):
+        from pod.governor import _check_carried_consent, _read_journal, _record_path, validate_authorization
+        from tests.test_carried_claim import CarriedCase
+        patch.stopall()
+        case = CarriedCase()
+        case.setUp()
+        try:
+            case.lost_with(case.merge_decision)
+            case.carry()
+            path = _record_path(case.project, "successor")
+            before = path.read_bytes()
+            result = self.earlier('''import json, sys
+from pathlib import Path
+from pod import __version__
+from pod.errors import PodError
+from pod.governor import _read_journal, _check_carried_consent, validate_authorization
+assert __version__ == "0.13.3"
+try:
+    journal = _read_journal(Path(sys.argv[1]))
+except PodError as exc:
+    print(json.dumps({"refused": exc.code}))
+else:
+    reasons = []
+    _check_carried_consent({"authorization": validate_authorization(json.loads(sys.argv[2]))}, journal, reasons)
+    print(json.dumps({"misread": [row["code"] for row in reasons]}))
+''', path, json.dumps(case.consent))
+            self.assertEqual(json.loads(result), {"refused": "invalid_governor"}, result)
+            reasons = []
+            _check_carried_consent({"authorization": validate_authorization(case.consent)}, _read_journal(path), reasons)
+            self.assertEqual([row["code"] for row in reasons], ["authorization_missing"])
+            self.assertEqual(path.read_bytes(), before)
+            self.assert_earlier_refuses(case.state())
+        finally:
+            case.doCleanups()
 
     def test_earlier_reader_and_writer_refuse_new_claim_relay(self):
         from tests.test_succession import SuccessionCase

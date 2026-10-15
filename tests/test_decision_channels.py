@@ -69,15 +69,13 @@ class DecisionChannelTests(KernelCase):
         self.assertEqual((decision["channel"], decision["question"]), ("relayed", "owner-question"))
         self.assertEqual(result["checkpoint"]["obligations"][-1]["source"]["relay"], RELAY)
 
-    def test_session_revision_obligation_reopen_and_acceptance_records(self):
+    def test_session_revision_obligation_and_reopen_records(self):
         self.intake()
         user = {"id": "U", "kind": "criterion", "provenance": "user_direct", "check": "new decision",
                 "source": {"instruction": "Add criterion"}, "state": "withdrawn",
                 "withdrawal": {"by": "user_direct", "reason": "scoped withdrawal"}}
         rows = [self.criterion("satisfied", evidence=[self.proof("O1")]), user]
-        closed = self.write(rows, close=True, revision_authority=USER,
-                            acceptances=[{"obligation": "O1", "source": "external-1", "verdict": "accepted",
-                                          "candidate": self.candidate, "evidence": "owner result"}])["checkpoint"]
+        closed = self.write(rows, close=True, revision_authority=USER)["checkpoint"]
         self.assertTrue(all(row["decision"]["channel"] == "session" for row in map_decisions(closed)))
         reopened = self.write(self.stored(), reopen=True, revision_authority=USER)["checkpoint"]
         self.assertEqual(reopened["reopened"][-1]["channel"], "session")
@@ -120,13 +118,14 @@ class DecisionChannelTests(KernelCase):
 
 class SharedDecisionTests(unittest.TestCase):
     def test_complete_relays_are_accepted_only_for_the_exhaustive_kind_list(self):
-        for kind in ("question", "governance", "withdrawal", "continuation", "claim", "retirement"):
+        for kind in ("question", "governance", "withdrawal", "claim", "retirement"):
             with self.subTest(kind=kind):
                 self.assertEqual(owner_decision({**USER, "channel": "relayed", "relay": RELAY}, kind=kind)["relay"], RELAY)
-        for kind in ("handoff", "continuity", "constraint", "acceptance", "reopen", "revision", "compaction", "governor_exception"):
-            with self.subTest(kind=kind), self.assertRaises(PodError) as caught:
-                owner_decision({**USER, "channel": "relayed", "relay": RELAY}, kind=kind)
-            self.assertEqual(caught.exception.code, "relayed_decision_refused")
+        for kind in ("handoff", "continuity", "continuation", "constraint", "reopen", "revision", "compaction", "governor_exception"):
+            with self.subTest(kind=kind):
+                with self.assertRaises(PodError) as caught:
+                    owner_decision({**USER, "channel": "relayed", "relay": RELAY}, kind=kind)
+                self.assertEqual(caught.exception.code, "relayed_decision_refused")
 
     def test_incomplete_or_misclassified_relays_refuse(self):
         for value in ({**USER, "channel": "relayed"}, {**USER, "channel": "session", "relay": RELAY},
@@ -174,6 +173,65 @@ class SharedDecisionTests(unittest.TestCase):
         self.assertFalse(decision_channel(stored)["channel_recorded"])
         self.assertEqual(stored, before)
 
+    def test_eighty_owner_authorized_writes_have_no_revision_count_cap(self):
+        from pod.obligations import accept_write, validate_map_record
+        from tests.test_obligations import ctx, intake, rows_of, write
+        state = accept_write(None, intake(revision_authority=USER), ctx())
+        for index in range(1, 80):
+            state = accept_write(state, write(state, rows_of(state),
+                                 revision_authority={**USER, "instruction": f"Owner revision {index}"}), ctx())
+            validate_map_record(state)
+        self.assertEqual(len(state["revision_decisions"]), 80)
+        self.assertEqual([row["seq"] for row in state["revision_decisions"]], list(range(1, 81)))
+
+
+class PublicAuthorizationChannelTests(unittest.TestCase):
+    """Use all three public operations; refused input must never reserve an effect."""
+
+    def setUp(self):
+        from tests.test_finalization import ResumeTests
+        self.case = ResumeTests()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+
+    def check_authorizations(self, operation, *, merge=False):
+        from pod.governor import _record_path
+        from tests.kernel_support import action
+        case = self.case
+        path = _record_path(case.project, "objective")
+        before = path.read_bytes()
+        calls = deepcopy(case.remote.calls)
+        shapes = (
+            ({"channel": "relayed", "relay": RELAY}, "relayed_authorization_refused"),
+            ({"channel": "relayed"}, "invalid_decision_relay"),
+            ({"channel": "relayed", "relay": {}}, "invalid_decision_relay"),
+            ({"channel": "relayed", "relay": {"reference": "message"}}, "invalid_decision_relay"),
+            ({"channel": "relayed", "relay": {"reference": "message", "owner_source": ""}}, "invalid_decision_relay"),
+            ({"channel": "relayed", "relay": {"reference": "r" * 513, "owner_source": "verified"}}, "invalid_decision_relay"),
+            ({"channel": "session", "relay": RELAY}, "invalid_decision_relay"),
+        )
+        for fields, code in shapes:
+            with self.subTest(fields=fields):
+                request = (case.merge() if merge else action(candidate=case.observed["commit"],
+                    target="origin/candidate", unit="delivery", effects=["workflow:ci.yml"],
+                    authorization=case.consent("publish")))
+                request["authorization"].update(fields)
+                with self.assertRaises(PodError) as caught:
+                    case.op(operation, action=request)
+                self.assertEqual(caught.exception.code, code)
+                self.assertIn("typed in the coordinator's own session", caught.exception.detail["next_action"])
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(case.remote.calls, calls)
+
+    def test_internal_governor_merge_refuses_relay_without_journal_write(self):
+        self.check_authorizations("governor", merge=True)
+
+    def test_internal_governor_publish_refuses_relay_without_journal_write(self):
+        self.check_authorizations("governor")
+
+    def test_governor_execute_publish_refuses_relay_without_journal_write(self):
+        self.check_authorizations("governor-execute")
+
 
 class ClaimChannelTests(succession.SuccessionCase):
     def test_relayed_claim_records_source_and_status_channel(self):
@@ -194,6 +252,27 @@ class RetirementChannelTests(retirement.RetirementCase):
         self.assertEqual(result["objectives"][0]["retirement"]["channel"], "relayed")
         self.assertEqual(self.state()["historical_retirement"]["relay"], RELAY)
         self.assertIn("Decision retirement: relayed", self.text_status())
+
+    def test_earlier_retirement_replays_explicit_default_session_only(self):
+        """Synthetic earlier entry: the same digest rule before channels existed."""
+        from pod.ledger import objective_root
+        from pod.util import digest
+        import json
+        self.delivered()
+        decision = self.decide()
+        self.assertEqual(self.retire(decision)["status"], "retired")
+        path = objective_root(self.project, "objective") / "context.json"
+        state = json.loads(path.read_bytes())
+        state["historical_retirement"].pop("channel")
+        state["historical_retirement"]["decision"] = digest(decision)
+        state.pop("decision_channels", None)
+        path.write_text(json.dumps(state))
+        before = self.snapshot()
+        self.assertEqual(self.retire({**decision, "channel": "session"})["objectives"][0]["status"], "replayed")
+        for changes in ({"instruction": "Different decision"}, {"channel": "relayed", "relay": RELAY}):
+            refused = self.retire({**decision, **changes})["objectives"][0]
+            self.assertEqual((refused["status"], refused["condition"]), ("refused", "objective_retired"))
+        self.assertEqual(self.snapshot(), before)
 
 
 class HandoffChannelTests(handoff.HandoffCase):

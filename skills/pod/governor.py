@@ -228,7 +228,14 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
         return None
     from .util import DECISION_FIELDS, owner_decision
     record = exact(value, AUTHORIZATION_FIELDS | {"target"} | DECISION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
-    record = owner_decision(record, kind="authorization")
+    try:
+        record = owner_decision(record, kind="authorization")
+    except PodError as exc:
+        if exc.code in ("invalid_decision_relay", "invalid_reference", "invalid_owner_source"):
+            action = "obtain the owner's consent typed in the coordinator's own session for this exact candidate and scope"
+            raise PodError("invalid_decision_relay", f"{exc}. Next: {action}",
+                           {**(exc.detail or {}), "next_action": action}) from None
+        raise
     if record["schema"] != AUTHORIZATION_SCHEMA:
         raise PodError("invalid_authorization", "Authorization schema is unsupported")
     for field in ("authorized_by", "reference", "target"):
@@ -570,7 +577,7 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
             authorized = validate_authorization(action.get("authorization"),
                                                 candidate=candidate, tree=tree, kind=scope, target=target)
         except PodError as exc:
-            if exc.code == "relayed_authorization_refused":
+            if exc.code in ("relayed_authorization_refused", "invalid_decision_relay"):
                 raise
             authorized = None
         if authorized is None:

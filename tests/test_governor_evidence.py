@@ -468,6 +468,13 @@ class ProviderEventTests(EvidenceCase):
             with self.subTest(case=case):
                 port = FakePort(blind=True)
                 _, derived = self.published(port)
+                # Preserve the genuine candidate-written validation row, which has no
+                # authorization, so the older writer can bind it without R120 fields.
+                journal = _read_journal(self.journal)
+                journal["actions"] = [row for row in journal["actions"] if row["record_id"] == derived]
+                journal.pop("decision_channels")
+                self.assertNotIn('"channel"', json.dumps(journal))
+                self.journal.write_text(json.dumps(journal))
                 port.blind = False
                 run = port._start(workflow, COMMIT, event="push", created_at=created)
                 port.complete(run["id"], "success")
@@ -837,7 +844,7 @@ class MergeOutcomeTests(KernelCase):
 
 
 class EarlierReaderTests(EvidenceCase):
-    """R6 — the released 0.12.0 source reads a journal with R4's new fields unchanged."""
+    """The released 0.12.0 reads channel-free R115 fields and refuses R120 decision fields."""
 
     RELEASED = "5f7298bab47c4a3263496dc2a7fe50ecfcda0530"
 
@@ -856,20 +863,40 @@ class EarlierReaderTests(EvidenceCase):
                         "skills", "VERSION"], check=True)
         with tarfile.open(archive) as bundle:
             bundle.extractall(released, filter="data")
+        # The derived validation row is genuinely candidate-written and has no authorization.
+        # Its R115 readback fields are preserved exactly in a separate channel-free journal.
+        control = _read_journal(self.journal)
+        control["actions"] = [row for row in control["actions"] if row["action"].get("authorization") is None]
+        self.assertTrue(control["actions"])
+        self.assertTrue(all(row.get("exception") is None for row in control["actions"]))
+        control.pop("decision_channels")
+        self.assertNotIn('"channel"', json.dumps(control))
+        control_root = self.root / "channel-free-validation-control"
+        control_root.mkdir()
+        control_path = control_root / "governor.json"
+        control_path.write_text(json.dumps(control))
+        control_before = control_path.read_bytes()
         program = ("import json, sys\nfrom pathlib import Path\nfrom pod import __version__\n"
+                   "from pod.errors import PodError\n"
                    "from pod.governor import _read_journal, status_at\n"
                    "assert __version__ == '0.12.0', __version__\n"
+                   "try:\n    _read_journal(Path(sys.argv[2]))\n"
+                   "except PodError as exc:\n    journal_error = exc.code\n"
+                   "else:\n    journal_error = None\n"
                    "root = Path(sys.argv[1])\njournal = _read_journal(root / 'governor.json')\n"
-                   "print(json.dumps({'rows': journal['actions'], 'status': status_at(root)['actions']}))\n")
+                   "print(json.dumps({'rows': journal['actions'], 'status': status_at(root)['actions'],\n"
+                   "                  'journal_error': journal_error}))\n")
         before = self.journal.read_bytes()
-        read = subprocess.run([sys.executable, "-c", program, str(objective_root(self.project, "objective"))],
+        read = subprocess.run([sys.executable, "-c", program, str(control_root), str(self.journal)],
                               cwd=released, env={**os.environ, "PYTHONPATH": str(released / "skills")},
                               capture_output=True, text=True)
         self.assertEqual(read.returncode, 0, read.stderr)
         earlier = json.loads(read.stdout)
-        self.assertEqual(earlier["rows"], _read_journal(self.journal)["actions"])
+        self.assertEqual(earlier["journal_error"], "invalid_governor")
+        self.assertEqual(earlier["rows"], control["actions"])
         self.assertEqual({row["record_id"]: row["outcome"] for row in earlier["status"]},
-                         {row["record_id"]: row["outcome"] for row in _read_journal(self.journal)["actions"]})
+                         {row["record_id"]: row["outcome"] for row in control["actions"]})
+        self.assertEqual(control_path.read_bytes(), control_before)
         self.assertEqual(self.journal.read_bytes(), before)
 
 

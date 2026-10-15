@@ -410,9 +410,9 @@ def _structure(raw: Any) -> dict:
     return ob
 
 
-def _acceptance(raw: Any, fields: set[str], *, obligation: str | None, stored: bool = True) -> dict:
+def _acceptance(raw: Any, fields: set[str], *, obligation: str | None) -> dict:
     """One coordinator judgement of an outside result; the source is the caller's opaque id."""
-    row = _exact(raw, fields | DECISION_FIELDS, fields, "acceptance", obligation=obligation)
+    row = _exact(raw, fields, fields, "acceptance", obligation=obligation)
     if not isinstance(row["source"], str) or not _SOURCE.fullmatch(row["source"]):
         raise refuse("obligation_invalid", "malformed",
                      "an acceptance source is 1-128 printable characters without spaces",
@@ -422,7 +422,7 @@ def _acceptance(raw: Any, fields: set[str], *, obligation: str | None, stored: b
                      field="verdict", **({"obligation": obligation} if obligation is not None else {}))
     _text(row["candidate"], "candidate", limit=128, obligation=obligation)
     _text(row["evidence"], "evidence", limit=1024, obligation=obligation)
-    return owner_decision(row, kind="acceptance", stored=stored)
+    return row
 
 
 def _acceptance_records(raw: Any, *, obligation: str) -> list[dict]:
@@ -464,11 +464,11 @@ def _write_acceptances(rows: dict[str, dict], prior_rows: dict[str, dict], reque
                          record="acceptances")
         ob = rows[key]
         request = _acceptance({name: item for name, item in raw.items() if name != "obligation"},
-                              _ACCEPTANCE_FIELDS, obligation=key, stored=False)
+                              _ACCEPTANCE_FIELDS, obligation=key)
         recorded = {row["source"]: row for row in ob.get("acceptances", [])}
         if request["source"] in recorded:
             earlier = {name: item for name, item in recorded[request["source"]].items() if name != "seq"}
-            if owner_decision(earlier, kind="acceptance") != request:
+            if earlier != request:
                 raise refuse("obligation_invalid", "acceptance_conflict",
                              "a recorded acceptance is immutable; record a new result under a new source",
                              obligation=key, field="source")
@@ -1014,8 +1014,6 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         decisions = deepcopy((prior_map or {}).get("revision_decisions", []))
         if authority is not None:
             decisions.append({"seq": seq, "kind": authority_kind, **authority})
-        if len(decisions) > 64:
-            raise refuse("obligation_invalid", "decision_history_full", "owner revision history is full", record="revision decisions")
         state["revision_decisions"] = decisions
     for ob in rows.values():
         if ob["state"] == "satisfied":
@@ -1583,8 +1581,8 @@ def validate_map_record(state: dict) -> None:
             raise refuse("obligation_invalid", "malformed", "persisted map sequence and revision are positive integers", record="persisted map")
     if "revision_decisions" in value:
         decisions = value["revision_decisions"]
-        if not isinstance(decisions, list) or len(decisions) > 64:
-            raise refuse("obligation_invalid", "malformed", "revision decisions are bounded", record="revision decisions")
+        if not isinstance(decisions, list):
+            raise refuse("obligation_invalid", "malformed", "revision decisions are a list", record="revision decisions")
         for row in decisions:
             _exact(row, DECISION_FIELDS | {"seq", "question", "kind"}, {"seq", "provenance", "instruction", "kind"}, "revision decision")
             if type(row["seq"]) is not int or not 1 <= row["seq"] <= value["seq"]:
@@ -2195,8 +2193,7 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                     "observations": state.get("observations"), "label": label,
                     "obligations": [{"id": ob["id"], "state": ob["state"],
                                      "referent": referent(ob),
-                                     **({"acceptances": [decision_channel(row) if isinstance(row, dict) else deepcopy(row)
-                                                         for row in ob["acceptances"]]}
+                                     **({"acceptances": deepcopy(ob["acceptances"])}
                                         if ob.get("acceptances") else {})}
                                     for ob in rows]},
             "lines": lines}
