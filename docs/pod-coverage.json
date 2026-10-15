@@ -5391,7 +5391,9 @@
         "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_in_flight_callers_after_landing_preserve_held_success_P2",
         "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_expired_recovery_rebind_then_holder_success_is_E1",
         "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_stale_result_cannot_replace_a_newer_completed_request",
-        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_recovery_retains_success_recorded_during_its_read"
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_recovery_retains_success_recorded_during_its_read",
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_presend_refusal_never_replaces_concurrent_intent_P13",
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_pending_intent_names_times_and_holds_after_clock_setback"
       ],
       "status": "NOT_RUN"
     },
@@ -5404,7 +5406,8 @@
         "tests.test_pod_ticks_corrections.ReadbackCorrections.test_closed_in_window_rebinds_own_but_keeps_B3_until_reopen",
         "tests.test_pod_ticks_corrections.ReadbackCorrections.test_amendment_in_window_rebinds_own_but_keeps_B2",
         "tests.test_pod_ticks_corrections.ReadbackCorrections.test_role_in_window_keeps_body_observation_and_B2",
-        "tests.test_pod_ticks_corrections.ReadbackCorrections.test_unconfirmed_closed_in_window_rebinds_ambiguously"
+        "tests.test_pod_ticks_corrections.ReadbackCorrections.test_unconfirmed_closed_in_window_rebinds_ambiguously",
+        "tests.test_pod_ticks_corrections.ReadbackCorrections.test_unreadable_amendment_in_window_rebinds_own_with_B5"
       ],
       "status": "NOT_RUN"
     },
@@ -5414,7 +5417,8 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_pod_ticks_corrections.BoundedCorrections.test_sixty_unknown_numbers_leave_context_unchanged"
+        "tests.test_pod_ticks_corrections.BoundedCorrections.test_sixty_unknown_numbers_leave_context_unchanged",
+        "tests.test_pod_ticks_corrections.BoundedCorrections.test_unknown_numbers_on_closed_issue_persist_nothing_P6b"
       ],
       "status": "NOT_RUN"
     },
@@ -5440,7 +5444,18 @@
         "tests.test_pod_ticks_protocol.ProtocolTests.test_hand_tick_unproven_is_left_named_D9",
         "tests.test_pod_ticks_protocol.ProtocolTests.test_hand_tick_unmapped_is_left_named_D10",
         "tests.test_pod_ticks_protocol.ProtocolTests.test_previously_mapped_hand_tick_is_left_when_mapping_lost_D10",
-        "tests.test_pod_ticks_protocol.ProtocolTests.test_lost_response_landed_tick_is_ambiguous_E3_D11"
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_lost_response_landed_tick_is_ambiguous_E3_D11",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D3_keeps_label_after_B3_P10",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D5_keeps_label_after_B3_P10",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D8_keeps_label_after_B3_P10",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D9_keeps_label_after_B3_P10",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D11_keeps_label_after_B3_P10",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D3_keeps_label_after_B2",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D5_keeps_label_after_B2",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D8_keeps_label_after_B2",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D9_keeps_label_after_B2",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D11_keeps_label_after_B2",
+        "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D3_keeps_label_after_body_drift_C2"
       ],
       "status": "NOT_RUN"
     }

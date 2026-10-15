@@ -34,6 +34,22 @@ def empty() -> dict:
             "authors": {}, "requests": {}, "closure_blocked": [], "last_rebind": None}
 
 
+def _intent_window(request: dict) -> dict:
+    from .github import MUTATION_TIMEOUT_S
+    if request["phase"] != "intent" or "intent_at" not in request:
+        return {}
+    return {"intent_at": request["intent_at"],
+            "retry_after": request["intent_at"] + MUTATION_TIMEOUT_S + INTENT_MARGIN_S}
+
+
+def _pending_error(request: dict | None, message: str) -> PodError:
+    window = _intent_window(request) if request is not None else {}
+    if window:
+        message += (f"; intent_at={window['intent_at']}, in flight until "
+                    f"retry_after={window['retry_after']} (Unix seconds)")
+    return PodError("pod_tick_pending", message, {**({"pod": request["pod"]} if request else {}), **window})
+
+
 def validate(value: object) -> None:
     """Optional representation: older contexts are read without conversion."""
     row = exact(value, set(empty()), set(empty()), name="pod_ticks")
@@ -238,7 +254,7 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
         # Only a request after the latest checkpoint/report can justify leaving
         # a due tick blocked at closure. seq is unchanged by tick rebinds.
         recent = request is not None and request["seq"] == (map_state or {}).get("seq", 0)
-        if recent and request["block"] is not None and (direction or request["block"].get("row") in ("B2", "B3")):
+        if direction and recent and request["block"] is not None:
             label, block = "blocked", request["block"]
         if terminal:
             direction = None
@@ -250,11 +266,21 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
                "authorship": author, "criteria": criteria, "proven": proven,
                "status": label, "direction": direction, "due": bool(direction) and not terminal,
                "blocked": block, "facts_current": fresh}
+        if (recent and request["phase"] == "completed" and request["block"] is not None
+                and request["block"].get("row") in ("B2", "B3", "B5")
+                and (request["result"] or {}).get("result") in ("accepted", "unconfirmed")
+                and (request["readback"] or {}).get("body_sha256") == request["intended"]
+                and source == {**request["source"], "body_sha256": request["intended"]}
+                and ledger["last_rebind"] == digest(source)):
+            row["hold"] = deepcopy(request["block"])
         if number in closed_blocks:
             row["blocked_at_closure"] = closed_blocks[number]
         if direction:
             request_body = {"project": str(project), "objective": objective, "owner": owner or state.get("owner"), "pod": number}
             row["request"] = {"operation": "pod-tick", "input": request_body}
+            window = _intent_window(request) if request is not None else {}
+            if window:
+                row["request"].update(window, status="in_flight" if time() < window["retry_after"] else "recovery_ready")
             row["command"] = "pod internal pod-tick --input - <<'JSON'\n" + json.dumps(request_body, sort_keys=True) + "\nJSON"
             waiting = [key for key, admission in state.get("admissions", {}).items()
                        if admission["state"] in ("reserved", "unresolved")]
@@ -343,7 +369,7 @@ class _ReadbackPort:
 def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
     """One request: locked intent, unlocked send, held result, readback, atomic receipt/rebind."""
     from . import ledger as store
-    from .github import GhPort, MUTATION_TIMEOUT_S, flip_pod_checkbox, issue_recheck_live, pod_lines
+    from .github import GhPort, flip_pod_checkbox, issue_recheck_live, pod_lines
     if type(pod) is not int or not 0 <= pod <= 999_999_999:
         raise PodError("invalid_request", "pod must be a PoD number from 0 to 999999999")
     path, key = store._path(project, objective), str(pod)
@@ -359,14 +385,12 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
         ledger = state.setdefault("pod_ticks", empty())
         pending = [(number, row) for number, row in ledger["requests"].items() if row["phase"] != "completed"]
         if pending and pending[0][0] != key:
-            raise PodError("pod_tick_pending", "Recover the pending PoD request before another tick",
-                           {"pod": int(pending[0][0])})
+            raise _pending_error(pending[0][1], "Recover the pending PoD request before another tick")
         recovering = bool(pending)
         request = deepcopy(pending[0][1]) if pending else None
-        if (recovering and request["phase"] == "intent" and "intent_at" in request
-                and time() - request["intent_at"] < MUTATION_TIMEOUT_S + INTENT_MARGIN_S):
-            raise PodError("pod_tick_pending", "The PoD request is still in flight; recover after its send timeout",
-                           {"pod": pod})
+        window = _intent_window(request) if request is not None else {}
+        if window and time() < window["retry_after"]:
+            raise _pending_error(request, "The PoD request is still in flight; recover after its send timeout")
         prior_request = deepcopy(ledger["requests"].get(key))
         seq = (store.map_of(state) or {}).get("seq", 0)
         source = deepcopy(source)
@@ -403,7 +427,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                 raise PodError("coordinator_conflict", "Tick belongs to the recorded coordinator")
             ticks = recorded.setdefault("pod_ticks", empty())
             if ticks["requests"].get(key) != prior_request:
-                raise PodError("pod_tick_pending", "PoD request changed during the immediate read")
+                raise _pending_error(ticks["requests"].get(key), "PoD request changed during the immediate read")
             if row is not None or live is not None and pod in pod_lines(live["body"]):
                 ticks["requests"][key] = deepcopy(request)
                 if live is not None:
@@ -423,8 +447,9 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
         if state["checkpoint"].get("objective_source") != source or (store.map_of(state) or {}).get("seq", 0) != seq:
             raise PodError("checkpoint_binding_changed", "Checkpoint changed during the immediate tick read; request again")
         ledger = state.setdefault("pod_ticks", empty())
-        if any(row["phase"] != "completed" for row in ledger["requests"].values()):
-            raise PodError("pod_tick_pending", "Recover the pending PoD request before another tick")
+        pending = next((row for row in ledger["requests"].values() if row["phase"] != "completed"), None)
+        if pending is not None:
+            raise _pending_error(pending, "Recover the pending PoD request before another tick")
         lines = pod_lines(body).get(pod, [])
         if not lines and pod not in mapping(store.map_of(state)) and key not in ledger["authors"]:
             raise PodError("line_missing", "No PoD line, mapping or authorship for this number",
@@ -490,7 +515,7 @@ def _record(project: Path, objective: str, owner: str, key: str, request: dict) 
         ticks = state.setdefault("pod_ticks", empty())
         current = ticks["requests"].get(key)
         if current is None or current["id"] != request["id"]:
-            raise PodError("pod_tick_pending", "Tick result no longer names the latest intent")
+            raise _pending_error(current, "Tick result no longer names the latest intent")
         ticks["requests"][key] = deepcopy(request)
         store._write(path, state)
         return state
@@ -519,7 +544,7 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
         ledger = state.setdefault("pod_ticks", empty())
         current = ledger["requests"].get(key)
         if current is None or current["id"] != request["id"]:
-            raise PodError("pod_tick_pending", "Tick receipt no longer names the latest intent")
+            raise _pending_error(current, "Tick receipt no longer names the latest intent")
         # A recovery that started without a response must retain any held
         # response recorded by the sender while this read was in flight.
         if result["result"] == "unconfirmed" and (current["result"] or {}).get("result") in ("accepted", "refused"):

@@ -605,6 +605,14 @@ def render(result: dict) -> None:
             reason = (f"; {clean(block['code'])}: {clean(block['reason'])}" if block else "")
             if block and "status" in block:
                 reason += f" (GitHub {block['status']}: {clean(block.get('message', ''))})"
+            hold = row.get("hold")
+            if hold:
+                reason += f"; hold {clean(hold['code'])}: {clean(hold['reason'])}"
+            request = row.get("request", {})
+            if "retry_after" in request:
+                wait = "in flight until" if request["status"] == "in_flight" else "recovery ready since"
+                reason += (f"; intent_at={request['intent_at']}, {wait} "
+                           f"retry_after={request['retry_after']} (Unix seconds)")
             direction = row.get("direction") or row.get("blocked_at_closure", {}).get("direction")
             checkbox = (f"checkboxes {row['checkboxes']}" if len(row.get("checkboxes", [])) > 1
                         else f"checkbox {row['ticked']}")

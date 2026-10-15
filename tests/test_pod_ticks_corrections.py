@@ -1,6 +1,8 @@
 """Regression controls for bounded tick recovery and truthful status/readback."""
 
 from copy import deepcopy
+from contextlib import redirect_stdout
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -12,7 +14,8 @@ from pod import pod_ticks
 from pod.errors import PodError
 from pod.github import MUTATION_TIMEOUT_S, issue_intake
 from pod.ledger import objective_root, read
-from pod.status import status
+from pod.status import render, status
+from tests.issue_port_support import SimulatedInterruption
 from tests.pod_tick_support import TickCase
 
 
@@ -62,6 +65,58 @@ print(json.dumps({"ok": True, "result": result, "_meta": {"runtimeId": "runtime"
 
 
 class ConcurrentCorrections(TickCase):
+    def test_presend_refusal_never_replaces_concurrent_intent_P13(self):
+        self.bind(); self.prove()
+        original = self.issue.issue
+        intents = []
+        def read_hook(**query):
+            if not intents:
+                intents.append(None)
+                self.issue.interrupt_next = True
+                with self.assertRaises(SimulatedInterruption):
+                    self.tick()
+                intents[0] = deepcopy(read(self.project, "objective")["pod_ticks"]["requests"]["1"])
+            return original(**query)
+        with patch.object(self.issue, "issue", side_effect=read_hook):
+            self.failure("pod_tick_pending", self.tick)
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["requests"]["1"], intents[0])
+        self.assertEqual(intents[0]["phase"], "intent")
+        self.assertIsNone(intents[0]["block"])
+        recovered = self.recover_tick()
+        self.assertEqual(recovered["receipt"]["authorship"], "ambiguous")
+        self.assertTrue(recovered["receipt"]["rebind"])
+        self.assertEqual(self.line()["status"], "ambiguous")
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_pending_intent_names_times_and_holds_after_clock_setback(self):
+        self.bind(); self.prove(); self.issue.interrupt_next = True
+        with patch("pod.pod_ticks.time", return_value=10000), self.assertRaises(SimulatedInterruption):
+            self.tick()
+        deadline = 10000 + MUTATION_TIMEOUT_S + pod_ticks.INTENT_MARGIN_S
+        before, calls = self.saved(), list(self.issue.calls)
+        for now in (10, deadline - 0.001):
+            with self.subTest(now=now), patch("pod.pod_ticks.time", return_value=now):
+                for number in (1, 2):
+                    exc = self.failure("pod_tick_pending", self.tick, number)
+                    self.assertEqual(exc.detail, {"pod": 1, "intent_at": 10000, "retry_after": deadline})
+                    self.assertIn("intent_at=10000", str(exc))
+                    self.assertIn(f"retry_after={deadline}", str(exc))
+                row = self.line()
+                self.assertEqual(row["request"]["status"], "in_flight")
+                self.assertEqual(row["request"]["intent_at"], 10000)
+                self.assertEqual(row["request"]["retry_after"], deadline)
+                out = StringIO()
+                with redirect_stdout(out):
+                    render(status(self.project, None, objective="objective"))
+                self.assertIn(f"intent_at=10000, in flight until retry_after={deadline}", out.getvalue())
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.issue.calls, calls)
+        with patch("pod.pod_ticks.time", return_value=deadline):
+            self.assertEqual(self.line()["request"]["status"], "recovery_ready")
+            recovered = self.tick()
+        self.assertEqual(recovered["receipt"]["authorship"], "ambiguous")
+        self.assertEqual(len(self.issue.writes), 1)
+
     def concurrent_callers(self, *, landed):
         self.bind(); self.prove()
         original = self.issue.issue_body_write
@@ -170,7 +225,8 @@ class ReadbackCorrections(TickCase):
         if ambiguous:
             self.issue.lose_next = "landed"
         before = deepcopy(read(self.project, "objective")["checkpoint"])
-        exc = self.failure("issue_reconciliation_required" if row == "B3" or reason == "issue_amendment_changed"
+        exc = self.failure("issue_access_unavailable" if row == "B5" else
+                           "issue_reconciliation_required" if row == "B3" or reason == "issue_amendment_changed"
                            else "issue_is_evidence_ledger", self.tick)
         self.assertEqual(exc.detail["receipt"]["rebind"], True)
         self.assertEqual(exc.detail["receipt"]["result"]["result"], "unconfirmed" if ambiguous else "accepted")
@@ -180,8 +236,16 @@ class ReadbackCorrections(TickCase):
         self.assertEqual({k: v for k, v in state.items() if k != "objective_source"},
                          {k: v for k, v in before.items() if k != "objective_source"})
         line = self.line()
-        self.assertEqual((line["status"], line["authorship"]), ("blocked", "ambiguous" if ambiguous else "own"))
-        self.assertEqual((line["blocked"]["row"], line["blocked"]["reason"]), (row, reason))
+        self.assertEqual((line["status"], line["authorship"]),
+                         ("ambiguous", "ambiguous") if ambiguous else ("current", "own"))
+        self.assertFalse(line["due"])
+        self.assertIsNone(line["blocked"])
+        self.assertEqual((line["hold"]["row"], line["hold"]["reason"]), (row, reason))
+        self.assertEqual(line["hold"], line["latest_request"]["block"])
+        out = StringIO()
+        with redirect_stdout(out):
+            render(status(self.project, None, objective="objective"))
+        self.assertIn(f"{line['status']}; hold {line['hold']['code']}: {reason}", out.getvalue())
         self.assertEqual(len(self.issue.writes), 1)
 
     def test_closed_in_window_rebinds_own_but_keeps_B3_until_reopen(self):
@@ -194,6 +258,7 @@ class ReadbackCorrections(TickCase):
         self.assertEqual(self.tick()["status"], "current")
         self.assertEqual(len(self.issue.writes), 1)
         self.assertIsNone(self.line()["blocked"])
+        self.assertNotIn("hold", self.line())
 
     def test_amendment_in_window_rebinds_own_but_keeps_B2(self):
         self.issue.amendments[99] = "original"
@@ -216,8 +281,88 @@ class ReadbackCorrections(TickCase):
         self.window_hold(reason="closed_issue_requires_intent_reconciliation", row="B3", ambiguous=True,
                          change=lambda: setattr(self.issue, "state", "CLOSED"))
 
+    def test_unreadable_amendment_in_window_rebinds_own_with_B5(self):
+        self.issue.amendments[99] = "original"
+        self.bind(amendments=[self.locator + "#issuecomment-99"]); self.prove()
+        def unreadable(**query):
+            raise PodError("issue_access_unavailable", "Simulated unreadable amendment")
+        self.window_hold(reason="issue_access_unavailable", row="B5",
+                         change=lambda: setattr(self.issue, "amendment", unreadable))
+
+
+class StatusLabelCorrections(TickCase):
+    def not_due_after_refusal(self, row, *, closed):
+        self.bind("- [x] **PoD#1" if row in ("D8", "D9") else "- [ ] **PoD#1")
+        if row in ("D5", "D8", "D11"):
+            self.prove()
+        if row == "D11":
+            self.issue.lose_next = "landed"
+        if row in ("D5", "D11"):
+            self.tick()
+        before, writes = self.line(), list(self.issue.writes)
+        self.assertFalse(before["due"])
+        if closed:
+            self.issue.state = "CLOSED"
+        else:
+            # Role drift keeps the bound body facts current for every D row.
+            self.issue.title = "EEL: outside role change"
+        self.failure("issue_reconciliation_required" if closed else "issue_is_evidence_ledger", self.tick)
+        after = self.line()
+        for field in ("status", "due", "direction", "authorship"):
+            self.assertEqual(after[field], before[field], field)
+        self.assertEqual(after["latest_request"]["block"]["row"], "B3" if closed else "B2")
+        self.assertNotIn("hold", after)
+        self.assertEqual(self.issue.writes, writes)
+
+    def test_D3_keeps_label_after_B3_P10(self):
+        self.not_due_after_refusal("D3", closed=True)
+
+    def test_D5_keeps_label_after_B3_P10(self):
+        self.not_due_after_refusal("D5", closed=True)
+
+    def test_D8_keeps_label_after_B3_P10(self):
+        self.not_due_after_refusal("D8", closed=True)
+
+    def test_D9_keeps_label_after_B3_P10(self):
+        self.not_due_after_refusal("D9", closed=True)
+
+    def test_D11_keeps_label_after_B3_P10(self):
+        self.not_due_after_refusal("D11", closed=True)
+
+    def test_D3_keeps_label_after_B2(self):
+        self.not_due_after_refusal("D3", closed=False)
+
+    def test_D5_keeps_label_after_B2(self):
+        self.not_due_after_refusal("D5", closed=False)
+
+    def test_D8_keeps_label_after_B2(self):
+        self.not_due_after_refusal("D8", closed=False)
+
+    def test_D9_keeps_label_after_B2(self):
+        self.not_due_after_refusal("D9", closed=False)
+
+    def test_D11_keeps_label_after_B2(self):
+        self.not_due_after_refusal("D11", closed=False)
+
+    def test_D3_keeps_label_after_body_drift_C2(self):
+        self.bind(); self.issue.body += "\noutside edit"
+        self.failure("issue_reconciliation_required", self.tick)
+        self.assertEqual(self.line()["status"], "not_proven")
+        self.assertFalse(self.line()["due"])
+        self.assertEqual(self.issue.writes, [])
+
 
 class BoundedCorrections(TickCase):
+    def test_unknown_numbers_on_closed_issue_persist_nothing_P6b(self):
+        self.bind(); self.prove(); self.issue.state = "CLOSED"
+        before = self.saved()
+        for number in range(500, 510):
+            exc = self.failure("issue_reconciliation_required", self.tick, number)
+            self.assertEqual(exc.detail["reason"], "closed_issue_requires_intent_reconciliation")
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["requests"], {})
+        self.assertEqual(self.issue.writes, [])
+
     def test_sixty_unknown_numbers_leave_context_unchanged(self):
         self.bind(); self.prove()
         before = self.saved()
