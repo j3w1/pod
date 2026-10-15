@@ -601,9 +601,14 @@ def render(result: dict) -> None:
         for row in result.get("pod_ticks", {}).get("lines", []):
             block = row.get("blocked")
             reason = (f"; {clean(block['code'])}: {clean(block['reason'])}" if block else "")
+            if block and "status" in block:
+                reason += f" (GitHub {block['status']}: {clean(block.get('message', ''))})"
+            direction = row.get("direction") or row.get("blocked_at_closure", {}).get("direction")
             print(f"PoD#{row['pod']}: checkbox {row['ticked']}; {clean(row['authorship'])}; "
-                  f"{clean(row['status'])}{reason}; criteria "
-                  + ", ".join(f"{clean(item['id'])}={clean(item['state'])}" for item in row['criteria']))
+                  f"{clean(row['status'])}" + (f" ({direction})" if direction else "") + f"{reason}; criteria "
+                  + ", ".join(f"{clean(item['id'])}={clean(item['state'])}"
+                              + (" (stale)" if item['state'] == 'satisfied' and not item['current'] else "")
+                              for item in row['criteria']))
         if result.get("gates"):
             gates = result["gates"]
             print(f"Gates: {len(gates['remaining'])} remaining, "

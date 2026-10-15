@@ -414,7 +414,7 @@ class CompatibilityTests(ReadinessCase):
         self.assertEqual({key: value for key, value in observed.items() if key not in NEW_FIELDS + DECISION_FIELDS}, expected)
         lines = observed_text.splitlines(keepends=True)
         self.assertEqual(lines[0].rstrip("\n"), observed["readiness"]["summary"])
-        added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ")
+        added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ", "PoD#")
         self.assertEqual(sum(line.startswith("Worker tab: ") for line in lines), len(observed.get("worker_tabs", [])))
         self.assertEqual("".join(line for line in lines[1:] if not line.startswith(added)),
                          expected_text)

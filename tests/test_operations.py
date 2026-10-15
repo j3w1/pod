@@ -1352,6 +1352,9 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(len(self.port.starts),1)
 
     def test_issue_change_holds_pending_replay_but_completed_read_is_observational(self):
+        from tests.issue_port_support import RecordingIssuePort
+        issue_port = patch('pod.github.GhPort', return_value=RecordingIssuePort())
+        issue_port.start(); self.addCleanup(issue_port.stop)
         source={'schema':'pod-issue-source/v1','repository':'acme/widgets','number':7,
                 'locator':'https://github.com/acme/widgets/issues/7','body_sha256':'a'*64,
                 'amendments':[]}

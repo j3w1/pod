@@ -1019,11 +1019,18 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         return {**recovered, "decision": recovered["admission"]["route_decision"]}
     # A tick rebind changes only objective_source. Name that stale packet before
     # rechecking its old source; every other pre-existing refusal keeps its order.
+    if any(row["phase"] != "completed" for row in existing_state.get("pod_ticks", {}).get("requests", {}).values()):
+        raise PodError("pod_tick_pending", "Recover the pending pod internal pod-tick request before admission")
     checkpoint_value = existing_state.get("checkpoint") or {}
     if (body.get("objective_source") != checkpoint_value.get("objective_source")
-            and existing_state.get("pod_ticks")):
+            and existing_state.get("pod_ticks", {}).get("last_rebind") == digest(checkpoint_value.get("objective_source"))
+            and (body.get("objective_source") is None or all(
+                body["objective_source"].get(key) == checkpoint_value["objective_source"].get(key)
+                for key in ("repository", "number", "locator", "amendments")))):
         differing = [key for key in ("candidate", "criteria", "objective_source", "worktree")
                      if body.get(key) != checkpoint_value.get(key)]
+        if body.get("plan_revision") != plan_revision:
+            differing.append("plan_revision")
         action = "read the named fields from pod internal map; freeze the corrected packet with pod internal packet and retry"
         raise PodError("packet_plan_mismatch", "Packet differs in fields: " + ", ".join(differing),
                        {"fields": differing, "reads": {key: "pod internal map: " + key for key in differing},

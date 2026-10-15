@@ -28,7 +28,7 @@ def _hash(body: str) -> str:
 
 def empty() -> dict:
     return {"schema": SCHEMA, "facts": None, "read": {"status": "not_read", "reason": "never_read"},
-            "authors": {}, "requests": {}, "closure_blocked": []}
+            "authors": {}, "requests": {}, "closure_blocked": [], "last_rebind": None}
 
 
 def validate(value: object) -> None:
@@ -36,9 +36,15 @@ def validate(value: object) -> None:
     row = exact(value, set(empty()), set(empty()), name="pod_ticks")
     if row["schema"] != SCHEMA:
         raise PodError("state_unsupported", "PoD tick representation is unsupported")
+    if row["last_rebind"] is not None and (not isinstance(row["last_rebind"], str) or not _SHA.fullmatch(row["last_rebind"])):
+        raise PodError("state_unsupported", "PoD tick rebind identity is malformed")
     if (not isinstance(row["authors"], dict) or not isinstance(row["requests"], dict)
             or not isinstance(row["read"], dict) or not isinstance(row["closure_blocked"], list)):
         raise PodError("state_unsupported", "PoD tick records are malformed")
+    exact(row["read"], {"status", "reason"}, {"status", "reason"}, name="PoD read")
+    if (row["read"]["status"] not in ("read", "not_read")
+            or row["read"]["reason"] is not None and not _text(row["read"]["reason"])):
+        raise PodError("state_unsupported", "PoD read state is malformed")
     for key, author in row["authors"].items():
         if not _NUMBER.fullmatch(key) or author not in ("own", "ambiguous"):
             raise PodError("state_unsupported", "PoD tick authorship is malformed")
@@ -68,6 +74,55 @@ def validate(value: object) -> None:
                 or any(request[field] is not None and not isinstance(request[field], dict)
                        for field in ("result", "readback", "block"))):
             raise PodError("state_unsupported", "PoD tick request is malformed")
+        if request["before"] != request["source"]["body_sha256"]:
+            raise PodError("state_unsupported", "PoD intent differs from its bound source")
+        result = request["result"]
+        if result is not None:
+            kind = result.get("result")
+            if kind == "accepted":
+                valid = (set(result) == {"result", "status"} and type(result.get("status")) is int
+                         and 200 <= result["status"] < 300)
+            elif kind == "refused":
+                valid = (set(result) == {"result", "status", "message"} and type(result.get("status")) is int
+                         and 400 <= result["status"] < 500 and _text(result.get("message"), empty=True))
+            else:
+                valid = set(result) == {"result", "reason"} and kind == "unconfirmed" and _text(result.get("reason"))
+            if not valid:
+                raise PodError("state_unsupported", "PoD held response is malformed")
+        back = request["readback"]
+        if back is not None:
+            exact(back, {"body_sha256", "state", "ticked"}, {"body_sha256", "state", "ticked"}, name="PoD readback")
+            if (back["body_sha256"] is not None and (not isinstance(back["body_sha256"], str) or not _SHA.fullmatch(back["body_sha256"]))
+                    or back["state"] not in (None, "OPEN", "CLOSED")
+                    or back["ticked"] is not None and type(back["ticked"]) is not bool):
+                raise PodError("state_unsupported", "PoD readback is malformed")
+        if request["block"] is not None:
+            _validate_block(request["block"])
+        if (request["phase"] == "intent" and (result is not None or request["before"] == request["intended"])
+                or request["phase"] == "result" and result is None):
+            raise PodError("state_unsupported", "PoD request phase contradicts its result")
+    for closed in row["closure_blocked"]:
+        keys = {"pod", "direction", "block", "ticked", "authorship"}
+        exact(closed, keys, keys, name="PoD blocked at closure")
+        if (type(closed["pod"]) is not int or not 0 <= closed["pod"] <= 999_999_999
+                or closed["direction"] not in ("tick", "untick")
+                or closed["authorship"] not in ("own", "ambiguous", "not_pod")
+                or closed["ticked"] is not None and type(closed["ticked"]) is not bool):
+            raise PodError("state_unsupported", "PoD closing limitation is malformed")
+        _validate_block(closed["block"])
+
+
+def _text(value: object, *, empty: bool = False) -> bool:
+    return isinstance(value, str) and (empty or bool(value)) and len(value) <= 512 and "\0" not in value
+
+
+def _validate_block(block: dict) -> None:
+    exact(block, {"code", "reason", "row", "status", "message"}, {"code", "reason", "row"}, name="PoD block")
+    if (not _text(block["code"]) or not _text(block["reason"])
+            or block["row"] not in ("A3", "B2", "B3", "B5", "C2", "C3", "D1", "E2")
+            or "status" in block and (type(block["status"]) is not int or not 400 <= block["status"] < 500)
+            or "message" in block and not _text(block["message"], empty=True)):
+        raise PodError("state_unsupported", "PoD block is malformed")
 
 
 def _facts(ledger: dict, source: dict, body: str) -> None:
@@ -75,16 +130,18 @@ def _facts(ledger: dict, source: dict, body: str) -> None:
     lines = {str(number): [line["ticked"] for line in rows] for number, rows in pod_lines(body).items()}
     ledger["facts"] = {"source": digest(source), "body_sha256": _hash(body), "lines": lines}
     ledger["read"] = {"status": "read", "reason": None}
-    # Once an unticked (or missing/duplicated) line is observed, earlier success
+    # Once an unticked or missing line is observed, earlier success
     # no longer establishes continuous authorship of a later tick.
     ledger["authors"] = {key: author for key, author in ledger["authors"].items()
-                         if lines.get(key) == [True]}
+                         if lines.get(key) and all(lines[key])}
 
 
 def refresh(state: dict, project: Path, source: dict) -> None:
     """Introducing/rebinding checkpoint: one best-effort read, never a refusal."""
     from .github import issue_recheck_live
     ledger = state.setdefault("pod_ticks", empty())
+    if ledger["last_rebind"] != digest(source):
+        ledger["last_rebind"] = None
     try:
         result, live = issue_recheck_live(project, source)
         if live is None or _hash(live["body"]) != source["body_sha256"]:
@@ -170,6 +227,8 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
         elif not criteria:
             label, block = "blocked", {"code": "unmapped", "reason": "unmapped"}
         request = ledger["requests"].get(key)
+        if request is not None and request["phase"] != "completed" and direction is None:
+            direction, label = request["direction"], "due"
         # Only a request after the latest checkpoint/report can justify leaving
         # a due tick blocked at closure. seq is unchanged by tick rebinds.
         recent = request is not None and request["seq"] == (map_state or {}).get("seq", 0)
@@ -248,7 +307,7 @@ def require_tabs(tabs: list[dict], prior: dict | None, proposed: dict, ctx: dict
 
 
 def _block(exc: PodError, *, row: str = "B2") -> dict:
-    return {"code": exc.code, "reason": (exc.detail or {}).get("reason", exc.code), "row": row}
+    return {"code": exc.code, "reason": (exc.detail or {}).get("reason") or exc.code, "row": row}
 
 
 def _source_check(result: dict) -> None:
@@ -298,13 +357,19 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
     current = projection(state, store.map_of(state), ctx, project=project, objective=objective)
     row = next((row for row in current["lines"] if row["pod"] == pod), None)
     request["direction"] = (row or {}).get("direction") or "tick"
+    live = None
     try:
         checked, live = issue_recheck_live(project, source, port=port)
         _source_check(checked)
     except PodError as exc:
-        request["block"] = _block(exc, row="B5" if exc.code == "issue_access_unavailable" else "B3"
+        request["block"] = _block(exc, row="A3" if exc.code == "repository_mismatch" else
+                                  "B5" if exc.code == "issue_access_unavailable" else "B3"
                                   if (exc.detail or {}).get("reason") == "closed_issue_requires_intent_reconciliation" else "B2")
-        _record(project, objective, owner, key, request)
+        if live is not None:
+            lines = pod_lines(live["body"]).get(pod, [])
+            request["readback"] = {"body_sha256": _hash(live["body"]), "state": live["state"],
+                                   "ticked": lines[0]["ticked"] if len(lines) == 1 else None}
+        _record(project, objective, owner, key, request, live=live)
         raise
     body = live["body"]
     with store._lock(path):
@@ -359,7 +424,7 @@ def _require_admissions_settled(state: dict) -> None:
                         "next_action": "Replay the existing admission with its unchanged frozen packet; settle or reconcile its native request, then request pod-tick again"})
 
 
-def _record(project: Path, objective: str, owner: str, key: str, request: dict) -> None:
+def _record(project: Path, objective: str, owner: str, key: str, request: dict, *, live: dict | None = None) -> None:
     from . import ledger as store
     path = store._path(project, objective)
     with store._lock(path):
@@ -372,6 +437,9 @@ def _record(project: Path, objective: str, owner: str, key: str, request: dict) 
         if current and current["phase"] != "completed" and current["id"] != request["id"]:
             raise PodError("pod_tick_pending", "Another tick request is pending")
         ticks["requests"][key] = deepcopy(request)
+        if live is not None:
+            observed_source = {**request["source"], "body_sha256": _hash(live["body"])}
+            _facts(ticks, observed_source, live["body"])
         store._write(path, state)
 
 
@@ -396,7 +464,9 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             # never a held refusal; everything else must reconcile.
             if not accepted and not held_refusal and now == request["before"]:
                 previous_check = {**checked, "status": "current", "reason": None}
-                if checked.get("reason") not in (None, "issue_body_changed"):
+                if checked.get("amendment_changed"):
+                    previous_check.update(status="reconciliation_required", reason="issue_amendment_changed")
+                elif checked.get("reason") not in (None, "issue_body_changed"):
                     previous_check = checked
                 _source_check(previous_check)
             else:
@@ -411,14 +481,15 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
                            {"reason": "issue_body_changed"})
     if failure is not None:
         rebind = False
-        request["block"] = _block(failure, row="B5" if live is None else "B2")
+        request["block"] = _block(failure, row="A3" if failure.code == "repository_mismatch" else "B5"
+                                  if failure.code == "issue_access_unavailable" else "B2")
     elif held_refusal:
         request["block"] = {"code": "github_write_refused", "reason": "github_write_refused", "row": "E2",
                             "status": result["status"], "message": result.get("message", "")}
     else:
         request["block"] = None
     states = pod_lines(live["body"]).get(int(key), []) if live else []
-    request.update(phase="completed", result=result,
+    request.update(phase="result" if live is None else "completed", result=result,
                    readback={"body_sha256": now, "state": live["state"] if live else None,
                              "ticked": states[0]["ticked"] if len(states) == 1 else None})
     path = store._path(project, objective)
@@ -437,6 +508,7 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             request["block"] = _block(failure)
         if rebind:
             state["checkpoint"]["objective_source"] = {**source, "body_sha256": now}
+            ledger["last_rebind"] = digest(state["checkpoint"]["objective_source"])
         if live is not None:
             _facts(ledger, state["checkpoint"]["objective_source"], live["body"])
             # Drift observations are stale facts: never pretend that their body

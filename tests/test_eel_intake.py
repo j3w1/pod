@@ -135,6 +135,8 @@ class EelCallerTests(unittest.TestCase):
         return PodError(EEL_CODE, "Issue is an Evidence Evaluation Ledger (EEL): evidence only")
 
     def test_affected_admission_and_pending_continuation_surface_the_eel_code(self):
+        issue_port = patch("pod.github.GhPort", return_value=TitledPort(body=PES))
+        issue_port.start(); self.addCleanup(issue_port.stop)
         current = read(self.project, "objective")["checkpoint"]
         checkpoint(self.project, "objective", owner="owner",
                    value={key: value for key, value in {**current, "objective_source": self.SOURCE}.items()

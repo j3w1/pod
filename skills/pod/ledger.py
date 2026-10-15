@@ -1402,8 +1402,12 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if "verification" not in core and "verification" in previous:
             # Like the map, the verification context carries forward until it is restated.
             core["verification"] = previous["verification"]
-        from .pod_ticks import refresh as refresh_ticks, mapping as tick_mapping
-        introducing = bool(tick_mapping({"obligations": proposed.get("obligations", [])})) and not tick_mapping(map_of(state))
+        from .pod_ticks import refresh as refresh_ticks
+        prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
+        raw_obligations = proposed.get("obligations")
+        introducing = isinstance(raw_obligations, list) and any(
+            isinstance(row, dict) and row.get("kind") == "criterion" and row.get("id") not in prior_criteria
+            for row in raw_obligations)
         rebound = core.get("objective_source") != previous.get("objective_source")
         if core.get("objective_source") is not None and (introducing or rebound):
             refresh_ticks(state, project, core["objective_source"])
@@ -1921,10 +1925,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             tabs = [worker if item["admission"] == admission_id else item for item in tabs]
             from .pod_ticks import projection as tick_projection
             return {"worker_tabs": tabs, "worker_tab": worker,
-                    "pod_ticks": tick_projection(state, store_map(), ctx, project=project, objective=objective)}
-
-        def store_map():
-            return map_of(state)
+                    "pod_ticks": tick_projection(state, map_of(state), ctx, project=project, objective=objective)}
         settled = admission_id not in ctx["outstanding"]
         if not settled:
             raise PodError("report_attempt_unverified", "The exact Dispatch has not settled natively. Next: read its native settlement before consuming the report")

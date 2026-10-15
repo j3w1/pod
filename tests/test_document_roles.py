@@ -66,6 +66,8 @@ class DocumentEffectTests(ProductionCase):
         self.prepare()
         port = TitledPort(body=PES)
         bound = issue_intake(self.project, self.locator, port=port)["source"]
+        issue_port = patch("pod.github.GhPort", return_value=port)
+        issue_port.start(); self.addCleanup(issue_port.stop)
         self.write(objective_source=bound)
         return port, bound
 
@@ -116,7 +118,8 @@ class DocumentEffectTests(ProductionCase):
         port = TitledPort(body=PES, amendment="Executable scope")
         bound = issue_intake(self.project, self.locator, port=port,
                              amendments=[self.locator + "#issuecomment-99"])["source"]
-        self.write(objective_source=bound)
+        with patch("pod.github.GhPort", return_value=port):
+            self.write(objective_source=bound)
         port.amendment_body = "Requirements only; use a separate PES."
         before = self.stored_bytes()
         with patch("pod.github.GhPort", return_value=port), self.assertRaises(PodError) as caught:
@@ -202,8 +205,10 @@ class ContainmentTests(unittest.TestCase):
 class ParentTraceabilityTests(ProductionCase):
     def test_local_and_cross_repository_parents_do_not_replace_child_target(self):
         self.prepare()
-        child = issue_intake(self.project, "https://github.com/acme/example/issues/7",
-                             port=TitledPort(body=PES))["source"]
+        child_port = TitledPort(body=PES)
+        child = issue_intake(self.project, "https://github.com/acme/example/issues/7", port=child_port)["source"]
+        issue_port = patch("pod.github.GhPort", return_value=child_port)
+        issue_port.start(); self.addCleanup(issue_port.stop)
         for repository in ("acme/example", "acme/requirements"):
             parent = TitledPort(title="SEAL: export", body=SEAL_FORMAT + "\nR1: export text")
             observation = parent.issue(repository=repository, number=11)
@@ -264,6 +269,8 @@ class SealRecoveryTests(unittest.TestCase):
         from pod.ledger import checkpoint, update_admission
         source = {"schema": "pod-issue-source/v1", "repository": "acme/widgets", "number": 7,
                   "locator": LOCATOR, "body_sha256": "a" * 64, "amendments": []}
+        issue_port = patch("pod.github.GhPort", return_value=TitledPort(body=PES))
+        issue_port.start(); self.addCleanup(issue_port.stop)
         current = read(self.project, "objective")["checkpoint"]
         checkpoint(self.project, "objective", owner="owner",
             value={key: value for key, value in {**current, "objective_source": source}.items()
