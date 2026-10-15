@@ -4666,7 +4666,9 @@
         "tests.test_worker_tab_endings.RetiredTabTests.test_unreported_external_retired_record_names_owner_decision",
         "tests.test_worker_tab_endings.RetiredTabTests.test_discarded_external_retired_record_names_owner_decision",
         "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_user_owned_route_mismatch_names_owner_decision_before_and_after_discard",
-        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_external_route_mismatch_names_owner_decision_before_and_after_discard"
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_external_route_mismatch_names_owner_decision_before_and_after_discard",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_start_receipt_only_mismatch_accepts_report_and_supplies_close",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_discarded_start_receipt_only_mismatch_accepts_report_and_supplies_close"
       ],
       "status": "NOT_RUN"
     },

@@ -36,12 +36,19 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   reused-later, other-objective or owner-kept terminals. If Orca refuses, name
   the tab and failure in the final report.
   Once closure, continuation or historical retirement is recorded without its
-  report, or while its reports are refused `route_mismatch` as recorded in the
-  admission's route decision, the standing close authorization does not cover
-  it; name the tab in the final report for the owner's decision.
-  Otherwise, while the objective is open, recording its report makes the
-  authorized close available, even if its result was discarded. Until then,
-  give no close command.
+  report, the standing close authorization does not cover it; name the tab in
+  the final report for the owner's decision.
+  Otherwise, if the admission's route decision records `route_mismatch`, say
+  that its mismatch is recorded: the standing close authorization covers the
+  tab only once its report is recorded, and Pod refuses that report while
+  Orca's effective route differs. If it stays refused, name the tab in the final
+  report for the owner's decision. A mismatch recorded from start-receipt
+  evidence alone does not mean reports are refused: a report with matching
+  worker-show route evidence remains accepted and supplies the close, even
+  after discard.
+  Without a recorded mismatch, while the objective is open, recording its
+  report makes the authorized close available, even if its result was discarded.
+  Until then, give no close command.
 - A disconnected or not-materialized terminal needs nothing. A terminal reused
   for a later Dispatch belongs to that assignment alone.
 
