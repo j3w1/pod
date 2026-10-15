@@ -569,7 +569,9 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
         try:
             authorized = validate_authorization(action.get("authorization"),
                                                 candidate=candidate, tree=tree, kind=scope, target=target)
-        except PodError:
+        except PodError as exc:
+            if exc.code == "relayed_authorization_refused":
+                raise
             authorized = None
         if authorized is None:
             _reason(reasons, "authorization", "authorization_missing",
@@ -585,9 +587,19 @@ def _check_carried_consent(action: dict, journal: dict, reasons: list[dict]) -> 
     consent = action.get("authorization")
     if consent is None:
         return
+    try:
+        consent = validate_authorization(consent)
+    except PodError:
+        return
     for row in journal["actions"]:
         carried = row.get("carried_from")
-        if isinstance(carried, dict) and row["action"].get("authorization") == consent:
+        if not isinstance(carried, dict):
+            continue
+        try:
+            recorded = validate_authorization(row["action"].get("authorization"))
+        except PodError:
+            continue
+        if recorded == consent:
             _reason(reasons, "authorization", "authorization_missing",
                     f"this authorization was carried from objective {carried['objective']} and authorizes no new "
                     f"effect; {NEXT_ACTIONS['authorization_missing']} in this objective's own session")

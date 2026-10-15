@@ -4130,7 +4130,8 @@
         "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_relay_instead_of_misreading_session",
         "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_session_governance_fields",
         "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_claim_relay",
-        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_retirement_relay"
+        "tests.test_decision_compatibility.DecisionCompatibilityTests.test_earlier_reader_and_writer_refuse_new_retirement_relay",
+        "tests.test_decision_channels.SharedDecisionTests.test_earlier_session_consent_cannot_become_fresh_by_default_channel"
       ],
       "status": "NOT_RUN"
     }

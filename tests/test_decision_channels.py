@@ -139,12 +139,32 @@ class SharedDecisionTests(unittest.TestCase):
                 owner_decision(value, kind="governance")
 
     def test_all_authorization_scopes_require_session(self):
+        from pod.governor import _check_authority
         for scope in ("publish", "merge", "release", "deploy"):
             with self.subTest(scope=scope):
                 self.assertEqual(validate_authorization(authorization(scope=(scope,)))["channel"], "session")
                 with self.assertRaises(PodError) as caught:
                     validate_authorization({**authorization(scope=(scope,)), "channel": "relayed", "relay": RELAY})
                 self.assertEqual(caught.exception.code, "relayed_authorization_refused")
+                supplied = {**authorization(scope=(scope,)), "channel": "relayed", "relay": RELAY}
+                action = {"kind": "push" if scope == "publish" else scope,
+                          "candidate": supplied["candidate"], "authorization": supplied}
+                binding = {key: supplied[key] for key in ("tree",)} | {"commit": supplied["candidate"]}
+                with self.assertRaises(PodError) as boundary:
+                    _check_authority(action, binding, False, False, [])
+                self.assertEqual(boundary.exception.code, "relayed_authorization_refused")
+
+    def test_earlier_session_consent_cannot_become_fresh_by_default_channel(self):
+        from pod.governor import _check_carried_consent
+        # Synthetic earlier-authorization control: the envelope predates channel recording.
+        earlier = authorization(scope=("publish",))
+        consent = validate_authorization(earlier)
+        journal = {"actions": [{"action": {"authorization": earlier},
+                                "carried_from": {"objective": "predecessor"}}]}
+        reasons = []
+        _check_carried_consent({"authorization": consent}, journal, reasons)
+        self.assertEqual([row["code"] for row in reasons], ["authorization_missing"])
+        self.assertNotIn("channel", earlier)
 
     def test_legacy_projection_never_rewrites_the_record(self):
         stored = {**USER}

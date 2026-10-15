@@ -22,7 +22,14 @@ class GovernanceAdoptionTests(KernelCase):
 
     def test_sibling_target_advance_records_derived_adoption(self):
         self.intake()
-        target = self.commit("README.md", "sibling work\n", "sibling")
+        git(self.project, "checkout", "-qb", "sibling-one", self.base)
+        self.commit("README.md", "first sibling work\n", "first sibling")
+        git(self.project, "checkout", "-qb", "sibling-two", self.base)
+        self.commit("sibling.txt", "second sibling work\n", "second sibling")
+        git(self.project, "checkout", "-q", "target")
+        git(self.project, "merge", "--no-ff", "-qm", "first sibling merge", "sibling-one")
+        git(self.project, "merge", "--no-ff", "-qm", "second sibling merge", "sibling-two")
+        target = git(self.project, "rev-parse", "HEAD")
         git(self.project, "update-ref", "refs/remotes/origin/target", target)
         state = self.write(self.stored())["checkpoint"]
         self.assertEqual(state["governance"]["base"], target)
