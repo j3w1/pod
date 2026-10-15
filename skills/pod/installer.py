@@ -40,6 +40,10 @@ def superseded_schemas(value: object) -> list[str]:
     if not isinstance(value, dict):
         return ["unknown"]
     found = set()
+    # Schema-family notice only: typed history placeholders carry no admission schema.
+    # Full validity still requires the verified context reader, never this installer scan.
+    history = value.get("history")
+    history_refs = isinstance(history, dict) and history.get("schema") == "pod-history-refs/v1"
     if value.get("schema") != STATE_SCHEMAS["context"]:
         found.add(str(value.get("schema"))[:64])
     checkpoint = value.get("checkpoint")
@@ -48,6 +52,8 @@ def superseded_schemas(value: object) -> list[str]:
     admissions = value.get("admissions")
     if isinstance(admissions, dict):
         for row in list(admissions.values())[:MAX_STATE_SCAN]:
+            if history_refs and isinstance(row, dict) and set(row) == {"$pod_history"}:
+                continue
             if isinstance(row, dict) and row.get("schema") != STATE_SCHEMAS["admission"]:
                 found.add(str(row.get("schema"))[:64])
     return sorted(found)

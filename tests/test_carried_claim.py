@@ -539,6 +539,25 @@ class ReservationTests(CarriedCase):
 class CapacityTests(CarriedCase):
     """R118: a claim too large for the successor's journal is refused before any write, with a supported route."""
 
+    def test_preflight_counts_session_channel_marker_before_any_claim_write(self):
+        from pod.succession import _carried_journal
+        from pod.util import encoded
+        built = self.lost_with(self.merge_decision)
+        self.successor()
+        decision = self.decide()
+        at = datetime(2026, 9, 21, tzinfo=timezone.utc)
+        journal, _ = _carried_journal(self.project, "successor", "objective", self.state(),
+                                     list(built.values()), at=at.isoformat())
+        self.assertNotIn("decision_channels", journal)
+        unmarked_size = len(encoded({**journal, "revision": journal["revision"] + 1}, compact=True))
+        before = self.snapshot()
+        with patch("pod.governor.MAX_JOURNAL", unmarked_size), patch("pod.succession.datetime") as clock:
+            clock.now.return_value = at
+            error = self.refused(lambda: self.claim(decision), code="claim_capacity")
+        self.assertEqual(error.detail["record"], "successor's Governor journal")
+        self.assertGreater(error.detail["proposed_bytes"], unmarked_size)
+        self.assertEqual(self.snapshot(), before)
+
     def near_limit(self, built):
         """Requested dispatches with bounded valid inputs until the predecessor's journal nearly fills its limit."""
         from pod.governor import MAX_JOURNAL
@@ -853,6 +872,71 @@ class CarriedUnconfirmedRerunTests(CarriedCase):
 
 class MergeTests(CarriedCase):
     """PoD#4 — a carried merge stays pending while its pull request is open and settles PASS only by R93."""
+
+    def test_carried_exception_is_omitted_from_successor_owner_inventory_and_closure(self):
+        import yaml
+        config_path = self.root / "config/pod/config.yaml"
+        config = yaml.safe_load(config_path.read_text())
+        config.setdefault("waste_governor", {})["exceptions"] = [{
+            "id": "merge-exception", "action": "efficiency_exception", "objective": "objective",
+            "kinds": ["merge"], "reason": "Owner's scoped predecessor grant",
+            "valid_until": "2027-01-01T00:00:00Z"}]
+        config_path.write_text(yaml.safe_dump(config))
+
+        def build():
+            candidate = self.renew()
+            self.consent = {**self.authorization, "scope": ["merge"], "target": "origin/target"}
+            result = self.op("governor", action={"kind": "merge", "candidate": candidate["commit"],
+                "target": "origin/target", "reason": "deliver", "unit": "default", "effects": [],
+                "authorization": self.consent},
+                exception={"grant": "merge-exception", "reason": "Scoped predecessor decision", "by": "owner"})
+            self.assertEqual(result["decision"], "ALLOW")
+            return result["record_id"]
+
+        merge = self.lost_with(build)
+        exception = self.row(merge, objective="objective")["exception"]
+        self.assertEqual(exception["channel"], "session")
+        predecessor = self.status()
+        for inventory in (predecessor, predecessor["report"]):
+            self.assertEqual([row["decision"] for row in inventory["owner_decisions"]
+                              if row["kind"] == "governor_exception"], [exception])
+        effects = self.writes()
+        self.carry()
+        self.assertEqual(self.row(merge)["exception"], exception)
+        self.assertEqual(self.row(merge)["carried_from"]["objective"], "objective")
+        successor = self.status(objective="successor")
+        for inventory in (successor, successor["report"]):
+            self.assertFalse([row for row in inventory.get("owner_decisions", [])
+                              if row["kind"] == "governor_exception"])
+        result = self.merged(fetched=True)
+        self.pull_request("MERGED", result)
+        self.assertEqual(self.mine("governor-reconcile", record_id=merge)["status"], "PASS")
+        self.mine("checkpoint", value=self.core(obligations=read(self.project, "successor")["checkpoint"]
+                                                ["obligations"], delivery={"record": merge}))
+        self.close_successor()
+        report = read(self.project, "successor")["checkpoint"]["closure"]["report"]
+        self.assertFalse([row for row in report.get("owner_decisions", []) if row["kind"] == "governor_exception"])
+        self.assertEqual(self.row(merge)["exception"], exception)
+        self.assertEqual(self.writes(), effects)
+
+    def test_carried_authorization_is_omitted_from_successor_owner_inventory_and_closure(self):
+        built = self.lost_with(self.merge_decision)
+        effects = self.writes()
+        self.carry()
+        merge = built["merge"]
+        self.assertEqual(self.row(merge)["carried_from"]["objective"], "objective")
+        status = self.status(objective="successor")
+        self.assertFalse([row for row in status.get("owner_decisions", []) if row["kind"] == "authorization"])
+        self.assertFalse([row for row in status["report"].get("owner_decisions", []) if row["kind"] == "authorization"])
+        result = self.merged(fetched=True)
+        self.pull_request("MERGED", result)
+        self.assertEqual(self.mine("governor-reconcile", record_id=merge)["status"], "PASS")
+        self.mine("checkpoint", value=self.core(obligations=read(self.project, "successor")["checkpoint"]
+                                                ["obligations"], delivery={"record": merge}))
+        self.close_successor()
+        report = read(self.project, "successor")["checkpoint"]["closure"]["report"]
+        self.assertFalse([row for row in report.get("owner_decisions", []) if row["kind"] == "authorization"])
+        self.assertEqual(self.writes(), effects)
 
     def test_open_then_merged_pull_request_settles_by_r93_and_closes_the_successor(self):
         built = self.lost_with(self.merge_decision)
@@ -1704,23 +1788,57 @@ class ClosedReplayTableShapeTests(unittest.TestCase):
 
 
 class EarlierReaderTests(CarriedCase):
-    """R6 — the oldest and newest earlier versions, 0.12.0 and main's 0.13.2, read carried rows as recorded."""
+    """Earlier readers retain channel-free carried rows and refuse R120's new decision fields."""
 
     RELEASED = {"0.12.0": "5f7298bab47c4a3263496dc2a7fe50ecfcda0530",
                 "0.13.2": "1705da5ab84de38f6e6f1f7f745d6e46939643a2"}
 
-    def test_earlier_pods_load_the_carried_journal_and_the_continued_record_unchanged(self):
+    def test_earlier_pods_keep_carried_rows_and_refuse_new_decision_fields(self):
         self.lost_with(self.publications)
         self.carry()
         repository = Path(__file__).resolve().parents[1]
         journal = _record_path(self.project, "successor")
         before = self.snapshot()
+        # Genuine candidate-written validation rows carry no owner-decision envelope.
+        # Keep them byte-for-value unchanged in a separate channel-free journal.
+        control = self.journal("successor")
+        control["actions"] = [row for row in control["actions"] if row["action"].get("authorization") is None]
+        self.assertTrue(control["actions"])
+        self.assertTrue(all(row.get("exception") is None for row in control["actions"]))
+        control.pop("decision_channels")
+        self.assertNotIn('"channel"', json.dumps(control))
+        control_root = self.root / "channel-free-validation-control"
+        control_root.mkdir()
+        control_path = control_root / "governor.json"
+        control_path.write_text(json.dumps(control))
+        control_before = control_path.read_bytes()
+        # Synthetic control: remove only the new top-level marker to retain the
+        # earlier nested-claim refusal, which actual readers now reach only afterwards.
+        predecessor = objective_root(self.project, "objective")
+        claim_control = json.loads((predecessor / "context.json").read_bytes())
+        claim_control.pop("decision_channels")
+        claim_root = self.root / "synthetic-markerless-claim-control"
+        claim_root.mkdir()
+        claim_path = claim_root / "context.json"
+        claim_path.write_text(json.dumps(claim_control))
+        claim_before = claim_path.read_bytes()
         program = ("import json, sys\nfrom pathlib import Path\nfrom pod import __version__\n"
+                   "from pod.errors import PodError\n"
                    "from pod.governor import _read_journal, status_at\nfrom pod.ledger import _read\n"
                    "assert __version__ == sys.argv[3], __version__\n"
+                   "try:\n    _read_journal(Path(sys.argv[4]))\n"
+                   "except PodError as exc:\n    journal_error = exc.code\n"
+                   "else:\n    journal_error = None\n"
                    "root = Path(sys.argv[1])\nrows = _read_journal(root / 'governor.json')['actions']\n"
+                   "try:\n    _read(Path(sys.argv[2]) / 'context.json')\n"
+                   "except PodError as exc:\n    predecessor_error = exc.code\n"
+                   "else:\n    predecessor_error = None\n"
+                   "try:\n    _read(Path(sys.argv[5]) / 'context.json')\n"
+                   "except PodError as exc:\n    nested_error = exc.code\n"
+                   "else:\n    nested_error = None\n"
                    "print(json.dumps({'rows': rows, 'status': status_at(root)['actions'],\n"
-                   "                  'predecessor': _read(Path(sys.argv[2]) / 'context.json')['continued_by']}))\n")
+                   "                  'predecessor_error': predecessor_error, 'journal_error': journal_error,\n"
+                   "                  'nested_error': nested_error}))\n")
         for version, commit in self.RELEASED.items():
             with self.subTest(version=version):
                 released = self.root / f"released-{version}"
@@ -1731,15 +1849,19 @@ class EarlierReaderTests(CarriedCase):
                 with tarfile.open(archive) as bundle:
                     bundle.extractall(released, filter="data")
                 read_back = subprocess.run(
-                    [sys.executable, "-c", program, str(journal.parent), str(objective_root(self.project, "objective")),
-                     version], cwd=released, env={**os.environ, "PYTHONPATH": str(released / "skills")},
+                    [sys.executable, "-c", program, str(control_root), str(predecessor),
+                     version, str(journal), str(claim_root)], cwd=released, env={**os.environ, "PYTHONPATH": str(released / "skills")},
                     capture_output=True, text=True)
                 self.assertEqual(read_back.returncode, 0, read_back.stderr)
                 earlier = json.loads(read_back.stdout)
-                self.assertEqual(earlier["rows"], self.journal("successor")["actions"])
+                self.assertEqual(earlier["rows"], control["actions"])
                 self.assertEqual([row["outcome"] for row in earlier["status"]],
-                                 [row["outcome"] for row in self.journal("successor")["actions"]][-16:])
-                self.assertEqual(earlier["predecessor"], read(self.project, "objective")["continued_by"])
+                                 [row["outcome"] for row in control["actions"]][-16:])
+                self.assertEqual(earlier["predecessor_error"], "invalid_context")
+                self.assertEqual(earlier["nested_error"], "state_unsupported")
+                self.assertEqual(earlier["journal_error"], "invalid_governor")
+        self.assertEqual(control_path.read_bytes(), control_before)
+        self.assertEqual(claim_path.read_bytes(), claim_before)
         self.assertEqual(before, self.snapshot())
 
 

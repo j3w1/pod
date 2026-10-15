@@ -269,9 +269,17 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             superseded = []
     except PodError as exc:
         result.update({"status": "blocked", "blocker": exc.code,
-                       "next_safe_action": "inspect the objective state"})
+                       "next_safe_action": ("Run internal record-compaction for this exact project and objective; "
+                                            "owner-scoped detection can read an over-limit record." if exc.code == "record_too_large"
+                                            else "inspect the objective state")})
         if objective is not None:
             result["readiness"] = unavailable(exc.code, f"the objective record cannot be read ({exc.code})")
+        if exc.code == "record_too_large":
+            from .history import CONTEXT_LIMIT, WARN_AT, COMPACT_AT
+            result["record_capacity"] = {"status": "unavailable", "physical_bytes": (exc.detail or {}).get("current_bytes"),
+                                         "logical_bytes": None, "limit_bytes": CONTEXT_LIMIT,
+                                         "warning_bytes": WARN_AT, "compaction_bytes": COMPACT_AT, "warning": True,
+                                         "next_action": result["next_safe_action"]}
         return result
     result["run"] = run
     native_error = None
@@ -364,14 +372,31 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         except PodError as exc:
             result["obligations"] = {"error": exc.code}
             # Recorded judgements stay readable when the map cannot be projected (R109).
-            recorded = {ob.get("id"): ob["acceptances"] for ob in checkpoint.get("obligations") or []
+            recorded = {ob.get("id"): ob["acceptances"]
+                        for ob in checkpoint.get("obligations") or []
                         if isinstance(ob, dict) and isinstance(ob.get("acceptances"), list)}
             if recorded:
                 result["obligations"]["acceptances"] = recorded
     continuity = checkpoint.get("continuity") if isinstance(checkpoint, dict) else None
     if isinstance(continuity, dict) and continuity.get("history"):
         # The objective's runtime rebind history only, read-only; status never rebinds (A2).
-        result["runtime_continuity"] = {"history": list(continuity["history"])}
+        from .util import decision_channel
+        result["runtime_continuity"] = {"history": [
+            {**row, "decision": decision_channel(row["decision"])} if isinstance(row.get("decision"), dict) else dict(row)
+            for row in continuity["history"]]}
+    if state is not None:
+        from .util import context_decisions, map_decisions, derived_governance_summary
+        from .governor import _read_journal, _record_path
+        try:
+            journal = _read_journal(_record_path(project, objective)) if objective else None
+        except PodError:
+            journal = None
+        decisions = context_decisions(state, journal) + map_decisions(checkpoint or {})
+        if decisions:
+            result["owner_decisions"] = decisions
+        derived = derived_governance_summary(checkpoint or {})
+        if derived:
+            result["derived_governance_decisions"] = derived
     if state is not None and checkpoint is not None:
         failure = settlement_failure(state, view, workers)
         if failure is not None:
@@ -428,6 +453,13 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         error = result["obligations"].get("error") if isinstance(result.get("obligations"), dict) else None
         result.update(assess(project, objective, state, record_root, view=view, map_error=error,
                              failure=result.get("native_settlement_failure"), owner_reader=handoff is None))
+    if state is not None and record_root is not None:
+        from .history import capacity
+        try:
+            result["record_capacity"] = capacity(record_root / "context.json", state)
+        except PodError as exc:
+            result["record_capacity"] = {"status": "unavailable", "code": exc.code}
+            result["readiness"] = unavailable(exc.code, f"the objective history cannot be read ({exc.code})")
     return result
 
 
@@ -452,6 +484,10 @@ def project_for_state(checkpoint: dict, project: Path) -> Path:
 def render(result: dict) -> None:
         if isinstance(result.get("readiness"), dict):
             print(clean(result["readiness"]["summary"]))
+        capacity = result.get("record_capacity") or {}
+        if capacity.get("warning"):
+            print(f"Record capacity: {capacity['physical_bytes']}/{capacity['limit_bytes']} bytes. "
+                  + clean(capacity["next_action"]))
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
         for choice in result.get("choices", []):
             print(f"  Choose {choice['objective']} | {choice['worktree'] or 'unbound'} | "
@@ -537,6 +573,13 @@ def render(result: dict) -> None:
             label = "Owner handoff" if entry["provenance"] == "owner_handoff" else "Runtime rebind"
             print(f"{label}: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
                   f"{clean(entry['at'])} ({entry['provenance']})")
+        for row in result.get("owner_decisions", []):
+            channel = row["decision"]["channel"] + (" (earlier record)" if row["decision"].get("channel_recorded") is False else "")
+            print(f"Decision {clean(row['kind'])}: {clean(channel)} ({clean(row['reference'])})")
+        derived = result.get("derived_governance_decisions")
+        if derived:
+            print(f"Derived governance adoptions ({derived['count']}): {clean(derived['previous_base'])} -> "
+                  f"{clean(derived['base'])}; unchanged sources; {clean(derived['history']['reference'])}")
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})"
                   + (f"; reason: {terminal.get('reason') or 'unknown'}" if "reason" in terminal else ""))

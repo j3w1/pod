@@ -22,7 +22,7 @@ import stat
 import unicodedata
 
 from .errors import PodError
-from .util import bounded_text, digest, exact
+from .util import bounded_text, digest, exact, owner_decision, channel_fields, decision_channel, CHANNEL_FIELDS
 
 FIELD = "historical_retirement"
 REQUEST = {"objective", "release"}
@@ -129,7 +129,7 @@ def _facts_valid(value: dict) -> bool:
 def validate_entry(value: object) -> None:
     """The stored shape of a retirement; anything else makes the record unsupported."""
     native = value.get("native") if isinstance(value, dict) else None
-    if (not isinstance(value, dict) or set(value) not in (ENTRY, LOCATED_ENTRY)
+    if (not isinstance(value, dict) or set(value) - CHANNEL_FIELDS not in (ENTRY, LOCATED_ENTRY)
             or not all(_text(value[key], 1024) for key in ("at", "decision", "instruction", "reason", "repository"))
             or not _texts(value["objectives"], MAX_OBJECTIVES, 256) or not value["objectives"]
             or not _text(value["owner"], 256) or not _runs(value["runs"])
@@ -144,6 +144,7 @@ def validate_entry(value: object) -> None:
             or any(type(native[key]) is not int or native[key] < 0 for key in ("runs", "dispatches", "exited_terminals"))
             or "locations" in value and not _locations_valid(value["locations"], value["released"])):
         raise PodError("state_unsupported", "Objective historical retirement record is malformed")
+    owner_decision(value, kind="retirement", stored=True)
 
 
 def refuse_retired(state: dict | None) -> None:
@@ -196,7 +197,8 @@ def status_block(state: dict) -> dict | None:
             "retained": retained, "unrecorded_locations": unrecorded,
             "preserved": [dict(row) for row in entry["preserved"]], "counts": counts(entry["preserved"]),
             "unfinished": list(entry["unfinished"]), "delivery": list(entry["delivery"]),
-            "reason": entry["reason"], "decided_with": list(entry["objectives"])}
+            "reason": entry["reason"], "decided_with": list(entry["objectives"]),
+            **channel_fields(decision_channel(entry))}
 
 
 def _governor_rows(project: Path, objective: str) -> list[dict]:
@@ -215,7 +217,7 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
-    from .util import bounded_json
+    from .history import load_context
     context = repository_context(project)
     root = state_root(project)
     try:
@@ -237,7 +239,7 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
                 continue
             if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
                 continue
-            raw = bounded_json(Path(entry.path) / "context.json", limit=CONTEXT_LIMIT)
+            raw = load_context(Path(entry.path) / "context.json", validate=False)
         except (OSError, PodError):
             unreadable.append(entry.path)
             continue
@@ -683,7 +685,9 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
             return fail("workers_unverified", f"A Run or its worker list could not be read ({exc.code}).")
         if shown["coordinator_handle"] not in (None, owner):
             return fail("generation_changed", "A recorded Run is now bound to another coordinator.")
-        if binding.get("run") == run and binding.get("generation") != shown["consumer_generation"]:
+        changed = binding.get("run") == run and binding.get("generation") != shown["consumer_generation"]
+        explicitly_unbound = shown.get("coordinator_known") is True and shown["coordinator_handle"] is None
+        if changed and not explicitly_unbound:
             return fail("generation_changed", "A recorded Run's consumer generation changed.")
         if fleet.get("complete") is not True:
             return fail("workers_unverified", "A Run's worker list is incomplete.")
@@ -788,7 +792,7 @@ def _requested(value: object) -> list[dict]:
 
 
 def _decision(value: object, requested: list[dict], repository: str) -> dict:
-    decision = exact(value, DECISION, DECISION, name="retirement_decision")
+    decision = exact(value, DECISION | CHANNEL_FIELDS, DECISION, name="retirement_decision")
     bounded_text(decision["instruction"], name="instruction", limit=1024)
     bounded_text(decision["reason"], name="reason", limit=1024)
     try:
@@ -806,7 +810,7 @@ def _decision(value: object, requested: list[dict], repository: str) -> dict:
             not isinstance(block, dict) or block.get("objective") != row["objective"]
             or block.get("release") != row["release"] for block, row in zip(blocks, requested)):
         raise mismatch
-    return decision
+    return owner_decision(decision, kind="retirement")
 
 
 def _block_valid(block: dict) -> bool:
@@ -887,6 +891,8 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                        {"next_action": "run it from the repository's canonical checkout"})
     if decision is not None:
         decision = _decision(decision, requested, repository)
+        legacy_digest = (digest({key: value for key, value in decision.items() if key != "channel"})
+                         if decision["channel"] == "session" and "relay" not in decision else None)
     port = port or OrcaPort(project)
     paths = {row["objective"]: _path(project, row["objective"]) for row in requested}
     results = []
@@ -904,7 +910,9 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                      "locations": [], "retained": [], "unrecorded_locations": None,
                                      "records": []},
                            "message": f"The objective's record is unreadable or unsupported ({exc.code}).",
-                           "next_action": "Historical retirement needs a readable current record."}
+                           "next_action": ("Run internal record-compaction for this exact project and objective first; "
+                                           "its owner-scoped maintenance preserves the logical facts." if exc.code == "record_too_large"
+                                           else "Historical retirement needs a readable current record.")}
             else:
                 # Each objective reads the host afresh: an earlier objective's inventory is never its proof.
                 verdict = _detect(project, name, row["release"], state, port=port, repository=repository,
@@ -916,7 +924,8 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             block = decision["objectives"][index]
             facts = {key: block.get(key) for key in FACTS}
             if verdict["status"] == "retired":
-                if state[FIELD]["decision"] == digest(decision):
+                if (state[FIELD]["decision"] == digest(decision) or "channel" not in state[FIELD]
+                        and legacy_digest == state[FIELD]["decision"]):
                     results.append({**verdict, "status": "replayed",
                                     "message": "This decision's historical retirement is already recorded; "
                                                "nothing was written."})
@@ -945,6 +954,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                 continue
             entry = {"at": datetime.now(timezone.utc).isoformat(), "decision": digest(decision),
                      "instruction": decision["instruction"], "reason": decision["reason"],
+                     **channel_fields(decision),
                      "repository": repository, "objectives": [item["objective"] for item in requested],
                      "owner": facts["owner"], "runs": facts["runs"], "released": facts["release"],
                      "locations": facts["locations"], "preserved": facts["records"], "unfinished": verdict["unfinished"],

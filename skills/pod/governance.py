@@ -7,7 +7,7 @@ import re
 
 from . import gitio
 from .errors import PodError
-from .util import bounded_text
+from .util import bounded_text, owner_decision, channel_fields, CHANNEL_FIELDS
 
 
 def _git(root: Path, argv: list[str], *, binary: bool = False):
@@ -121,7 +121,15 @@ def carried_merge_context(row: dict, unit: dict | None, governance: dict | None 
     carried = row.get("carried_from")
     if not isinstance(carried, dict) or not isinstance(carried.get("candidate"), dict) \
             or not isinstance(carried.get("governance"), dict):
-        return unit, governance or {}
+        bound = governance or {}
+        admitted = row.get("governance_binding")
+        if admitted is not None:
+            if (not isinstance(admitted, dict) or set(admitted) != {"base_ref", "base"}
+                    or not isinstance(admitted["base"], str) or not _OBJECT.fullmatch(admitted["base"])):
+                raise PodError("state_unsupported", "The merge's admitted governance binding is malformed")
+            return unit, {**bound, "base": admitted["base"]}
+        # A merge recorded before derived adoption was admitted at its original proof base.
+        return unit, {**bound, "base": bound.get("proof_base", bound.get("base"))}
     admitted = carried["governance"]
     return ({**(unit or {}), "candidate": dict(carried["candidate"])},
             {"base_ref": (governance or admitted).get("base_ref"), "base": admitted.get("base")})
@@ -134,6 +142,7 @@ def verify_merge_result(project: Path, row: dict, unit: dict | None, governance:
     the result, or else the target's current commit does.
     """
     from .governor import validate_authorization
+    unit, governance = carried_merge_context(row, unit, governance)
     record_id = row["record_id"]
     candidate = unit.get("candidate") if isinstance(unit, dict) else None
     if (not isinstance(candidate, dict) or not isinstance(candidate.get("commit"), str)
@@ -234,6 +243,7 @@ def target_contains_result(project: Path, row: dict, governance: dict) -> bool |
     first: the answer is only as fresh as the tracking ref.
     """
     from . import gitio
+    _, governance = carried_merge_context(row, None, governance)
     admitted = row.get("target_binding")
     head, base = row.get("commit"), governance.get("base") if isinstance(governance, dict) else None
     if (not isinstance(admitted, dict) or not isinstance(head, str) or not _OBJECT.fullmatch(head)
@@ -299,7 +309,7 @@ def _governance_target(project: Path, proposed: str | None, *, user_direct: bool
 
 def governance_observation(project: Path, base_ref: str | None, *, at: str | None = None,
                            user_direct: bool = False, bound_ref: str | None = None,
-                           selection: str | None = None) -> dict:
+                           selection: str | None = None, paths: list[str] | None = None) -> dict:
     """Read governance from the independently selected target, never the candidate."""
     from .github import repository_context
     from .obligations import GOVERNANCE_PATHS, MAX_GOVERNANCE_TEXT
@@ -322,7 +332,7 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
         return {"status": "unavailable", "reason": "base_ref_unresolved", "target_ref": target,
                 "current": current}
     texts: dict[str, str | None] = {}
-    for path in GOVERNANCE_PATHS:
+    for path in GOVERNANCE_PATHS if paths is None else paths:
         listed = _git(project, ["ls-tree", "-z", commit, "--", path])
         if listed is None or listed.returncode != 0:
             return {"status": "unavailable", "reason": "tree_unreadable", "current": current}
@@ -357,24 +367,55 @@ def _history_limit() -> int:
     return ledger.MAX_GOVERNANCE_HISTORY
 
 
+def _require_history_capacity(history: dict) -> None:
+    counts = {"candidate": len(history["candidates"]),
+              "owner decision": sum(row.get("provenance") != "derived" for row in history["decisions"])}
+    full = [kind for kind, count in counts.items() if count > _history_limit()]
+    if full:
+        raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
+                       {"detail": "governance_history_full",
+                        "next_action": "preserve the objective and report its " + " and ".join(full)
+                                       + " history capacity; retained evidence cannot be evicted or replaced",
+                        "referent": {"limit": _history_limit(), "counts": counts}})
+
+
 def _governance_history(prior: dict | None) -> dict:
     """Kernel-owned bounded history; never accept a caller's replacement."""
     history = (prior or {}).get("governance_history", {"candidates": [], "decisions": []})
     if (not isinstance(history, dict) or set(history) != {"candidates", "decisions"}
-            or any(not isinstance(history[key], list) or len(history[key]) > _history_limit()
+            or any(not isinstance(history[key], list)
                    for key in ("candidates", "decisions"))
             or any(not isinstance(value, str) or not value or len(value) > 512
                    for value in history["candidates"])):
         raise PodError("state_unsupported", "Governance history is malformed")
     for row in history["decisions"]:
+        if isinstance(row, dict) and row.get("provenance") == "derived":
+            from .obligations import GOVERNANCE_PATHS
+            if (set(row) != {"seq", "base_ref", "base", "previous_base", "provenance", "kind", "sources"}
+                    or type(row["seq"]) is not int or row["seq"] < 1
+                    or row["kind"] != "unchanged_sources"
+                    or not isinstance(row["base_ref"], str) or not _BASE_REF.fullmatch(row["base_ref"])
+                    or any(not isinstance(row[key], str) or not _OBJECT.fullmatch(row[key]) for key in ("base", "previous_base"))
+                    or not isinstance(row["sources"], list)
+                    or any(not isinstance(source, dict) or set(source) != {"path", "revision"}
+                           or source["path"] not in GOVERNANCE_PATHS
+                           or source["revision"] is not None and (not isinstance(source["revision"], str)
+                               or re.fullmatch(r"sha256:[0-9a-f]{64}", source["revision"]) is None)
+                           for source in row["sources"])
+                    or len({source["path"] for source in row["sources"]}) != len(row["sources"])):
+                raise PodError("state_unsupported", "Derived governance decision history is malformed")
+            continue
         if (not isinstance(row, dict)
-                or set(row) != {"seq", "base_ref", "base", "provenance", "instruction", "kind"}
+                or set(row) - {"seq", "base_ref", "base", "provenance", "instruction", "kind", "question", *CHANNEL_FIELDS}
+                or not {"seq", "base_ref", "base", "provenance", "instruction", "kind"} <= set(row)
                 or type(row["seq"]) is not int or row["seq"] < 1
                 or not isinstance(row["base_ref"], str) or not _BASE_REF.fullmatch(row["base_ref"])
                 or not isinstance(row["base"], str) or not _OBJECT.fullmatch(row["base"])
                 or row["provenance"] != "user_direct" or row["kind"] not in ("initial", "snapshot", "retarget")
                 or not isinstance(row["instruction"], str) or not 1 <= len(row["instruction"]) <= 1024):
             raise PodError("state_unsupported", "Governance decision history is malformed")
+        owner_decision(row, kind="governance", stored=True)
+    _require_history_capacity(history)
     return {"candidates": list(history["candidates"]),
             "decisions": [dict(row) for row in history["decisions"]]}
 
@@ -390,7 +431,8 @@ def _checkpoint_candidate(project: Path, candidate: str | None) -> str:
 
 
 def _retain_governance_history(project: Path, map_state: dict, prior: dict | None,
-                               candidate: str, proposed: dict, *, snapshot_authorized: bool) -> None:
+                               candidate: str, proposed: dict, *, snapshot_authorized: bool,
+                               derived_adoption: dict | None = None) -> None:
     if map_state["governance"].get("base") is None:
         return
     history = _governance_history(prior)
@@ -406,15 +448,15 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
             and (prior is None or snapshot_authorized or old.get("base_ref") != current["base_ref"])):
         decision = {"base_ref": current["base_ref"], "base": current["base"],
                     "provenance": "user_direct", "instruction": authority["instruction"],
+                    **channel_fields(owner_decision(authority, kind="governance")),
+                    **({"question": authority["question"]} if "question" in authority else {}),
                     "kind": "initial" if prior is None else "snapshot" if snapshot_authorized else "retarget"}
         if not any({key: value for key, value in row.items() if key != "seq"} == decision
                    for row in history["decisions"]):
             history["decisions"].append({"seq": map_state["seq"], **decision})
-    if any(len(history[key]) > _history_limit() for key in ("candidates", "decisions")):
-        raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
-                       {"detail": "governance_history_full",
-                        "next_action": "preserve the objective and report its governance history capacity",
-                        "referent": {"limit": _history_limit()}})
+    if derived_adoption is not None:
+        history["decisions"].append({"seq": map_state["seq"], **derived_adoption})
+    _require_history_capacity(history)
     map_state["governance_history"] = history
 
 
@@ -502,7 +544,34 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
     return observed
 
 
-def require_governance_current(project: Path, map_state: dict | None) -> None:
+def unchanged_governance(project: Path, map_state: dict) -> tuple[dict, dict] | None:
+    """Read every bound source, including absence, at the current target; grant no write."""
+    from .obligations import bind_governance
+    governance = map_state["governance"]
+    observed = governance_observation(project, governance["base_ref"], bound_ref=governance["base_ref"],
+                                      selection=governance["selection"], paths=[row["path"] for row in map_state["governance_sources"]])
+    if observed.get("status") != "observed":
+        return None
+    if observed["commit"] == governance["base"]:
+        return None
+    if git_is_ancestor(project, governance["base"], observed["commit"]) is not True:
+        return None
+    sources, _ = bind_governance(observed, governance["base_ref"], governance["exclude"])
+    revisions = lambda rows: [{"path": row["path"], "revision": row["revision"]} for row in rows]
+    if revisions(sources) != revisions(map_state["governance_sources"]):
+        return None
+    delivery = map_state.get("delivery")
+    if delivery is not None:
+        validate_delivery_record(delivery)
+        if (delivery["target_ref"] != governance["base_ref"]
+                or git_is_ancestor(project, delivery["result"], observed["commit"]) is not True):
+            return None
+    return observed, {"base_ref": governance["base_ref"], "previous_base": governance["base"],
+                      "base": observed["commit"], "provenance": "derived", "kind": "unchanged_sources",
+                      "sources": revisions(sources)}
+
+
+def require_governance_current(project: Path, map_state: dict | None, *, checkpoint: bool = False) -> tuple[dict, dict] | None:
     """Before new admission or a governed effect: the bound base is still the target's base."""
     if not isinstance(map_state, dict) or map_state.get("obligations") is None:
         return
@@ -528,9 +597,16 @@ def require_governance_current(project: Path, map_state: dict | None) -> None:
         if (current == delivery["result"] and delivery["base"] == governance["base"]
                 and delivery["target_ref"] == governance["base_ref"]):
             return
+    unchanged = unchanged_governance(project, map_state)
+    if checkpoint and unchanged is not None:
+        return unchanged
+    action = ("write a plain checkpoint; it adopts unchanged governance itself without an owner question"
+              if unchanged is not None else None)
+    if delivery is not None:
         raise refuse("governance_changed", "governance_changed",
-                     "the target moved after the recorded delivery; obtain a direct user decision "
-                     "for the new snapshot", recorded=delivery["result"][:12], current=current[:12])
+                     ("the target moved after the recorded delivery; unchanged governance awaits checkpoint adoption"
+                      if unchanged is not None else "the target moved after the recorded delivery; obtain a direct user decision for the new snapshot"),
+                     next_action=action, recorded=delivery["result"][:12], current=current[:12])
     raise refuse("governance_changed", "governance_changed",
                  "the target branch moved since governance was bound", bound=governance["base"][:12],
-                 current=current[:12])
+                 current=current[:12], next_action=action)

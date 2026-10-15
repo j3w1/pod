@@ -93,6 +93,7 @@ class ClaimTests(SuccessionCase):
         self.assertEqual(link["unfinished"], ["O1", "S1", "S2"])
         self.assertEqual(link["unreported"], [self.admission["admission_id"]])
         own_before["revision"] += 1
+        own_before["decision_channels"] = 1
         self.assertEqual(after, own_before)  # Owner, admissions, Runs and evidence are kept as recorded.
         successor = read(self.project, "successor")
         self.assertEqual(successor["continues"]["objective"], "objective")

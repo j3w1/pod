@@ -49,6 +49,7 @@ REQUIRED = {
     "owner-handoff": (*OWNED, "decision"),
     "succession": (*OWNED, "predecessor"),
     "historical-retirement": ("project", "objectives"),
+    "record-compaction": ("project", "objective"),
 }
 
 

@@ -58,7 +58,7 @@ class AcceptanceTests(AcceptanceCase):
         self.refused("obligation_invalid", "acceptance_conflict", self.accept,
                      {**ACCEPTED, "verdict": "rejected"})
         rows = self.stored()
-        rows[0]["acceptances"] = [{**ACCEPTED, "seq": 99}]
+        rows[0]["acceptances"] = [{**ACCEPTED, "channel": "session", "seq": 99}]
         self.refused("obligation_invalid", "acceptance_kernel_field", self.write, rows)
         rows[0]["acceptances"] = [dict(REJECTED)]  # Without a sequence, the natural caller mistake.
         self.refused("obligation_invalid", "acceptance_kernel_field", self.write, rows)
@@ -91,6 +91,15 @@ class AcceptanceTests(AcceptanceCase):
         self.assertEqual([row["source"] for row in self.public_rows()["O1"]["acceptances"]],
                          [ACCEPTED["source"], REJECTED["source"]])
         self.assertNotIn("acceptances", json.dumps(closed["closure"]["report"]))
+        from pod.status import status
+        from pod.util import map_decisions
+        self.assertFalse(map_decisions(closed))
+        with patch.object(OrcaPort, "read_native", autospec=True,
+                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
+            observed = status(self.project, None, objective="objective", current_run_fn=lambda: {"run": None})
+        self.assertNotIn("owner_decisions", observed)
+        self.assertEqual([row["source"] for row in observed["obligations"]["obligations"][0]["acceptances"]],
+                         [ACCEPTED["source"], REJECTED["source"]])
         self.refused("objective_closed", None, self.accept, {**ACCEPTED, "source": "op-later"})
 
     def test_only_the_recorded_coordinator_writes_records(self):

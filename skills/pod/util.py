@@ -16,6 +16,136 @@ import unicodedata
 from .errors import FieldRefusal, PodError
 
 MAX_RECORD = 128 * 1024
+DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"}
+CHANNEL_FIELDS = {"channel", "relay"}
+RELAYED_DECISIONS = {"question", "governance", "withdrawal", "claim", "retirement"}
+
+
+def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
+    """Validate the shared owner-decision fields; stored reads never add or rewrite fields.
+
+    The enclosing boundary validates its own facts and provenance. Older inputs without
+    instruction/provenance keep their existing shape; those fields, when supplied, obey
+    the same contract. A relay describes its verified owner source, not Pod verification
+    of the person or where a keystroke originated.
+    """
+    if not isinstance(value, dict):
+        raise PodError("invalid_decision", "An owner decision must be an object")
+    if "provenance" in value and value["provenance"] != "user_direct":
+        raise PodError("invalid_decision", "Owner decision provenance must be user_direct")
+    if "instruction" in value:
+        bounded_text(value["instruction"], name="instruction", limit=1024)
+        try:
+            value["instruction"].encode("utf-8")
+        except UnicodeEncodeError:
+            raise PodError("invalid_decision_text", "Decision instruction must be UTF-8 text") from None
+    channel = value.get("channel", "session")
+    if channel not in ("session", "relayed"):
+        raise PodError("invalid_decision_channel", "Decision channel must be session or relayed")
+    if channel == "session" and "relay" in value or channel == "relayed" and "relay" not in value:
+        raise PodError("invalid_decision_relay", "A complete relay is required exactly for channel relayed",
+                       {"next_action": "classify the channel honestly and provide relay reference and owner_source only for relayed decisions"})
+    if channel == "relayed":
+        relay = exact(value["relay"], {"reference", "owner_source"}, {"reference", "owner_source"}, name="decision_relay")
+        for field in ("reference", "owner_source"):
+            bounded_text(relay[field], name=field, limit=512)
+            try:
+                relay[field].encode("utf-8")
+            except UnicodeEncodeError:
+                raise PodError("invalid_decision_text", "Relay fields must be UTF-8 text") from None
+        if kind not in RELAYED_DECISIONS:
+            code = "relayed_authorization_refused" if kind == "authorization" else "relayed_decision_refused"
+            action = "obtain the owner's decision typed in the coordinator's own session for this decision kind"
+            raise PodError(code, f"A relayed {kind} decision is refused. Next: {action}",
+                           {"kind": kind, "next_action": action})
+    return dict(value) if stored else {**value, "channel": channel}
+
+
+def decision_channel(value: dict) -> dict:
+    """Additive public projection, with earlier provenance explicit and stored bytes untouched."""
+    return {**value, "channel": value.get("channel", "session"),
+            **({"channel_recorded": False} if "channel" not in value else {})}
+
+
+def channel_fields(value: dict) -> dict:
+    return {key: value[key] for key in CHANNEL_FIELDS | {"channel_recorded"} if key in value}
+
+
+def derived_governance_summary(state: dict) -> dict | None:
+    """Bounded projection; complete adoptions remain only at their history positions."""
+    count, first, latest = 0, None, None
+    for index, row in enumerate(state.get("governance_history", {}).get("decisions", [])):
+        if row.get("provenance") == "derived":
+            count += 1
+            if first is None:
+                first = (index, row)
+            latest = (index, row)
+    if first is None:
+        return None
+    row = latest[1]
+    return {"count": count, "previous_base": first[1]["previous_base"],
+            "base": row["base"], "base_ref": row["base_ref"],
+            "sources": [dict(source) for source in row["sources"]],
+            "history": {"reference": "governance_history/decisions", "provenance": "derived",
+                        "first": first[0], "last": latest[0]}}
+
+
+def map_decisions(state: dict) -> list[dict]:
+    """Owner decision records on the map, with stable location references."""
+    rows = []
+    def add(kind, reference, value):
+        rows.append({"kind": kind, "reference": reference, "decision": decision_channel(value)})
+    for index, value in enumerate(state.get("revision_decisions", [])):
+        add("revision", f"revision_decisions/{index}", value)
+    for index, value in enumerate(state.get("governance_history", {}).get("decisions", [])):
+        if value.get("provenance") != "derived":
+            add("governance", f"governance_history/decisions/{index}", value)
+    for index, value in enumerate(state.get("reopened", [])):
+        add("reopen", f"reopened/{index}", value)
+    for ob in state.get("obligations", []):
+        if ob.get("provenance") == "user_direct":
+            add("obligation", f"obligations/{ob['id']}/source", ob["source"])
+        if ob.get("withdrawal", {}).get("by") == "user_direct":
+            add("withdrawal", f"obligations/{ob['id']}/withdrawal", ob["withdrawal"])
+    return rows
+
+
+def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
+    """Non-map owner decisions; derived continuity and Governor verdicts are not owner decisions."""
+    rows = []
+    def add(kind, reference, value):
+        rows.append({"kind": kind, "reference": reference, "decision": decision_channel(value)})
+    for index, value in enumerate(state.get("constraints", [])):
+        if value.get("provenance") == "user_direct":
+            add("constraint", f"constraints/{index}", value)
+    for index, value in enumerate(((state.get("checkpoint") or {}).get("continuity") or {}).get("history", [])):
+        if isinstance(value.get("decision"), dict):
+            add("handoff" if value["provenance"] == "owner_handoff" else "continuity", f"continuity/history/{index}", value["decision"])
+    if isinstance(state.get("continued_by"), dict):
+        add("claim", "continued_by", state["continued_by"])
+    if isinstance(state.get("historical_retirement"), dict):
+        add("retirement", "historical_retirement", state["historical_retirement"])
+    for identity, admission in state.get("admissions", {}).items():
+        for index, failure in enumerate(admission.get("failures", [])):
+            if failure.get("cleared_by") == "user":
+                add("route_failure_clear", f"admissions/{identity}/failures/{index}/clear_decision", failure.get("clear_decision", {}))
+    for value in (journal or {}).get("actions", []):
+        for field, kind in (("authorization", "authorization"),):
+            decision = value.get("action", {}).get(field)
+            if isinstance(decision, dict) and "carried_from" not in value:
+                add(kind, f"governor/{value['record_id']}/{field}", decision)
+        if isinstance(value.get("exception"), dict) and "carried_from" not in value:
+            add("governor_exception", f"governor/{value['record_id']}/exception", value["exception"])
+    return rows
+
+
+def protect_decision_record(value: dict) -> None:
+    """Earlier readers must refuse channel fields and closure reports they cannot read faithfully."""
+    def carries_channel(item):
+        return (isinstance(item, dict) and (bool((CHANNEL_FIELDS | {"decision_channels"}) & item.keys()) or any(carries_channel(v) for v in item.values()))
+                or isinstance(item, list) and any(carries_channel(v) for v in item))
+    if carries_channel(value):
+        value["decision_channels"] = 1
 _ZONED_TIMESTAMP = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})\Z")
 

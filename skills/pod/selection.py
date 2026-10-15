@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from .catalog import AGENTS, by_id, known, route_key, supported_route
 from .errors import PodError
+from .util import DECISION_FIELDS, owner_decision
 
 CONSTRAINT_KINDS = ("only_agents", "only_models", "exclude_models", "role_model",
                     "max_workers", "allow_disabled", "allow_delegation")
@@ -16,7 +17,7 @@ PREFERENCE_ERRORS = ("setup_required", "invalid_pin", "pin_ineligible", "invalid
                      "preferred_ineligible")
 
 
-def validate_constraint(value: object, snapshot: dict | None = None) -> dict:
+def validate_constraint(value: object, snapshot: dict | None = None, *, new: bool = False) -> dict:
     """Constraint shape; with a snapshot, the checks for a new direct-user constraint.
 
     Model constraints accept any registry id, including ids that are no longer supported, so
@@ -26,11 +27,15 @@ def validate_constraint(value: object, snapshot: dict | None = None) -> dict:
     if not isinstance(value, dict):
         raise PodError("invalid_constraint", "Constraint must be a record")
     required = {"kind", "provenance", "value"}
-    if set(value) - (required | {"id", "role", "saved_state", "mode", "file_stamp", "active"}) or not required <= set(value):
+    if set(value) - (required | {"id", "role", "saved_state", "mode", "file_stamp", "active"} | DECISION_FIELDS) or not required <= set(value):
         raise PodError("invalid_constraint", "Constraint has missing or unsupported fields")
     kind, provenance, item = value["kind"], value["provenance"], value["value"]
     if kind not in CONSTRAINT_KINDS or provenance not in PROVENANCE:
         raise PodError("invalid_constraint", "Constraint kind or provenance is unsupported")
+    if provenance == "user_direct":
+        value = owner_decision(value, kind="constraint", stored=not (new or snapshot is not None))
+    elif (DECISION_FIELDS - {"provenance"}) & set(value):
+        raise PodError("invalid_constraint", "Only direct user constraints carry owner decision fields")
     if kind in ("allow_disabled", "allow_delegation") and provenance != "user_direct":
         raise PodError("constraint_authority", "Only direct user intent can widen delegation")
     if kind in ("only_agents", "only_models", "exclude_models"):

@@ -12,9 +12,10 @@ import re
 from typing import Callable, Iterator
 
 from .errors import PodError
+from .history import load_context, prepare_context, publish_context
 from . import gitio
 from .installer import STATE_SCHEMAS, superseded_objectives, superseded_schemas
-from .util import MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact, explicit_home, native_home
+from .util import MAX_RECORD, bounded_text, digest, exact, explicit_home, native_home
 
 ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred")
 CONTEXT_SCHEMA = STATE_SCHEMAS["context"]
@@ -190,7 +191,9 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels"}, _CONTEXT_FIELDS, name="context")
+    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] != 1):
+        raise PodError("state_unsupported", "Decision channel representation is unsupported")
     from .succession import validate_link
     for name in _SUCCESSION_FIELDS & set(state):
         validate_link(name, state[name])
@@ -234,7 +237,7 @@ def _validate_context(value: object) -> dict:
 def _read(path: Path) -> dict:
     if not _record_exists(path):
         return _empty()
-    return _validate_context(bounded_json(path, limit=CONTEXT_LIMIT))
+    return load_context(path)
 
 
 def read(project: Path, objective: str) -> dict | None:
@@ -242,28 +245,37 @@ def read(project: Path, objective: str) -> dict | None:
     return _read(path) if _record_exists(path) else None
 
 
-def _write(path: Path, value: dict) -> None:
+def _write(path: Path, value: dict, *, native: dict | None = None, protected=()) -> None:
     from .succession import refuse_continued
     # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
     # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
     refuse_continued(value, reserved=False)
+    from .util import protect_decision_record
+    protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+    record, chunks = prepare_context(path, value, native=native, protected=protected)
+    publish_context(path, record, chunks)
 
 
 def _write_succession(path: Path, value: dict) -> None:
     """The claim's single write of a predecessor record, under that record's lock."""
+    from .util import protect_decision_record
+    protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+    record, chunks = prepare_context(path, value)
+    publish_context(path, record, chunks)
 
 
 def _write_retirement(path: Path, value: dict) -> None:
     """The owner's historical retirement: its single write of the record, under that record's lock."""
+    from .util import protect_decision_record
+    protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
-    atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
+    record, chunks = prepare_context(path, value, purpose="retirement")
+    publish_context(path, record, chunks)
 
 
 def _run_references(state: dict) -> dict[str, str]:
@@ -412,6 +424,9 @@ def _validate_continuity(value: object) -> None:
                 or (row["provenance"] == "owner") != isinstance(row.get("decision"), dict)
                 or not isinstance(row["verified"], dict)):
             raise PodError("state_unsupported", "Runtime continuity history row is malformed")
+        if isinstance(row.get("decision"), dict):
+            from .util import owner_decision
+            owner_decision(row["decision"], kind="continuity", stored=True)
 
 
 def classify_continuity(state: dict, *, owner: str, current: dict, port) -> dict:
@@ -633,8 +648,9 @@ def continuity_locked(project: Path, objective: str, *, owner: str, port,
 
 def owner_continuity(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:
     """Rebind an ambiguous continuity only on the Owner's exact-scope direct decision."""
+    from .util import owner_decision, CHANNEL_FIELDS, channel_fields
     value = exact(decision, {"provenance", "instruction", "objective", "recorded_runtime",
-                             "current_runtime", "ambiguity"},
+                             "current_runtime", "ambiguity"} | CHANNEL_FIELDS,
                   {"provenance", "instruction", "objective", "recorded_runtime",
                    "current_runtime", "ambiguity"}, name="continuity_decision")
     bounded_text(value["instruction"], name="instruction", limit=1024)
@@ -646,6 +662,7 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
                          "next_action": "retry the mutation; if it reports ambiguity, ask the Owner again"})
     if value["provenance"] != "user_direct":
         raise mismatch("only a direct Owner instruction can rebind an ambiguous continuity")
+    value = owner_decision(value, kind="continuity")
     if (not isinstance(value["ambiguity"], list) or not value["ambiguity"]
             or len(value["ambiguity"]) > CONTINUITY_AMBIGUITY
             or any(not isinstance(item, str) for item in value["ambiguity"])):
@@ -678,6 +695,7 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
             raise mismatch("objective, runtimes or reported ambiguity differ")
         entry = _apply_continuity(state, verdict, provenance="owner",
                                   decision={"provenance": "user_direct", "instruction": value["instruction"],
+                                            **channel_fields(value),
                                             "ambiguity": verdict["ambiguity"]})
         _write(path, state)
         return {"status": "rebound", "objective": objective, "runtime_continuity": entry}
@@ -941,7 +959,14 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
 
     map_state = map_of(state)
     base_ref = (map_state or {}).get("governance", {}).get("base_ref")
+    from .util import context_decisions
+    from .governor import _read_journal, _record_path
+    try:
+        decisions = context_decisions(state, _read_journal(_record_path(project, objective)))
+    except PodError:
+        decisions = context_decisions(state)
     return {"admissions": state.get("admissions", {}),
+            "owner_decisions": decisions,
             "outstanding": _outstanding_ids(state, native),
             "ceiling": ceiling, "delegation": delegation,
             "constraints": state.get("constraints", []),
@@ -1015,7 +1040,7 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
 def map_read(project: Path, objective: str) -> dict:
     """Read one restatable map and its exact objective-local attempt evidence."""
     from .assurance import evidence_valid, review_completed
-    from .obligations import governance_digest, restatable_rows, undispositioned
+    from .obligations import bound_governance_digest, restatable_rows, undispositioned
     view = kernel_view(project, objective)
     state, map_state, ctx = view["state"], view["map"], view["ctx"]
     if state is None or map_state is None:
@@ -1039,7 +1064,7 @@ def map_read(project: Path, objective: str) -> dict:
                         "head": result.get("head"),
                         "paths_complete": (row.get("changed_paths") is not None
                                            and result.get("paths_status") != "over_limit")})
-    gov = governance_digest(map_state["governance_sources"])
+    gov = bound_governance_digest(map_state)
     eligibility = {}
     for ob in map_state["obligations"]:
         if ob["kind"] != "assurance":
@@ -1198,6 +1223,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     map_state: dict = {}
     ctx = None
     has_delivery = "delivery" in proposed
+    derived_adoption = None
+    adopted_observation = None
     delivery_request = proposed.pop("delivery", None)
     if proposed or prior_map is not None:
         refresh = proposed.get("governance_refresh") is True
@@ -1211,10 +1238,10 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             verified_delivery = verify_delivery(project, objective, prior_map, record_id,
                                                 seq=prior_map["seq"] + 1)
         if prior_map is not None and not refresh:
-            # A delivery never skips currency: a first record or a replay is current only when the target
-            # is still exactly the bound base or that verified result, so nothing past it is trusted.
             current_map = prior_map if verified_delivery is None else {**prior_map, "delivery": verified_delivery}
-            require_governance_current(project, current_map)
+            unchanged = require_governance_current(project, current_map, checkpoint=True)
+            if unchanged is not None:
+                adopted_observation, derived_adoption = unchanged
         if prior_map is None:
             declared = proposed.get("governance")
             base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
@@ -1244,22 +1271,27 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                                    selection=prior_map["governance"].get("selection"))
                             if base_ref is not None
                         else governance_observation(project, None))
+        if adopted_observation is not None:
+            observed = adopted_observation
         history = _governance_history(prior_map)
         snapshot_authorized = (refresh
             and user_direct_revision(proposed.get("revision_authority"))
             and isinstance(declared, dict)
             and declared.get("base_ref") == observed.get("target_ref")
             and declared.get("base") == observed.get("commit"))
-        observed = _independent_governance(
-            project, observed, core["candidate"], state["admissions"],
-            established=(prior_map or {}).get("governance"),
-            previous_candidate=previous.get("candidate"),
-            known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized)
+        if derived_adoption is None:
+            observed = _independent_governance(
+                project, observed, core["candidate"], state["admissions"],
+                established=(prior_map or {}).get("governance"),
+                previous_candidate=previous.get("candidate"),
+                known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized)
         ctx = kernel_context(project, objective, state, authority.get("native"),
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
                              verification=core.get("verification"))
         ctx["governance_refresh"] = refresh
+        ctx["derived_adoption"] = derived_adoption
+        ctx["recorded_questions"] = previous.get("questions", [])
         if dispositions:
             if prior_map is None:
                 raise refuse("obligation_unaccounted", "disposition_invalid",
@@ -1287,7 +1319,11 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if verified_delivery is not None:
             map_state["delivery"] = verified_delivery
         _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,
-                                   snapshot_authorized=snapshot_authorized)
+                                   snapshot_authorized=snapshot_authorized, derived_adoption=derived_adoption)
+        if map_state.get("closure") is not None:
+            # Include this checkpoint's decision in the final stored report as well.
+            from .obligations import report_projection
+            map_state["closure"]["report"] = report_projection(map_state, ctx)
     return map_state, ctx
 
 
@@ -1346,7 +1382,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                "pod_version": identity["version"],
                                "bundle_digest": identity["bundle_digest"],
                                **({"continuity": continuity} if continuity else {})}
-        _write(path, state)
+        _write(path, state, native=authority.get("native"))
         result = dict(state)
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx)
@@ -1650,7 +1686,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
-        _write(path, state)
+        _write(path, state, native=native)
         return {**row, "existing": False}
 
 
@@ -1812,7 +1848,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                             and failure.get("recorded_at", "") <= row["created_at"]):
                         failure["cleared_at"] = row["report"]["consumed_at"]
                         failure["cleared_by"] = admission_id
-        _write(path, state)
+        _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
         return {"ingestion": ingestion, "settled": settled,
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
@@ -1828,7 +1864,7 @@ def state_inventory(project: Path) -> dict:
         return result
     for path in root.glob("*/context.json"):
         try:
-            _validate_context(bounded_json(path, limit=CONTEXT_LIMIT))
+            load_context(path)
             result["current"] += 1
         except PodError as exc:
             result["unsupported" if exc.code == "state_unsupported" else "unreadable"] += 1
@@ -1842,13 +1878,12 @@ def state_inventory(project: Path) -> dict:
 
 def superseded_for_run(run_id: str) -> list[dict]:
     """Superseded objective records that name this Run; read-only, for status."""
-    import json
     root = state_root()
     rows = []
     for row in superseded_objectives(root):
         try:
-            value = json.loads((root / row["record"] / "context.json").read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, ValueError):
+            value = load_context(root / row["record"] / "context.json", validate=False)
+        except (OSError, PodError):
             continue
         checkpoint_value = value.get("checkpoint") if isinstance(value, dict) else None
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
@@ -1971,12 +2006,20 @@ def constraints_update(project: Path, objective: str, *, owner: str,
 def route_failure(project: Path, objective: str, *, owner: str, admission_id: str,
                   kind: str, source: str, retry_after: str | None = None,
                   clear: bool = False, cleared_by: str | None = None,
+                  decision: dict | None = None,
                   native_reader: Callable[[dict], dict] | None = None) -> dict:
     from .selection import FAILURE_KINDS, TEMPORARY_RECONSIDERATION_SECONDS
     if kind not in FAILURE_KINDS or not isinstance(source, str) or not source or len(source) > 256:
         raise PodError("invalid_route_failure", "Failure kind and source are required")
     if kind == "safety_refusal" and retry_after is not None:
         raise PodError("invalid_route_failure", "Safety refusal has no timed retry")
+    from .util import owner_decision, DECISION_FIELDS
+    clear_decision = None
+    if clear and cleared_by == "user":
+        value = exact(decision if decision is not None else {}, DECISION_FIELDS, name="clear_decision")
+        clear_decision = owner_decision(value, kind="route_failure_clear")
+    elif decision is not None:
+        raise PodError("invalid_route_failure", "An owner decision applies only to a user-cleared route failure")
     if retry_after is not None:
         from .util import normalize_timestamp
         retry_after = normalize_timestamp(retry_after, field="Retry-after", code="invalid_route_failure")
@@ -1989,6 +2032,8 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
                 if failure["kind"] == kind and not failure.get("cleared_at"):
                     failure["cleared_at"] = datetime.now(timezone.utc).isoformat()
                     failure["cleared_by"] = cleared_by
+                    if clear_decision is not None:
+                        failure["clear_decision"] = clear_decision
                     matched = True
             if not matched:
                 raise PodError("unknown_route_failure", "No matching active failure to clear")

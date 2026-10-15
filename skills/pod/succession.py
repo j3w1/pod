@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 
 from .errors import PodError
-from .util import bounded_text, digest, exact
+from .util import bounded_text, digest, exact, owner_decision, channel_fields, decision_channel, CHANNEL_FIELDS
 
 DECISION = {"provenance", "instruction", "predecessor", "predecessor_owner", "successor",
             "successor_owner", "runs", "ambiguity"}
@@ -47,7 +47,7 @@ def validate_link(name: str, value: object) -> None:
     fields = CONTINUED if name == "continued_by" else CONTINUES
     if name == "continues" and isinstance(value, dict) and value.get("state") == CLAIMING:
         fields = CONTINUES | {"state", "decision"}
-    if (not isinstance(value, dict) or set(value) != fields
+    if (not isinstance(value, dict) or set(value) - CHANNEL_FIELDS != fields
             or any(not isinstance(value[key], str) or not value[key] or len(value[key]) > 1024
                    for key in fields - {"runs", "unfinished", "unreported", "ambiguity"})
             or name == "continued_by" and (value["orca_claim"] != "unavailable"
@@ -55,6 +55,8 @@ def validate_link(name: str, value: object) -> None:
                                                       for key in ("runs", "unfinished", "unreported"))
                                            or not _texts(value["ambiguity"], limit=512))):
         raise PodError("state_unsupported", f"Objective {name.replace('_', ' ')} record is malformed")
+    if name == "continued_by":
+        owner_decision(value, kind="claim", stored=True)
 
 
 def reserved_for(state: dict | None) -> str | None:
@@ -326,6 +328,7 @@ def status_block(project: Path, state: dict) -> dict | None:
                      chain_end=chain.get("objective"), unfinished_at_claim=list(link["unfinished"]),
                      unreported=list(link["unreported"]), ambiguity=list(link["ambiguity"]),
                      orca_claim=link["orca_claim"])
+        block.update(channel_fields(decision_channel(link)))
         if chain.get("reason"):
             block["reason"] = chain["reason"]
         carried = _carried_settlement(project, state, link)
@@ -640,10 +643,11 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
     from .operations import OrcaPort
     bounded_text(predecessor, name="predecessor", limit=256)
     if decision is not None:
-        decision = exact(decision, DECISION | {CARRIED}, DECISION, name="succession_decision")
+        decision = exact(decision, DECISION | {CARRIED} | CHANNEL_FIELDS, DECISION, name="succession_decision")
         bounded_text(decision["instruction"], name="instruction", limit=1024)
         if decision["provenance"] != "user_direct":
             raise PodError("succession_decision_mismatch", "Only the owner's direct instruction permits a claim")
+        decision = owner_decision(decision, kind="claim")
     if owner != os.environ.get("ORCA_TERMINAL_HANDLE"):
         raise PodError("native_authority_unverified", "A claim needs the successor's own live coordinator")
     if predecessor == objective:
@@ -742,6 +746,7 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
         at = datetime.now(timezone.utc).isoformat()
         link = {"objective": objective, "record": own.parent.name, "owner": facts["successor_owner"],
                 "runs": list(verdict["facts"]["runs"]), "at": at, "instruction": decision["instruction"],
+                **channel_fields(decision),
                 "unfinished": verdict["unfinished"], "unreported": verdict["unreported"],
                 "ambiguity": list(verdict["facts"]["ambiguity"]), "orca_claim": "unavailable"}
         reservation = {"objective": predecessor, "record": other.parent.name, "at": at, "state": CLAIMING,
@@ -824,13 +829,31 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
     with every carried row and marker, exactly as the claim copies it. The limits never change.
     """
     from .governor import MAX_JOURNAL
-    from .ledger import CONTEXT_LIMIT
-    from .util import encoded
+    from .ledger import CONTEXT_LIMIT, _path
+    from .history import prepare_context
+    from .util import encoded, protect_decision_record
     journal, _ = _carried_journal(project, objective, predecessor, prior, record_ids, at=at)
+    protect_decision_record(journal)
     planned = [("successor's Governor journal", {**journal, "revision": journal["revision"] + 1}, MAX_JOURNAL)]
-    planned += [(name, {**value, "revision": value["revision"] + 2}, CONTEXT_LIMIT) for name, value in records.items()]
-    for name, value, limit in planned:
-        size = len(encoded(value, compact=True))
+    for name, value in records.items():
+        candidate = {**value, "revision": value["revision"] + 2}
+        protect_decision_record(candidate)
+        path = _path(project, predecessor if name.startswith("predecessor") else objective)
+        try:
+            physical, _ = prepare_context(path, candidate,
+                                          journal=None if name.startswith("predecessor") else journal)
+        except PodError as exc:
+            if exc.code != "record_too_large":
+                raise
+            # Keep the established claim refusal and remedy; nothing has been published.
+            physical = None
+            size = exc.detail["proposed_bytes"]
+        else:
+            size = len(encoded(physical, compact=True))
+        planned.append((name, physical, CONTEXT_LIMIT, size))
+    for entry in planned:
+        name, value, limit = entry[:3]
+        size = entry[3] if len(entry) == 4 else len(encoded(value, compact=True))
         if size <= limit:
             continue
         route = ("no supported route completes a claim linked before this check: only unreleased candidates of it "

@@ -241,7 +241,7 @@ class ResumeTests(KernelCase):
         # the refusal names it; with a tracking ref that lags the merge, the closure check itself names it.
         moved = self.refusal("checkpoint", value=self.core(obligations=rows, close=True))
         self.assertEqual((moved.code, moved.detail["finalization"]["remaining"]),
-                         ("governance_changed", ["delivery_record", "closure"]))
+                         ("obligation_unaccounted", ["delivery_record", "closure"]))
         git(self.project, "update-ref", "refs/remotes/origin/target", self.base)
         early = self.refusal("checkpoint", value=self.core(obligations=rows, close=True))
         self.assertEqual((early.code, early.detail["detail"]), ("obligation_unaccounted", "closure_unfinished"))

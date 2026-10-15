@@ -460,6 +460,7 @@ class WriteTests(RetirementCase):
         after = self.state()
         entry = after.pop("historical_retirement")
         state["revision"] += 1
+        state["decision_channels"] = 1
         self.assertEqual(after, state)  # Owner, admissions, obligations, outcomes and evidence are as recorded.
         self.assertEqual(self.journal(), journal)
         self.assertEqual({key: value for key, value in self.snapshot().items() if key != own},

@@ -650,11 +650,11 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
 
 def label_qualification(state: dict | None, ctx: dict, candidate: str | None) -> dict:
     """R88: the `independently reviewed` label is derived, never asserted."""
-    from .obligations import governance_digest
+    from .obligations import bound_governance_digest
     if not isinstance(state, dict) or state.get("obligations") is None:
         return {"label": "WITHHELD", "assurance_unbound": [{"obligation": None, "gap": "none_recorded"}],
                 "withdrawn": [], "required": False}
-    gov = governance_digest(state["governance_sources"])
+    gov = bound_governance_digest(state)
     rows = [ob for ob in state["obligations"] if ob["kind"] == "assurance"]
     live = [ob for ob in rows if ob["state"] != "withdrawn"]
     gaps = []
@@ -665,7 +665,10 @@ def label_qualification(state: dict | None, ctx: dict, candidate: str | None) ->
             gaps.append({"obligation": ob["id"], "gap": "unbound"})
         elif candidate is None or candidate != ctx.get("candidate") or not evidence_valid(ob, ctx, gov, candidate):
             gaps.append({"obligation": ob["id"], "gap": "invalidated"})
-    withdrawn = [{"obligation": ob["id"], "provenance": ob["provenance"], **ob["withdrawal"]}
+    from .util import decision_channel
+    withdrawn = [{"obligation": ob["id"], "provenance": ob["provenance"],
+                  **(decision_channel(ob["withdrawal"]) if ob["withdrawal"]["by"] == "user_direct"
+                     and not ctx.get("legacy_decision_report") else ob["withdrawal"])}
                  for ob in rows if ob["state"] == "withdrawn"]
     # Recorded, non-withdrawn assurance obligations are themselves a review requirement; a
     # caller cannot declare them not required.

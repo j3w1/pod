@@ -466,7 +466,7 @@ def run_show(run: str) -> dict:
             or type(generation) is not int or generation < 0):
         raise PodError("orca_contract", "Run read does not prove the requested Run's coordinator")
     return {"runtime": response["runtime"], "run": run, "coordinator_handle": coordinator,
-            "consumer_generation": generation}
+            "consumer_generation": generation, "coordinator_known": "coordinator_handle" in row}
 
 
 def worker_show(dispatch: str) -> dict:

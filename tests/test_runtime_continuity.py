@@ -375,6 +375,8 @@ class AmbiguousContinuityTests(ContinuityCase):
         row = after["admissions"][first["admission_id"]]
         self.assertEqual((row["state"], row["native_binding"]), ("reserved", None))
         self.assertEqual(after["owner"], before["owner"])
+        self.assertEqual(after["decision_channels"], 1)
+        before["decision_channels"] = 1
         for state in (before, after):  # only the recorded runtime and continuity authority moved
             state["revision"] = 0
             state["checkpoint"]["native_refs"] = [{"runId": "run", "runtime": "*"}]

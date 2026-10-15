@@ -312,6 +312,8 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
 
     def assert_only_handoff_changes(self, before, after, *, completed):
         # One invariant covers every phase and failure sibling, independent of code structure.
+        self.assertEqual(after["decision_channels"], 1)
+        before["decision_channels"] = 1
         for state in (before, after):
             state.pop("revision")
             state["checkpoint"].pop("continuity")
@@ -1396,23 +1398,41 @@ class CompatibilityTests(HandoffCase):
             subprocess.run(["git", "-C", str(root), "archive", BASELINE, "skills/pod", "VERSION"], stdout=stream, check=True)
         old = self.root / "old"; old.mkdir()
         with tarfile.open(archive) as bundle: bundle.extractall(old, filter="data")
-        script = '''import json,os
+        # Synthetic control: retain the older nested-handoff refusal after removing
+        # only the new top-level discriminator from a separate copy.
+        control = deepcopy(self.state())
+        control.pop("decision_channels")
+        control_path = self.root / "synthetic-markerless-handoff.json"
+        control_path.write_text(json.dumps(control))
+        control_before = control_path.read_bytes()
+        script = '''import json,os,sys
 from pathlib import Path
 from pod import __version__
+from pod.errors import PodError
+from pod.ledger import _read
 from pod.status import status
 from pod import orca
 assert __version__ == '0.8.0'
 # The genuine reader and authority functions are unchanged; replace only Orca reads.
 orca.current_run=lambda: {'runtime':'runtime-new','run':{'id':'run','coordinator_handle':'next','consumer_generation':2}}
 orca.worker_rows=lambda run: {'runtime':'runtime-new','workers':[],'complete':True,'scope':{'run':run}}
-print(json.dumps({'objective':status(Path.cwd(),None,objective='objective'), 'run':status(Path.cwd(),'run')}))
+try:
+    _read(Path(sys.argv[1]))
+except PodError as exc:
+    nested_blocker = exc.code
+else:
+    nested_blocker = None
+print(json.dumps({'objective':status(Path.cwd(),None,objective='objective'), 'run':status(Path.cwd(),'run'),
+                  'nested_blocker':nested_blocker}))
 '''
         env = {**os.environ, "PYTHONPATH": str(old / "skills")}
-        result = subprocess.run([os.sys.executable, "-c", script], cwd=self.project, env=env, capture_output=True, text=True, check=True)
+        result = subprocess.run([os.sys.executable, "-c", script, str(control_path)], cwd=self.project, env=env, capture_output=True, text=True, check=True)
         observed = json.loads(result.stdout)
-        self.assertEqual(observed["objective"]["blocker"], "state_unsupported")
+        self.assertEqual(observed["objective"]["blocker"], "invalid_context")
+        self.assertEqual(observed["nested_blocker"], "state_unsupported")
         self.assertNotEqual(observed["run"].get("objective"), "objective")
         self.assertEqual(self.snapshot(), before)
+        self.assertEqual(control_path.read_bytes(), control_before)
         import hashlib
         self.old_reader_proof = {"reader_commit": BASELINE, "reader_version": "0.8.0",
             "candidate": subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip(),
