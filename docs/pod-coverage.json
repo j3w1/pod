@@ -4155,7 +4155,10 @@
         "tests.test_decision_channels.RetirementChannelTests.test_earlier_retirement_replays_explicit_default_session_only",
         "tests.test_carried_claim.CapacityTests.test_preflight_counts_session_channel_marker_before_any_claim_write",
         "tests.test_owner_handoff.TransitionTableTests.test_transition_outcome_table_preserves_every_other_field_and_journal",
-        "tests.test_issue41.ReleasedWriterTests.test_071_validator_loads_new_marked_journal"
+        "tests.test_issue41.ReleasedWriterTests.test_071_validator_loads_new_marked_journal",
+        "tests.test_owner_handoff.CompatibilityTests.test_genuine_080_reader_blocks_objective_and_skips_run_without_conversion",
+        "tests.test_succession.ClaimTests.test_detection_writes_nothing_and_a_matching_decision_claims",
+        "tests.test_runtime_continuity.AmbiguousContinuityTests.test_reserved_dispatch_found_needs_the_owner_then_separate_recovery_binds_it"
       ],
       "status": "NOT_RUN"
     },
