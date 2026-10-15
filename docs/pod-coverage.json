@@ -902,7 +902,15 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_github.RepositoryAndIssueTests.test_issue_intake_target_and_content_reconciliation",
+      "offline_test": [
+        "tests.test_github.RepositoryAndIssueTests.test_issue_intake_target_and_content_reconciliation",
+        "tests.test_hot_paths.RepositoryReadsTests.test_issue_target_checks_read_the_remote_fresh",
+        "tests.test_seal_intake.SealIntakeTests.test_readable_pes_keeps_repository_mismatch",
+        "tests.test_seal_intake.SealIntakeTests.test_returned_identity_mismatch_keeps_repository_mismatch",
+        "tests.test_seal_intake.SealIntakeTests.test_read_errors_keep_repository_mismatch_without_content",
+        "tests.test_seal_intake.SealIntakeTests.test_recheck_mismatch_never_reads",
+        "tests.test_seal_intake.SealIntakeTests.test_git_identity_failure_with_git_ancestor_still_prevents_issue_read"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1013,7 +1021,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_external_metadata_notice_is_short_and_not_a_product_dependency",
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_external_metadata_notice_is_not_a_product_dependency",
       "status": "NOT_RUN"
     },
     {
@@ -1033,7 +1041,9 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
+        "tests.test_skill_validation.SkillValidationTests.test_long_guidance_validates_without_refusal_or_warning",
+        "tests.test_skill_validation.SkillValidationTests.test_kept_limits_and_structure_still_refuse",
+        "tests.test_skill_validation.SkillValidationTests.test_validator_reports_all_word_counts",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
         "tests.test_skill_validation.SkillValidationTests.test_the_version_lives_only_in_a_well_formed_version_file"
@@ -1808,7 +1818,9 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
+        "tests.test_skill_validation.SkillValidationTests.test_long_guidance_validates_without_refusal_or_warning",
+        "tests.test_skill_validation.SkillValidationTests.test_kept_limits_and_structure_still_refuse",
+        "tests.test_skill_validation.SkillValidationTests.test_validator_reports_all_word_counts",
         "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
@@ -2956,7 +2968,18 @@
         "tests.test_document_roles.SealRecoveryTests.test_pending_replay_surfaces_seal_refusal_without_replacement_start",
         "tests.test_document_roles.DocumentEffectTests.test_closed_issue_preserves_governor_finalization_but_not_new_admission",
         "tests.test_document_roles.DocumentEffectTests.test_body_drift_and_unavailable_reads_hold_forward_work",
-        "tests.test_document_roles.ContainmentTests.test_cancellation_remains_available_after_source_changes_or_failed_reads"
+        "tests.test_document_roles.ContainmentTests.test_cancellation_remains_available_after_source_changes_or_failed_reads",
+        "tests.test_seal_intake.SealIntakeTests.test_other_repository_refuses_each_role_form_after_one_read",
+        "tests.test_seal_intake.SealIntakeTests.test_non_git_directory_refuses_each_role_form_after_one_read",
+        "tests.test_seal_intake.SealIntakeTests.test_checkout_without_origin_refuses_each_role_form_after_one_read",
+        "tests.test_seal_intake.SealIntakeTests.test_non_github_origin_refuses_each_role_form_after_one_read",
+        "tests.test_seal_intake.SealIntakeTests.test_internal_issue_intake_uses_the_same_role_refusals",
+        "tests.test_seal_intake.SealIntakeTests.test_eel_precedence_and_casefolded_identity_are_preserved",
+        "tests.test_seal_intake.SealIntakeTests.test_complete_source_at_title_and_body_bounds_still_refuses_role",
+        "tests.test_seal_intake.SealIntakeTests.test_incomplete_body_keeps_repository_mismatch",
+        "tests.test_seal_intake.SealIntakeTests.test_incomplete_title_keeps_repository_mismatch",
+        "tests.test_seal_intake.SealIntakeTests.test_non_identity_markers_keep_repository_mismatch",
+        "tests.test_seal_intake.SealIntakeTests.test_same_repository_intake_and_recheck_keep_existing_results"
       ],
       "status": "NOT_RUN"
     },
@@ -2981,7 +3004,8 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_authoring.AuthoringTests.test_templates_and_filled_examples_have_distinct_responsibilities"
+        "tests.test_authoring.AuthoringTests.test_templates_and_filled_examples_have_distinct_responsibilities",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
       ],
       "status": "NOT_RUN"
     },
@@ -4480,6 +4504,31 @@
         "unit"
       ],
       "offline_test": "tests.test_decision_channels.SharedDecisionTests.test_eighty_owner_authorized_writes_have_no_revision_count_cap",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A357",
+      "required_evidence": [
+        "unit",
+        "installed_bundle",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_skill_validation.SkillValidationTests.test_repository_bundle_is_valid",
+        "tests.test_bundle_parity.BundleParityTests.test_tracked_files_match_the_declared_inventory",
+        "tests.test_installer.InstallerTests.test_fresh_rerun_placements_receipt_and_untouched_agent_configs",
+        "tests.test_skill_validation.SkillValidationTests.test_installed_copy_parity_names_what_differs"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A358",
+      "required_evidence": [
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": null,
       "status": "NOT_RUN"
     }
   ]

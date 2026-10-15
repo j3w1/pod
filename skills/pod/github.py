@@ -355,22 +355,39 @@ def _refuse_requirements(row: dict, locator: str) -> None:
                        "Issue is a SEAL (Scope, Expectations, Acceptance & Limits): requirements input, "
                        "not a primary executable issue for the whole initiative",
                        {"marker": marker, "locator": locator,
-                        "next_action": "use a bounded Pod Execution Spec citing selected SEAL requirements, "
-                                       "or an explicitly scoped analysis, planning or decomposition request"})
+                        "next_action": "use read-only SEAL delivery planning, a bounded Pod Execution Spec "
+                                       "citing selected SEAL requirements, or an explicitly scoped analysis request"})
+
+
+def _complete_issue_source(row: dict) -> bool:
+    title, body = row.get("title"), row.get("body")
+    return (isinstance(title, str) and bool(title.strip()) and len(title) <= 512
+            and isinstance(body, str) and bool(body.strip()) and len(body.encode()) <= 512 * 1024)
 
 
 def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
                  amendments: list[str] | None = None) -> dict:
     parsed = parse_issue_locator(locator)
     context = repository_context(project, fresh=True)  # A100 binds the target now
-    if context["repository"] is None or context["repository"].casefold() != parsed["repository"].casefold():
-        raise PodError("repository_mismatch", "Issue target differs from the actual checkout repository")
     reader = port or GhPort(project)
+    if context["repository"] is None or context["repository"].casefold() != parsed["repository"].casefold():
+        # A complete, exact role identity can explain the refusal from any checkout.
+        # All other observations, including failed reads, retain the target refusal.
+        try:
+            row = reader.issue(repository=parsed["repository"], number=parsed["number"])
+            returned = parse_issue_locator(row.get("url")) if isinstance(row, dict) else None
+        except PodError:
+            returned = None
+        if (returned is not None and row.get("number") == parsed["number"]
+                and returned["number"] == parsed["number"]
+                and returned["repository"].casefold() == parsed["repository"].casefold()
+                and _complete_issue_source(row)):
+            _refuse_requirements(row, parsed["locator"])
+        raise PodError("repository_mismatch", "Issue target differs from the actual checkout repository")
     row = reader.issue(repository=parsed["repository"], number=parsed["number"])
     body = row.get("body")
     title = row.get("title")
-    if (not isinstance(title, str) or not title.strip() or len(title) > 512
-            or not isinstance(body, str) or not body.strip() or len(body.encode()) > 512 * 1024):
+    if not _complete_issue_source(row):
         raise PodError("incomplete_issue_source", "Issue body is empty or exceeds the bounded source size")
     _refuse_requirements(row, parsed["locator"])
     requested_amendments = amendments or []

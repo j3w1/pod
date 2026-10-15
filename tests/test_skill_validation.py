@@ -1,15 +1,13 @@
 import os
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import shutil
 import unittest
 
-from pod.bundle import BUNDLE_FILES, bundle_root, canonical
+from pod.bundle import BUNDLE_FILES, MAX_SKILL, bundle_root
 from pod.errors import PodError
-from pod.skill_validation import (DELIVERY_FILES, MAX_DELIVERY_WORDS, MAX_SKILL_WORDS,
-                                  AUTHORING_REFERENCES, EXECUTION_REFERENCES,
-                                  main, validate_installed, validate_skill)
+from pod.skill_validation import REFERENCES, main, validate_installed, validate_skill
 from tests.common import fixture
 
 BUNDLE = bundle_root()
@@ -28,33 +26,68 @@ def rewrite_frontmatter(skill: Path, replacement: str) -> None:
 
 
 class SkillValidationTests(unittest.TestCase):
-    def test_authoring_allowance_is_separate_and_cannot_hide_execution_guidance(self):
+    def test_long_guidance_validates_without_refusal_or_warning(self):
         with fixture() as root:
             skill = copied(root)
-            for name in AUTHORING_REFERENCES:
+            path = skill / "SKILL.md"
+            path.write_text(path.read_text() + (
+                "Read the applicable evidence and explain what it establishes for the requested outcome.\n" * 510))
+            for name in REFERENCES:
                 path = skill / name
-                text = path.read_text()
-                path.write_text(text + " word" * (450 - len(text.split())))
-            counts = validate_skill(skill)["word_counts"]
-            self.assertEqual(counts["authoring_templates"], 1350)
-            self.assertGreater(counts["references_combined"], 2000)
-            self.assertLessEqual(counts["execution_references"], 2000)
-            path = skill / AUTHORING_REFERENCES[0]
-            path.write_text(path.read_text() + " extra")
-            with self.assertRaisesRegex(PodError, "seal-template.md exceeds"):
+                path.write_text(path.read_text() + (
+                    "\nExplain which evidence supports the outcome and which questions remain open.\n" * 50))
+            output, errors = StringIO(), StringIO()
+            with redirect_stdout(output), redirect_stderr(errors):
+                result = validate_skill(skill)
+                code = main([str(skill)])
+            counts = result["word_counts"]
+            self.assertGreater(len((skill / "SKILL.md").read_text().splitlines()), 500)
+            self.assertGreater(counts["SKILL.md"], 400)
+            self.assertTrue(all(counts[name] > 450 for name in REFERENCES))
+            # Every reference exceeds 450, so both the three-template total and
+            # the other references exceed their former thresholds as well.
+            templates = [name for name in REFERENCES if name.endswith("-template.md")]
+            self.assertEqual(len(templates), 3)
+            self.assertGreater(sum(counts[name] for name in templates), 1350)
+            self.assertGreater(sum(counts[name] for name in REFERENCES if name not in templates), 2000)
+            self.assertGreater(counts["SKILL.md"], 2000)
+            self.assertEqual(result["status"], "valid")
+            self.assertEqual(code, 0)
+            self.assertIn("Skill is valid!", output.getvalue())
+            self.assertNotRegex(output.getvalue().lower(), "warning|failed|refus")
+            self.assertEqual(errors.getvalue(), "")
+
+    def test_kept_limits_and_structure_still_refuse(self):
+        cases = (
+            ("skill-bytes", "SKILL.md", lambda text: text + "x" * MAX_SKILL, "oversized"),
+            ("reference-bytes", "references/cleanup.md", lambda text: text + "x" * MAX_SKILL, "bounded title"),
+            ("metadata-before-body", "SKILL.md", lambda text: text.replace("Use when", "Invoke if").replace(
+                "## Roles", "## Else"), "Use when"),
+            ("version-before-body", "VERSION", lambda text: "v0.4.0\n", "MAJOR.MINOR.PATCH"),
+            ("missing-link", "SKILL.md", lambda text: text.replace(
+                "- Issue intake: [intake](references/issue-intake.md).", ""), "exactly once"),
+            ("duplicate-link", "SKILL.md", lambda text: text + (
+                "\n- Extra intake: [intake](references/issue-intake.md).\n"), "exactly once"),
+            ("untriggered-link", "SKILL.md", lambda text: text.replace("- Issue intake:", "-"), "read-when trigger"),
+            ("cross-link", "references/cleanup.md", lambda text: text + (
+                "\nSee [planning](planning.md).\n"), "must not link another reference"),
+        )
+        with fixture() as root:
+            for name, relative, change, message in cases:
+                with self.subTest(name=name):
+                    skill = copied(root / name)
+                    path = skill / relative
+                    path.write_text(change(path.read_text()))
+                    if name == "version-before-body":
+                        path = skill / "SKILL.md"
+                        path.write_text(path.read_text().replace("## Roles", "## Else"))
+                    with self.assertRaisesRegex(PodError, message):
+                        validate_skill(skill)
+            skill = copied(root / "inventory")
+            (skill / "references/cleanup.md").unlink()
+            with self.assertRaisesRegex(PodError, "inventory mismatch"):
                 validate_skill(skill)
 
-    def test_instruction_word_budgets(self):
-        skill_words = len((BUNDLE / "SKILL.md").read_text().split())
-        references = sorted((BUNDLE / "references").glob("*.md"))
-        counts = {path.name: len(path.read_text().split()) for path in references}
-        self.assertLessEqual(skill_words, 400)
-        self.assertTrue(all(count <= 450 for count in counts.values()), counts)
-        self.assertLessEqual(sum(counts[Path(name).name] for name in EXECUTION_REFERENCES), 2000)
-        self.assertLessEqual(sum(counts[Path(name).name] for name in AUTHORING_REFERENCES), 1350)
-        self.assertLessEqual(sum(len((BUNDLE / name).read_text().split())
-                                 for name in DELIVERY_FILES), MAX_DELIVERY_WORDS)
-        self.assertIn("issue-intake.md", counts)
     def test_repository_bundle_is_valid(self):
         result = validate_skill(BUNDLE)
         self.assertEqual(result["status"], "valid")
@@ -64,13 +97,15 @@ class SkillValidationTests(unittest.TestCase):
         result = validate_skill(BUNDLE)
         counts = result["word_counts"]
         self.assertEqual(counts["SKILL.md"], len((BUNDLE / "SKILL.md").read_text().split()))
-        self.assertEqual(counts["delivery_path"], sum(counts[name] for name in DELIVERY_FILES))
+        self.assertEqual(set(counts), {"SKILL.md", *REFERENCES, "installed_guidance"})
+        for name in REFERENCES:
+            self.assertEqual(counts[name], len((BUNDLE / name).read_text().split()))
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(main([str(BUNDLE)]), 0)
-        self.assertEqual(counts["execution_references"], sum(counts[name] for name in EXECUTION_REFERENCES))
-        self.assertEqual(counts["authoring_templates"], sum(counts[name] for name in AUTHORING_REFERENCES))
-        self.assertEqual(counts["installed_guidance"], counts["SKILL.md"] + counts["references_combined"])
+        self.assertEqual(counts["installed_guidance"], counts["SKILL.md"] + sum(counts[name] for name in REFERENCES))
+        self.assertIn("Stored word counts (informational; they do not measure the context an agent loads)",
+                      output.getvalue())
         for name, count in counts.items():
             self.assertIn(f"{name}: {count} words", output.getvalue())
 
@@ -90,9 +125,6 @@ class SkillValidationTests(unittest.TestCase):
                     skill = copied(root / name)
                     path = skill / "SKILL.md"
                     text = path.read_text().replace(old, new)
-                    if name == "duplicate-link":
-                        # Exercise link uniqueness independently of the full authoring budget.
-                        text = text.replace("Read objective, criteria, instructions and assumptions.\n", "")
                     path.write_text(text)
                     with self.assertRaisesRegex(PodError, message):
                         validate_skill(skill)
@@ -135,37 +167,6 @@ class SkillValidationTests(unittest.TestCase):
             self.assertNotIn(removed, text)
         self.assertNotRegex(text, r"\brun (?:project |focused |required )?(?:tests|checks)\b")
 
-    def test_each_word_budget_has_a_refusal(self):
-        with fixture() as root:
-            for name, limit, message in (("SKILL.md", 400, "SKILL.md exceeds"),
-                                         ("references/cleanup.md", 450, "cleanup.md exceeds")):
-                skill = copied(root / name.replace("/", "-"))
-                path = skill / name
-                text = path.read_text()
-                path.write_text(text + " filler" * (limit + 1 - len(text.split())))
-                with self.assertRaisesRegex(PodError, message):
-                    validate_skill(skill)
-            for kind in ("combined", "delivery"):
-                skill = copied(root / kind)
-                counts = validate_skill(skill)["word_counts"]
-                total = counts["execution_references" if kind == "combined" else "delivery_path"]
-                remaining = 2001 - total
-                names = (["references/cleanup.md", "references/recovery.md"] if kind == "combined"
-                         else list(DELIVERY_FILES[1:]))
-                for name in names:
-                    path = skill / name
-                    text = path.read_text()
-                    added = min(remaining, 450 - len(text.split()))
-                    path.write_text(text + " filler" * added)
-                    remaining -= added
-                self.assertEqual(remaining, 0)
-                # The delivery-only control leaves the combined reference total in budget.
-                if kind == "delivery":
-                    for name in ("references/cleanup.md", "references/pes-template.md", "references/recovery.md"):
-                        (skill / name).write_text("# Optional\n")
-                with self.assertRaisesRegex(PodError, f"{'Skill execution references' if kind == 'combined' else 'Skill delivery path'} exceed"):
-                    validate_skill(skill)
-
     def test_frontmatter_allowlist_rejects_coordinator_overrides(self):
         with fixture() as root:
             for extra in ("context: fork\n", "model: opus\n", "effort: max\n",
@@ -184,8 +185,7 @@ class SkillValidationTests(unittest.TestCase):
             for name, change in (("skill-meta", lambda s: s.replace("metadata:\n", 'metadata:\n  version: "0.4.0"\n')),):
                 skill = copied(root / name)
                 text = (skill / "SKILL.md").read_text(encoding="utf-8")
-                text += " filler" * (MAX_SKILL_WORDS - len(text.split()))
-                self.assertEqual(len(text.split()), 400)
+                text = text.replace("## Roles", "## Else")
                 (skill / "SKILL.md").write_text(change(text), encoding="utf-8")
                 with self.assertRaises(PodError) as duplicated:
                     validate_skill(skill)

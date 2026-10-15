@@ -28,19 +28,7 @@ FORBIDDEN_FORMS = (
 )
 REQUIRED_FORMS = ("pod config --json", "pod internal <op> --input FILE", "~/.local/bin/pod",
                   "https://raw.githubusercontent.com/j3w1/pod/main/install.sh")
-MAX_SKILL_LINES = 500
-MAX_SKILL_WORDS = 400
-MAX_REFERENCE_WORDS = 450
-AUTHORING_REFERENCES = ("references/seal-template.md", "references/pes-template.md",
-                       "references/eel-template.md")
-EXECUTION_REFERENCES = tuple(name for name in REFERENCES if name not in AUTHORING_REFERENCES)
-MAX_EXECUTION_WORDS = 2000
-MAX_AUTHORING_WORDS = 1350
-MAX_DELIVERY_WORDS = 2000
 SECTIONS = ("Roles", "Done when", "Boundaries", "Helpers", "Read when needed")
-DELIVERY_FILES = ("SKILL.md", "references/issue-intake.md", "references/planning.md",
-                  "references/orca-boundary.md", "references/models.md",
-                  "references/verification.md", "references/governor.md")
 SOURCE_PREFIX = "https://github.com/j3w1/pod"
 
 
@@ -48,8 +36,6 @@ def _skill_text(root: Path) -> str:
     text = (root / "SKILL.md").read_text(encoding="utf-8")
     if len(text.encode()) > MAX_SKILL:
         raise PodError("invalid_skill", "SKILL.md is oversized")
-    if len(text.splitlines()) > MAX_SKILL_LINES:
-        raise PodError("invalid_skill", "SKILL.md exceeds its line budget")
     return text
 
 
@@ -108,8 +94,6 @@ def _cross_reference(data: str) -> bool:
 
 
 def _check_body(root: Path, text: str, body: str) -> dict[str, int]:
-    if len(text.split()) > MAX_SKILL_WORDS:
-        raise PodError("invalid_skill", "SKILL.md exceeds its word budget")
     if tuple(re.findall(r"^## (.+)$", body, re.M)) != SECTIONS:
         raise PodError("invalid_skill", "SKILL.md must have exactly the five router sections")
     for pattern, described in FORBIDDEN_FORMS:
@@ -134,26 +118,13 @@ def _check_body(root: Path, text: str, body: str) -> dict[str, int]:
         data = (root / name).read_text(encoding="utf-8")
         if not data.startswith("# ") or len(data.encode()) > MAX_SKILL:
             raise PodError("invalid_skill", f"{name} is missing a bounded title")
-        words = len(data.split())
-        counts[name] = words
-        if words > MAX_REFERENCE_WORDS:
-            raise PodError("invalid_skill", f"{name} exceeds its word budget")
+        counts[name] = len(data.split())
         if _cross_reference(data):
             raise PodError("invalid_skill", f"{name} must not link another reference")
         for pattern, described in FORBIDDEN_FORMS:
             if pattern.search(data):
                 raise PodError("invalid_skill", f"{name} must not instruct {described}")
-    counts["references_combined"] = sum(counts[name] for name in REFERENCES)
-    counts["execution_references"] = sum(counts[name] for name in EXECUTION_REFERENCES)
-    counts["authoring_templates"] = sum(counts[name] for name in AUTHORING_REFERENCES)
-    counts["delivery_path"] = sum(counts[name] for name in DELIVERY_FILES)
-    counts["installed_guidance"] = counts["SKILL.md"] + counts["references_combined"]
-    if counts["execution_references"] > MAX_EXECUTION_WORDS:
-        raise PodError("invalid_skill", "Skill execution references exceed their combined word budget")
-    if counts["authoring_templates"] > MAX_AUTHORING_WORDS:
-        raise PodError("invalid_skill", "Skill authoring templates exceed their combined word budget")
-    if counts["delivery_path"] > MAX_DELIVERY_WORDS:
-        raise PodError("invalid_skill", "Skill delivery path exceeds its word budget")
+    counts["installed_guidance"] = sum(counts.values())
     return counts
 
 
@@ -285,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Skill validation failed: {exc}")
         return 1
     print("Skill is valid!")
+    print("Stored word counts (informational; they do not measure the context an agent loads):")
     for name, count in result["word_counts"].items():
         print(f"{name}: {count} words")
     return 0

@@ -40,9 +40,10 @@ Every map-bearing write, including full checkpoint/report and admission maps, ca
 
 ## Read when needed
 
-Reload lost guidance. Trivial work reads none.
+Read a reference when the current action, or a necessary prerequisite of it, needs it. Never preload the reference directory, and never read a reference merely because it is linked. Read an authoring template only to author or revise that kind of document. Reload guidance when it is lost, changed or insufficient. Trivial work reads none.
 
 - Issue intake: [intake](references/issue-intake.md).
+- SEAL link or SEAL delivery planning: [delivery planning](references/seal-delivery.md).
 - SEAL authoring/revision: [template](references/seal-template.md).
 - PES authoring/revision: [template](references/pes-template.md).
 - EEL authoring/revision: [template](references/eel-template.md).

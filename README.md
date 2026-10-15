@@ -29,7 +29,7 @@ This installs the Pod skill for Codex and Claude Code, a user-local `pod` comman
 
 Your existing authenticated session remains the coordinator, with its current model and effort. Orca owns Runs, Tasks, Dispatches, worker tabs, messages, request recovery, worktrees, and lifecycle. Pod makes assignment choices, checks them at admission, and binds evidence to the objective. Your project decides what counts as accepted.
 
-Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. A SEAL supplies requirements; Pod refuses it as the primary executable issue. Use a bounded PES or a scoped analysis/planning/decomposition request rather than executing the whole initiative. An Evidence Evaluation Ledger issue, titled `EEL:` or marked with its format line, is evidence only: Pod refuses to execute from it, and implementation needs a separate Pod Execution Spec that cites it. A direct objective follows the same process without an issue.
+Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. A SEAL supplies requirements; Pod refuses it as the primary executable issue, including from another repository or a directory without GitHub repository identity. Use read-only SEAL delivery planning, a bounded PES citing selected SEAL requirements, or an explicitly scoped analysis request. An Evidence Evaluation Ledger issue, titled `EEL:` or marked with its format line, is evidence only: Pod refuses to execute from it, and implementation needs a separate Pod Execution Spec that cites it. A direct objective follows the same process without an issue.
 
 ## The basic workflow
 
@@ -45,6 +45,8 @@ For persistent issue-backed work, the [Issue intake reference](https://github.co
 
 - Direct task: `/pod update the README to explain this feature`.
 - Plan only: `/pod <issue-url> — plan only; do not change files`.
+- Plan SEAL delivery: `/pod https://github.com/owner/project/issues/<SEAL>` reconciles existing delivery first. If work remains, Pod confirms the outcome with you before proposing bounded PESs; if nothing remains, it reports that and stops. Planning writes nothing without authorization and stops at the published PESs.
+- Run an approved PES: `/pod https://github.com/owner/project/issues/<PES>` starts that bounded objective in its target repository, with its own proof and delivery checks.
 - Plan then execute: accept the host plan and continue in the same conversation.
 - Continue after interruption: invoke the same objective; Pod reads the native state and reconciles unresolved requests before another start.
 
