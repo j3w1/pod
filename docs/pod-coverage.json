@@ -5080,7 +5080,8 @@
         "tests.test_pod_ticks_protocol.ProtocolTests.test_hand_tick_unproven_is_left_named_D9",
         "tests.test_pod_ticks_protocol.ProtocolTests.test_own_tick_unticks_after_evidence_reopen_D6",
         "tests.test_pod_ticks_protocol.ProtocolTests.test_own_tick_unticks_after_withdrawal_D6",
-        "tests.test_pod_ticks_visibility.VisibilityTests.test_due_untick_after_direct_user_reopen"
+        "tests.test_pod_ticks_visibility.VisibilityTests.test_due_untick_after_direct_user_reopen",
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_previously_mapped_hand_tick_is_left_when_mapping_lost_D10"
       ],
       "status": "NOT_RUN"
     },

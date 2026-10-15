@@ -99,6 +99,14 @@ class ProtocolTests(TickCase):
         self.assertEqual(self.line(2)["criteria"], [])
         self.assertEqual(self.issue.writes, [])
 
+    def test_previously_mapped_hand_tick_is_left_when_mapping_lost_D10(self):
+        """Mapping-only forward-compatible control; current criterion sources are immutable."""
+        self.bind("- [x] **PoD#1"); self.prove(); self.tick()
+        self.lapse(remove_mapping=True); self.tick()
+        self.assertEqual(self.line()["status"], "ticked_without_pod_proof")
+        self.assertEqual(self.line()["criteria"], [])
+        self.assertEqual(self.issue.writes, [])
+
     def test_held_refusal_reads_back_then_stays_due_E2(self):
         self.bind(); self.prove(); self.issue.calls.clear()
         self.issue.refuse_next = 403

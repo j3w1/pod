@@ -27,6 +27,7 @@ REQUIRED = {
     "verify-sources": ("project", "sources"),
     "issue-intake": ("project", "locator"),
     "issue-recheck": ("project", "source"),
+    "pod-tick": (*OWNED, "pod"),
     "project-context": ("project",),
     "acceptance": ("criteria", "evidence_rows", "candidate", "policy_revision", "sources",
                    "dependencies", "environment", "review_required", "hosted_required"),
