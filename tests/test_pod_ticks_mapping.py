@@ -76,6 +76,7 @@ class MappingTests(TickCase):
         self.prove()
         self.failure("line_duplicated", self.tick)
         self.assertEqual(self.line()["occurrences"], 2)
+        self.assertEqual(self.line()["checkboxes"], [False, True])
         self.assertEqual(self.line()["blocked"]["code"], "line_duplicated")
         self.assertEqual(self.issue.writes, [])
 

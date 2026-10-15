@@ -604,7 +604,9 @@ def render(result: dict) -> None:
             if block and "status" in block:
                 reason += f" (GitHub {block['status']}: {clean(block.get('message', ''))})"
             direction = row.get("direction") or row.get("blocked_at_closure", {}).get("direction")
-            print(f"PoD#{row['pod']}: checkbox {row['ticked']}; {clean(row['authorship'])}; "
+            checkbox = (f"checkboxes {row['checkboxes']}" if len(row.get("checkboxes", [])) > 1
+                        else f"checkbox {row['ticked']}")
+            print(f"PoD#{row['pod']}: {checkbox}; {clean(row['authorship'])}; "
                   f"{clean(row['status'])}" + (f" ({direction})" if direction else "") + f"{reason}; criteria "
                   + ", ".join(f"{clean(item['id'])}={clean(item['state'])}"
                               + (" (stale)" if item['state'] == 'satisfied' and not item['current'] else "")

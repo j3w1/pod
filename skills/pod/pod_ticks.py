@@ -239,7 +239,8 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
             if number in closed_blocks:
                 prior = closed_blocks[number]
                 label, block = "blocked", prior["block"]
-        row = {"pod": number, "ticked": ticked, "occurrences": len(observed) if fresh else None,
+        row = {"pod": number, "ticked": ticked, "checkboxes": list(observed),
+               "occurrences": len(observed) if fresh else None,
                "authorship": author, "criteria": criteria, "proven": proven,
                "status": label, "direction": direction, "due": bool(direction) and not terminal,
                "blocked": block, "facts_current": fresh}

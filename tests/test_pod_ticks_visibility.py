@@ -53,6 +53,18 @@ class VisibilityTests(TickCase):
         for field in ("remaining", "records", "finished"):
             self.assertEqual(before[field], after[field])
 
+    def test_duplicate_line_status_and_render_keep_each_observed_checkbox(self):
+        self.bind("- [ ] **PoD#1\n- [X] **PoD#1 duplicate")
+        view = status(self.project, None, objective="objective")
+        row = view["pod_ticks"]["lines"][0]
+        self.assertEqual(row["checkboxes"], [False, True])
+        self.assertIsNone(row["ticked"])
+        out = StringIO()
+        with redirect_stdout(out):
+            render(view)
+        self.assertIn("checkboxes [False, True]", out.getvalue())
+        self.assertIn("line_duplicated", out.getvalue())
+
     def test_tick_does_not_change_readiness_state_or_coordinator_needed(self):
         self.bind(); self.prove()
         before = status(self.project, None, objective="objective")["readiness"]
