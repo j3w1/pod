@@ -31,11 +31,16 @@ def closing(scenario):
         if scenario == "closed":
             case.report(admission, packet, map={"obligations": finished(), "close": True})
         case.port.effective = {"agent": "codex", "model": "gpt-6-luna", "effort": "medium"}
+        runtime_changed = scenario in ("runtime", "runtime_malformed")
+        if runtime_changed:
+            case.port.runtime = "changed-runtime"
+        continuity = None
         try:
-            case.report(admission, packet, outcome="bogus" if scenario == "malformed" else "succeeded",
+            case.report(admission, packet, outcome="bogus" if scenario in ("malformed", "runtime_malformed") else "succeeded",
                         map={"obligations": finished(), "close": True})
         except PodError as exc:
             code = exc.code
+            continuity = (exc.detail or {}).get("runtime_continuity")
         else:
             code = "ACCEPTED"
         if scenario == "discard":
@@ -45,6 +50,14 @@ def closing(scenario):
         result = {"version": __version__, "code": code,
                   "route_mismatch": state["admissions"][admission["admission_id"]]["route_decision"]["route_mismatch"],
                   "closed": bool(state["checkpoint"].get("closure"))}
+        if runtime_changed:
+            history = state["checkpoint"]["continuity"]["history"]
+            keys = ("from_runtime", "to_runtime", "provenance")
+            result.update(admission_runtime=state["admissions"][admission["admission_id"]]["runtime"],
+                          refs_runtime=[ref["runtime"] for ref in state["checkpoint"]["native_refs"]],
+                          persisted_rebinds=[{key: entry[key] for key in keys} for entry in history],
+                          runtime_continuity=[{key: entry[key] for key in keys} for entry in continuity or []],
+                          reported_rebind_matches_history=continuity == history)
         if scenario == "discard":
             passing = {"schema": "pod-evidence/v1", "criterion": "PoD#1", "candidate": case.candidate,
                        "sources": [], "policy_revision": "p", "dependencies": [], "environment": "fixture",

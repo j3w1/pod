@@ -67,6 +67,22 @@ class RefusalCompatibilityTests(unittest.TestCase):
     def test_already_closed_closing_report_keeps_genuine_0150_route_mismatch(self):
         self.assertTrue(self.closing_compatible("closed")["closed"])
 
+    def runtime_mismatch_compatible(self, scenario):
+        result = self.closing_compatible(scenario)
+        self.assertFalse(result["closed"])
+        self.assertEqual(result["admission_runtime"], "changed-runtime")
+        self.assertEqual(result["refs_runtime"], ["changed-runtime"])
+        expected = [{"from_runtime": "runtime", "to_runtime": "changed-runtime", "provenance": "automatic"}]
+        self.assertEqual(result["persisted_rebinds"], expected)
+        self.assertEqual(result["runtime_continuity"], expected)
+        self.assertTrue(result["reported_rebind_matches_history"])
+
+    def test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind(self):
+        self.runtime_mismatch_compatible("runtime")
+
+    def test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind(self):
+        self.runtime_mismatch_compatible("runtime_malformed")
+
     def test_discard_then_close_keeps_genuine_0150_acceptance_route_hold(self):
         result = self.closing_compatible("discard")
         self.assertTrue(result["closed"])

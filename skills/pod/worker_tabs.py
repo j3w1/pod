@@ -207,9 +207,9 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if keep:
         return finish("owner_kept_unowned", f"Owner-kept by instruction {keep['id']}. " + wording, command=None)
     if admission.get("report") is None:
-        unavailable = bool((state.get("checkpoint") or {}).get("closure") or admission.get("disposition"))
+        closed = bool((state.get("checkpoint") or {}).get("closure"))
         next_step = ("The owner's standing close authorization does not cover this tab because its report "
-                     "was not recorded; name it in the final report for the owner's decision." if unavailable else
+                     "was not recorded; name it in the final report for the owner's decision." if closed else
                      "The authorized close becomes available once its report is recorded.")
         return finish("user_owned" if row["ownership"] == "user_owned" else "external",
                       wording + " " + next_step, command=None)

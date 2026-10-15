@@ -285,16 +285,33 @@ class TableTests(TabCase):
             self.assertEqual((row["row"], row["state"]), (case, "kept"))
             self.assertIsNone(row["command"])
             self.assertIn("Do not reuse", row["wording"])
-            self.assertIn("standing close authorization does not cover this tab", row["wording"])
-            self.assertIn("because its report was not recorded", row["wording"])
-            self.assertIn("name it in the final report for the owner's decision", row["wording"])
-            self.assertNotIn("once its report is recorded", json.dumps(output))
+            if close:
+                self.assertIn("standing close authorization does not cover this tab", row["wording"])
+                self.assertIn("because its report was not recorded", row["wording"])
+                self.assertIn("name it in the final report for the owner's decision", row["wording"])
+                self.assertNotIn("once its report is recorded", json.dumps(output))
+            else:
+                self.assertIn("The authorized close becomes available once its report is recorded", row["wording"])
+                self.assertNotIn("for the owner's decision", row["wording"])
             self.assertNotIn("terminal close", json.dumps(output))
             finalization = output.get("finalization") or output["readiness"]["finalization"]
             self.assertIn(row["wording"], finalization["next_action"])
         if close:
+            before = self.saved()
             with self.assertRaises(PodError) as caught: self.report(admission, frozen)
             self.assertEqual(caught.exception.code, "objective_closed")
+            self.assertEqual(before, self.saved())
+        else:
+            result = self.report(admission, frozen)
+            ack = self.ack("report", {"admission_id": admission["admission_id"]}, result)
+            for row in (result["worker_tab"], ack["worker_tab"], self.status()["worker_tabs"][0]):
+                self.assertEqual((row["row"], row["state"]), (case, "kept"))
+                self.assertIn("Do not reuse", row["wording"])
+                self.assertEqual(row["command"],
+                                 ["orca", "terminal", "close", "--terminal", admission["native_binding"]["terminalHandle"]])
+            state = read(self.project, "objective")
+            self.assertIsNone(state["checkpoint"].get("closure"))
+            self.assertIsNotNone(state["admissions"][admission["admission_id"]]["report"])
 
     def test_unreported_user_owned_closing_ack_and_status_name_owner_decision(self):
         self.disposed_unreported("user_owned", close=True)
@@ -302,10 +319,10 @@ class TableTests(TabCase):
     def test_unreported_external_closing_ack_and_status_name_owner_decision(self):
         self.disposed_unreported("external", close=True)
 
-    def test_unreported_discarded_user_owned_ack_and_status_name_owner_decision(self):
+    def test_unreported_discarded_user_owned_ack_and_status_allow_late_report(self):
         self.disposed_unreported("user_owned", close=False)
 
-    def test_unreported_discarded_external_ack_and_status_name_owner_decision(self):
+    def test_unreported_discarded_external_ack_and_status_allow_late_report(self):
         self.disposed_unreported("external", close=False)
 
     def test_report_ack_waits_for_another_workers_unrecorded_report(self):

@@ -33,9 +33,10 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   standing authorization. This never applies to active, coordinator, setup,
   reused-later, other-objective or owner-kept terminals. If Orca refuses, name
   the tab and failure in the final report.
-  If closure or disposal leaves no recorded report for that tab, the standing
-  close authorization does not cover it. Give no close command; name the tab in
-  the final report for the owner's decision.
+  While the objective is open, recording its report makes the authorized close
+  available, even if its result was discarded. Until then, give no close command.
+  After closure without its report, the standing close authorization does not
+  cover it; name the tab in the final report for the owner's decision.
 - A disconnected or not-materialized terminal needs nothing. A terminal reused
   for a later Dispatch belongs to that assignment alone.
 
@@ -64,7 +65,7 @@ instruction, and Orca's reason for any unowned tab, in the final report.
 Both closing routes wait for every connected Orca-owned unreleased worker tab
 except an owner-kept tab; pending, unknown and unreadable facts hold closure too.
 A closing report includes its own tab: record its proof without closing, settle
-the tabs, then close. A refusal writes no context, map or report record. Kept
+the tabs, then close. A tab refusal writes no context, map or report record. Kept
 user-owned/external tabs do not block the write; the closing acknowledgement
 names their next steps. Follow every listed row before the final report and
 preserve named close failures and owner-kept exceptions.

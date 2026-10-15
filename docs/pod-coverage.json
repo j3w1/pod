@@ -4653,8 +4653,8 @@
         "tests.test_worker_tabs.TableTests.test_report_ack_waits_for_another_workers_unrecorded_report",
         "tests.test_worker_tabs.TableTests.test_unreported_user_owned_closing_ack_and_status_name_owner_decision",
         "tests.test_worker_tabs.TableTests.test_unreported_external_closing_ack_and_status_name_owner_decision",
-        "tests.test_worker_tabs.TableTests.test_unreported_discarded_user_owned_ack_and_status_name_owner_decision",
-        "tests.test_worker_tabs.TableTests.test_unreported_discarded_external_ack_and_status_name_owner_decision"
+        "tests.test_worker_tabs.TableTests.test_unreported_discarded_user_owned_ack_and_status_allow_late_report",
+        "tests.test_worker_tabs.TableTests.test_unreported_discarded_external_ack_and_status_allow_late_report"
       ],
       "status": "NOT_RUN"
     },
@@ -4712,7 +4712,9 @@
         "tests.test_worker_tabs.ClosureTests.test_closing_route_mismatch_precedes_tab_body_and_map_validation",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_malformed_closing_report_keeps_genuine_0150_route_mismatch",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
-        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold"
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
       ],
       "status": "NOT_RUN"
     },
@@ -4883,7 +4885,9 @@
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_same_requests_keep_genuine_0150_refusal_codes",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_malformed_closing_report_keeps_genuine_0150_route_mismatch",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
-        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold"
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
       ],
       "status": "NOT_RUN"
     },
@@ -4930,7 +4934,9 @@
         "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_without_admissions",
         "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal",
         "tests.test_worker_tabs.ClosureTests.test_continuity_difference_is_not_an_unreadable_tab",
-        "tests.test_worker_tabs.ClosureTests.test_closing_continuity_ambiguity_keeps_its_owner_decision_route"
+        "tests.test_worker_tabs.ClosureTests.test_closing_continuity_ambiguity_keeps_its_owner_decision_route",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
       ],
       "status": "NOT_RUN"
     }

@@ -222,7 +222,7 @@ def _op_report(request: dict) -> dict:
             shown = port.show_worker(binding["dispatchId"])
     # Closing preparation and runtime rebind share the consume lock. Tab
     # refusals write nothing; route mismatches keep their earlier update path.
-    from .ledger import consume_report, _continuity_step
+    from .ledger import consume_report, _continuity_step, _record_continuity_event
     prepared = {}
     if closing:
         def prepare(current, row):
@@ -233,7 +233,13 @@ def _op_report(request: dict) -> dict:
                                               owner=row["owner"], port=port, persist=False)
                 if continuity is not None:
                     observed = port.show_worker(row["native_binding"]["dispatchId"])
-            prepared.update(_prepare_report(request, current, row, observed, closing=True))
+            try:
+                prepared.update(_prepare_report(request, current, row, observed, closing=True))
+            except PodError as exc:
+                # The route-mismatch update persisted the prepared rebind too.
+                if exc.code == "route_mismatch" and continuity is not None:
+                    _record_continuity_event(continuity)
+                raise
             return {**prepared, "continuity": continuity}
         inputs = {"observation": None, "prepare": prepare}
     else:
