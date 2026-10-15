@@ -539,6 +539,12 @@ def _moved(record):
     return counts
 
 
+def _settlement_action(sections):
+    return ("Consume or triage reports, record implementation dispositions, or settle governed "
+            "effects through their supported paths; largest sections: "
+            + ", ".join(row["section"] for row in sections[:3]))
+
+
 def capacity(path, state):
     """Additive observation only: never changes readiness, phase or existing actions."""
     _, receipts, raw = _load(path)
@@ -556,9 +562,7 @@ def capacity(path, state):
             useful = False
         result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; internal "
                                  "record-compaction permits owner-scoped maintenance now." if useful else
-                                 "Consume or triage reports, record implementation dispositions, or settle governed "
-                                 "effects through their supported paths; largest sections: "
-                                 + ", ".join(row["section"] for row in result["largest_sections"][:3]))
+                                 _settlement_action(result["largest_sections"]))
     else:
         result["next_action"] = f"Continue through the existing objective operations; settled history compacts once the record reaches {COMPACT_AT} bytes."
     return result
@@ -606,14 +610,24 @@ def record_compaction(project, objective, *, decision=None):
                 return {"status": "replayed", "facts": facts, "written": False}
             if not same_scope or decision["facts"] != binding:
                 _fail("compaction_decision_mismatch", "The decision differs from the exact physical or logical record; detect again")
-        # Maintenance compares bytes before asking whether a useful plan fits;
-        # a no-op needs no write capacity, even when the existing record is full.
-        record, chunks = prepare_context(path, state, force=True, maintenance=receipts, require_fit=False)
+        # Both detection and decision reserve the next receipt, including the
+        # largest JSON encoding of a permitted instruction. Its digest has fixed
+        # width; byte-count digits and fragment references can otherwise grow
+        # after the owner fills in the template. A no-op needs no write capacity.
+        allowance = {"authority": {"provenance": "user_direct", "channel": "session", "instruction": "\x01" * 1024},
+                     "decision": "0" * 64, "input_sha256": binding["input_sha256"], "logical_sha256": logical}
+        record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, allowance], require_fit=False)
         useful = len(_bytes(record)) < len(raw)
         if useful:
             _require_size(record, current_bytes=len(raw))
         result = {"status": "compaction_available" if useful else "unchanged", "facts": facts, "current_bytes": len(raw),
                   "proposed_bytes": len(_bytes(record)), "limit_bytes": CONTEXT_LIMIT, "moved": _moved(record), "written": False}
+        if not useful:
+            result["largest_sections"] = largest_sections(state)
+            result["next_action"] = (_settlement_action(result["largest_sections"]) if len(raw) >= WARN_AT else
+                                     "Continue through the existing objective operations; no settled history currently "
+                                     "reduces this record after the maintenance receipt allowance.")
+            return result
         if decision is None:
             result["question"] = (f"May Pod compact settled history for objective {objective}, preserving all recorded "
                                   "work and decisions and keeping unsettled items in its record?")
@@ -621,8 +635,6 @@ def record_compaction(project, objective, *, decision=None):
                 "decision": {"provenance": "user_direct", "instruction": "<owner instruction>", "channel": "session",
                              "repository": repository, "objective": objective, "facts": binding}}}
             return result
-        if not useful:
-            return {**result, "status": "unchanged", "written": False}
         receipt = {"authority": {key: decision[key] for key in ("provenance", "instruction", "channel")},
                    "decision": digest(decision), "input_sha256": binding["input_sha256"], "logical_sha256": logical}
         record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, receipt], require_fit=False)

@@ -385,7 +385,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             {**row, "decision": decision_channel(row["decision"])} if isinstance(row.get("decision"), dict) else dict(row)
             for row in continuity["history"]]}
     if state is not None:
-        from .util import context_decisions, map_decisions
+        from .util import context_decisions, map_decisions, derived_governance_summary
         from .governor import _read_journal, _record_path
         try:
             journal = _read_journal(_record_path(project, objective)) if objective else None
@@ -394,8 +394,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         decisions = context_decisions(state, journal) + map_decisions(checkpoint or {})
         if decisions:
             result["owner_decisions"] = decisions
-        derived = [row for row in (checkpoint or {}).get("governance_history", {}).get("decisions", [])
-                   if row.get("provenance") == "derived"]
+        derived = derived_governance_summary(checkpoint or {})
         if derived:
             result["derived_governance_decisions"] = derived
     if state is not None and checkpoint is not None:
@@ -577,8 +576,10 @@ def render(result: dict) -> None:
         for row in result.get("owner_decisions", []):
             channel = row["decision"]["channel"] + (" (earlier record)" if row["decision"].get("channel_recorded") is False else "")
             print(f"Decision {clean(row['kind'])}: {clean(channel)} ({clean(row['reference'])})")
-        for row in result.get("derived_governance_decisions", []):
-            print(f"Derived governance adoption: {clean(row['previous_base'])} -> {clean(row['base'])}; unchanged sources")
+        derived = result.get("derived_governance_decisions")
+        if derived:
+            print(f"Derived governance adoptions ({derived['count']}): {clean(derived['previous_base'])} -> "
+                  f"{clean(derived['base'])}; unchanged sources; {clean(derived['history']['reference'])}")
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})"
                   + (f"; reason: {terminal.get('reason') or 'unknown'}" if "reason" in terminal else ""))

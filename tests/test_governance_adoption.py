@@ -56,7 +56,7 @@ class GovernanceAdoptionTests(KernelCase):
         self.assertEqual(closed["governance"]["proof_base"], initial["governance"]["base"])
         self.assertEqual(closed["obligations"][0]["receipts"], receipts)
         self.assertEqual(closed["obligations"][1]["source"]["base"], target)
-        self.assertEqual(closed["closure"]["report"]["derived_governance_decisions"][-1]["base"], target)
+        self.assertEqual(closed["closure"]["report"]["derived_governance_decisions"]["base"], target)
 
     def test_candidate_change_cannot_rebind_proof_during_adoption(self):
         self.intake()

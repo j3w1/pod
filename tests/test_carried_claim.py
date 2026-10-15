@@ -873,6 +873,52 @@ class CarriedUnconfirmedRerunTests(CarriedCase):
 class MergeTests(CarriedCase):
     """PoD#4 — a carried merge stays pending while its pull request is open and settles PASS only by R93."""
 
+    def test_carried_exception_is_omitted_from_successor_owner_inventory_and_closure(self):
+        import yaml
+        config_path = self.root / "config/pod/config.yaml"
+        config = yaml.safe_load(config_path.read_text())
+        config.setdefault("waste_governor", {})["exceptions"] = [{
+            "id": "merge-exception", "action": "efficiency_exception", "objective": "objective",
+            "kinds": ["merge"], "reason": "Owner's scoped predecessor grant",
+            "valid_until": "2027-01-01T00:00:00Z"}]
+        config_path.write_text(yaml.safe_dump(config))
+
+        def build():
+            candidate = self.renew()
+            self.consent = {**self.authorization, "scope": ["merge"], "target": "origin/target"}
+            result = self.op("governor", action={"kind": "merge", "candidate": candidate["commit"],
+                "target": "origin/target", "reason": "deliver", "unit": "default", "effects": [],
+                "authorization": self.consent},
+                exception={"grant": "merge-exception", "reason": "Scoped predecessor decision", "by": "owner"})
+            self.assertEqual(result["decision"], "ALLOW")
+            return result["record_id"]
+
+        merge = self.lost_with(build)
+        exception = self.row(merge, objective="objective")["exception"]
+        self.assertEqual(exception["channel"], "session")
+        predecessor = self.status()
+        for inventory in (predecessor, predecessor["report"]):
+            self.assertEqual([row["decision"] for row in inventory["owner_decisions"]
+                              if row["kind"] == "governor_exception"], [exception])
+        effects = self.writes()
+        self.carry()
+        self.assertEqual(self.row(merge)["exception"], exception)
+        self.assertEqual(self.row(merge)["carried_from"]["objective"], "objective")
+        successor = self.status(objective="successor")
+        for inventory in (successor, successor["report"]):
+            self.assertFalse([row for row in inventory.get("owner_decisions", [])
+                              if row["kind"] == "governor_exception"])
+        result = self.merged(fetched=True)
+        self.pull_request("MERGED", result)
+        self.assertEqual(self.mine("governor-reconcile", record_id=merge)["status"], "PASS")
+        self.mine("checkpoint", value=self.core(obligations=read(self.project, "successor")["checkpoint"]
+                                                ["obligations"], delivery={"record": merge}))
+        self.close_successor()
+        report = read(self.project, "successor")["checkpoint"]["closure"]["report"]
+        self.assertFalse([row for row in report.get("owner_decisions", []) if row["kind"] == "governor_exception"])
+        self.assertEqual(self.row(merge)["exception"], exception)
+        self.assertEqual(self.writes(), effects)
+
     def test_carried_authorization_is_omitted_from_successor_owner_inventory_and_closure(self):
         built = self.lost_with(self.merge_decision)
         effects = self.writes()

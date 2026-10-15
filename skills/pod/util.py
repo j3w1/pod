@@ -71,6 +71,25 @@ def channel_fields(value: dict) -> dict:
     return {key: value[key] for key in CHANNEL_FIELDS | {"channel_recorded"} if key in value}
 
 
+def derived_governance_summary(state: dict) -> dict | None:
+    """Bounded projection; complete adoptions remain only at their history positions."""
+    count, first, latest = 0, None, None
+    for index, row in enumerate(state.get("governance_history", {}).get("decisions", [])):
+        if row.get("provenance") == "derived":
+            count += 1
+            if first is None:
+                first = (index, row)
+            latest = (index, row)
+    if first is None:
+        return None
+    row = latest[1]
+    return {"count": count, "previous_base": first[1]["previous_base"],
+            "base": row["base"], "base_ref": row["base_ref"],
+            "sources": [dict(source) for source in row["sources"]],
+            "history": {"reference": "governance_history/decisions", "provenance": "derived",
+                        "first": first[0], "last": latest[0]}}
+
+
 def map_decisions(state: dict) -> list[dict]:
     """Owner decision records on the map, with stable location references."""
     rows = []
@@ -115,7 +134,7 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
             decision = value.get("action", {}).get(field)
             if isinstance(decision, dict) and "carried_from" not in value:
                 add(kind, f"governor/{value['record_id']}/{field}", decision)
-        if isinstance(value.get("exception"), dict):
+        if isinstance(value.get("exception"), dict) and "carried_from" not in value:
             add("governor_exception", f"governor/{value['record_id']}/exception", value["exception"])
     return rows
 

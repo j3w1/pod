@@ -2051,9 +2051,11 @@ def report_projection(state: dict, ctx: dict) -> dict:
             "unprepared": {"publish": "MISSING", "merge": "MISSING"}}
         result["hosted_checks"] = delivery_status.get("hosted_checks", "NOT_RUN")
     if state.get("governance_history", {}).get("decisions"):
-        result["governance_decisions"] = [deepcopy(row) if legacy_report or row.get("provenance") == "derived" else decision_channel(row)
-                                           for row in state["governance_history"]["decisions"]]
-        derived = [row for row in result["governance_decisions"] if row.get("provenance") == "derived"]
+        result["governance_decisions"] = [deepcopy(row) if legacy_report else decision_channel(row)
+                                           for row in state["governance_history"]["decisions"]
+                                           if row.get("provenance") != "derived"]
+        from .util import derived_governance_summary
+        derived = derived_governance_summary(state)
         if derived and not legacy_report:
             result["derived_governance_decisions"] = derived
     from .util import map_decisions

@@ -44,6 +44,13 @@ class RecordCompactionTests(KernelCase):
         decision["instruction"] = "Compact settled history of this exact objective"
         return decision
 
+    def unoffered_decision(self, detected):
+        # An explicit exact decision remains a no-op even when detection offers none.
+        facts = detected["facts"]
+        return {"provenance": "user_direct", "instruction": "Compact this exact record if useful",
+                "channel": "session", "repository": facts["repository"], "objective": facts["objective"],
+                "facts": {key: facts[key] for key in ("record", "revision", "input_sha256", "logical_sha256")}}
+
     def files(self):
         return {str(p.relative_to(self.path.parent.parent)): p.read_bytes()
                 for p in self.path.parent.parent.rglob("*") if p.is_file()}
@@ -70,6 +77,63 @@ class RecordCompactionTests(KernelCase):
         self.assertNotIn("synthetic-owner", result["question"])
         self.assertNotIn("synthetic-run", result["question"])
         self.assertEqual(files, self.files())
+
+    def test_unchanged_detection_has_guidance_without_an_owner_question_or_template(self):
+        self.intake()
+        path = objective_root(self.project, "objective") / "context.json"
+        before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
+        detected = run("record-compaction", {"project": str(self.project), "objective": "objective"})
+        self.assertEqual((detected["status"], detected["written"]), ("unchanged", False))
+        self.assertNotIn("question", detected)
+        self.assertIsInstance(detected["next_action"], str)
+        self.assertIn("Continue", detected["next_action"])
+        self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, before)
+
+    def test_over_limit_unchanged_detection_names_sections_and_settlement_routes(self):
+        from pod.ledger import read
+        self.intake()
+        path = objective_root(self.project, "objective") / "context.json"
+        state = read(self.project, "objective")
+        state["source_rejections"] = {"synthetic-unsettled": "x" * CONTEXT_LIMIT}
+        path.write_bytes(encoded(state, compact=True))
+        before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
+        detected = run("record-compaction", {"project": str(self.project), "objective": "objective"})
+        self.assertEqual((detected["status"], detected["written"]), ("unchanged", False))
+        self.assertNotIn("question", detected)
+        self.assertEqual(detected["largest_sections"][0]["section"], "source_rejections")
+        for route in ("reports", "implementation dispositions", "governed effects"):
+            self.assertIn(route, detected["next_action"])
+        self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, before)
+
+    def test_detection_counts_receipt_overhead_before_asking_the_owner(self):
+        from pod.ledger import read
+        self.intake()
+        path = objective_root(self.project, "objective") / "context.json"
+        state = read(self.project, "objective")
+        state["checkpoint"]["revision_decisions"] = [
+            {"seq": 1, "kind": "revision", "provenance": "user_direct", "instruction": "x" * 180},
+            {"seq": 1, "kind": "revision", "provenance": "user_direct", "instruction": "latest"}]
+        path.write_bytes(encoded(state, compact=True))
+        before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
+        detected = run("record-compaction", {"project": str(self.project), "objective": "objective"})
+        self.assertEqual((detected["status"], detected["written"]), ("unchanged", False))
+        self.assertNotIn("question", detected)
+        self.assertIsInstance(detected["next_action"], str)
+        self.assertGreaterEqual(detected["proposed_bytes"], detected["current_bytes"])
+        self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, before)
+
+    def test_detection_receipt_allowance_covers_the_largest_owner_instruction(self):
+        self.arrange()
+        detected = self.operate()
+        decision = detected["next_action"]["request"]["decision"]
+        # Each allowed character needs six JSON bytes; this reaches the allowance.
+        decision["instruction"] = "\x01" * 1024
+        result = self.operate(decision)
+        self.assertEqual(result["status"], "compacted")
+        self.assertEqual(result["proposed_bytes"], detected["proposed_bytes"])
+        self.assertEqual(capacity(self.path, self.state)["maintenance"][0]["authority"]["instruction"],
+                         decision["instruction"])
+        self.assertEqual(_read(self.path), self.state)
 
     def test_owner_maintenance_preserves_every_logical_field_and_revision(self):
         self.arrange()
@@ -118,8 +182,12 @@ class RecordCompactionTests(KernelCase):
         self.arrange()
         self.operate(self.decide())
         before = self.files()
-        second = self.decide()
-        second["instruction"] += " again"
+        detected = self.operate()
+        self.assertEqual(detected["status"], "unchanged")
+        self.assertNotIn("question", detected)
+        self.assertIsInstance(detected["next_action"], str)
+        second = self.unoffered_decision(detected)
+        second["instruction"] = "Compact settled history of this exact objective again"
         result = self.operate(second)
         self.assertEqual((result["status"], result["written"]), ("unchanged", False))
         self.assertEqual(self.files(), before)
@@ -147,9 +215,11 @@ class RecordCompactionTests(KernelCase):
         path.write_bytes(encoded(state, compact=True))
         request = {"project": str(self.project), "objective": "objective"}
         found = run("record-compaction", request)
-        self.assertLess(found["proposed_bytes"], found["current_bytes"])
-        decision = found["next_action"]["request"]["decision"]
-        decision["instruction"] = "Compact this exact record if useful"
+        self.assertEqual(found["status"], "unchanged")
+        self.assertGreaterEqual(found["proposed_bytes"], found["current_bytes"])
+        self.assertNotIn("question", found)
+        self.assertIsInstance(found["next_action"], str)
+        decision = self.unoffered_decision(found)
         before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
         result = run("record-compaction", {**request, "decision": decision})
         self.assertEqual((result["status"], result["written"]), ("unchanged", False))
@@ -166,8 +236,9 @@ class RecordCompactionTests(KernelCase):
         before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
         found = run("record-compaction", request)
         self.assertEqual(found["status"], "unchanged")
-        decision = found["next_action"]["request"]["decision"]
-        decision["instruction"] = "Compact this exact record if useful"
+        self.assertNotIn("question", found)
+        self.assertIsInstance(found["next_action"], str)
+        decision = self.unoffered_decision(found)
         result = run("record-compaction", {**request, "decision": decision})
         self.assertEqual((result["status"], result["written"]), ("unchanged", False))
         self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, before)
@@ -262,8 +333,10 @@ class RecordCompactionTests(KernelCase):
         path = objective_root(self.project, "objective") / "context.json"
         request = {"project": str(self.project), "objective": "objective"}
         detected = run("record-compaction", request)
-        decision = detected["next_action"]["request"]["decision"]
-        decision["instruction"] = "Compact this exact record if useful"
+        self.assertEqual(detected["status"], "unchanged")
+        self.assertNotIn("question", detected)
+        self.assertIsInstance(detected["next_action"], str)
+        decision = self.unoffered_decision(detected)
         before = path.read_bytes()
         files = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
         result = run("record-compaction", {**request, "decision": decision})
