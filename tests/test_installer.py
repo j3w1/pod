@@ -405,7 +405,7 @@ class InstallerTests(unittest.TestCase):
         self.installed()
         prior = json.loads(self.receipt.read_text())["target"]["digest"]
         skill = (ROOT / "skills/pod/SKILL.md").read_bytes()
-        # Change bundle bytes without making a valid skill exceed its word budget.
+        # Change bundle bytes while preserving valid skill structure.
         changed = skill + b"\n"
         newer = archive_tree(self.root / "newer.tar.gz", changes={"skills/pod/SKILL.md": changed})
         env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri()}

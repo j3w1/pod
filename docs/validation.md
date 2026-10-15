@@ -35,7 +35,7 @@ fabricate compatibility to make a result pass.
 | Suite lanes | `PYTHONPATH=skills python tools/suite_lanes.py check` | Each test has one lane, tests the timing heuristic flags are classified, recorded entries name real tests, incident modules yield tests and every lane fits its target. |
 | Explicit incidents | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident cases are discovered. |
 | Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check $(git hash-object -t tree /dev/null) HEAD` | Syntax and whole-candidate whitespace. |
-| Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Inventory, root VERSION link, frontmatter, descriptors, triggered links, launcher safety and printed budgets. |
+| Skill validation | `PYTHONPATH=skills python -m pod.skill_validation skills/pod` | Inventory, root VERSION link, frontmatter, descriptors, triggered links and launcher safety. |
 | Catalog check | `PYTHONPATH=skills python -m pod.catalog --check` | Exact supported ids/efforts, source aliases, attributed guidance and provider sources. |
 | Focused routes/refresh/workspace | `PYTHONPATH=skills python -m unittest tests.test_catalog tests.test_config tests.test_pin tests.test_selection tests.test_routes tests.test_route_upgrade tests.test_sources tests.test_observations tests.test_cli tests.test_workspace_state tests.test_tui_render -v` | Deterministic affected-domain checks; also included in the full unit gate. |
 | Source hygiene | `python tools/source_audit.py .` | Tracked-source privacy and removed-mechanism guards; no package/tag/release publication path. |
@@ -128,20 +128,17 @@ suitability. Genuine earlier-writer fixtures and synthetic controls retain their
 provenance; neither is live proof. Hosted checkout fetches complete Git objects for
 upgrade and genuine-writer tests.
 
-Instruction budgets are whitespace-delimited, including frontmatter: SKILL ≤400
-words, each reference ≤450, eight execution references ≤2000 combined, three
-canonical authoring templates ≤1350 combined and delivery path ≤2000. Only
-seal-template.md, pes-template.md and eel-template.md use the authoring allowance.
-Print every file count and execution, authoring, delivery, all-reference and full
-installed-guidance totals. Runtime anchors and independent content review check
-that runtime rules remain in execution guidance; word counts do not measure
-agent reading, tokens, cost or suitability.
-The delivery file list is `SKILL.md`, `references/issue-intake.md`,
-`references/planning.md`, `references/orca-boundary.md`, `references/models.md`,
-`references/verification.md` and `references/governor.md`, relative to `skills/pod`.
-Metadata restrictions precede word-budget checks. Every reference has one triggered
-router link and no reference-to-reference links. Runtime guidance lives in the
-installed bundle; contributor checks live here.
+The documentation contract is [R71](spec/interface.md#r71--maintain-the-documentation-contract).
+Skill validation checks bundle structure and installed parity; the location-aware
+anchor table checks that required topics occur once in their owning files. Independent
+review checks the guidance against R71 for clarity, completeness, task coherence and
+authoritative placement. Stored per-file word counts and their total are informational
+and do not measure the context an agent loads. Observed runs, rather than static
+checks, establish which references an agent actually read and why.
+Metadata and VERSION restrictions are reported before body checks. Every reference
+has one unique triggered router link and no reference-to-reference links. Runtime
+guidance lives in the installed bundle's applicable task references, with authoring
+templates serving authoring and revision; contributor checks live here.
 
 ## Containment and live boundary
 

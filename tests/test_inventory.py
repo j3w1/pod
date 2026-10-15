@@ -343,6 +343,12 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             "unknown_prompts": ("SKILL.md", "unknown or permission prompts block"),
             "safety": ("SKILL.md", "never reroute a safety refusal"),
             "capacity": ("SKILL.md", "never infer physical capacity or count other objectives' workers"),
+            "reference_action": ("SKILL.md", "read a reference when the current action, or a necessary prerequisite of it, needs it"),
+            "no_preload": ("SKILL.md", "never preload the reference directory"),
+            "no_link_loading": ("SKILL.md", "never read a reference merely because it is linked"),
+            "template_loading": ("SKILL.md", "read an authoring template only to author or revise that kind of document"),
+            "guidance_reload": ("SKILL.md", "reload guidance when it is lost, changed or insufficient"),
+            "trivial_loading": ("SKILL.md", "trivial work reads none"),
             "pin_limits": ("references/models.md", "direct user constraints, host restrictions, review independence, tool permissions and spending"),
             "worktree": ("references/planning.md", "`--branch orca/<task-slug>`"),
             "project_audit": ("references/planning.md", "cited `project_policy` assurances"),
@@ -350,6 +356,33 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             "eel": ("references/issue-intake.md", "never execute it or restate it as a direct objective"),
             "seal_intake": ("references/issue-intake.md", "analysis grants no implementation authority"),
             "parent_traceability": ("references/issue-intake.md", "child pess retain parent locator, observed body/amendment digests"),
+            "seal_read_only": ("references/seal-delivery.md", "planning creates no pod objective, orca run, orca worker or pod record"),
+            "seal_publication_authority": ("references/seal-delivery.md", "creating or editing an issue, a comment or the seal needs the owner's authorization in this conversation"),
+            "seal_record": ("references/seal-delivery.md", "the github seal issue remains the only record of requirements, linked deliveries and acceptance"),
+            "seal_reconcile": ("references/seal-delivery.md", "read the seal, its amendments and its delivery outline"),
+            "seal_delivery_sources": ("references/seal-delivery.md", "that the seal links or that cite it, in every repository involved"),
+            "seal_related_scope": ("references/seal-delivery.md", "read a related seal only for the requirements it shares with this one"),
+            "seal_no_crawl": ("references/seal-delivery.md", "never crawl further links transitively"),
+            "seal_classification": ("references/seal-delivery.md", "classify each applicable acceptance criterion with its evidence"),
+            "seal_no_child_closure": ("references/seal-delivery.md", "a child's passing proof supports parent criteria but never closes them"),
+            "seal_disposition": ("references/seal-delivery.md", "only an owner-recorded disposition is a withdrawal"),
+            "seal_reuse": ("references/seal-delivery.md", "reopen only the evidence tied to the changed requirements"),
+            "seal_complete_stop": ("references/seal-delivery.md", "stop, with no question round and no decomposition"),
+            "seal_questions": ("references/seal-delivery.md", "ask one batched round of questions, each with a recommended option first"),
+            "seal_outcome": ("references/seal-delivery.md", "always confirm the outcome to deliver now and the criteria it includes"),
+            "seal_followup": ("references/seal-delivery.md", "ask one follow-up round only when an answer raises a new decision"),
+            "seal_implementation_choices": ("references/seal-delivery.md", "never ask about implementation choices"),
+            "seal_boundary_value": ("references/seal-delivery.md", "can it produce a meaningful result that is verified on its own"),
+            "seal_boundary_ownership": ("references/seal-delivery.md", "does it own distinct contracts, state and files"),
+            "seal_boundary_compatibility": ("references/seal-delivery.md", "can it be delivered or safely staged without breaking dependent projects"),
+            "seal_boundary_proportionality": ("references/seal-delivery.md", "does splitting reduce expected total work, risk or delay"),
+            "seal_independent_delivery": ("references/seal-delivery.md", "cross-project work with a stable interface usually splits"),
+            "seal_coupled_delivery": ("references/seal-delivery.md", "when separating it would create artificial intermediate objectives, duplicate approvals or more integration risk"),
+            "seal_coverage": ("references/seal-delivery.md", "every open applicable criterion has exactly one owning delivery"),
+            "seal_combined_proof": ("references/seal-delivery.md", "a criterion that needs several deliveries names its combined proof"),
+            "seal_ready_drafts": ("references/seal-delivery.md", "draft only the pess that are ready, not a speculative backlog"),
+            "seal_handover": ("references/seal-delivery.md", "report each published pes's `/pod` invocation and dependencies, then stop"),
+            "seal_execution_request": ("references/seal-delivery.md", "only on explicit request, as an ordinary objective"),
             "continuation": ("references/recovery.md", "on resume read native state first"),
             "preference_races": ("references/recovery.md", "rechoose at most twice, then report the conflict"),
             "trivial": ("references/models.md", "trivial direct work needs no worker"),
@@ -371,10 +404,9 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         self.assertIn("PoD#1", EXAMPLE_SPEC)
         self.assertNotIn("N/A", EXAMPLE_SPEC)
 
-    def test_external_metadata_notice_is_short_and_not_a_product_dependency(self):
+    def test_external_metadata_notice_is_not_a_product_dependency(self):
         text = (self.root / "AGENTS.md").read_text()
         notice = text.split("## Upstream metadata governance", 1)[1]
-        self.assertLessEqual(len(notice.split()), 90)
         self.assertIn("not part of Pod", notice)
         self.assertIn("not required to install, use or fork", notice)
         self.assertEqual(notice.count("https://"), 1)

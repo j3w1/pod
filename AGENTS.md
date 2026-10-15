@@ -6,7 +6,7 @@ exemption. Inspect Git state and preserve unrelated work.
 | Read when | Document or check |
 | --- | --- |
 | Changing behavior or a requirement | `docs/pod-spec.md` and the linked affected domain |
-| Editing skill text | The trigger list in `skills/pod/SKILL.md` and `python -m pod.skill_validation` |
+| Editing skill text | `docs/spec/interface.md` R71 (the documentation contract), the trigger list in `skills/pod/SKILL.md`, and `python -m pod.skill_validation` |
 | Changing gates or CI | `docs/validation.md` |
 | Adding or changing tests | `docs/validation.md` "Test lanes"; `python tools/suite_lanes.py check` |
 | Changing the installer | `docs/installation.md` and `docs/validation.md` |

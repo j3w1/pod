@@ -1013,7 +1013,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_external_metadata_notice_is_short_and_not_a_product_dependency",
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_external_metadata_notice_is_not_a_product_dependency",
       "status": "NOT_RUN"
     },
     {
@@ -1033,7 +1033,9 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
+        "tests.test_skill_validation.SkillValidationTests.test_long_guidance_validates_without_refusal_or_warning",
+        "tests.test_skill_validation.SkillValidationTests.test_kept_limits_and_structure_still_refuse",
+        "tests.test_skill_validation.SkillValidationTests.test_validator_reports_all_word_counts",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
         "tests.test_skill_validation.SkillValidationTests.test_the_version_lives_only_in_a_well_formed_version_file"
@@ -1808,7 +1810,9 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_skill_validation.SkillValidationTests.test_instruction_word_budgets",
+        "tests.test_skill_validation.SkillValidationTests.test_long_guidance_validates_without_refusal_or_warning",
+        "tests.test_skill_validation.SkillValidationTests.test_kept_limits_and_structure_still_refuse",
+        "tests.test_skill_validation.SkillValidationTests.test_validator_reports_all_word_counts",
         "tests.test_inventory.InventoryIntegrityTests.test_current_contract_names_the_new_boundaries",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_skill_validation.SkillValidationTests.test_descriptors_and_router_structure_are_enforced",
@@ -2981,7 +2985,8 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_authoring.AuthoringTests.test_templates_and_filled_examples_have_distinct_responsibilities"
+        "tests.test_authoring.AuthoringTests.test_templates_and_filled_examples_have_distinct_responsibilities",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries"
       ],
       "status": "NOT_RUN"
     },
@@ -4480,6 +4485,31 @@
         "unit"
       ],
       "offline_test": "tests.test_decision_channels.SharedDecisionTests.test_eighty_owner_authorized_writes_have_no_revision_count_cap",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A357",
+      "required_evidence": [
+        "unit",
+        "installed_bundle",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_skill_validation.SkillValidationTests.test_repository_bundle_is_valid",
+        "tests.test_bundle_parity.BundleParityTests.test_tracked_files_match_the_declared_inventory",
+        "tests.test_installer.InstallerTests.test_fresh_rerun_placements_receipt_and_untouched_agent_configs",
+        "tests.test_skill_validation.SkillValidationTests.test_installed_copy_parity_names_what_differs"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A358",
+      "required_evidence": [
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": null,
       "status": "NOT_RUN"
     }
   ]
