@@ -496,6 +496,61 @@ def _accepted_assurance_current(ob: dict, ctx: dict, gov: str) -> bool:
         for item in ob.get("receipts", []))
 
 
+@input_record("group member")
+def _group_member(item, assurance_id):
+    from .contracts import SEVERITIES
+    from .obligations import _exact, _ident, refuse
+    _exact(item, contract_fields("group member"), required("group member"), "group member", obligation=assurance_id)
+    _ident(item["finding"], "finding", obligation=assurance_id)
+    if item["severity"] not in SEVERITIES:
+        raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES),
+                     record="group member", obligation=assurance_id)
+
+
+@input_record("finding")
+def _finding_record(raw, assurance_id):
+    from .contracts import SEVERITIES, TRIAGE
+    from .obligations import _exact, _ident, _text, refuse
+    record = _exact(raw, contract_fields("finding"),
+                    set(TABLE["finding"]["required_by_shape"]["group" if isinstance(raw, dict) and "findings" in raw else "single"]),
+                    "finding", obligation=assurance_id)
+    if "findings" in record:
+        grouped = record["findings"]
+        if ("finding" in record or "severity" in record or not isinstance(grouped, list)
+                or not bound("finding", "findings", "min_items") <= len(grouped)
+                <= bound("finding", "findings", "max_items")):
+            raise refuse("obligation_invalid", "malformed", "a group contains 1..8 finding/severity records",
+                         record="finding group", obligation=assurance_id)
+        for item in grouped:
+            _group_member(item, assurance_id)
+        if record.get("triage") != "required_correction":
+            _text(record.get("root_cause"), "root_cause", obligation=assurance_id)
+        ids = [item["finding"] for item in grouped]
+        if len(set(ids)) != len(ids):
+            raise refuse("obligation_invalid", "malformed", "group ids are unique", record="finding group",
+                         obligation=assurance_id)
+        record = {**record, "finding": ids[0], "severity": min((item["severity"] for item in grouped), key=SEVERITIES.index)}
+    else:
+        if "finding" not in record or "severity" not in record:
+            raise refuse("obligation_invalid", "malformed", "finding needs finding and severity", record="finding",
+                         obligation=assurance_id)
+        ids = [record["finding"]]
+    _ident(record["finding"], "finding", obligation=assurance_id)
+    _text(record["summary"], "summary", obligation=assurance_id)
+    if record["severity"] not in SEVERITIES or record["triage"] not in TRIAGE:
+        raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES) + "; triage allowed: " + ", ".join(TRIAGE),
+                     finding=record["finding"], obligation=assurance_id)
+    if record["severity"] in ("blocker", "major") and record["triage"] == "advisory":
+        if "reason" not in record:
+            raise refuse("obligation_invalid", "downgrade_unreasoned",
+                         "downgrading a reviewer's blocker or major finding needs a reason",
+                         finding=record["finding"], obligation=assurance_id)
+        _text(record["reason"], "reason", limit=bound("finding", "reason"), obligation=assurance_id)
+    if "root_cause" in record:
+        _text(record["root_cause"], "root_cause", obligation=assurance_id)
+    return record, ids
+
+
 def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *,
            admission_id: str) -> tuple[dict, frozenset]:
     """R82/R87: review findings become corrections or proposals; reports add only proposals.
@@ -503,7 +558,7 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     Returns the map value, finding-owned obligation ids, and the consumed review
     marker. Only this report boundary can supply those records to `accept_write`.
     """
-    from .obligations import (MAX_FINDINGS, PROPOSAL_SOURCES, SEVERITIES, TRIAGE, _admissions,
+    from .obligations import (MAX_FINDINGS, PROPOSAL_SOURCES, SEVERITIES, _admissions,
                               _exact, _ident, _text, expand_update, refuse)
     value = expand_update(state, value)
     base = {key: value[key] for key in value if key in ("seq", "obligations", "proposals")}
@@ -529,48 +584,11 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     records = []
     correction_findings = {}
     for raw in findings:
-        record = _exact(raw, {"finding", "severity", "findings", "triage", "summary", "reason", "correction", "root_cause"},
-                        {"triage", "summary"} | ({"findings"} if isinstance(raw, dict) and "findings" in raw else {"finding", "severity"}),
-                        "finding", obligation=assurance_id)
-        if "findings" in record:
-            grouped = record["findings"]
-            if "finding" in record or "severity" in record or not isinstance(grouped, list) or not 1 <= len(grouped) <= 8:
-                raise refuse("obligation_invalid", "malformed", "a group contains 1..8 finding/severity records",
-                             record="finding group", obligation=assurance_id)
-            for item in grouped:
-                _exact(item, {"finding", "severity"}, {"finding", "severity"}, "group member", obligation=assurance_id)
-                _ident(item["finding"], "finding", obligation=assurance_id)
-                if item["severity"] not in SEVERITIES:
-                    raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES),
-                                 record="group member", obligation=assurance_id)
-            if record.get("triage") != "required_correction":
-                _text(record.get("root_cause"), "root_cause", obligation=assurance_id)
-            ids = [item["finding"] for item in grouped]
-            if len(set(ids)) != len(ids):
-                raise refuse("obligation_invalid", "malformed", "group ids are unique", record="finding group",
-                             obligation=assurance_id)
-            record = {**record, "finding": ids[0], "severity": min((item["severity"] for item in grouped), key=SEVERITIES.index)}
-        else:
-            if "finding" not in record or "severity" not in record:
-                raise refuse("obligation_invalid", "malformed", "finding needs finding and severity", record="finding",
-                             obligation=assurance_id)
-            ids = [record["finding"]]
-        _ident(record["finding"], "finding", obligation=assurance_id)
-        _text(record["summary"], "summary", obligation=assurance_id)
-        if record["severity"] not in SEVERITIES or record["triage"] not in TRIAGE:
-            raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES) + "; triage allowed: " + ", ".join(TRIAGE),
-                         finding=record["finding"], obligation=assurance_id)
-        if record["severity"] in ("blocker", "major") and record["triage"] == "advisory":
-            if "reason" not in record:
-                raise refuse("obligation_invalid", "downgrade_unreasoned",
-                             "downgrading a reviewer's blocker or major finding needs a reason",
-                             finding=record["finding"], obligation=assurance_id)
-            _text(record["reason"], "reason", limit=1024, obligation=assurance_id)
+        record, ids = _finding_record(raw, assurance_id)
         entry = {"attempt": admission_id, "finding": record["finding"], "severity": record["severity"],
                  "triage": record["triage"], "summary": record["summary"],
                  "recorded_seq": state["seq"] + 1}
         if "root_cause" in record:
-            _text(record["root_cause"], "root_cause", obligation=assurance_id)
             entry["root_cause"] = record["root_cause"]
         if "findings" in record:
             entry["findings"] = ids

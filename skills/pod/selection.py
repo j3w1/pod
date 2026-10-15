@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from .catalog import AGENTS, by_id, known, route_key, supported_route
+from .contracts import bound, fields, required, input_record
 from .errors import PodError
 from .util import DECISION_FIELDS, owner_decision
 
@@ -53,15 +54,9 @@ def validate_constraint(value: object, snapshot: dict | None = None, *, new: boo
         if snapshot is not None and item > snapshot["max_active"]:
             raise PodError("constraint_authority", "Objective maximum cannot widen personal ceiling")
     elif kind == "keep_worker_tab":
-        from .util import bounded_text, exact
         if provenance != "user_direct" or not value.get("instruction"):
             raise PodError("constraint_authority", "A worker-tab keep or revocation needs a recorded user_direct instruction")
-        exact(item, {"objective", "dispatch", "terminal", "keep"},
-              {"objective", "dispatch", "terminal", "keep"}, name="worker_tab_instruction")
-        for field in ("objective", "dispatch", "terminal"):
-            bounded_text(item[field], name=field, limit=256)
-        if type(item["keep"]) is not bool:
-            raise PodError("invalid_constraint", "Worker-tab keep is a boolean; false records revocation")
+        _worker_tab_instruction(item)
     elif kind == "allow_disabled":
         if not isinstance(item, str) or (supported_route(item) is None and item not in known()):
             raise PodError("invalid_constraint", "Disabled exception needs an exact supported route")
@@ -75,6 +70,16 @@ def validate_constraint(value: object, snapshot: dict | None = None, *, new: boo
     elif item is not True:
         raise PodError("invalid_constraint", "Delegation exception must be true")
     return value
+
+
+@input_record("worker_tab_instruction")
+def _worker_tab_instruction(item):
+    from .util import bounded_text, exact
+    exact(item, fields("worker_tab_instruction"), required("worker_tab_instruction"), name="worker_tab_instruction")
+    for field in ("objective", "dispatch", "terminal"):
+        bounded_text(item[field], name=field, limit=bound("worker_tab_instruction", field))
+    if type(item["keep"]) is not bool:
+        raise PodError("invalid_constraint", "Worker-tab keep is a boolean; false records revocation")
 
 
 def active_constraints(constraints: list[dict], snapshot: dict) -> list[dict]:

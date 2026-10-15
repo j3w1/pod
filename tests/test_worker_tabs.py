@@ -230,6 +230,62 @@ class TitleTests(TabCase):
 
 
 class TableTests(TabCase):
+    def unreported(self, case):
+        _, admission = self.worker()
+        self.tab_case = case
+        self.assertIsNone(read(self.project, "objective")["admissions"][admission["admission_id"]]["report"])
+        result = self.write(self.waiting_rows())
+        ack = self.ack("checkpoint", {"value": {}}, result)
+        for output in (self.status(), ack):
+            row = output["worker_tabs"][0]
+            self.assertEqual((row["row"], row["state"]), (case, "kept"))
+            self.assertIsNone(row["command"])
+            self.assertIn("Do not reuse", row["wording"])
+            self.assertIn("once its report is recorded", row["wording"])
+            self.assertNotIn("terminal close", json.dumps(output))
+
+    def test_unreported_user_owned_status_and_checkpoint_ack_wait_for_report(self):
+        self.unreported("user_owned")
+
+    def test_unreported_external_status_and_checkpoint_ack_wait_for_report(self):
+        self.unreported("external")
+
+    def test_report_ack_waits_for_another_workers_unrecorded_report(self):
+        self.intake(self.sub("S"), self.sub("T"))
+        packets = [self.packet([key], role="investigate", resolves="question", stop_condition="answer")
+                   for key in ("S", "T")]
+        # Freeze the second packet after the first admission changes the map.
+        first = self.start("first", packets[0])["admission"]
+        packets[1] = self.packet(["T"], role="investigate", resolves="question", stop_condition="answer")
+        second = self.start("second", packets[1])["admission"]
+        self.settle(first); self.settle(second)
+        self.tab_cases[first["native_binding"]["dispatchId"]] = "user_owned"
+        self.tab_cases[second["native_binding"]["dispatchId"]] = "external"
+        result = self.report(first, packets[0], map={"obligations": self.waiting_rows()})
+        ack = self.ack("report", {"admission_id": first["admission_id"]}, result)
+        rows = {row["admission"]: row for row in ack["worker_tabs"]}
+        self.assertEqual(rows[first["admission_id"]]["command"],
+                         ["orca", "terminal", "close", "--terminal", first["native_binding"]["terminalHandle"]])
+        other = rows[second["admission_id"]]
+        self.assertIsNone(other["command"])
+        self.assertIn("once its report is recorded", other["wording"])
+        self.assertIn(other["wording"], ack["finalization"]["next_action"])
+
+    def test_owned_report_ack_leads_with_exactly_one_and_relays_native_release(self):
+        frozen, admission = self.worker()
+        result = self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        ack = self.ack("report", {"admission_id": admission["admission_id"]}, result)
+        row = ack["worker_tab"]
+        self.assertTrue(row["wording"].startswith("After an accepted report choose exactly one:"), row)
+        self.assertIn("immediate supported reuse, permitted retention, or release", row["wording"])
+        self.assertEqual(row["command"], ["orca", *self.release_argv])
+        self.assertIn("orca orchestration worker-release --dispatch dispatch-1", row["wording"])
+        self.assertNotIn("Release owed", row["wording"])
+        view = self.status()
+        self.assertIn("Release owed", view["readiness"]["summary"])
+        self.assertIn("Release owed", view["readiness"]["finalization"]["next_action"])
+        self.assertIn("Release owed", ack["finalization"]["next_action"])
+
     def table(self, cases):
         frozen, admission = self.worker()
         snapshot = self.saved()
@@ -450,7 +506,79 @@ class ClosureTests(TabCase):
             with self.subTest(report_route=report_route), self.assertRaises(PodError) as caught:
                 if report_route: self.report(admission, frozen, map={"obligations": closing, "close": True})
                 else: self.write(closing, close=True)
-            self.assertEqual(caught.exception.code, "native_assignment_unverified")
+            self.assertEqual(caught.exception.code, "worker_tabs_open")
+            self.assertEqual(before, self.saved())
+
+    def rebind_and_close(self, *, report_route, worker=True):
+        if worker:
+            frozen, admission = self.worker()
+            self.tab_case = "not_materialized"
+            if not report_route:
+                self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        else:
+            self.intake()
+        closing = self.finished_rows()
+        self.port.runtime = "changed-runtime"
+        from pod import ledger
+        with patch.object(ledger, "_write", wraps=ledger._write) as writes:
+            result = (self.report(admission, frozen, map={"obligations": closing, "close": True})
+                      if report_route else self.write(closing, close=True))
+        self.assertEqual(writes.call_count, 1, "rebind and closure must be one write")
+        state = read(self.project, "objective")
+        self.assertIsNotNone(state["checkpoint"]["closure"])
+        self.assertEqual(len(state["checkpoint"]["continuity"]["history"]), 1)
+        self.assertEqual(state["checkpoint"]["native_refs"][0]["runtime"], "changed-runtime")
+        self.assertEqual(result["runtime_continuity"][0]["to_runtime"], "changed-runtime")
+
+    def test_runtime_change_closing_checkpoint_rebinds_atomically_without_tabs(self):
+        self.rebind_and_close(report_route=False)
+
+    def test_runtime_change_closing_report_rebinds_atomically_without_tabs(self):
+        self.rebind_and_close(report_route=True)
+
+    def test_runtime_change_closing_checkpoint_rebinds_without_admissions(self):
+        self.rebind_and_close(report_route=False, worker=False)
+
+    def test_continuity_difference_is_not_an_unreadable_tab(self):
+        frozen, admission = self.worker()
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        closing = self.finished_rows(); before = self.saved()
+        self.port.runtime = "changed-runtime"
+        self.current["consumer_generation"] += 1
+        for report_route in (False, True):
+            with self.subTest(report_route=report_route), self.assertRaises(PodError) as caught:
+                if report_route: self.report(admission, frozen, map={"obligations": closing, "close": True})
+                else: self.write(closing, close=True)
+            self.assertEqual(caught.exception.code, "native_identity_unverified" if report_route else "native_assignment_unverified")
+            self.assertNotIn("Terminal facts unreadable", str(caught.exception.detail))
+            self.assertNotIn("worker-show", str(caught.exception.detail))
+            self.assertEqual(before, self.saved())
+        with self.assertRaises(PodError) as malformed:
+            self.report(admission, frozen, outcome="bogus", map={"obligations": closing, "close": True})
+        self.assertEqual(malformed.exception.code, "native_identity_unverified")
+        self.assertEqual(before, self.saved())
+
+    def test_closing_continuity_ambiguity_keeps_its_owner_decision_route(self):
+        frozen, admission = self.worker()
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        from pod.ledger import _lock, _path, _read, _write
+        path = _path(self.project, "objective")
+        with _lock(path):
+            prior_state = _read(path)
+            prior_state["checkpoint"].pop("continuity")
+            _write(path, prior_state)
+        closing = self.finished_rows(); before = self.saved()
+        self.port.runtime = "changed-runtime"
+        for report_route in (False, True):
+            with self.subTest(report_route=report_route), self.assertRaises(PodError) as caught:
+                if report_route:
+                    self.report(admission, frozen, outcome="bogus", map={"obligations": closing, "close": True})
+                else:
+                    self.write(closing, close=True)
+            self.assertEqual(caught.exception.code, "runtime_continuity_ambiguous")
+            self.assertIn("internal runtime-continuity", caught.exception.detail["next_action"])
+            self.assertNotIn("Terminal facts unreadable", str(caught.exception.detail))
+            self.assertNotIn("worker-show", caught.exception.detail["next_action"])
             self.assertEqual(before, self.saved())
 
     def test_closed_refusals_use_known_rows_or_name_the_status_read(self):
@@ -567,6 +695,45 @@ class RetentionTests(TabCase):
     satisfied = assurance_satisfied
     waiting = assurance_waiting
 
+    def test_implementer_retained_for_corrections_and_delta_review_of_its_result(self):
+        self.intake(self.sub("S"), {"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+            "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
+            "candidate": self.base, "existing_evidence": "tests", "insufficiency": "no review",
+            "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}})
+        frozen = self.packet(["S"], purpose="Repair parser", boundary={"paths": ["src"]})
+        implementer = self.start("implement", frozen)["admission"]; self.settle(implementer)
+        self.move("src/old.py")
+        self.report(implementer, frozen, map={"obligations": self.waiting_rows()}, result_commit=self.candidate)
+        rows = self.stored()
+        next(row for row in rows if row["id"] == "A")["candidate"] = self.candidate
+        self.write(rows, dispositions=[{"admission": implementer["admission_id"], "integrated_into": self.candidate}])
+        review_packet = self.packet(["A"], role="review")
+        reviewer = self.start("review", review_packet)["admission"]; self.settle(reviewer)
+        rows = self.stored()
+        audit = next(row for row in rows if row["id"] == "A"); audit.pop("executor")
+        audit.update(state="waiting", wait={"class": "dependency", "referent": "K"})
+        rows.append({"id": "K", "kind": "correction", "provenance": "coordinator", "parent": "A",
+            "check": "repair parser", "boundary": {"paths": ["src"]}, "state": "unassigned"})
+        self.tab_case = "retained"
+        self.report(reviewer, review_packet, map={"obligations": rows}, triage=[{
+            "finding": "defect", "severity": "major", "triage": "required_correction",
+            "summary": "parser defect", "correction": "K"}])
+        for reason in ("corrections", "delta review"):
+            with self.subTest(reason=reason):
+                result = self.report(implementer, frozen, result_commit=self.candidate)
+                row = result["worker_tab"]
+                self.assertEqual(row["retention_reason"], reason)
+                self.assertEqual(row["retained_title"]["title"], f"Implementer: Repair parser (retained: {reason})")
+                status_row = next(row for row in self.status()["worker_tabs"]
+                                  if row["admission"] == implementer["admission_id"])
+                self.assertEqual(status_row["retention_reason"], reason)
+                self.assertIn(reason, status_row["wording"])
+            if reason == "corrections":
+                rows = self.stored()
+                next(row for row in rows if row["id"] == "K").update(state="satisfied", evidence=[self.proof("K")])
+                next(row for row in rows if row["id"] == "A")["wait"] = {"class": "sequenced", "referent": "O1"}
+                self.write(rows)
+
     def test_required_correction_delta_review_then_release(self):
         self.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
             "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
@@ -603,3 +770,33 @@ class RetentionTests(TabCase):
         self.assertEqual(caught.exception.code, "worker_tabs_open")
         self.tab_cases[admission["native_binding"]["dispatchId"]] = "disconnected"
         self.write(self.finished_rows(), close=True)
+
+
+class ReadinessWordingTests(TabCase):
+    def test_open_summaries_keep_work_wait_and_finalization_detail(self):
+        frozen, admission = self.worker()
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        self.assertTrue(self.status()["readiness"]["summary"].startswith(
+            "Working: the coordinator acts next; not finished. Worker tab"))
+        rows = self.waiting_rows()
+        rows[0].pop("executor")
+        rows[0].update(state="blocked_external", external={"party": "owner", "need": "choose a channel",
+                                                         "unblocks_when": "the owner answers"})
+        rows[1]["wait"] = {"class": "dependency", "referent": "O1"}
+        self.write(rows)
+        self.assertTrue(self.status()["readiness"]["summary"].startswith(
+            "Waiting on the owner: choose a channel (O1)"))
+        self.write([{key: value for key, value in row.items() if key != "external"} for row in self.finished_rows()])
+        self.assertTrue(self.status()["readiness"]["summary"].startswith(
+            "Delivered but finalizing: Pod still needs closure; not safe to close the coordinator. Worker tab"))
+
+    def test_closed_external_summary_keeps_gate_and_party_detail(self):
+        frozen, admission = self.worker(); self.tab_case = "not_materialized"
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        self.write(self.finished_rows(), close=True, remaining_gates=[{"kind": "hosted_ci", "workflow": "ci.yml"}])
+        self.tab_case = "owned"
+        summary = self.status()["readiness"]["summary"]
+        self.assertTrue(summary.startswith("Closed with external work: 1 remaining gate(s) outside the objective, "
+                                           "for the provider; Worker tab"), summary)
+        self.assertNotIn("needs nothing more", summary)
+        self.assertNotIn("coordinator may close", summary)

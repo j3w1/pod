@@ -350,6 +350,12 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
     tabs = worker_tabs if worker_tabs is not None else (view or {}).get("worker_tabs", [])
     if tabs:
         from .worker_tabs import finalization, wording
-        block["summary"] = f"{block['state'].replace('_', ' ').capitalize()}. " + wording(tabs)
+        if block["state"] == "closed":
+            block["summary"] = "Closed: " + wording(tabs)
+        elif block["state"] == "closed_external":
+            block["summary"] = block["summary"].replace(
+                "Pod needs nothing more and its coordinator may close.", wording(tabs))
+        else:
+            block["summary"] += " " + wording(tabs)
         block["finalization"] = finalization(block.get("finalization"), tabs)
     return out

@@ -36,6 +36,9 @@ EFFECT_PREFIXES = ("workflow:", "deploy:", "release:")
 ACTION_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "remote_diagnostic",
                 "merge", "release", "deploy", "cancel_validation")
 PURPOSES = ("validation", "diagnostic", "checkpoint", "release", "cancellation")
+AUTHORIZATION_SCOPES = ("publish", "merge", "release", "deploy")
+SEVERITIES = ("blocker", "major", "minor", "info")
+TRIAGE = ("required_correction", "advisory")
 
 
 def text(length=512):
@@ -162,7 +165,7 @@ TABLE = {
                                  "proposals": _MAP_FIELDS["proposals"]}),
     "action": definition({"kind": choice(ACTION_KINDS), **{key: text() for key in ("candidate", "target", "reason")},
                           "unit": ident(), "purpose": choice(PURPOSES), "effects": {**items(16, {"type": "text", "max_length": 256, "prefixes": list(EFFECT_PREFIXES), "nonempty_suffix": True}), "unique": True},
-                          "authorization": {"type": "object"}, "diagnostic": record("diagnostic"),
+                          "authorization": record("authorization"), "diagnostic": record("diagnostic"),
                           "evidence": items(16, text()),
                           "inputs": {"type": "object", "max_items": 8,
                                      "keys": ident(r"[A-Za-z_][A-Za-z0-9_-]{0,63}\Z"),
@@ -211,6 +214,40 @@ TABLE["policy citation"] = definition({"path": choice(GOVERNANCE_PATHS),
                                        "lines": {"type": "text", "pattern": LINES, "max_lines": 64},
                                        **{key: _ANY for key in ("revision", "quote_sha256", "base", "gone")}},
                                       ("path", "lines"))
+TABLE["authorization"] = definition({
+    "schema": choice(("pod-authorization/v1",)),
+    **{key: {"type": "text", "pattern": r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z", "max_length": 64}
+       for key in ("candidate", "tree")},
+    **{key: text(512) for key in ("authorized_by", "reference", "target")},
+    "scope": {**items(8, choice(AUTHORIZATION_SCOPES)), "min_items": 1},
+    "utc": {"type": "text", "form": "timezone-aware ISO timestamp"},
+    "provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
+    "channel": {**choice(("session", "relayed")), "form": "relayed authorization is refused"},
+    "relay": record("decision_relay"),
+}, ("schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"))
+TABLE["decision_relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
+                                     ("reference", "owner_source"))
+TABLE["finding"] = definition({
+    "finding": ident(), "severity": choice(SEVERITIES), "triage": choice(TRIAGE),
+    "summary": text(512),
+    "reason": {**text(1024), "validated_when": "blocker or major finding downgraded to advisory"},
+    "root_cause": text(512),
+    "findings": {**items(8, record("group member")), "min_items": 1},
+    "correction": {"type": "text", "form": "new correction obligation identifier"},
+}, ("triage", "summary"),
+    required_by_shape={"single": ["finding", "severity", "triage", "summary"],
+                       "group": ["findings", "triage", "summary"]},
+    form="finding and severity or findings, exclusively; an advisory group also needs root_cause")
+TABLE["group member"] = definition({"finding": ident(), "severity": choice(SEVERITIES)}, ("finding", "severity"))
+TABLE["worker_tab_instruction"] = definition({
+    **{key: text(256) for key in ("objective", "dispatch", "terminal")}, "keep": {"type": "boolean"},
+}, ("objective", "dispatch", "terminal", "keep"))
+TABLE["report request"] = definition({
+    **{key: {"type": "text"} for key in ("project", "objective", "admission_id")},
+    "packet": {"type": "object", "form": "frozen packet result"}, "report": record("report"),
+    "map": record("map"), "triage": items(32, record("finding")), "proposals": items(64, record("proposal")),
+    "result_commit": _GIT,
+}, ("report", "packet", "project", "objective", "admission_id"))
 TABLE["context_reference"]["variants"] = {
     "source": ["kind", "path", "sha256"], "instruction": ["kind", "path", "sha256"],
     "summary": ["kind", "id", "binding_digest"],

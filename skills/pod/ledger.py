@@ -304,12 +304,13 @@ def _run_references(state: dict) -> dict[str, str]:
 def require_authority(project: Path, objective: str, *, owner: str,
                       state: dict | None = None, run_id: str | None = None,
                       native_port=None, expected_runtime: str | None = None, claim: str | None = None,
-                      allow_rebind: bool = True) -> dict:
+                      persist_rebind: bool = True) -> dict:
     """Join a stable native current Run to this objective's persisted owner and refs.
 
     Every caller passing ``state`` holds the objective lock, so a proven runtime
-    continuity is rebound and recorded here before the existing checks repeat
-    against the new runtime. ``expected_runtime`` is the runtime the caller's own
+    continuity is rebound before the existing checks repeat against the new
+    runtime. Closing writes defer its persistence to their successful write.
+    ``expected_runtime`` is the runtime the caller's own
     mutation already observed; continuity only rebinds to that runtime.
     """
     from .operations import OrcaPort
@@ -342,17 +343,17 @@ def require_authority(project: Path, objective: str, *, owner: str,
     try:
         native = port.read_native(owner, authority_runs=selected, assignments=assignments)
     except PodError:
-        if not locked or not allow_rebind:
+        if not locked:
             raise
         continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                      expected_runtime=expected_runtime)
+                                      expected_runtime=expected_runtime, persist=persist_rebind)
         if continuity is None:
             raise
         native = port.read_native(owner, authority_runs=selected, assignments=bound_assignments(state))
     else:
-        if locked and allow_rebind and native.get("runtime") not in set(refs.values()):
+        if locked and native.get("runtime") not in set(refs.values()):
             continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                          current=native, expected_runtime=expected_runtime)
+                                          current=native, expected_runtime=expected_runtime, persist=persist_rebind)
             if continuity is not None and bound_assignments(state):
                 native = port.read_native(owner, authority_runs=selected,
                                           assignments=bound_assignments(state))
@@ -597,7 +598,8 @@ def _ambiguous(objective: str, verdict: dict) -> PodError:
 
 
 def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, port,
-                     current: dict | None = None, expected_runtime: str | None = None) -> dict | None:
+                     current: dict | None = None, expected_runtime: str | None = None,
+                     persist: bool = True) -> dict | None:
     """Under the caller's objective lock: rebind a proven continuity and record it.
 
     Returns None when no continuity path applies or continuity is disproven, so the
@@ -628,11 +630,16 @@ def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, 
     if verdict["classification"] == "disproven" or current.get("authoritative") is not True:
         return None
     entry = _apply_continuity(state, verdict, provenance="automatic")
-    _write(_path(project, objective), state)
-    events = _CONTINUITY_EVENTS.get()
-    if events is not None:
-        events.append(entry)
+    if persist:
+        _write(_path(project, objective), state)
+        _record_continuity_event(entry)
     return entry
+
+
+def _record_continuity_event(entry: dict | None) -> None:
+    events = _CONTINUITY_EVENTS.get()
+    if entry is not None and events is not None:
+        events.append(entry)
 
 
 def continuity_locked(project: Path, objective: str, *, owner: str, port,
@@ -1368,8 +1375,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                          if isinstance(row, dict)}
         authority = require_authority(project, objective, owner=owner, state=state,
                                       expected_runtime=native["runtime"],
-                                      **({"allow_rebind": False} if isinstance(proposed, dict)
-                                         and proposed.get("close") is True else {}))
+                                      persist_rebind=not (isinstance(proposed, dict) and proposed.get("close") is True))
         if native["runtime"] != authority["runtime"]:
             raise PodError("native_authority_unverified", "Checkpoint runtime differs from current Run")
         supplied = core["native_refs"]
@@ -1410,6 +1416,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                "bundle_digest": identity["bundle_digest"],
                                **({"continuity": continuity} if continuity else {})}
         _write(path, state, native=authority.get("native"))
+        if isinstance(proposed, dict) and proposed.get("close") is True:
+            _record_continuity_event(authority.get("continuity"))
         result = dict(state)
         result["worker_tabs"] = (ctx or {}).get("worker_tabs", [])
         if map_state:
@@ -1805,10 +1813,11 @@ def _report_written_ids(map_state: dict, admission_id: str) -> dict:
 
 
 def consume_report(project: Path, objective: str, *, owner: str, admission_id: str,
-                   observation: dict, accompanying: dict | None = None, findings: list | None = None,
+                   observation: dict | None, accompanying: dict | None = None, findings: list | None = None,
                    proposals: list | None = None, result_commit: str | None = None,
                    route_refresh: dict | None = None, route_mismatch: bool = False,
-                   report_placement: dict | None = None, packet_body: dict | None = None) -> dict:
+                   report_placement: dict | None = None, packet_body: dict | None = None,
+                   prepare=None) -> dict:
     """Report consumption is a map write: Git result ingestion, triage and proposals, atomically.
 
     The worker report is an observation. Changed paths come from Git, never from the
@@ -1822,12 +1831,18 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         row = state["admissions"].get(admission_id)
         if state["owner"] != owner or row is None:
             raise PodError("unknown_admission", "No owned admission identity")
+        prepared_continuity = None
+        if prepare is not None:
+            prepared = prepare(state, row)
+            observation = prepared["observation"]
+            route_refresh, route_mismatch = prepared["route_refresh"], prepared["route_mismatch"]
+            report_placement = prepared["report_placement"]
+            prepared_continuity = prepared["continuity"]
         # The report path read its fresh identity at the observation's runtime (A2).
         observed_runtime = (observation.get("native_binding") or {}).get("runtime")
+        closing = isinstance(accompanying, dict) and accompanying.get("close") is True
         authority = require_authority(project, objective, owner=owner, state=state, run_id=row["run_id"],
-                                      expected_runtime=observed_runtime,
-                                      **({"allow_rebind": False} if isinstance(accompanying, dict)
-                                         and accompanying.get("close") is True else {}))
+                                      expected_runtime=observed_runtime, persist_rebind=not closing)
         if observed_runtime is not None and authority["runtime"] != observed_runtime:
             raise PodError("native_authority_unverified", "Report identity was read at another runtime")
         map_state = map_of(state)
@@ -1842,11 +1857,12 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
             raise
         from .worker_tabs import require_closed_tabs, project as tab_project, rows as tab_rows
-        if isinstance(accompanying, dict) and accompanying.get("close") is True:
+        if closing:
             require_closed_tabs(ctx["worker_tabs"])
         if route_mismatch:
-            row["route_decision"]["route_mismatch"] = True
-            _write(path, state, native=authority.get("native"))
+            if not closing:
+                row["route_decision"]["route_mismatch"] = True
+                _write(path, state, native=authority.get("native"))
             raise PodError("route_mismatch", "Native effective route changed after start")
         if route_refresh:
             row["route_decision"].update(effective=route_refresh["effective"], effective_unknown=False)
@@ -1864,7 +1880,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 placements[admission_id] = report_placement
             tabs = tab_rows(state, placements, outstanding=ctx["outstanding"])
             worker = tab_project(state, row, placements.get(admission_id, {}), settled=True,
-                                 packet_body=packet_body)
+                                 packet_body=packet_body, acknowledgement=True)
             tabs = [worker if item["admission"] == admission_id else item for item in tabs]
             return {"worker_tabs": tabs, "worker_tab": worker}
         settled = admission_id not in ctx["outstanding"]
@@ -1931,6 +1947,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                         failure["cleared_at"] = row["report"]["consumed_at"]
                         failure["cleared_by"] = admission_id
         _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
+        if closing:
+            _record_continuity_event(prepared_continuity or authority.get("continuity"))
         return {"ingestion": ingestion, "settled": settled,
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],

@@ -2044,7 +2044,10 @@
         "tests.test_runtime_continuity.ProvenContinuityTests.test_checkpoint_records_generation_and_proven_change_rebinds_checkpoint_write",
         "tests.test_runtime_continuity.ProvenContinuityTests.test_governor_mutation_report_read_and_new_admission_each_rebind_and_continue",
         "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_admission_proven_absent_rebinds_then_continues_recovery",
-        "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_state_alone_without_a_lookup_result_does_not_rebind"
+        "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_state_alone_without_a_lookup_result_does_not_rebind",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_report_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_without_admissions"
       ],
       "status": "NOT_RUN"
     },
@@ -4632,7 +4635,8 @@
       ],
       "offline_test": [
         "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command",
-        "tests.test_worker_tabs.TableTests.test_pending_unknown_and_unreadable"
+        "tests.test_worker_tabs.TableTests.test_pending_unknown_and_unreadable",
+        "tests.test_worker_tabs.TableTests.test_owned_report_ack_leads_with_exactly_one_and_relays_native_release"
       ],
       "status": "NOT_RUN"
     },
@@ -4643,7 +4647,10 @@
       ],
       "offline_test": [
         "tests.test_worker_tabs.TableTests.test_user_owned_and_external",
-        "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change"
+        "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change",
+        "tests.test_worker_tabs.TableTests.test_unreported_user_owned_status_and_checkpoint_ack_wait_for_report",
+        "tests.test_worker_tabs.TableTests.test_unreported_external_status_and_checkpoint_ack_wait_for_report",
+        "tests.test_worker_tabs.TableTests.test_report_ack_waits_for_another_workers_unrecorded_report"
       ],
       "status": "NOT_RUN"
     },
@@ -4723,7 +4730,9 @@
         "tests.test_worker_tabs.ClosureTests.test_existing_closure_keeps_its_bytes_but_names_every_open_tab",
         "tests.test_finalization.ClosureOrderTests.test_a_closure_recorded_before_this_rule_still_validates",
         "tests.test_worker_tabs.OwnerKeepTests.test_owner_can_revoke_after_closure_without_changing_the_closure_report",
-        "tests.test_worker_tabs.ClosureTests.test_closed_refusals_use_known_rows_or_name_the_status_read"
+        "tests.test_worker_tabs.ClosureTests.test_closed_refusals_use_known_rows_or_name_the_status_read",
+        "tests.test_worker_tabs.ReadinessWordingTests.test_open_summaries_keep_work_wait_and_finalization_detail",
+        "tests.test_worker_tabs.ReadinessWordingTests.test_closed_external_summary_keeps_gate_and_party_detail"
       ],
       "status": "NOT_RUN"
     },
@@ -4733,7 +4742,8 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_worker_tabs.RetentionTests.test_required_correction_delta_review_then_release"
+        "tests.test_worker_tabs.RetentionTests.test_required_correction_delta_review_then_release",
+        "tests.test_worker_tabs.RetentionTests.test_implementer_retained_for_corrections_and_delta_review_of_its_result"
       ],
       "status": "NOT_RUN"
     },
@@ -4835,7 +4845,12 @@
         "tests.test_request_contract.BoundTests.test_verification_proposal_and_authority_bounds",
         "tests.test_request_contract.BoundTests.test_packet_total_bound",
         "tests.test_request_contract.BoundTests.test_provenance_source_text_bounds",
-        "tests.test_request_contract.BoundTests.test_policy_citation_line_bound"
+        "tests.test_request_contract.BoundTests.test_policy_citation_line_bound",
+        "tests.test_request_contract.BoundTests.test_authorization_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_finding_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_finding_group_member_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_worker_tab_instruction_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_authorization_relay_bounds_keep_complete_refusal_data"
       ],
       "status": "NOT_RUN"
     },
@@ -4887,6 +4902,23 @@
         "tests.test_request_contract.RepairTests.test_policy_mismatch_from_different_project_is_repaired_by_named_config_and_map_reads",
         "tests.test_request_contract.RepairTests.test_checkpoint_policy_mismatch_names_all_known_digests_and_refreshes",
         "tests.test_request_contract.RepairTests.test_pending_replay_from_other_project_names_digests_and_recovers_in_objective_project"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A380",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_report_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_without_admissions",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal",
+        "tests.test_worker_tabs.ClosureTests.test_continuity_difference_is_not_an_unreadable_tab",
+        "tests.test_worker_tabs.ClosureTests.test_closing_continuity_ambiguity_keeps_its_owner_decision_route"
       ],
       "status": "NOT_RUN"
     }

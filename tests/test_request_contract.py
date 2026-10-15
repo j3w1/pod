@@ -171,7 +171,7 @@ class DiscoveryTests(CallerCase):
 class BoundTests(CallerCase):
     """One past each listed length/count, grouped by the record's production path."""
 
-    def check_bounds(self, record, original, operation, wrap):
+    def check_bounds(self, record, original, operation, wrap, *, complete=False):
         for field, spec in self.contracts[record]["fields"].items():
             for path, kind, maximum in limits(spec):
                 base = original
@@ -195,7 +195,115 @@ class BoundTests(CallerCase):
                     bad = [deepcopy(exemplar) for _ in range(maximum + 1)]
                 changed = {**deepcopy(base), field: replace(value, path, bad)}
                 with self.subTest(record=record, field=field, path=path, bound=maximum):
-                    self.refused(operation, wrap(changed))
+                    error = operation(wrap(changed)) if callable(operation) else self.refused(operation, wrap(changed))
+                    if complete:
+                        self.complete_contract(error, record)
+
+    def complete_contract(self, error, record):
+        from pod.contracts import bounded_fields
+        detail = error["detail"].get("referent", error["detail"])
+        self.assertEqual(detail["bounded_fields"], bounded_fields(record))
+        self.assertEqual(detail["accepted"], self.contracts[record]["accepted"])
+        contract = self.contracts[record]
+        options = [contract["optional"]] + [sorted(set(contract["accepted"]) - set(names))
+                                           for names in contract.get("required_by_shape", {}).values()]
+        self.assertIn(detail["optional"], options)
+
+    def test_authorization_discovery_bounds_and_complete_refusals(self):
+        from pod.errors import PodError
+        from pod.governor import validate_authorization
+        self.initial()
+        binding = self.ok("governor-prepare", self.owned(unit="default", branch={
+            "remote": "origin", "base": "target", "branch": "delivery"}))["candidate"]
+        authorization = ks.authorization(candidate=binding["commit"], tree=binding["tree"], scope=("merge",),
+                                          target="origin/target")
+        authorization.update(instruction="Merge this exact candidate", provenance="user_direct")
+        action = {"kind": "merge", "candidate": binding["id"], "target": "origin/target", "reason": "deliver",
+                  "effects": [], "authorization": authorization}
+        self.assertEqual(self.contracts["action"]["fields"]["authorization"]["record"], "authorization")
+        self.assert_within(authorization, "authorization")
+
+        def refused(request):
+            # Governor deliberately turns malformed consent into its existing
+            # authorization_missing DEFER. Its validator still owns the input
+            # refusal and complete field data; neither path changes its code.
+            with self.assertRaises(PodError) as caught:
+                validate_authorization(request["action"]["authorization"])
+            error = {"code": caught.exception.code, "detail": caught.exception.detail}
+            self.assertNotIn(SENTINEL, str(caught.exception))
+            decision = self.ok("governor", request)
+            self.assertEqual(decision["decision"], "DEFER")
+            self.assertIn("authorization_missing", [reason["code"] for reason in decision["reasons"]])
+            return error
+
+        self.check_bounds("authorization", authorization, refused,
+                          lambda value: self.owned(action={**action, "authorization": value}), complete=True)
+        for changed in ({**authorization, "scope": []}, {**authorization, "scope": [SENTINEL]},
+                        {**authorization, "unexpected": SENTINEL}):
+            self.complete_contract(refused(self.owned(action={**action, "authorization": changed})),
+                                   "authorization")
+        self.assertEqual(self.ok("governor", self.owned(action=action))["decision"], "ALLOW")
+
+    def review_request(self):
+        from tests.test_issue41_corrections import assurance
+        self.intake(assurance(self))
+        packet = self.packet(["A"], role="review")
+        admission = self.start("review", packet)["admission"]; self.settle(admission)
+        request = self.report_request(packet, admission)
+        request["map"] = {"obligations": [{**self.stored()[0]}, assurance(self)]}
+        return request
+
+    def test_authorization_relay_bounds_keep_complete_refusal_data(self):
+        from pod.errors import PodError
+        from pod.governor import validate_authorization
+        authorization = ks.authorization(candidate=self.base, tree="b" * 40, scope=("merge",))
+        relay = {"reference": "owner-message", "owner_source": "verified owner source"}
+        self.assert_within(relay, "decision_relay")
+
+        def refused(value):
+            with self.assertRaises(PodError) as caught:
+                validate_authorization(value)
+            return {"code": caught.exception.code, "detail": caught.exception.detail}
+
+        self.check_bounds("decision_relay", relay, refused,
+                          lambda value: {**authorization, "channel": "relayed", "relay": value}, complete=True)
+
+    def test_finding_discovery_bounds_and_complete_refusals(self):
+        request = self.review_request()
+        finding = {"finding": "defect", "severity": "major", "triage": "advisory", "summary": "bounded finding",
+                   "reason": "documented downgrade", "root_cause": "shared cause"}
+        self.assertEqual(self.contracts["report request"]["fields"]["triage"]["items"]["record"], "finding")
+        self.assert_within(finding, "finding")
+        self.check_bounds("finding", finding, "report", lambda value: {**request, "triage": [value]}, complete=True)
+        bad = {**finding, "unexpected": SENTINEL}
+        self.complete_contract(self.refused("report", {**request, "triage": [bad]}), "finding")
+
+    def test_finding_group_member_discovery_bounds_and_complete_refusals(self):
+        request = self.review_request()
+        finding = {"findings": [{"finding": "defect", "severity": "major"}], "triage": "advisory",
+                   "summary": "bounded group", "reason": "documented downgrade", "root_cause": "shared cause"}
+        self.assertEqual(self.contracts["finding"]["fields"]["findings"]["items"]["record"], "group member")
+        self.assert_within(finding, "finding")
+        self.check_bounds("group member", finding["findings"][0], "report",
+                          lambda value: {**request, "triage": [{**finding, "findings": [value]}]}, complete=True)
+        for members in ([], [{"finding": "F" + str(index), "severity": "minor"} for index in range(9)]):
+            self.complete_contract(self.refused("report", {**request, "triage": [{**finding, "findings": members}]}),
+                                   "finding")
+        bad = {**finding["findings"][0], "unexpected": SENTINEL}
+        self.complete_contract(self.refused("report", {**request, "triage": [{**finding, "findings": [bad]}]}),
+                               "group member")
+
+    def test_worker_tab_instruction_discovery_bounds_and_complete_refusals(self):
+        self.initial()
+        item = {"objective": "objective", "dispatch": "dispatch", "terminal": "terminal", "keep": True}
+        constraint = {"id": "keep", "kind": "keep_worker_tab", "provenance": "user_direct",
+                      "instruction": "Keep this worker tab", "value": item}
+        self.assert_within(item, "worker_tab_instruction")
+        wrap = lambda value: self.owned(action="add", value={**constraint, "value": value})
+        self.check_bounds("worker_tab_instruction", item, "constraint", wrap, complete=True)
+        self.complete_contract(self.refused("constraint", wrap({**item, "unexpected": SENTINEL})),
+                               "worker_tab_instruction")
+        self.ok("constraint", wrap(item))
 
     def test_packet_text_and_list_bounds(self):
         body = self.raw_packet(context=[{"kind": "summary", "id": "summary", "binding_digest": "a" * 64}],

@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 from .contracts import (TABLE, UNIT, IDENTIFIER, SURFACE, SOURCE, LINES, GOVERNANCE_PATHS, KINDS, PROVENANCES, STATES,
                         WAIT_CLASSES, PARTIES, ROLES, VERDICTS, PROPOSAL_SOURCES, bound, fields, required,
-                        input_record, annotate, current)
+                        SEVERITIES, TRIAGE, input_record, annotate, current)
 from .errors import PodError
 from .gitio import OBJECT_ID
 from .util import (digest, exact, _field_names, owner_decision, decision_channel, channel_fields,
@@ -32,14 +32,12 @@ import unicodedata
 
 TERMINAL = ("satisfied", "withdrawn")
 EXTERNAL_WAITS = ("authority", "user_hold", "input_unavailable")
-SEVERITIES = ("blocker", "major", "minor", "info")
-TRIAGE = ("required_correction", "advisory")
 AUTHORIZED_SCOPES = ("publish", "merge", "release", "deploy")
 MAX_OBLIGATIONS = bound("map", "obligations", "max_items")
 MAX_PROPOSALS = bound("map", "proposals", "max_items")
 MAX_SERVES = bound("packet", "serves", "max_items")
 MAX_EVIDENCE = bound("obligation", "evidence", "max_items")
-MAX_FINDINGS = 32
+MAX_FINDINGS = bound("report request", "triage", "max_items")
 MAX_ACCEPTANCES = bound("map", "acceptances", "max_items")
 MAX_CITED_LINES = bound("policy citation", "lines", "max_lines")
 MAX_GOVERNANCE_TEXT = 1_048_576

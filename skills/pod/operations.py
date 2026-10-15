@@ -220,7 +220,7 @@ class OrcaPort:
         evidence = []
         for row in assignments:
             try:
-                evidence.append(_assignment_evidence(self.show_worker(row["native_binding"]["dispatchId"]), row))
+                shown = self.show_worker(row["native_binding"]["dispatchId"])
             except PodError as exc:
                 # Preserve the native read's code, with the precise read to repeat.
                 # This adds no observation and never promotes unknown settlement.
@@ -229,6 +229,9 @@ class OrcaPort:
                                      row, {}, settled=True, failure=exc.code)
                 exc.detail = {**(exc.detail or {}), "worker_tabs": [failed], "next_action": failed["wording"]}
                 raise
+            # Identity/runtime disagreement is a continuity refusal, not an
+            # unreadable terminal or a reason to repeat worker-show.
+            evidence.append(_assignment_evidence(shown, row))
         binding_after = current_run() if expected_runs else None
         observed = binding_before or binding_after
         if observed is not None:

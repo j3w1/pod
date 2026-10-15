@@ -200,7 +200,7 @@ def fake_native(port, state, *, owner="owner", run="run") -> dict:
 def fake_authority(port):
     """A require_authority stand-in that still carries exact assignment evidence."""
     def authority(project, objective, *, owner, state=None, run_id=None, native_port=None,
-                  expected_runtime=None, allow_rebind=True):
+                  expected_runtime=None, allow_rebind=True, persist_rebind=True):
         from pod.ledger import read
         current = state if state is not None else read(project, objective)
         refs = {row["runId"]: row["runtime"]

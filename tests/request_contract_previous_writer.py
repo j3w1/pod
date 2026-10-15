@@ -5,6 +5,7 @@ import json
 from pod import __version__
 from pod.errors import PodError
 from pod.internal import run
+from pod.ledger import read, update_admission
 from tests.issue41_support import ProductionCase
 
 
@@ -44,7 +45,18 @@ def main():
         admission = case.start("work", packet)["admission"]
         case.settle(admission)
         result("settled_report", lambda: case.report(admission, packet))
-        print(json.dumps({"version": __version__, "codes": observed}, sort_keys=True))
+        def unknown(row):
+            row["route_decision"].update(effective_unknown=True,
+                                         effective={key: "unknown" for key in ("agent", "model", "effort", "context")})
+        update_admission(case.project, "objective", owner="owner", admission_id=admission["admission_id"], update=unknown)
+        result("malformed_nonclosing_effective_refresh", lambda: case.report(admission, packet, outcome="bogus"))
+        refreshed = read(case.project, "objective")["admissions"][admission["admission_id"]]["route_decision"]
+        case.port.effective = {"agent": "codex", "model": "gpt-6-luna", "effort": "medium"}
+        result("malformed_nonclosing_route_mismatch", lambda: case.report(admission, packet, outcome="bogus"))
+        stored = read(case.project, "objective")["admissions"][admission["admission_id"]]
+        print(json.dumps({"version": __version__, "codes": observed,
+                          "effective_unknown": refreshed["effective_unknown"],
+                          "route_mismatch": stored["route_decision"]["route_mismatch"]}, sort_keys=True))
     finally:
         case.doCleanups()
 

@@ -84,10 +84,16 @@ def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | N
     if keep:
         return "owner request"
     obligations = (state.get("checkpoint") or {}).get("obligations") or []
-    # The result's reviewer can be retained through both correction and delta review.
+    integrated = admission.get("disposition") or {}
+    reviewed = {ob["id"] for ob in obligations if ob.get("kind") == "assurance"
+                and admission.get("role") == "implement" and integrated.get("kind") == "integrated_into"
+                and ob.get("candidate") == integrated.get("candidate")}
+    # The reviewer and an implementer whose integrated result is reviewed can
+    # both remain in this correction cycle.
     children = [ob for ob in obligations if ob.get("kind") == "correction"
                 and (ob.get("id") in admission.get("serves", [])
-                     or (ob.get("finding") or {}).get("attempt") == admission["admission_id"])]
+                     or (ob.get("finding") or {}).get("attempt") == admission["admission_id"]
+                     or ob.get("parent") in reviewed)]
     if any(ob["state"] not in ("satisfied", "withdrawn") for ob in children):
         return "corrections"
     parents = {ob.get("parent") for ob in children}
@@ -98,7 +104,8 @@ def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | N
 
 
 def project(state: dict, admission: dict, facts: dict, *, settled: bool,
-            failure: str | None = None, packet_body: dict | None = None) -> dict:
+            failure: str | None = None, packet_body: dict | None = None,
+            acknowledgement: bool = False) -> dict:
     """Apply the finished worker table, including exclusions and keep precedence."""
     binding = admission.get("native_binding") or {}
     objective = (state.get("checkpoint") or {}).get("objective")
@@ -170,10 +177,16 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         debt = "Release still owed" if (state.get("checkpoint") or {}).get("closure") else "Release owed"
         wording = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
                    if keep else f"{debt} {timing}: {next_step}.")
-        if reason in ("corrections", "delta review"):
-            wording += f" Retain only while {reason} of this result are pending; release when the cycle ends."
-        wording += " After an accepted report choose exactly one: immediate supported reuse, permitted retention, or release."
+        cycle = (f" Retain only while {reason} of this result are pending; release when the cycle ends."
+                 if reason in ("corrections", "delta review") else "")
+        decision = "After an accepted report choose exactly one: immediate supported reuse, permitted retention, or release."
+        wording += cycle + " " + decision
         fields = {"blocks_closure": not bool(keep), "retention_reason": reason}
+        if acknowledgement:
+            fields["closure_wording"] = wording
+            option = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
+                      if keep else f"Orca's release option: {next_step}.")
+            wording = decision + " " + option + cycle
         if reason and packet_body is not None:
             fields["retained_title"] = rename(f"{title(packet_body)} (retained: {reason})", handle)
         return finish("owner_kept_owned" if keep else "retained_owned" if row["release_state"] == "retained" else "owned",
@@ -184,6 +197,9 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     wording += " Do not reuse."
     if keep:
         return finish("owner_kept_unowned", f"Owner-kept by instruction {keep['id']}. " + wording, command=None)
+    if admission.get("report") is None:
+        return finish("user_owned" if row["ownership"] == "user_owned" else "external",
+                      wording + " The authorized close becomes available once its report is recorded.", command=None)
     close = ["orca", "terminal", "close", "--terminal", handle]
     return finish("user_owned" if row["ownership"] == "user_owned" else "external",
                   wording + " Under the owner's standing authorization, close this finished worker tab before the final report: "
@@ -207,7 +223,8 @@ def rows(state: dict, placements: dict, *, outstanding=(), failure: str | None =
 
 
 def wording(tabs: list[dict]) -> str:
-    return " ".join(f"Worker tab {row['terminal'] or row['dispatch']}: {row['wording']}" for row in tabs)
+    return " ".join(f"Worker tab {row['terminal'] or row['dispatch']}: {row.get('closure_wording', row['wording'])}"
+                    for row in tabs)
 
 
 def finalization(value: dict | None, tabs: list[dict]) -> dict | None:

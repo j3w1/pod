@@ -24,7 +24,7 @@ from typing import Protocol
 import yaml
 
 from .config import GOVERNED_KINDS, effective, validate_effects
-from .contracts import UNIT, PURPOSES, bound, fields, required, input_record
+from .contracts import TABLE, UNIT, PURPOSES, AUTHORIZATION_SCOPES, bound, fields, required, input_record
 from .errors import PodError
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
@@ -34,7 +34,6 @@ from .util import (MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, 
 SCHEMA = "pod-governor/v2"
 KINDS = GOVERNED_KINDS
 AUTHORIZED_KINDS = ("merge", "release", "deploy")
-AUTHORIZATION_SCOPES = ("publish", *AUTHORIZED_KINDS)
 VALIDATION_KINDS = ("workflow_dispatch", "validation_rerun")
 PUBLICATION_KINDS = ("push", "pr_update")
 DISPATCH_KINDS = ("workflow_dispatch", "remote_diagnostic")
@@ -214,9 +213,12 @@ def _compact(journal: dict) -> None:
 
 # --------------------------------------------------------------------------- validation
 
-AUTHORIZATION_SCHEMA = "pod-authorization/v1"
-AUTHORIZATION_FIELDS = {"schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"}
+AUTHORIZATION_SCHEMA = TABLE["authorization"]["fields"]["schema"]["allowed"][0]
+AUTHORIZATION_FIELDS = required("authorization")
 _GIT_OBJECT_ID = gitio.OBJECT_ID
+
+
+@input_record("authorization")
 def validate_authorization(value: object, *, candidate: str | None = None, tree: str | None = None,
                            kind: str | None = None, target: str | None = None) -> dict | None:
     """Accept only a complete owner authorization for a governed merge, release or deploy.
@@ -226,8 +228,8 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     """
     if value is None:
         return None
-    from .util import DECISION_FIELDS, owner_decision
-    record = exact(value, AUTHORIZATION_FIELDS | {"target"} | DECISION_FIELDS, AUTHORIZATION_FIELDS, name="authorization")
+    from .util import owner_decision
+    record = exact(value, fields("authorization"), AUTHORIZATION_FIELDS, name="authorization")
     try:
         record = owner_decision(record, kind="authorization")
     except PodError as exc:
@@ -241,14 +243,15 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
         raise PodError("invalid_authorization", "Authorization schema is unsupported")
     for field in ("authorized_by", "reference", "target"):
         if field in record:
-            bounded_text(record[field], name=field, limit=512)
-    if (not all(isinstance(record[key], str) and _GIT_OBJECT_ID.fullmatch(record[key])
+            bounded_text(record[field], name=field, limit=bound("authorization", field))
+    if (not all(isinstance(record[key], str) and re.fullmatch(TABLE["authorization"]["fields"][key]["pattern"], record[key])
                 for key in ("candidate", "tree"))
             or len(record["candidate"]) != len(record["tree"])):
         raise PodError("invalid_authorization", "Authorization candidate and tree must be Git object ids")
     utc = normalize_timestamp(record["utc"], field="Authorization timestamp", code="invalid_authorization")
     scope = record["scope"]
-    if (not isinstance(scope, list) or not scope or len(scope) > 8
+    if (not isinstance(scope, list) or not bound("authorization", "scope", "min_items") <= len(scope)
+            <= bound("authorization", "scope", "max_items")
             or any(item not in AUTHORIZATION_SCOPES for item in scope)):
         raise PodError("invalid_authorization", "Authorization scope is unsupported")
     if candidate is not None and record["candidate"] != candidate:

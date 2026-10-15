@@ -14,11 +14,24 @@ from typing import Any
 import unicodedata
 
 from .errors import FieldRefusal, PodError
+from .contracts import bound, fields, required, input_record
 
 MAX_RECORD = 128 * 1024
 DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"}
 CHANNEL_FIELDS = {"channel", "relay"}
 RELAYED_DECISIONS = {"question", "governance", "withdrawal", "claim", "retirement"}
+
+
+@input_record("decision_relay")
+def _decision_relay(value):
+    relay = exact(value, fields("decision_relay"), required("decision_relay"), name="decision_relay")
+    for field in ("reference", "owner_source"):
+        bounded_text(relay[field], name=field, limit=bound("decision_relay", field))
+        try:
+            relay[field].encode("utf-8")
+        except UnicodeEncodeError:
+            raise PodError("invalid_decision_text", "Relay fields must be UTF-8 text") from None
+    return relay
 
 
 def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
@@ -34,7 +47,6 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
     if "provenance" in value and value["provenance"] != "user_direct":
         raise PodError("invalid_decision", "Owner decision provenance must be user_direct")
     if "instruction" in value:
-        from .contracts import bound
         bounded_text(value["instruction"], name="instruction", limit=bound("revision authority", "instruction"))
         try:
             value["instruction"].encode("utf-8")
@@ -47,13 +59,7 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
         raise PodError("invalid_decision_relay", "A complete relay is required exactly for channel relayed",
                        {"next_action": "classify the channel honestly and provide relay reference and owner_source only for relayed decisions"})
     if channel == "relayed":
-        relay = exact(value["relay"], {"reference", "owner_source"}, {"reference", "owner_source"}, name="decision_relay")
-        for field in ("reference", "owner_source"):
-            bounded_text(relay[field], name=field, limit=512)
-            try:
-                relay[field].encode("utf-8")
-            except UnicodeEncodeError:
-                raise PodError("invalid_decision_text", "Relay fields must be UTF-8 text") from None
+        _decision_relay(value["relay"])
         if kind not in RELAYED_DECISIONS:
             code = "relayed_authorization_refused" if kind == "authorization" else "relayed_decision_refused"
             action = "obtain the owner's decision typed in the coordinator's own session for this decision kind"

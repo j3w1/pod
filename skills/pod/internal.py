@@ -145,45 +145,9 @@ def _op_packet(request: dict) -> dict:
     return packet(request)
 
 
-def _op_report(request: dict) -> dict:
-    exact(request, {"report", "packet", "project", "objective", "admission_id", "map", "triage",
-                    "proposals", "result_commit"},
-          {"report", "packet", "project", "objective", "admission_id"}, name="request")
-    if not isinstance(request["packet"], dict):
-        raise PodError("invalid_packet", "Report needs a frozen packet")
-    from .ledger import read
-    state = read(Path(request["project"]), request["objective"])
-    from .handoff import refuse_nonowner
-    refuse_nonowner(Path(request["project"]), request["objective"], state, (state or {}).get("owner"))
-    admission = state.get("admissions", {}).get(request["admission_id"]) if state else None
-    if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
-            or admission.get("packet_id") != request["packet"].get("packet_id")):
-        raise PodError("report_attempt_unverified", "No exact native admission binding")
-    from .operations import OrcaPort, _binding_from_show, _reuse_effective_evidence
-    port = OrcaPort(Path(request["project"]))
+def _prepare_report(request, state, admission, shown, *, closing):
+    from .operations import _binding_from_show, _reuse_effective_evidence, _placement_evidence
     binding = admission["native_binding"]
-    try:
-        shown = port.show_worker(binding["dispatchId"])
-    except PodError as exc:
-        from .worker_tabs import project as tab_project
-        failed = tab_project(state, admission, {}, settled=True, failure=exc.code)
-        exc.detail = {**(exc.detail or {}), "worker_tabs": [failed], "next_action": failed["wording"]}
-        raise
-    if shown.get("runtime") != admission["runtime"]:
-        if isinstance(request.get("map"), dict) and request["map"].get("close") is True:
-            from .worker_tabs import project as tab_project
-            failed = tab_project(state, admission, {}, settled=True, failure="native_assignment_unverified")
-            raise PodError("native_assignment_unverified", "Closing report cannot rebind before its tab check; "
-                           "record a nonclosing checkpoint at the current runtime, then retry", {
-                           "worker_tabs": [failed], "next_action": failed["wording"]})
-        # A report read classifies a runtime change before its own runtime check (A2).
-        from .ledger import continuity_locked
-        if continuity_locked(Path(request["project"]), request["objective"], owner=admission["owner"],
-                             port=port) is not None:
-            state = read(Path(request["project"]), request["objective"])
-            admission = state["admissions"][request["admission_id"]]
-            binding = admission["native_binding"]
-            shown = port.show_worker(binding["dispatchId"])
     fresh = _binding_from_show(shown, admission, binding["dispatchId"])
     if fresh != binding:
         raise PodError("report_attempt_unverified", "Fresh native identity differs from admission")
@@ -195,22 +159,88 @@ def _op_report(request: dict) -> dict:
     if (not route_mismatch and admission["route_decision"].get("effective_unknown")
             and all(effective[key] != "unknown" for key in ("agent", "model", "effort"))):
         route_refresh = {"effective": effective, "inherited": inherited}
+    if not closing:
+        from .ledger import update_admission
+        if route_mismatch:
+            update_admission(Path(request["project"]), request["objective"],
+                             owner=admission["owner"], admission_id=admission["admission_id"],
+                             update=lambda row: row["route_decision"].update(route_mismatch=True),
+                             expected_runtime=admission["runtime"])
+            raise PodError("route_mismatch", "Native effective route changed after start")
+        if route_refresh:
+            def refresh(row):
+                row["route_decision"].update(effective=effective, effective_unknown=False)
+                row["effective_evidence"]["effective"] = effective
+                if inherited is not None:
+                    row["effective_evidence"]["inherited"] = inherited
+            update_admission(Path(request["project"]), request["objective"],
+                             owner=admission["owner"], admission_id=admission["admission_id"],
+                             update=refresh, expected_runtime=admission["runtime"])
+            route_refresh = None
     validated = report(request["report"], request["packet"],
                        {"runtime": admission["runtime"], **{key: binding[key] for key in
                         ("runId", "taskId", "dispatchId", "workerId")}})
-    # Report consumption is a map write: Git reads the result, triage and proposals land
-    # atomically, and nothing in the report itself changes an obligation.
-    from .ledger import consume_report
-    from .operations import _placement_evidence
+    return {"observation": validated, "route_refresh": route_refresh, "route_mismatch": route_mismatch,
+            "report_placement": _placement_evidence(shown["result"], binding)}
+
+
+def _op_report(request: dict) -> dict:
+    exact(request, fields("report request"), required("report request"), name="request")
+    if not isinstance(request["packet"], dict):
+        raise PodError("invalid_packet", "Report needs a frozen packet")
+    from .ledger import read
+    state = read(Path(request["project"]), request["objective"])
+    from .handoff import refuse_nonowner
+    refuse_nonowner(Path(request["project"]), request["objective"], state, (state or {}).get("owner"))
+    admission = state.get("admissions", {}).get(request["admission_id"]) if state else None
+    if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
+            or admission.get("packet_id") != request["packet"].get("packet_id")):
+        raise PodError("report_attempt_unverified", "No exact native admission binding")
+    from .operations import OrcaPort
+    port = OrcaPort(Path(request["project"]))
+    binding = admission["native_binding"]
+    closing = isinstance(request.get("map"), dict) and request["map"].get("close") is True
+    try:
+        shown = port.show_worker(binding["dispatchId"])
+    except PodError as exc:
+        from .worker_tabs import project as tab_project
+        failed = tab_project(state, admission, {}, settled=True, failure=exc.code)
+        exc.detail = {**(exc.detail or {}), "worker_tabs": [failed], "next_action": failed["wording"]}
+        raise
+    if shown.get("runtime") != admission["runtime"] and not closing:
+        # A report read classifies a runtime change before its own runtime check (A2).
+        from .ledger import continuity_locked
+        if continuity_locked(Path(request["project"]), request["objective"], owner=admission["owner"],
+                             port=port) is not None:
+            state = read(Path(request["project"]), request["objective"])
+            admission = state["admissions"][request["admission_id"]]
+            binding = admission["native_binding"]
+            shown = port.show_worker(binding["dispatchId"])
+    # Closing preparation and runtime rebind are in the consume transaction so
+    # every refusal leaves the recorded state unchanged, including continuity.
+    from .ledger import consume_report, _continuity_step
+    prepared = {}
+    if closing:
+        def prepare(current, row):
+            observed = shown
+            continuity = None
+            if observed.get("runtime") != row["runtime"]:
+                continuity = _continuity_step(Path(request["project"]), request["objective"], current,
+                                              owner=row["owner"], port=port, persist=False)
+                if continuity is not None:
+                    observed = port.show_worker(row["native_binding"]["dispatchId"])
+            prepared.update(_prepare_report(request, current, row, observed, closing=True))
+            return {**prepared, "continuity": continuity}
+        inputs = {"observation": None, "prepare": prepare}
+    else:
+        prepared = _prepare_report(request, state, admission, shown, closing=False)
+        inputs = prepared
     consumed = consume_report(Path(request["project"]), request["objective"], owner=admission["owner"],
-                              admission_id=admission["admission_id"], observation=validated,
+                              admission_id=admission["admission_id"], **inputs,
                               accompanying=request.get("map"), findings=request.get("triage"),
-                              proposals=request.get("proposals"),
-                              result_commit=request.get("result_commit"),
-                              route_refresh=route_refresh, route_mismatch=route_mismatch,
-                              report_placement=_placement_evidence(shown["result"], binding),
+                              proposals=request.get("proposals"), result_commit=request.get("result_commit"),
                               packet_body=request["packet"]["body"])
-    return {**validated, **consumed}
+    return {**prepared["observation"], **consumed}
 
 
 def _op_source(request: dict) -> dict:
