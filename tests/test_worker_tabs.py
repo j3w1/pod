@@ -50,11 +50,12 @@ class TabCase(ProductionCase):
         worker = result["worker"]
         handle, worktree = worker["agentTerminalHandle"], worker["worktreeId"]
         ownership = "user_owned" if case == "user_owned" else "external" if case == "external" else "owned"
-        release = ("retained" if case in ("retained", "user_owned", "external") else
+        release = ("retained" if case in ("retained", "owner_request", "user_owned", "external") else
                    case if case in ("release_pending", "release_unknown") else "none")
         resource = {"terminalHandle": handle, "worktreeId": worktree, "ownerDispatchId": dispatch,
                     "originDispatchId": dispatch, "ownershipState": ownership, "releaseState": release,
-                    "retainedReason": "user_takeover" if case == "user_owned" else "coordinator_request" if case == "retained" else None}
+                    "retainedReason": "user_takeover" if case == "user_owned" else "owner_request" if case == "owner_request"
+                                      else "coordinator_request" if case == "retained" else None}
         terminal = {"handle": handle, "tabId": "synthetic-tab", "worktreeId": worktree,
                     "connected": case != "disconnected", "writable": True, "orphaned": False}
         result.update(terminalResource=resource, terminal=terminal)
@@ -332,6 +333,21 @@ class ClosureTests(TabCase):
         self.closing((("owned", True), ("retained", True), ("release_pending", True),
                       ("release_unknown", True), ("unreadable", True)), report_route=True)
 
+    def test_unrecorded_owner_request_is_retained_and_still_blocks_both_routes(self):
+        frozen, admission = self.worker(); self.tab_case = "owner_request"
+        raw = self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        row = raw["worker_tab"]
+        self.assertEqual(row["row"], "retained_owned"); self.assertFalse(row["owner_kept"])
+        self.assertEqual(row["reason"], "owner_request"); self.assertNotIn("retained_title", row)
+        self.assertEqual(self.status()["worker_tabs"][0]["row"], "retained_owned")
+        before = self.saved()
+        for report_route in (False, True):
+            with self.subTest(report_route=report_route), self.assertRaises(PodError) as caught:
+                if report_route: self.report(admission, frozen, map={"obligations": self.finished_rows(), "close": True})
+                else: self.write(self.finished_rows(), close=True)
+            self.assertEqual(caught.exception.code, "worker_tabs_open")
+            self.assertEqual(before, self.saved())
+
     def test_checkpoint_accepts_kept_absent_and_excluded(self):
         self.closing(tuple((case, False) for case in ("user_owned", "external", "not_materialized", "disconnected",
                      "reused_later", "coordinator", "setup", "other_objective")), report_route=False)
@@ -466,6 +482,8 @@ class OwnerKeepTests(TabCase):
                     self.assertIn("Do not reuse", row["wording"])
                 else:
                     self.assertEqual(row["command"], self.release_argv)
+                    if report_route:
+                        self.assertEqual(ack["worker_tab"]["retained_title"]["title"], frozen["title"] + " (retained: owner request)")
                 status_row = self.status()["worker_tabs"][0]
                 self.assertTrue(status_row["owner_kept"])
                 self.assertEqual(row["command"], status_row["command"])
@@ -481,9 +499,13 @@ class OwnerKeepTests(TabCase):
         self.report(admission, frozen, map={"obligations": self.waiting_rows()})
         for case in ("release_pending", "release_unknown"):
             self.tab_case = case
-            with self.assertRaises(PodError) as caught:
-                self.write(self.finished_rows(), close=True)
-            self.assertEqual(caught.exception.code, "worker_tabs_open")
+            before = self.saved()
+            for report_route in (False, True):
+                with self.subTest(case=case, report_route=report_route), self.assertRaises(PodError) as caught:
+                    if report_route: self.report(admission, frozen, map={"obligations": self.finished_rows(), "close": True})
+                    else: self.write(self.finished_rows(), close=True)
+                self.assertEqual(caught.exception.code, "worker_tabs_open")
+                self.assertEqual(before, self.saved())
         self.tab_case = "user_owned"
         self.assertTrue(self.status()["worker_tabs"][0]["owner_kept"])
         self.keep(admission, False, "revoke")
@@ -544,6 +566,14 @@ class RetentionTests(TabCase):
             "finding": "defect", "severity": "major", "triage": "required_correction",
             "summary": "parser defect", "correction": "K"}])
         self.assertEqual(raw["worker_tab"]["retained_title"]["title"], "Reviewer: Check parser (retained: corrections)")
+        self.assertEqual(self.status()["worker_tabs"][0]["retention_reason"], "corrections")
+        before = self.saved()
+        for report_route in (False, True):
+            with self.subTest(report_route=report_route), self.assertRaises(PodError) as caught:
+                if report_route: self.report(admission, frozen, map={"obligations": self.stored(), "close": True})
+                else: self.write(self.stored(), close=True)
+            self.assertEqual(caught.exception.code, "worker_tabs_open")
+            self.assertEqual(before, self.saved())
         rows = self.stored(); rows[2].update(state="satisfied", evidence=[self.proof("K")])
         rows[1]["wait"] = {"class": "sequenced", "referent": "O1"}; self.write(rows)
         raw = self.report(admission, frozen)

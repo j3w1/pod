@@ -4648,7 +4648,8 @@
         "tests.test_worker_tabs.ClosureTests.test_checkpoint_refuses_owned_retained_and_pending",
         "tests.test_worker_tabs.ClosureTests.test_report_refuses_own_owned_retained_pending_and_unreadable_tab",
         "tests.test_worker_tabs.ClosureTests.test_route_refresh_and_mismatch_cannot_write_before_tab_refusal",
-        "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal"
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal",
+        "tests.test_worker_tabs.ClosureTests.test_unrecorded_owner_request_is_retained_and_still_blocks_both_routes"
       ],
       "status": "NOT_RUN"
     },
