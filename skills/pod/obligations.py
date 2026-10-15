@@ -750,6 +750,8 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
         ob["introduced_seq"] = seq
         if ob["provenance"] == "user_direct" and isinstance(ob.get("source"), dict):
             authority = ctx.get("revision_authority") or {}
+            if "instruction" in ob["source"]:
+                _text(ob["source"]["instruction"], "instruction", limit=1024, obligation=ob["id"])
             if CHANNEL_FIELDS & set(ob["source"]):
                 source_authority = owner_decision(ob["source"], kind="question" if "question" in authority else "revision")
                 if channel_fields(source_authority) != channel_fields(authority):
@@ -921,6 +923,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
                 question == reference or isinstance(question, dict) and reference in (question.get("id"), question.get("reference"))
                 for question in questions):
             raise refuse("decision_question_unrecorded", "unknown_referent", "the owner answer must name a currently recorded question",
+                         record="revision authority",
                          next_action="record the question first, or obtain the owner's instruction in the coordinator's session")
         authority_kind = "question"
     elif value.get("governance_refresh") is True:
@@ -1012,7 +1015,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         if authority is not None:
             decisions.append({"seq": seq, "kind": authority_kind, **authority})
         if len(decisions) > 64:
-            raise refuse("obligation_invalid", "decision_history_full", "owner revision history is full")
+            raise refuse("obligation_invalid", "decision_history_full", "owner revision history is full", record="revision decisions")
         state["revision_decisions"] = decisions
     for ob in rows.values():
         if ob["state"] == "satisfied":

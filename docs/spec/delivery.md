@@ -185,7 +185,7 @@ Every `pod-authorization/v1` scope (`publish`, `merge`, `release`, `deploy`) req
 `session`; a relayed authorization refuses `relayed_authorization_refused` and names
 typed consent in the coordinator's session as its next action. Every other kind
 requires session too, including owner handoff R105, runtime continuity R98,
-direct-user route/delegation constraints, general revisions/reopen, external-result
+direct-user route/delegation constraints, general revisions/reopen without a recorded-question answer, external-result
 acceptance, user-cleared route failures and Governor efficiency exceptions. Such a relay refuses
 `relayed_decision_refused`. Missing/partial relay or relay alongside session refuses.
 A recorded question answer permits only the answer it conveys; a mailbox message

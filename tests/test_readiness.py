@@ -21,6 +21,7 @@ from tests.test_succession import SuccessionCase
 BASELINE = "5f7298bab47c4a3263496dc2a7fe50ecfcda0530"  # Pod 0.12.0, the last status without readiness
 REPOSITORY = Path(__file__).resolve().parents[1]
 NEW_FIELDS = ("readiness", "successor_claim")
+DECISION_FIELDS = ("owner_decisions", "derived_governance_decisions")
 
 
 def baseline_status() -> types.ModuleType:
@@ -388,7 +389,7 @@ class ProjectionTests(unittest.TestCase):
 
 
 class CompatibilityTests(ReadinessCase):
-    """PoD#2: every field 0.12.0 printed keeps its exact value; only the readiness fields are new."""
+    """Every prior field keeps its exact value; readiness and R120 inventories are additive."""
 
     def compare(self, caller, objective="objective"):
         if caller is None:
@@ -410,11 +411,14 @@ class CompatibilityTests(ReadinessCase):
             results.append((json.loads(json.dumps(result)), output.getvalue()))
         (expected, expected_text), (observed, observed_text) = results
         self.assertTrue(set(NEW_FIELDS) & set(observed) and not set(NEW_FIELDS) & set(expected))
-        self.assertEqual({key: value for key, value in observed.items() if key not in NEW_FIELDS}, expected)
+        self.assertEqual({key: value for key, value in observed.items() if key not in NEW_FIELDS + DECISION_FIELDS}, expected)
         lines = observed_text.splitlines(keepends=True)
         self.assertEqual(lines[0].rstrip("\n"), observed["readiness"]["summary"])
-        self.assertEqual("".join(line for line in lines[1:] if not line.startswith("Successor claim: ")),
+        added = ("Successor claim: ", "Decision ", "Derived governance adoption: ")
+        self.assertEqual("".join(line for line in lines[1:] if not line.startswith(added)),
                          expected_text)
+        for row in observed.get("owner_decisions", []):
+            self.assertIn(row["decision"]["channel"], ("session", "relayed"))
         return observed
 
     def test_open_work_for_the_owner_and_a_peer(self):
