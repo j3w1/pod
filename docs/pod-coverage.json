@@ -3396,7 +3396,7 @@
         "live_native",
         "independent_review"
       ],
-      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_with_a_pending_effect_names_the_exact_refusal",
+      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_with_a_pending_effect_names_the_carry_or_the_exact_refusal",
       "status": "NOT_RUN"
     },
     {
@@ -3636,6 +3636,346 @@
         "tests.test_finalization.ClosureOrderTests.test_a_closure_recorded_before_this_rule_still_validates",
         "tests.test_finalization.ResumeTests.test_a_closed_objective_stays_finished_after_its_target_advances"
       ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A304",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.CarryTests.test_publication_rows_are_carried",
+        "tests.test_carried_claim.CarryTests.test_run_rows_are_carried"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A305",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.RefusalTests.test_rows_without_a_readback_and_unreadable_journals_hold_the_claim",
+        "tests.test_carried_claim.RefusalTests.test_a_decision_must_name_exactly_the_carried_rows",
+        "tests.test_succession.SiblingRefusalTableTests.test_predecessor_record_holds_the_claim"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A306",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ReplayTests.test_a_claim_interrupted_after_the_predecessor_link_completes_by_replay",
+        "tests.test_carried_claim.ReplayTests.test_a_claim_interrupted_after_the_carried_rows_completes_by_replay"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A307",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.ReplayTests.test_competing_claims_and_the_returning_predecessor_are_refused",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A308",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.SettlementTests.test_readback_settles_carried_publications_including_a_merged_pull_request",
+        "tests.test_carried_claim.CarriedRunTests.test_a_carried_rerun_reads_its_own_attempt_and_a_carried_dispatch_its_own_run"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A309",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.SettlementTests.test_carried_rows_are_never_canceled_and_their_absence_waits_for_the_margin",
+        "tests.test_carried_claim.SettlementTests.test_a_successor_never_cancels_a_carried_validation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A310",
+      "required_evidence": [
+        "unit",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.MergeTests.test_open_then_merged_pull_request_settles_by_r93_and_closes_the_successor",
+        "tests.test_carried_claim.MergeTests.test_a_truncated_pull_request_list_never_settles_a_carried_merge"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A311",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.MergeTests.test_a_closed_pull_request_fails_only_after_the_margin_and_with_git_evidence",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A312",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.EarlierReaderTests.test_earlier_pods_load_the_carried_journal_and_the_continued_record_unchanged",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A313",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.RefusalTests.test_a_caller_performed_rerun_reservation_holds_the_claim",
+        "tests.test_carried_claim.RefusalTests.test_a_rerun_recorded_without_provenance_holds_the_claim",
+        "tests.test_carried_claim.RefusalTests.test_a_rerun_bound_without_provenance_holds_the_claim",
+        "tests.test_carried_claim.CarriedUnconfirmedRerunTests.test_a_landed_rerun_whose_reply_was_lost_holds_and_blocks_the_successors_closure",
+        "tests.test_carried_claim.CarriedUnconfirmedRerunTests.test_a_rerun_that_never_landed_reads_failed_only_after_the_absence_floor"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A314",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ReservationTests.test_a_claim_interrupted_after_its_reservation_holds_the_successor",
+        "tests.test_carried_claim.ReservationTests.test_a_claim_interrupted_after_the_predecessor_link_holds_the_successor",
+        "tests.test_carried_claim.ReservationTests.test_a_claim_interrupted_after_the_carried_rows_holds_the_successor",
+        "tests.test_carried_claim.ReservationTests.test_a_reserved_successor_may_still_change_coordinator_or_rebind",
+        "tests.test_carried_claim.ReservationTests.test_a_reservation_whose_claim_cannot_complete_is_released",
+        "tests.test_carried_claim.ReservationTests.test_a_replay_refuses_a_successor_that_changed_without_a_reservation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A315",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.MergeTests.test_a_manual_outcome_of_a_carried_merge_holds_like_its_readback",
+        "tests.test_carried_claim.MergeTests.test_a_manual_failed_carried_merge_needs_a_closed_pull_request_past_the_margin"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A316",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.CarriedSettlementTests.test_a_carried_pull_request_update_settles_only_from_its_pull_request",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A317",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.CarriedSettlementTests.test_a_carried_cancellation_settles_whether_or_not_its_target_was_carried",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A318",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.CarriedChainTests.test_the_predecessor_follows_a_row_carried_again_and_keeps_an_earlier_settled_one",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A319",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_before_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_before_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_before_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_rows_publications",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_rows_runs",
+        "tests.test_carried_claim.ChainTableTests.test_1_hop_after_rows_merge",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_before_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_before_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_before_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_rows_publications",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_rows_runs",
+        "tests.test_carried_claim.ChainTableTests.test_2_hop_after_rows_merge",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_before_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_before_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_before_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_link_publications",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_link_runs",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_link_merge",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_rows_publications",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_rows_runs",
+        "tests.test_carried_claim.ChainTableTests.test_3_hop_after_rows_merge",
+        "tests.test_carried_claim.ChainTableShapeTests.test_the_chain_table_runs_every_row_once"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A320",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.ReservationTests.test_a_reservation_whose_claim_cannot_complete_is_released",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A321",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.ReservationTests.test_an_objective_named_by_an_incomplete_earlier_claim_is_never_claimed",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A322",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ShapeTableTests.test_pod_0_13_1_after_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_pod_0_13_1_after_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_pod_0_13_1_after_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_rows_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_rows_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_candidate_2b613c8_after_rows_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_current_before_link_release",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_link_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_link_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_link_rebind",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_replay",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_handoff",
+        "tests.test_carried_claim.ShapeTableTests.test_current_after_rows_rebind",
+        "tests.test_carried_claim.ShapeTableShapeTests.test_the_shape_table_runs_every_row_once",
+        "tests.test_carried_claim.PrelinkDecisionTests.test_a_new_decision_naming_the_handed_over_owner_completes_the_reservation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A323",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ReservationTests.test_closure_proves_no_claim_names_a_successor_that_already_started",
+        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_an_unstarted_objective_and_any_closure"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A324",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.CapacityTests.test_a_claim_too_large_for_the_successor_writes_nothing",
+        "tests.test_carried_claim.CapacityTests.test_settling_in_the_predecessor_lets_a_just_fitting_claim_complete",
+        "tests.test_carried_claim.CapacityTests.test_a_reservation_that_cannot_fit_is_released_by_its_decision",
+        "tests.test_carried_claim.CapacityTests.test_a_claim_linked_before_the_check_refuses_its_replay_by_name"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A325",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ReservationTests.test_a_repeated_close_answers_from_the_recorded_closure",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_pod_0_13_1_two_completed",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_two",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_two_completed",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_after_link",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_after_rows",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_current_unreadable",
+        "tests.test_carried_claim.ClosedReplayTableShapeTests.test_the_closed_replay_table_runs_every_row_once"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A326",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_before_an_unreadable_record",
+        "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_after_an_unreadable_record"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A327",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_predecessor_record_holds_the_successor_until_repaired",
+        "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_journal_of_its_own_never_proves_a_successor_started"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A328",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ContinuityCapacityTests.test_a_full_history_refuses_the_claim_before_any_write",
+        "tests.test_carried_claim.ContinuityCapacityTests.test_one_free_entry_finishes_a_claim_interrupted_after_the_link",
+        "tests.test_carried_claim.ContinuityCapacityTests.test_a_reservation_whose_last_entry_went_to_a_handoff_is_released_unlinked"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A329",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.DoubleClaimTests.test_two_genuine_earlier_claims_hold_the_successor",
+        "tests.test_carried_claim.DoubleClaimTests.test_a_claim_an_earlier_writer_completed_never_hides_the_other",
+        "tests.test_carried_claim.DoubleClaimTests.test_a_single_earlier_claim_still_completes_and_closes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A330",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_carried_claim.DoubleClaimTests.test_two_released_link_only_claims_hold_the_successor_after_one_completes",
       "status": "NOT_RUN"
     }
   ]

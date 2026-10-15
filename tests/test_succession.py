@@ -79,7 +79,7 @@ class ClaimTests(SuccessionCase):
         self.assertEqual(verdict["status"], "claim_available", verdict)
         self.assertEqual(verdict["facts"], {"predecessor": "objective", "predecessor_owner": "owner",
                                             "successor": "successor", "successor_owner": "next",
-                                            "runs": ["run"], "ambiguity": []})
+                                            "runs": ["run"], "ambiguity": [], "carried": []})
         for identity in ("owner", "next", "run-s"):  # The plain question names objectives, never handles or Runs.
             self.assertNotIn(identity, verdict["question"])
         self.assertEqual(before, self.snapshot())
@@ -165,6 +165,19 @@ def _differing_identity(case):
     path.write_text(json.dumps(raw))
 
 
+def _release_pending(case):
+    """A pending release: performed by the project, it has no readback, so no claim carries it (R118)."""
+    from pod.governor import _read_journal, _record_path, _write_journal
+    path = _record_path(case.project, "objective")
+    journal = _read_journal(path)
+    journal["actions"].append({
+        "record_id": "r" * 64, "logical_key": "r" * 64, "attempt": 1,
+        "action": {"kind": "release", "candidate": case.candidate, "target": "v1", "unit": "default"},
+        "decision": "ALLOW", "outcome": "pending", "receipt": {"started_at": "2026-01-01T00:00:00+00:00"},
+        "warnings": [], "reasons": [], "classifications": [], "run_event": None, "rejected_run": None})
+    _write_journal(path, journal)
+
+
 def _closed(case):
     path, raw = _raw(case, "objective")
     checkpoint = raw["checkpoint"]
@@ -176,7 +189,7 @@ def _closed(case):
 SIBLINGS = {
     "predecessor-closed": (_closed, "predecessor_closed", None),
     "handoff-pending": (None, "predecessor_handoff_pending", ("pod.handoff.unfinished", {"state": "pending"})),
-    "effect-pending": (None, "predecessor_effect_pending", ("pod.ledger._governor_pending", True)),
+    "release-pending": (_release_pending, "predecessor_effect_pending", None),
     "admission-unresolved": (_admission_state("unresolved"), "predecessor_work_unsettled", None),
     "reserved-with-dispatch": (_admission_state("reserved"), "predecessor_work_unsettled", None),
     "differing-identity": (_differing_identity, "predecessor_unverified", None),
@@ -204,7 +217,7 @@ class ClosedCoordinatorTests(SuccessionCase):
 
 class SiblingRefusalTableTests(GroupedTable):
     """Each unproven predecessor fact holds the claim and writes nothing."""
-    GROUPS = {"test_predecessor_record_holds_the_claim": ["predecessor-closed", "handoff-pending", "effect-pending"],
+    GROUPS = {"test_predecessor_record_holds_the_claim": ["predecessor-closed", "handoff-pending", "release-pending"],
               "test_predecessor_work_holds_the_claim": ["admission-unresolved", "reserved-with-dispatch",
                                                         "differing-identity"]}
 
@@ -265,7 +278,9 @@ class SiblingRefusalTests(SuccessionCase):
         path, raw = _raw(self, "objective")
         original = path.read_text()
         path.write_text("truncated{")
-        self.refused(lambda: self.claim(), code="predecessor_unverified")
+        # The unreadable record could name the unstarted successor in a claim, so it does nothing until repaired.
+        refused = self.refused(lambda: self.claim(), code="claim_unverified")
+        self.assertEqual(refused.detail["unreadable"], [str(path.parent)])
         path.write_text(original)
         run("checkpoint", {"project": str(self.project), "objective": "successor", "owner": "next",
                            "value": self.core(obligations=[self.criterion("satisfied", evidence=[
@@ -376,13 +391,15 @@ class AfterClaimTests(SuccessionCase):
 
         def interrupted(path, value):
             calls.append(path)
-            if path == objective_root(self.project, "successor") / "context.json" and len(calls) == 1:
+            # The successor's completing link, written after its reservation and the predecessor's link (R118).
+            if (path == objective_root(self.project, "successor") / "context.json"
+                    and "state" not in value.get("continues", {"state": None})):
                 raise PodError("unsafe_state", "interrupted")
             return original(path, value)
         with patch("pod.ledger._write", side_effect=interrupted):
             self.refused(lambda: self.claim(decision), code="unsafe_state")
         self.assertEqual(read(self.project, "objective")["continued_by"]["objective"], "successor")
-        self.assertNotIn("continues", read(self.project, "successor"))
+        self.assertEqual(read(self.project, "successor")["continues"]["state"], "claiming")
         self.assertEqual(self.status()["succession"]["state"], "claim_incomplete")
         before = self.snapshot()
         verdict = self.claim()  # Detection reports the gap and still writes nothing.

@@ -34,6 +34,9 @@ RUN_LIST_LIMIT = 20
 # A mutation that has not answered within this many seconds has ended; a read is bounded by half.
 MUTATION_TIMEOUT_S = 120
 PR_FIELDS = "number,url,headRefOid,state,isDraft"
+# A pull request read back for a carried effect (R118): every state, with its merge commit.
+PR_READ_FIELDS = "number,url,headRefOid,state,mergeCommit,mergedAt"
+PR_LIST_LIMIT = 10
 ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
 _ISSUE_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)/?\Z")
@@ -84,6 +87,10 @@ def gh_allowed(argv: list[str]) -> bool:
     if (len(argv) == 12 and argv[:2] == ["pr", "list"] and argv[2] == "--head" and _name(argv[3])
             and argv[4] == "--base" and _name(argv[5]) and argv[6:] == [
                 "--state", "open", "--json", PR_FIELDS, "--limit", "5"]):
+        return True
+    if (len(argv) == 12 and argv[:2] == ["pr", "list"] and argv[2] == "--head" and _name(argv[3])
+            and argv[4] == "--base" and _name(argv[5]) and argv[6:] == [
+                "--state", "all", "--json", PR_READ_FIELDS, "--limit", str(PR_LIST_LIMIT + 1)]):
         return True
     if (len(argv) == 10 and argv[:2] == ["pr", "create"] and argv[2] == "--head" and _name(argv[3])
             and argv[4] == "--base" and _name(argv[5]) and argv[6] == "--title"
@@ -566,6 +573,23 @@ class GhPort:
         row = open_rows[0]
         return {"number": row.get("number"), "url": row.get("url"), "head_sha": row.get("headRefOid"),
                 "draft": bool(row.get("isDraft"))}
+
+    def pull_requests(self, *, head: str, base: str) -> list[dict]:
+        """Pull requests of this head into this base in every state, newest first: at most PR_LIST_LIMIT + 1."""
+        rows = self._gh_json(["pr", "list", "--head", head, "--base", base, "--state", "all",
+                              "--json", PR_READ_FIELDS, "--limit", str(PR_LIST_LIMIT + 1)])
+        if not isinstance(rows, list):
+            raise PodError("gh_contract", "gh pr list returned an unsupported shape")
+        found = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            merged = row.get("mergeCommit") if isinstance(row.get("mergeCommit"), dict) else {}
+            oid = merged.get("oid")
+            found.append({"number": row.get("number"), "url": row.get("url"), "head_sha": row.get("headRefOid"),
+                          "state": row.get("state"), "merged_at": row.get("mergedAt"),
+                          "merge_commit": oid if isinstance(oid, str) and _GIT_ID.fullmatch(oid) else None})
+        return found
 
     def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> dict:
         completed = self._gh(["pr", "create", "--head", head, "--base", base, "--title", title, "--body", body],

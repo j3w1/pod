@@ -244,7 +244,9 @@ def read(project: Path, objective: str) -> dict | None:
 
 def _write(path: Path, value: dict) -> None:
     from .succession import refuse_continued
-    refuse_continued(value)  # Backstop: only its own transition writes a continued record or a historical retirement.
+    # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
+    # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
+    refuse_continued(value, reserved=False)
     value["revision"] += 1
     _validate_context(value)
     atomic_json(path, value, limit=CONTEXT_LIMIT, compact=True)
@@ -288,7 +290,7 @@ def _run_references(state: dict) -> dict[str, str]:
 
 def require_authority(project: Path, objective: str, *, owner: str,
                       state: dict | None = None, run_id: str | None = None,
-                      native_port=None, expected_runtime: str | None = None) -> dict:
+                      native_port=None, expected_runtime: str | None = None, claim: str | None = None) -> dict:
     """Join a stable native current Run to this objective's persisted owner and refs.
 
     Every caller passing ``state`` holds the objective lock, so a proven runtime
@@ -301,9 +303,9 @@ def require_authority(project: Path, objective: str, *, owner: str,
     locked = state is not None
     state = _read(_path(project, objective)) if state is None else state
     from .succession import refuse_continued
-    refuse_continued(state)
+    refuse_continued(state, claim=claim)  # `claim`: the succession claim of this successor, the one write it allows.
     from .handoff import refuse_nonowner
-    refuse_nonowner(project, objective, state, owner, port=native_port)
+    refuse_nonowner(project, objective, state, owner, port=native_port, claim=claim)
     if state["owner"] not in (None, owner):
         raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
     refs = _run_references(state)
@@ -653,7 +655,8 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
         state = _read(path)
         if state["owner"] != owner or state.get("checkpoint") is None:
             raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
-        _require_open(state)
+        # A rebind is no work: a successor an incomplete claim reserves may rebind so that it can finish the claim.
+        _require_open(state, reserved=False)
         refs = _run_references(state)
         if len(set(refs.values())) != 1:
             raise PodError("native_authority_unverified", "Objective Run references span runtimes")
@@ -884,7 +887,9 @@ def _authorization_granted(project: Path, objective: str):
             return applicable_authorization(unit, row["action"].get("authorization"),
                                             candidate=row.get("commit") or row["action"]["candidate"],
                                             tree=tree, scope=scope)
+        # A row carried from a lost coordinator records the predecessor's consent, never this objective's (R118).
         return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
+                   and not isinstance(row.get("carried_from"), dict)
                    and candidate in (row["action"]["candidate"], row.get("commit"), row.get("candidate_id"))
                    and valid(row) for row in journal["actions"])
     return granted
@@ -1073,9 +1078,9 @@ def map_read(project: Path, objective: str) -> dict:
             "finalization": remaining}
 
 
-def _require_open(state: dict) -> None:
+def _require_open(state: dict, *, reserved: bool = True) -> None:
     from .succession import refuse_continued
-    refuse_continued(state)
+    refuse_continued(state, reserved=reserved)
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
         from .obligations import refuse
@@ -1269,7 +1274,11 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                     raise refuse("obligation_unaccounted", "disposition_invalid",
                                  "a disposition names a recorded admission", record='checkpoint map transition')
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
-        if proposed.get("close") is True:
+        if proposed.get("close") is True and not (prior_map or {}).get("closure"):
+            from .succession import refuse_incomplete
+            # A new closure proves that no incomplete claim, from any writer, names this objective as successor
+            # (R118); a repeated one answers from the recorded closure as before (R117).
+            refuse_incomplete(project, objective, state, full=True)
             # A delivery recorded in the closing write itself does not count: closure is the last record, and
             # its report is derived before that write adds the delivery.
             ctx["closure_unrecorded"] = _closure_unrecorded(
@@ -1783,7 +1792,9 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                         "written": _report_written_ids(map_state, admission_id),
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
                         "report": report_projection(map_state, ctx)}
-            if value.get("close") is True:
+            if value.get("close") is True and not map_state.get("closure"):
+                from .succession import refuse_incomplete
+                refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's new closure (R118).
                 ctx["closure_unrecorded"] = _closure_unrecorded(project, objective, state,
                                                                 delivered=map_state.get("delivery") is not None)
             new_map = accept_write(map_state, value, ctx, triaged=triaged)

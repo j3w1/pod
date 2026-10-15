@@ -100,12 +100,16 @@ class GovernorFakePort:
         self.blind = blind
         self.heads = {}
         self.prs = {}
+        # Pull requests in every state, as the readback of a carried row reads them (R118).
+        self.pr_history = {}
         self.runs_by = {}
         self.run_status = {}
         # Earlier attempts of a rerun run, as `gh run view --attempt` would show them.
         self.attempts = {}
-        # When the attempt a rerun starts begins, as `startedAt` reports it.
-        self.rerun_stamp = "2026-09-21T00:00:01+00:00"
+        # When the runs it starts are created; a fixture on the real clock moves it to just after now.
+        self.stamp = "2026-09-21T00:00:01+00:00"
+        # When the attempt a rerun starts begins, as `startedAt` reports it; None begins it at `stamp`.
+        self.rerun_stamp = None
         self.next_run = 100
         self.lost = set(lost)
         self.rejected = set(rejected)
@@ -126,10 +130,10 @@ class GovernorFakePort:
             raise PodError("remote_effect_uncertain", "lost")
         return {"status": "pushed", "remote_head": commit}
 
-    def _start(self, workflow, commit, *, event, created_at="2026-09-21T00:00:01+00:00"):
+    def _start(self, workflow, commit, *, event, created_at=None):
         run = {"id": str(self.next_run), "status": "in_progress", "conclusion": None,
-               "created_at": created_at, "url": "https://example.invalid/run",
-               "event": event, "head_sha": commit, "attempt": 1, "started_at": created_at}
+               "created_at": created_at or self.stamp, "url": "https://example.invalid/run",
+               "event": event, "head_sha": commit, "attempt": 1, "started_at": created_at or self.stamp}
         self.next_run += 1
         self.runs_by.setdefault((workflow, commit), []).append(run)
         self.run_status[run["id"]] = run
@@ -141,6 +145,11 @@ class GovernorFakePort:
         if "pull_request" in self.broken:
             return "not a mapping"
         return self.prs.get((head, base))
+
+    def pull_requests(self, *, head, base):
+        """Every pull request of this head into this base, as `gh pr list --state all` reads them back."""
+        self.calls.append(("pr_read", head, base))
+        return [dict(pr) for pr in reversed(self.pr_history.get((head, base), []))]
 
     def open_pull_request(self, *, head, base, title, body):
         self.calls.append(("pr_create", head, base, title))
@@ -180,7 +189,7 @@ class GovernorFakePort:
         current = self.run_status[run_id]
         self.attempts[run_id][current["attempt"]] = dict(current)
         current.update({"status": "in_progress", "conclusion": None, "attempt": current["attempt"] + 1,
-                        "started_at": self.rerun_stamp})
+                        "started_at": self.rerun_stamp or self.stamp})
         return {"status": "rerun_requested"}
 
     def cancel(self, *, run_id):

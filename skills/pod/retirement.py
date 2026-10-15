@@ -208,9 +208,10 @@ def _governor_rows(project: Path, objective: str) -> list[dict]:
             if row["decision"] == "ALLOW" and row["outcome"] in PRESERVED_OUTCOMES]
 
 
-def _claimants(project: Path, objective: str) -> list[str] | None:
-    """Objectives of this repository whose claim names this one as successor; None when a record that could
-    hold such a claim is unreadable. Directories without a record carry no claim and are skipped."""
+def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
+    """Objectives of this repository whose claim names this one as successor, and the records that could hold
+    such a claim but are unreadable, by path. Every readable record is read whatever the others are, so an
+    unreadable record never hides a readable claim. Directories without a record carry no claim and are skipped."""
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
@@ -219,33 +220,36 @@ def _claimants(project: Path, objective: str) -> list[str] | None:
     root = state_root(project)
     try:
         if root.is_symlink():
-            return None
+            return [], [str(root)]
         with os.scandir(root) as frontier:
             entries = sorted(frontier, key=lambda entry: entry.name)
     except FileNotFoundError:
-        return []
+        return [], []
     except OSError:
-        return None
-    found = []
+        return [], [str(root)]
+    found, unreadable = [], []
     for entry in entries:
         if entry.name.startswith("."):
             continue
         try:
             if entry.is_symlink():
-                return None
+                unreadable.append(entry.path)
+                continue
             if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
                 continue
             raw = bounded_json(Path(entry.path) / "context.json", limit=CONTEXT_LIMIT)
         except (OSError, PodError):
-            return None
+            unreadable.append(entry.path)
+            continue
         if not isinstance(raw, dict):
-            return None
+            unreadable.append(entry.path)
+            continue
         link = raw.get("continued_by")
         name = _name(raw)
         if (isinstance(link, dict) and link.get("objective") == objective and name is not None
                 and record_name(project, context, name) == entry.name):
             found.append(name)
-    return found
+    return found, unreadable
 
 
 def _readable(place: object) -> bool:
@@ -620,14 +624,14 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
         return fail("objective_closed", "The objective is closed; a closed objective needs no retirement.")
-    claimants = _claimants(project, objective)
-    if claimants is None:
-        return fail("scope_unreadable", "A Pod record that could name this objective as a claimed successor is "
-                    "unreadable.")
+    claimants, unreadable = _claimants(project, objective)
     if claimants:
         # An interrupted claim recorded the predecessor's link before this objective's own back-link.
         return fail("objective_continues", f"Objective {claimants[0]} records this objective as its successor; "
                     "historical retirement never ends a successor that holds a claim.")
+    if unreadable:
+        return fail("scope_unreadable", "A Pod record that could name this objective as a claimed successor is "
+                    "unreadable.")
     owner = state.get("owner")
     if not owner:
         return fail("owner_unrecorded", "The objective records no coordinator.")

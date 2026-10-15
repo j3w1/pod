@@ -130,9 +130,15 @@ def bounded_stdin_json(*, limit: int = MAX_RECORD) -> Any:
         raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
 
 
+def encoded(value: Any, *, compact: bool = False) -> bytes:
+    """The exact bytes `atomic_json` writes for a value."""
+    options = {"separators": (",", ":")} if compact else {"indent": 2}
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, **options).encode() + b"\n"
+
+
 def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD, compact: bool = False) -> None:
     options = {"separators": (",", ":")} if compact else {"indent": 2}
-    data = json.dumps(value, sort_keys=True, ensure_ascii=False, **options).encode() + b"\n"
+    data = encoded(value, compact=compact)
     if len(data) > limit:
         sections = sorted(
             ({"section": key, "bytes": len(json.dumps(item, sort_keys=True, ensure_ascii=False,

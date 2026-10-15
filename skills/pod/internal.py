@@ -486,7 +486,8 @@ def _op_runtime_continuity(request: dict) -> dict:
     project = Path(request["project"])
     from .ledger import read
     from .handoff import refuse_nonowner
-    refuse_nonowner(project, request["objective"], read(project, request["objective"]), request["owner"])
+    refuse_nonowner(project, request["objective"], read(project, request["objective"]), request["owner"],
+                    reserved=False)
     return owner_continuity(project, request["objective"], owner=request["owner"],
                             decision=request["decision"], port=OrcaPort(project))
 
