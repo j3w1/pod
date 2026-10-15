@@ -233,7 +233,7 @@ class ClosureTests(TickCase):
         with self.assertRaises(SimulatedInterruption):
             self.tick()
         self.assert_due_refusal(lambda: self.write(close=True))
-        self.tick()  # recovery reads only; UNKNOWN is still not a refusal
+        self.recover_tick()  # recovery reads only; UNKNOWN is still not a refusal
         self.assert_due_refusal(lambda: self.write(close=True))
         self.assertEqual(len(self.issue.writes), 1)
 

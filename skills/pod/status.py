@@ -217,7 +217,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             return result
         if run is None:
             return result
-    from .ledger import _read, kernel_view, read, superseded_for_run
+    from .ledger import _read, kernel_view, map_of, read, superseded_for_run
     from .readiness import assess, unavailable
     record_root = None
     try:
@@ -409,8 +409,10 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         from .pod_ticks import projection as tick_projection
         result["pod_ticks"] = ((view or {}).get("pod_ticks") if view else None)
         if result["pod_ticks"] is None:
-            result["pod_ticks"] = tick_projection(state, checkpoint, (view or {}).get("ctx") or {},
-                                                  project=project, objective=objective)
+            tick_error = result.get("obligations", {}).get("error")
+            result["pod_ticks"] = ({"status": "unavailable", "error": tick_error, "lines": []}
+                                   if tick_error and checkpoint.get("objective_source") else
+                                   tick_projection(state, map_of(state), {}, project=project, objective=objective))
     if result["installed_version_drift"]:
         result["blocker"] = "installed_version_changed"
         result["next_safe_action"] = RELOAD_ACTION

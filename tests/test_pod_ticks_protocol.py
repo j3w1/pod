@@ -83,18 +83,21 @@ class ProtocolTests(TickCase):
         self.assertFalse(self.line()["ticked"])
 
     def test_hand_tick_proven_is_current_but_never_pod_authored_D8(self):
-        self.bind("- [X] **PoD#1"); self.prove(); self.tick()
+        self.bind("- [X] **PoD#1"); self.prove()
+        self.assertEqual(self.tick()["status"], "current")
         row = self.line()
         self.assertEqual((row["status"], row["authorship"]), ("current", "not_pod"))
         self.assertEqual(self.issue.writes, [])
 
     def test_hand_tick_unproven_is_left_named_D9(self):
-        self.bind("- [x] **PoD#1"); self.tick()
+        self.bind("- [x] **PoD#1")
+        self.assertEqual(self.tick()["status"], "ticked_without_pod_proof")
         self.assertEqual(self.line()["status"], "ticked_without_pod_proof")
         self.assertEqual(self.issue.writes, [])
 
     def test_hand_tick_unmapped_is_left_named_D10(self):
-        self.bind("- [ ] **PoD#1\n- [x] **PoD#2"); self.tick(2)
+        self.bind("- [ ] **PoD#1\n- [x] **PoD#2")
+        self.assertEqual(self.tick(2)["status"], "ticked_without_pod_proof")
         self.assertEqual(self.line(2)["status"], "ticked_without_pod_proof")
         self.assertEqual(self.line(2)["criteria"], [])
         self.assertEqual(self.issue.writes, [])
@@ -102,7 +105,8 @@ class ProtocolTests(TickCase):
     def test_previously_mapped_hand_tick_is_left_when_mapping_lost_D10(self):
         """Mapping-only forward-compatible control; current criterion sources are immutable."""
         self.bind("- [x] **PoD#1"); self.prove(); self.tick()
-        self.lapse(remove_mapping=True); self.tick()
+        self.lapse(remove_mapping=True)
+        self.assertEqual(self.tick()["status"], "ticked_without_pod_proof")
         self.assertEqual(self.line()["status"], "ticked_without_pod_proof")
         self.assertEqual(self.line()["criteria"], [])
         self.assertEqual(self.issue.writes, [])
@@ -143,7 +147,8 @@ class ProtocolTests(TickCase):
         self.assertEqual(result["status"], "unconfirmed")
         self.assertTrue(result["receipt"]["rebind"])
         self.assertEqual(self.line()["status"], "ambiguous")
-        self.lapse(); self.tick()
+        self.lapse()
+        self.assertEqual(self.tick()["status"], "ambiguous")
         self.assertEqual(len(self.issue.writes), 1)
         self.assertEqual(self.line()["authorship"], "ambiguous")
 
@@ -175,7 +180,7 @@ class ProtocolTests(TickCase):
             self.tick()
         self.assertEqual(read(self.project, "objective")["pod_ticks"]["requests"]["1"]["phase"], "intent")
         self.issue.calls.clear()
-        result = self.tick()
+        result = self.recover_tick()
         self.assertEqual([call[0] for call in self.issue.calls], ["issue"])
         self.assertTrue(result["receipt"]["recovered"])
         self.assertEqual(self.line()["authorship"], "ambiguous")
@@ -204,6 +209,7 @@ class ProtocolTests(TickCase):
         self.bind(); self.prove(); self.issue.readback_override = "outside replacement"
         source = deepcopy(read(self.project, "objective")["checkpoint"]["objective_source"])
         exc = self.failure("issue_reconciliation_required", self.tick)
+        self.assertEqual(exc.detail["reason"], "tick_readback_mismatch")
         self.assertFalse(exc.detail["receipt"]["rebind"])
         self.assertEqual(read(self.project, "objective")["checkpoint"]["objective_source"], source)
         self.assertEqual(self.line()["blocked"]["row"], "B2")

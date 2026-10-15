@@ -49,6 +49,14 @@ class TickCase(ProductionCase):
     def tick(self, number=1):
         return self.op("pod-tick", pod=number)
 
+    def recover_tick(self, number=1):
+        """Advance only the injected intent clock; never wait for time to pass."""
+        from pod.github import MUTATION_TIMEOUT_S
+        from pod.pod_ticks import INTENT_MARGIN_S
+        request = read(self.project, "objective")["pod_ticks"]["requests"][str(number)]
+        with patch("pod.pod_ticks.time", return_value=request["intent_at"] + MUTATION_TIMEOUT_S + INTENT_MARGIN_S):
+            return self.tick(number)
+
     def saved(self):
         root = objective_root(self.project, "objective")
         return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*")

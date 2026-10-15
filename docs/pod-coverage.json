@@ -5354,7 +5354,8 @@
       "offline_test": [
         "tests.test_inventory.InventoryIntegrityTests.test_repository_owned_validator_checks_the_actual_canonical_skill",
         "tests.test_pod_ticks_visibility.VisibilityTests.test_existing_closed_snapshot_without_tick_records_validates_without_new_rule",
-        "tests.test_pod_ticks_visibility.VisibilityTests.test_no_issue_body_is_stored_in_context_or_receipts"
+        "tests.test_pod_ticks_visibility.VisibilityTests.test_no_issue_body_is_stored_in_context_or_receipts",
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_earlier_intent_without_time_recovers_without_conversion"
       ],
       "status": "NOT_RUN"
     },
@@ -5367,6 +5368,80 @@
         "live_native"
       ],
       "offline_test": "tests.test_inventory.InventoryIntegrityTests.test_spec_and_coverage_ids_are_complete",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A413",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_pod_ticks_corrections.StatusCorrections.test_mapless_issue_bound_status_cli_exits_zero",
+        "tests.test_pod_ticks_corrections.StatusCorrections.test_kernel_failure_never_fabricates_due_untick"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A414",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_in_flight_callers_before_landing_never_send_again_P1",
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_in_flight_callers_after_landing_preserve_held_success_P2",
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_expired_recovery_rebind_then_holder_success_is_E1",
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_stale_result_cannot_replace_a_newer_completed_request",
+        "tests.test_pod_ticks_corrections.ConcurrentCorrections.test_recovery_retains_success_recorded_during_its_read"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A415",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_pod_ticks_corrections.ReadbackCorrections.test_closed_in_window_rebinds_own_but_keeps_B3_until_reopen",
+        "tests.test_pod_ticks_corrections.ReadbackCorrections.test_amendment_in_window_rebinds_own_but_keeps_B2",
+        "tests.test_pod_ticks_corrections.ReadbackCorrections.test_role_in_window_keeps_body_observation_and_B2",
+        "tests.test_pod_ticks_corrections.ReadbackCorrections.test_unconfirmed_closed_in_window_rebinds_ambiguously"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A416",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_pod_ticks_corrections.BoundedCorrections.test_sixty_unknown_numbers_leave_context_unchanged"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A417",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_success_readback_mismatch_stops_without_rebind_E5"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A418",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_pod_ticks_mapping.MappingTests.test_two_criteria_require_both_current_proofs_D3_D4",
+        "tests.test_pod_ticks_mapping.MappingTests.test_withdrawn_mapping_is_not_proven",
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_hand_tick_proven_is_current_but_never_pod_authored_D8",
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_hand_tick_unproven_is_left_named_D9",
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_hand_tick_unmapped_is_left_named_D10",
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_previously_mapped_hand_tick_is_left_when_mapping_lost_D10",
+        "tests.test_pod_ticks_protocol.ProtocolTests.test_lost_response_landed_tick_is_ambiguous_E3_D11"
+      ],
       "status": "NOT_RUN"
     }
   ]

@@ -154,7 +154,7 @@ class VisibilityTests(TickCase):
         before = self.saved()
         self.failure("pod_tick_pending", self.start, "worker", frozen)
         self.assertEqual(self.saved(), before)
-        self.tick()
+        self.recover_tick()
         self.assertEqual(self.line()["authorship"], "ambiguous")
 
     def test_unreadable_write_readback_recovers_before_any_new_send(self):
