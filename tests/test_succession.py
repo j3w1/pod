@@ -278,7 +278,9 @@ class SiblingRefusalTests(SuccessionCase):
         path, raw = _raw(self, "objective")
         original = path.read_text()
         path.write_text("truncated{")
-        self.refused(lambda: self.claim(), code="predecessor_unverified")
+        # The unreadable record could name the unstarted successor in a claim, so it does nothing until repaired.
+        refused = self.refused(lambda: self.claim(), code="claim_unverified")
+        self.assertEqual(refused.detail["unreadable"], [str(path.parent)])
         path.write_text(original)
         run("checkpoint", {"project": str(self.project), "objective": "successor", "owner": "next",
                            "value": self.core(obligations=[self.criterion("satisfied", evidence=[

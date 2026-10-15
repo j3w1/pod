@@ -105,11 +105,14 @@ def incoming_claim(project: Path, objective: str, state: dict | None, *, full: b
     Rows or units the earlier candidate copied before stopping name their predecessor in the objective's own
     journal. The scan runs only where this objective's records cannot prove there is none: a completed `continues`
     proves it, and so does work it already started, since every writer refuses to begin a claim of a started
-    successor. `full` scans anyway, for closure and for continuing it as a predecessor, which also cover a claim an
-    earlier Pod left before the objective started. Returns `{"predecessor": name}`, or `{"predecessor": None}` when
-    a record that could hold such a claim is unreadable.
+    successor; an objective with no checkpoint yet is named by no claim, since every writer claims only a recorded
+    successor. An unreadable journal of its own proves nothing. `full` scans anyway, for closure and for continuing
+    it as a predecessor, which also cover a claim an earlier Pod left before the objective started. Returns
+    `{"predecessor": name}` for a readable claim, which an unreadable record never hides, or
+    `{"predecessor": None, "unreadable": paths}` when no readable claim is found and a record that could hold one
+    is unreadable.
     """
-    if not isinstance(state, dict):
+    if not isinstance(state, dict) or state.get("checkpoint") is None:
         return None
     back = state.get("continues")
     if isinstance(back, dict):
@@ -117,13 +120,13 @@ def incoming_claim(project: Path, objective: str, state: dict | None, *, full: b
     copied = _copied_from(project, objective)
     if copied is not None:
         return {"predecessor": copied}
-    if not full and _started(project, objective, state):
+    if not full and _started(project, objective, state, unreadable=None):
         return None
     from .retirement import _claimants
-    claimants = _claimants(project, objective)
-    if claimants is None:
-        return {"predecessor": None}
-    return {"predecessor": claimants[0]} if claimants else None
+    claimants, unreadable = _claimants(project, objective)
+    if claimants:
+        return {"predecessor": claimants[0]}
+    return {"predecessor": None, "unreadable": unreadable[:MAX_LISTED]} if unreadable else None
 
 
 def _copied_from(project: Path, objective: str) -> str | None:
@@ -144,18 +147,20 @@ def refuse_incomplete(project: Path, objective: str, state: dict | None, *, clai
                       full: bool = False) -> None:
     """Refuse the successor of an incomplete claim every write but that claim's own (R118).
 
-    An unreadable record that could hold such a claim refuses only where `full` asks for proof, closure and
-    continuing it as a predecessor; ordinary work goes on, since only those two could strand the claim's effects.
+    While a record that could hold such a claim is unreadable, an objective whose own records cannot prove it has
+    none refuses every write: work would start it, and a started successor can no longer complete the claim.
+    Closure and continuing it as a predecessor (`full`) ask that proof even of a started objective.
     """
     found = incoming_claim(project, objective, state, full=full)
     if found is None or claim is not None and found["predecessor"] == claim:
         return
     if found["predecessor"] is None:
-        if full:
-            raise PodError("claim_unverified", "A Pod record that could name this objective as the successor of an "
-                           "incomplete claim is unreadable",
-                           {"next_action": "repair or remove the unreadable record, then retry"})
-        return
+        named = found["unreadable"]
+        raise PodError("claim_unverified", "A Pod record that could name this objective as the successor of an "
+                       "incomplete claim is unreadable: " + ", ".join(named[:3])
+                       + (f"; and {len(named) - 3} more" if len(named) > 3 else ""),
+                       {"unreadable": named,
+                        "next_action": "repair or remove the unreadable record, then retry"})
     raise _claim_incomplete(found["predecessor"])
 
 
@@ -292,11 +297,13 @@ def status_block(project: Path, state: dict) -> dict | None:
 
 
 def _started(project: Path, objective: str, state: dict, *, predecessor: str | None = None,
-             carried: frozenset = frozenset()) -> str | None:
+             carried: frozenset = frozenset(),
+             unreadable: str | None = "the successor's Governor journal is unreadable") -> str | None:
     """Why the successor has already begun work, if it has.
 
     Rows and units this claim of `predecessor` already copied (record ids in `carried`) are the claim's own
-    partial write, not the successor's work.
+    partial write, not the successor's work. An unreadable journal answers `unreadable`: started for a claim, which
+    must not copy into it, and unproven (None) for the incoming-claim scan.
     """
     from .governor import _read_journal, _record_path
     from .obligations import TERMINAL
@@ -310,7 +317,7 @@ def _started(project: Path, objective: str, state: dict, *, predecessor: str | N
     try:
         journal = _read_journal(_record_path(project, objective))
     except PodError:
-        return "the successor's Governor journal is unreadable"
+        return unreadable
     def mine(item: dict) -> bool:
         return predecessor is not None and (item.get("carried_from") or {}).get("objective") == predecessor
     if (any(not (mine(row) and row["record_id"] in carried) for row in journal["actions"])
@@ -441,7 +448,8 @@ def _incomplete_claim(project: Path, objective: str, state: dict) -> tuple | Non
         return None
     if found["predecessor"] is None:
         return ("predecessor_unverified", "A Pod record that could name the predecessor as a claimed successor is "
-                "unreadable.")
+                "unreadable: " + ", ".join(found["unreadable"][:3]) + ".",
+                "Repair or remove the unreadable record, then rerun the claim.")
     own = found["predecessor"]
     return ("predecessor_claim_incomplete",
             f"The predecessor's own claim on objective {own} is incomplete; it is not continued until that claim "
@@ -521,6 +529,15 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
     started = _started(project, objective, state)
     if started:
         return fail("successor_started", "Claim before the successor starts work: " + started + ".")
+    from .ledger import CONTINUITY_HISTORY
+    if len(((state.get("checkpoint") or {}).get("continuity") or {}).get("history") or []) >= CONTINUITY_HISTORY:
+        # An interruption after the predecessor's link is finished by the successor's coordinator, after an owner
+        # handoff or runtime rebind if it is gone; each adds a continuity entry, so the claim links only while one
+        # is free (R98, R105, R118).
+        return fail("successor_continuity_full",
+                    f"The successor's {CONTINUITY_HISTORY}-entry continuity history is full: an interrupted claim could "
+                    "not be finished after an owner handoff or runtime rebind.",
+                    "Claim the predecessor from a fresh successor objective, recorded and not yet started.")
     failed, unfinished_rows, unreported = _predecessor_checks(project, predecessor, prior, facts, fail, port=port)
     if failed is not None:
         return failed

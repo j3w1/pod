@@ -472,13 +472,25 @@ class ReservationTests(CarriedCase):
         self.refused(self.close_successor, code="claim_incomplete")
         self.assertEqual(before, self.snapshot())
 
-    def test_an_unreadable_record_holds_closure_but_not_work(self):
+    def test_an_unreadable_record_holds_an_unstarted_objective_and_any_closure(self):
+        """While the scan cannot read a record, an objective its own records do not prove started does no work, which
+        would start it; a started one works on, and closure asks the proof of either."""
         self.lost_with(lambda: None)
         self.successor()
         broken = state_root(self.project) / "zz-unreadable"
         broken.mkdir()
         (broken / "context.json").write_text("{")
-        self.mine("governor-prepare", unit="own", branch={"remote": "origin", "branch": "own", "base": "target"})
+        prepare = self.own_work()["prepare"]
+        before = self.snapshot()
+        refused = self.refused(prepare, code="claim_unverified")
+        self.assertEqual((refused.detail["unreadable"], refused.detail["next_action"]),
+                         ([str(broken)], "repair or remove the unreadable record, then retry"))
+        self.assertEqual(before, self.snapshot())
+        (broken / "context.json").unlink()
+        prepare()
+        (broken / "context.json").write_text("{")
+        self.mine("checkpoint", value=self.core(
+            obligations=read(self.project, "successor")["checkpoint"]["obligations"]))  # Started, it works on.
         self.refused(self.close_successor, code="claim_unverified")
         (broken / "context.json").unlink()
         broken.rmdir()
@@ -1313,6 +1325,181 @@ class PrelinkDecisionTests(ShapeCase):
 class ShapeTableShapeTests(unittest.TestCase):
     def test_the_shape_table_runs_every_row_once(self):
         assert_grouped_table(self, ShapeTableTests, SHAPE_ROWS, limit=1)
+
+
+EARLIER_IDENTITY = {"version": "0.13.1", "bundle_digest": "0" * 64}
+
+
+class UnreadableScanTests(ShapeCase):
+    """R118: an unreadable record never hides a readable incoming claim, and while the scan cannot read a record an
+    objective its own records do not prove started accepts no work, so absence of proof never starts it."""
+
+    def broken(self, name):
+        """An unrelated record of the repository that no longer parses."""
+        path = state_root(self.project) / name
+        path.mkdir()
+        (path / "context.json").write_text("{")
+        return path
+
+    def earlier_successor(self):
+        """The successor as an earlier bundle recorded it, so its Governor work first needs a refreshed checkpoint."""
+        with patch("pod.bundle.running_identity", return_value=EARLIER_IDENTITY):
+            self.successor()
+        self.refresh = lambda: self.mine("checkpoint", value=self.core(
+            obligations=read(self.project, "successor")["checkpoint"]["obligations"]))
+        self.prepare_own = lambda: self.mine("governor-prepare", unit="own",
+                                             branch={"remote": "origin", "branch": "own", "base": "target"})
+
+    def masked(self, name):
+        built = self.lost_with(self.publications)
+        effects = self.writes()
+        self.earlier_successor()
+        decision = self.interrupted("candidate-2b613c8", "after_link")  # Its genuine routine; no backlink.
+        broken = self.broken(name)
+        place = objective_root(self.project, "objective").name
+        self.assertTrue(broken.name < place if name.startswith("00") else place < broken.name)
+        before = self.snapshot()
+        for call in (self.refresh, self.prepare_own, lambda: self.close("successor", "next", "run-s")):
+            refused = self.refused(call, code="claim_incomplete")
+            self.assertEqual(refused.detail["predecessor"], "objective")
+        self.assertEqual(before, self.snapshot())
+        # Its own replay with the decision that made it is never held by the unrelated record.
+        self.assertEqual(self.claim(decision)["status"], "claimed")
+        self.assertEqual(sorted(row["record_id"] for row in self.journal("successor")["actions"]),
+                         sorted(built.values()))
+        self.refresh()  # The refresh route opens once the claim is complete.
+        self.assertEqual(self.refused(lambda: self.close("successor", "next", "run-s")).detail["detail"],
+                         "closure_unfinished")
+        self.assertEqual(self.writes(), effects)
+
+    def test_a_readable_claim_is_found_before_an_unreadable_record(self):
+        self.masked("zz-unreadable")
+
+    def test_a_readable_claim_is_found_after_an_unreadable_record(self):
+        self.masked("00-unreadable")
+
+    def test_an_unreadable_predecessor_record_holds_the_successor_until_repaired(self):
+        built = self.lost_with(self.publications)
+        self.earlier_successor()
+        decision = self.interrupted("candidate-2b613c8", "after_link")
+        record = objective_root(self.project, "objective") / "context.json"
+        original = record.read_bytes()
+        record.write_text("{")
+        before = self.snapshot()
+        for call in (self.refresh, self.prepare_own, lambda: self.close("successor", "next", "run-s")):
+            refused = self.refused(call, code="claim_unverified")
+            self.assertEqual(refused.detail["unreadable"], [str(record.parent)])
+        self.assertEqual(before, self.snapshot())
+        record.write_bytes(original)
+        self.refused(self.prepare_own, code="claim_incomplete")
+        self.assertEqual(self.claim(decision)["status"], "claimed")
+        self.assertEqual(sorted(row["record_id"] for row in self.journal("successor")["actions"]),
+                         sorted(built.values()))
+
+    def test_an_unreadable_journal_of_its_own_never_proves_a_successor_started(self):
+        self.lost_with(lambda: {})
+        self.successor()
+        decision = self.interrupted("pod-0.13.1", "after_link")
+        journal = _record_path(self.project, "successor")
+        journal.write_text("{")
+        before = self.snapshot()
+        self.refused(lambda: self.mine("checkpoint", value=self.core(
+            obligations=read(self.project, "successor")["checkpoint"]["obligations"])), code="claim_incomplete")
+        self.assertEqual(before, self.snapshot())
+        journal.unlink()
+        self.assertEqual(self.claim(decision)["status"], "claimed")
+        self.close("successor", "next", "run-s")
+
+
+class ContinuityCapacityTests(ShapeCase):
+    """R118: a claim links the predecessor only while its successor can still record the owner handoff or runtime
+    rebind that finishes an interrupted claim; the eight-entry history bound (R98, R105) is unchanged."""
+
+    def setUp(self):
+        super().setUp()
+        self.coordinator, self.generation = "next", 1
+
+    def handoffs(self, count):
+        """`count` more completed owner handoffs of the successor through the production helper, each after Orca
+        reports its coordinator lost; returns the new coordinator."""
+        for _ in range(count):
+            old, new = self.coordinator, f"coordinator-{self.generation}"
+            self.terminals[old], self.terminals[new] = "stale", "live"
+            self.act(new, "run-s")
+            self.current.update(coordinator_handle=old, consumer_generation=self.generation)
+            verdict = self.status(objective="successor")["owner_handoff"]
+
+            def moved(argv, **kwargs):
+                self.current.update(coordinator_handle=new, consumer_generation=self.generation + 1)
+                return {"runtime": self.port.runtime, "exit": 0, "error": None, "result": {}}
+            with patch("pod.orca.mutate_command", side_effect=moved):
+                run("owner-handoff", {"project": str(self.project), "objective": "successor", "owner": new,
+                                      "decision": {"provenance": "user_direct", "instruction": "Recover it",
+                                                   **verdict["facts"]}})
+            self.coordinator, self.generation = new, self.generation + 1
+        history = read(self.project, "successor")["checkpoint"]["continuity"]["history"]
+        self.assertEqual(len(history), self.generation - 1)
+        return self.coordinator
+
+    def decided(self, caller):
+        return {"provenance": "user_direct", "instruction": "Carry the lost effects",
+                **self.claim(caller=caller)["facts"]}
+
+    def fresh_successor_claims(self, built):
+        """The predecessor was never frozen: a fresh successor claims it and carries every original effect."""
+        self.assertNotIn("continued_by", read(self.project, "objective"))
+        self.successor(name="other", caller="other", run_id="run-o")
+        facts = self.claim(name="other", caller="other")["facts"]
+        decision = {"provenance": "user_direct", "instruction": "Carry the lost effects", **facts}
+        self.assertEqual(self.claim(decision, name="other", caller="other")["status"], "claimed")
+        self.assertEqual(sorted(row["record_id"] for row in self.journal("other")["actions"]),
+                         sorted(built.values()))
+
+    def test_a_full_history_refuses_the_claim_before_any_write(self):
+        built = self.lost_with(self.publications)
+        effects = self.writes()
+        self.successor()
+        caller = self.handoffs(8)
+        detected = self.claim(caller=caller)
+        self.assertEqual(detected["condition"], "successor_continuity_full", detected.get("message"))
+        before = self.snapshot()
+        refused = self.refused(lambda: self.claim({"provenance": "user_direct", "instruction": "Carry them",
+                                                   **detected["facts"]}, caller=caller),
+                               code="successor_continuity_full")
+        self.assertIn("fresh successor objective", refused.detail["next_action"])
+        self.assertEqual(before, self.snapshot())
+        self.fresh_successor_claims(built)
+        self.assertEqual(self.writes(), effects)
+
+    def test_one_free_entry_finishes_a_claim_interrupted_after_the_link(self):
+        built = self.lost_with(self.publications)
+        self.successor()
+        caller = self.handoffs(7)
+        decision = self.decided(caller)
+        with patch("pod.succession._carry", side_effect=KeyboardInterrupt("after the link")), \
+                self.assertRaises(KeyboardInterrupt):
+            self.claim(decision, caller=caller)
+        self.port.runtime = self.port.placement["runtime"] = "runtime-restarted"  # The rebind takes the last entry.
+        self.assertEqual(self.claim(decision, caller=caller)["status"], "claimed")
+        self.assertEqual(len(read(self.project, "successor")["checkpoint"]["continuity"]["history"]), 8)
+        self.assertEqual(sorted(row["record_id"] for row in self.journal("successor")["actions"]),
+                         sorted(built.values()))
+
+    def test_a_reservation_whose_last_entry_went_to_a_handoff_is_released_unlinked(self):
+        built = self.lost_with(self.publications)
+        effects = self.writes()
+        self.successor()
+        caller = self.handoffs(7)
+        decision = self.decided(caller)
+        with patch("pod.ledger._write_succession", side_effect=KeyboardInterrupt("reserved")), \
+                self.assertRaises(KeyboardInterrupt):
+            self.claim(decision, caller=caller)
+        rescuer = self.handoffs(1)  # Its coordinator lost before the link: the handoff takes the last entry.
+        released = self.refused(lambda: self.claim(decision, caller=rescuer), code="successor_continuity_full")
+        self.assertIn("reservation was released", str(released))
+        self.assertNotIn("continues", read(self.project, "successor"))
+        self.fresh_successor_claims(built)
+        self.assertEqual(self.writes(), effects)
 
 
 class EarlierReaderTests(CarriedCase):

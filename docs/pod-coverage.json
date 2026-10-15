@@ -3890,7 +3890,7 @@
       ],
       "offline_test": [
         "tests.test_carried_claim.ReservationTests.test_closure_proves_no_claim_names_a_successor_that_already_started",
-        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_closure_but_not_work"
+        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_an_unstarted_objective_and_any_closure"
       ],
       "status": "NOT_RUN"
     },
@@ -3913,6 +3913,40 @@
         "unit"
       ],
       "offline_test": "tests.test_carried_claim.ReservationTests.test_a_repeated_close_answers_from_the_recorded_closure",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A326",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_before_an_unreadable_record",
+        "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_after_an_unreadable_record"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A327",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_predecessor_record_holds_the_successor_until_repaired",
+        "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_journal_of_its_own_never_proves_a_successor_started"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A328",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ContinuityCapacityTests.test_a_full_history_refuses_the_claim_before_any_write",
+        "tests.test_carried_claim.ContinuityCapacityTests.test_one_free_entry_finishes_a_claim_interrupted_after_the_link",
+        "tests.test_carried_claim.ContinuityCapacityTests.test_a_reservation_whose_last_entry_went_to_a_handoff_is_released_unlinked"
+      ],
       "status": "NOT_RUN"
     }
   ]
