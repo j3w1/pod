@@ -10,15 +10,29 @@ from unittest.mock import patch
 from pod.config import effective, personal_path
 from pod.errors import PodError
 from pod.github import (AMENDMENT_JQ, GhPort, ISSUE_FIELDS, PR_FIELDS, RUN_FIELDS,
-                        gh_allowed, git_allowed,
-                        issue_intake, issue_recheck, repository_context)
+                        MUTATION_TIMEOUT_S, flip_pod_checkbox, gh_allowed, git_allowed,
+                        issue_intake, issue_recheck, issue_recheck_live, pod_lines,
+                        pod_ref_number, repository_context, repository_reads)
 from pod.ledger import checkpoint, objective_root, read, state_root
 from pod.placement import inspect
 from pod.util import digest
 from tests.common import fixture
+from tests.issue_port_support import RecordingIssuePort, SimulatedInterruption, patch_issue_port
 
 COMMIT = "a" * 40
 OLD = "b" * 40
+
+
+def issue_binding(body="- [ ] **PoD#1"):
+    import hashlib
+    return {"schema": "pod-issue-source/v1", "repository": "acme/widgets", "number": 7,
+            "locator": "https://github.com/acme/widgets/issues/7",
+            "body_sha256": hashlib.sha256(body.encode()).hexdigest(), "amendments": []}
+
+
+def issue_patch(repository="acme/widgets", number=7):
+    return ["api", "--method", "PATCH", "--include",
+            f"repos/{repository}/issues/{number}", "--input", "-"]
 
 
 def completed(stdout="", returncode=0):
@@ -63,6 +77,40 @@ class IssuePort:
 
 
 class AllowlistTests(unittest.TestCase):
+    def test_issue_patch_is_bound_to_exact_path_and_json_stdin(self):
+        bound = ("acme/widgets", 7)
+        stdin = json.dumps({"body": "- [x] **PoD#1\r\n"})
+        self.assertTrue(gh_allowed(issue_patch(), bound_issue=bound, stdin=stdin))
+        for argv in (issue_patch("other/widgets"), issue_patch(number=8),
+                     issue_patch("Acme/widgets"),  # Deliberately case-sensitive.
+                     ["api", "--method", "POST", *issue_patch()[3:]],
+                     [arg for arg in issue_patch() if arg != "--include"],
+                     [*issue_patch()[:-2], "-f", "body=text"],
+                     ["issue", "edit", "7", "--repo", "acme/widgets", "--body", "text"],
+                     [*issue_patch(), "--silent"]):
+            with self.subTest(argv=argv):
+                self.assertFalse(gh_allowed(argv, bound_issue=bound, stdin=stdin))
+        for payload in (None, "invalid JSON", "null", "[]", '{}',
+                        json.dumps({"body": "text", "title": "extra"}),
+                        json.dumps({"body": 1}), json.dumps({"body": "é" * (256 * 1024 + 1)}),
+                        json.dumps({"body": "\ud800"})):
+            with self.subTest(payload_type=type(payload).__name__, size=len(payload or "")):
+                self.assertFalse(gh_allowed(issue_patch(), bound_issue=bound, stdin=payload))
+        self.assertFalse(gh_allowed(issue_patch(), stdin=stdin))
+        self.assertTrue(gh_allowed(issue_patch(), bound_issue=bound,
+                                   stdin=json.dumps({"body": "a" * (512 * 1024)})))
+
+    def test_issue_patch_refusals_start_no_process(self):
+        port = GhPort(Path("/fixture"))
+        with patch("pod.github._run") as runner:
+            for bound, stdin in ((None, json.dumps({"body": "text"})),
+                                 (("acme/widgets", 8), json.dumps({"body": "text"})),
+                                 (("acme/widgets", 7), "invalid")):
+                with self.assertRaises(PodError) as refused:
+                    port._gh(issue_patch(), mutation=True, bound_issue=bound, stdin=stdin)
+                self.assertEqual(refused.exception.code, "unsupported_gh_operation")
+            runner.assert_not_called()
+
     def test_git_shapes(self):
         self.assertTrue(git_allowed(["push", "--porcelain", "origin", f"{COMMIT}:refs/heads/agent/x"]))
         self.assertTrue(git_allowed(["push", "--porcelain", f"--force-with-lease=refs/heads/agent/x:{OLD}",
@@ -235,6 +283,311 @@ class PortReadingTests(unittest.TestCase):
         with self.run_with([completed(wrong_issue)]), self.assertRaises(PodError) as mismatch:
             self.port.amendment(repository="acme/widgets", number=7, comment=99)
         self.assertEqual(mismatch.exception.code, "issue_identity_mismatch")
+
+
+class PodLineTests(unittest.TestCase):
+    def test_reference_numbers_are_bounded_and_anchored(self):
+        for ref, expected in (("PoD#1", 1), ("PoD#10", 10), ("PoD#1x", 1),
+                              ("PoD#1 — title", 1), ("PoD#0001", 1), ("PoD#0", 0),
+                              ("PoD#999999999", 999999999), ("PoD#1000000000", None),
+                              ("xPoD#1", None), (" PoD#1", None), ("pod#1", None),
+                              ("PoD#", None), (None, None), (1, None)):
+            with self.subTest(ref=ref):
+                self.assertEqual(pod_ref_number(ref), expected)
+
+    def test_checkbox_states_and_line_endings(self):
+        for newline in ("\n", "\r\n"):
+            for char in (" ", "x", "X"):
+                with self.subTest(newline=repr(newline), char=char):
+                    prefix = "text é" + newline
+                    body = prefix + f"- [{char}] **PoD#1" + newline
+                    self.assertEqual(pod_lines(body), {1: [{"offset": len(prefix) + 3,
+                                                           "ticked": char != " "}]})
+
+    def test_quotes_indentation_and_non_lf_separators_are_not_lines(self):
+        for prefix in ("> ", " ", "  ", "   ", "\t", "text\v", "text\r", "text\u2028"):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(pod_lines(prefix + "- [ ] **PoD#1\n"), {})
+
+    def test_fenced_lines_are_excluded(self):
+        line = "- [ ] **PoD#1"
+        for opener, closer in (("```", "```"), ("~~~", "~~~"),
+                               ("```python", "````"), ("~~~ info `allowed`", "~~~~"),
+                               ("   ```python", "  `````\t"), ("  ~~~yaml", "   ~~~~")):
+            for newline in ("\n", "\r\n"):
+                with self.subTest(opener=opener, closer=closer, newline=repr(newline)):
+                    prefix = newline.join((opener, line, closer, ""))
+                    self.assertEqual(pod_lines(prefix + line),
+                                     {1: [{"offset": len(prefix) + 3, "ticked": False}]})
+        for body in (f"```info\n{line}", f"~~~\n{line}\n```\n{line}",
+                     f"````\n{line}\n```\n{line}", f"```\n{line}\n``` trailing\n{line}"):
+            with self.subTest(body=body):
+                self.assertEqual(pod_lines(body), {})
+        # Four-space fences and backtick info containing a backtick do not open a fence.
+        for opener in ("    ```", "```bad`info"):
+            body = opener + "\n" + line
+            self.assertEqual(pod_lines(body), {1: [{"offset": len(opener) + 4, "ticked": False}]})
+
+    def test_numbers_duplicates_suffixes_and_empty_body(self):
+        body = "- [ ] **PoD#1\n- [X] **PoD#10\n- [x] **PoD#1x\n- [ ] **PoD#1"
+        self.assertEqual(pod_lines(body), {
+            1: [{"offset": 3, "ticked": False},
+                {"offset": body.index("- [x]") + 3, "ticked": True},
+                {"offset": body.rindex("- [ ]") + 3, "ticked": False}],
+            10: [{"offset": body.index("- [X]") + 3, "ticked": True}]})
+        self.assertEqual(pod_lines(""), {})
+        self.assertEqual(pod_lines("- [ ] **PoD#1000000000"), {})
+
+    def test_flip_changes_one_character_and_preserves_crlf(self):
+        for char, ticked in ((" ", True), ("x", False), ("X", False), ("X", True)):
+            with self.subTest(char=char, ticked=ticked):
+                body = "é\r\n" + f"- [{char}] **PoD#1\r\nuntouched\r\n"
+                offset = pod_lines(body)[1][0]["offset"]
+                result = flip_pod_checkbox(body, offset, ticked)
+                self.assertEqual(sum(a != b for a, b in zip(body, result)), 1)
+                self.assertEqual(result, body[:offset] + ("x" if ticked else " ") + body[offset + 1:])
+                self.assertEqual(len(body.encode()), len(result.encode()))
+
+    def test_flip_refuses_an_invalid_offset_or_no_change(self):
+        body = "- [ ] **PoD#1\n```\n- [ ] **PoD#2\n```"
+        for offset, ticked in ((-1, True), (0, True), (4, True), (len(body), True),
+                               (body.index("- [ ]", 1) + 3, True), (3, False), (True, True),
+                               (3.0, True), (3, "yes")):
+            with self.subTest(offset=offset, ticked=ticked), self.assertRaises(PodError) as refused:
+                flip_pod_checkbox(body, offset, ticked)
+            self.assertEqual(refused.exception.code, "internal_error")
+
+
+class IssueBodyWriteTests(unittest.TestCase):
+    def perform(self, response=None, *, error=None):
+        runner = patch("pod.github.subprocess.run", return_value=response, side_effect=error)
+        return runner
+
+    def test_success_and_held_refusal_status_table(self):
+        for status in (200, 201, 403, 404, 410, 422, 429):
+            with self.subTest(status=status):
+                message = "GitHub message " + "é" * 600
+                output = f"HTTP/2.0 {status} Status\r\nContent-Type: application/json\r\n\r\n"
+                output += json.dumps({"message": message})
+                with self.perform(completed(output, 0 if status < 300 else 1)) as runner, \
+                     patch("pod.github.gh_executable", return_value=Path("/fixture/gh")), \
+                     patch("pod.github.forget_repository_reads") as forget:
+                    body = "- [x] **PoD#1\r\n"
+                    result = GhPort(Path("/fixture")).issue_body_write(source=issue_binding(), body=body)
+                expected = {"result": "accepted" if status < 300 else "refused", "status": status}
+                if status >= 400:
+                    expected["message"] = message[:512]
+                self.assertEqual(result, expected)
+                runner.assert_called_once()
+                self.assertEqual(runner.call_args.args[0], ["/fixture/gh", *issue_patch()])
+                self.assertEqual(runner.call_args.kwargs["input"], json.dumps({"body": body}))
+                self.assertEqual(runner.call_args.kwargs["timeout"], MUTATION_TIMEOUT_S)
+                forget.assert_called_once()
+
+    def test_server_errors_and_contradictions_are_uncertain(self):
+        for status, exit_code in ((500, 1), (502, 1), (504, 1), (403, 0), (200, 1),
+                                  (201, -9), (404, -9), (302, 0), (500, 0)):
+            with self.subTest(status=status, exit_code=exit_code):
+                output = f'HTTP/1.1 {status} Status\n\n{{"message": "error"}}'
+                with self.perform(completed(output, exit_code)) as runner, \
+                     patch("pod.github.gh_executable", return_value=Path("/fixture/gh")), \
+                     self.assertRaises(PodError) as uncertain:
+                    GhPort(Path("/fixture")).issue_body_write(source=issue_binding(), body="new")
+                self.assertEqual(uncertain.exception.code, "remote_effect_uncertain")
+                runner.assert_called_once()
+
+    def test_missing_or_malformed_status_is_uncertain(self):
+        for output in ('{"message": "error"}', "garbage", "", "HTTP/2.0 200 OK",
+                       "HTTP/2.0 200 OK\ninvalid header\n\n{}",
+                       "garbage\nHTTP/2.0 200 OK\n\n{}", "HTTP/2.0 100 Continue\n\n"):
+            with self.subTest(output=output), self.perform(completed(output)) as runner, \
+                 patch("pod.github.gh_executable", return_value=Path("/fixture/gh")), \
+                 self.assertRaises(PodError) as uncertain:
+                GhPort(Path("/fixture")).issue_body_write(source=issue_binding(), body="new")
+            self.assertEqual(uncertain.exception.code, "remote_effect_uncertain")
+            runner.assert_called_once()
+
+    def test_interim_status_is_skipped_and_body_status_text_is_ignored(self):
+        for status, exit_code in ((200, 0), (201, 0), (429, 1), (502, 1)):
+            output = ("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\n"
+                      "Link: </x>\r\n\r\n" + f"HTTP/2.0 {status} Status\r\n\r\n"
+                      + json.dumps({"message": "HTTP/2.0 200 OK\n\n"}))
+            with self.subTest(status=status), self.perform(completed(output, exit_code)) as runner, \
+                 patch("pod.github.gh_executable", return_value=Path("/fixture/gh")):
+                if status >= 500:
+                    with self.assertRaises(PodError) as uncertain:
+                        GhPort(Path("/fixture")).issue_body_write(source=issue_binding(), body="new")
+                    self.assertEqual(uncertain.exception.code, "remote_effect_uncertain")
+                else:
+                    self.assertEqual(GhPort(Path("/fixture")).issue_body_write(
+                        source=issue_binding(), body="new")["status"], status)
+            runner.assert_called_once()
+
+    def test_timeout_oserror_decode_and_oversized_response_are_uncertain(self):
+        for error in (subprocess.TimeoutExpired(["fixture-gh"], 120), OSError("offline"),
+                      UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid"), None):
+            with self.subTest(error=type(error).__name__), \
+                 self.perform(completed("a" * 2_000_001), error=error) as runner, \
+                 patch("pod.github.gh_executable", return_value=Path("/fixture/gh")), \
+                 patch("pod.github.forget_repository_reads") as forget, \
+                 self.assertRaises(PodError) as uncertain:
+                GhPort(Path("/fixture")).issue_body_write(source=issue_binding(), body="new")
+            self.assertEqual(uncertain.exception.code, "remote_effect_uncertain")
+            runner.assert_called_once()
+            forget.assert_called_once()
+
+    def test_refusal_without_json_message_is_still_a_held_refusal(self):
+        for payload in ("garbage", "null", "{}", '{"message": 1}'):
+            with self.subTest(payload=payload), \
+                 self.perform(completed("HTTP/2.0 403 Forbidden\n\n" + payload, 1)), \
+                 patch("pod.github.gh_executable", return_value=Path("/fixture/gh")):
+                self.assertEqual(GhPort(Path("/fixture")).issue_body_write(
+                    source=issue_binding(), body="new"),
+                    {"result": "refused", "status": 403, "message": ""})
+
+    def test_invalid_binding_and_body_are_refused_before_running(self):
+        for source, body in (({**issue_binding(), "number": 8}, "new"),
+                             (issue_binding(), 1), (issue_binding(), "a" * (512 * 1024 + 1))):
+            with self.subTest(body_type=type(body).__name__), patch("pod.github._run") as runner, \
+                 self.assertRaises(PodError):
+                GhPort(Path("/fixture")).issue_body_write(source=source, body=body)
+            runner.assert_not_called()
+
+    def test_issue_write_forgets_scoped_repository_identity(self):
+        context = {"repository": "acme/widgets"}
+        with repository_reads(), patch("pod.github._read_repository_context", return_value=(context, True)) as read, \
+             self.perform(completed("HTTP/2.0 200 OK\n\n{}")), \
+             patch("pod.github.gh_executable", return_value=Path("/fixture/gh")):
+            repository_context(Path("/fixture"))
+            repository_context(Path("/fixture"))
+            GhPort(Path("/fixture")).issue_body_write(source=issue_binding(), body="new")
+            repository_context(Path("/fixture"))
+            self.assertEqual(read.call_count, 2)
+
+
+class RecordingIssuePortTests(unittest.TestCase):
+    def test_mutable_issue_and_amendments_with_call_order_and_exact_writes(self):
+        port = RecordingIssuePort(amendments={99: "original"})
+        port.title, port.state, port.amendments[99] = "changed", "CLOSED", "amended"
+        row = port.issue(repository="acme/widgets", number=7)
+        self.assertEqual((row["title"], row["state"]), ("changed", "CLOSED"))
+        self.assertEqual(port.amendment(repository="acme/widgets", number=7, comment=99)["body"], "amended")
+        body = "- [x] **PoD#1\r\n"
+        source = issue_binding()
+        self.assertEqual(port.issue_body_write(source=source, body=body), {"result": "accepted", "status": 200})
+        self.assertEqual(port.body, body)
+        self.assertEqual(port.writes, [body])
+        self.assertEqual(port.calls, [("issue", "acme/widgets", 7), ("amendment", "acme/widgets", 7, 99),
+                                      ("issue_body_write", source, body)])
+        source["number"] = 8
+        self.assertEqual(port.calls[-1][1]["number"], 7)
+
+    def test_unreadable_reads_and_refused_write_are_one_shot(self):
+        port = RecordingIssuePort()
+        for read in (lambda: port.issue(repository="acme/widgets", number=7),
+                     lambda: port.amendment(repository="acme/widgets", number=7, comment=99)):
+            port.unreadable = True
+            with self.assertRaises(PodError) as unavailable:
+                read()
+            self.assertEqual(unavailable.exception.code, "issue_access_unavailable")
+            read()
+        port.refuse_next = 429
+        before = port.body
+        self.assertEqual(port.issue_body_write(source=issue_binding(), body="new")["result"], "refused")
+        self.assertEqual(port.body, before)
+        self.assertEqual(port.issue_body_write(source=issue_binding(), body="new")["result"], "accepted")
+        self.assertEqual(port.writes, ["new", "new"])
+
+    def test_lost_responses_and_interruptions_apply_only_the_specified_write(self):
+        for outcome in ("landed", "not_landed", "interrupted"):
+            with self.subTest(outcome=outcome):
+                port = RecordingIssuePort(body="old")
+                if outcome == "interrupted":
+                    port.interrupt_next = True
+                else:
+                    port.lose_next = outcome
+                with self.assertRaises(SimulatedInterruption if outcome == "interrupted" else PodError):
+                    port.issue_body_write(source=issue_binding(), body="new")
+                self.assertEqual(port.body, "old" if outcome == "not_landed" else "new")
+                self.assertEqual(port.writes, ["new"])
+                self.assertEqual(port.issue_body_write(source=issue_binding(), body="later")["result"], "accepted")
+
+    def test_other_actor_can_write_before_or_instead_of_pod(self):
+        for actor, outcome, expected in (("outside", None, "new"),
+                                          (("before", "outside"), None, "new"),
+                                          (("instead", "outside"), None, "outside"),
+                                          ("new", "not_landed", "new"),
+                                          ("new", "refused", "new")):
+            with self.subTest(actor=actor, outcome=outcome):
+                port = RecordingIssuePort(body="old")
+                port.other_actor = actor
+                if outcome == "refused":
+                    port.refuse_next = 403
+                elif outcome:
+                    port.lose_next = outcome
+                try:
+                    port.issue_body_write(source=issue_binding(), body="new")
+                except PodError as exc:
+                    self.assertEqual(exc.code, "remote_effect_uncertain")
+                self.assertEqual(port.body, expected)
+                self.assertIsNone(port.other_actor)
+                self.assertEqual(port.writes, ["new"])
+
+    def test_readback_override_is_one_read_after_a_successful_write(self):
+        port = RecordingIssuePort(body="old")
+        port.readback_override = "outside"
+        self.assertEqual(port.issue(repository="acme/widgets", number=7)["body"], "old")
+        port.issue_body_write(source=issue_binding(), body="new")
+        self.assertEqual(port.issue(repository="acme/widgets", number=7)["body"], "outside")
+        self.assertEqual(port.issue(repository="acme/widgets", number=7)["body"], "new")
+
+    def test_patch_helper_returns_same_instance_without_production_state(self):
+        from pod import github
+        original = github.GhPort
+        port = RecordingIssuePort()
+        with patch_issue_port(port) as factory:
+            self.assertIs(github.GhPort(Path("/fixture")), port)
+            factory.assert_called_once_with(Path("/fixture"))
+        self.assertIs(github.GhPort, original)
+
+
+class IssueRecheckLiveTests(unittest.TestCase):
+    def test_live_result_equals_public_recheck_and_returns_the_live_row(self):
+        binding = issue_binding("Complete issue body")
+        import hashlib
+        binding["amendments"] = [{"locator": binding["locator"] + "#issuecomment-99",
+                                  "sha256": hashlib.sha256(b"Decision").hexdigest()}]
+        for kwargs in ({}, {"updated": "changed"}, {"body": "Changed"},
+                       {"amendment": "Changed decision"}, {"state": "CLOSED"},
+                       {"state": "CLOSED", "body": "Changed", "amendment": "Changed"}):
+            with self.subTest(kwargs=kwargs), patch("pod.github.repository_context", return_value={
+                    "repository": "acme/widgets"}) as context:
+                port = IssuePort(**kwargs)
+                result, row = issue_recheck_live(Path("/fixture"), binding, port=port)
+                self.assertEqual(result, issue_recheck(Path("/fixture"), binding, port=port))
+                self.assertEqual(row, port.issue(repository="acme/widgets", number=7))
+                self.assertTrue(all(call.kwargs == {"fresh": True} for call in context.call_args_list))
+
+    def test_live_and_public_recheck_keep_refusal_order_and_codes(self):
+        for repository_name, port, expected, calls in (
+                ("other/repo", RecordingIssuePort(title="SEAL: requirements"), "repository_mismatch", []),
+                ("acme/widgets", RecordingIssuePort(title="EEL: evidence"), "issue_is_evidence_ledger", ["issue"]),
+                ("acme/widgets", RecordingIssuePort(title="SEAL: requirements"), "issue_is_requirements_spec", ["issue"])):
+            for recheck in (issue_recheck_live, issue_recheck):
+                with self.subTest(recheck=recheck.__name__, expected=expected), \
+                     patch("pod.github.repository_context", return_value={"repository": repository_name}), \
+                     self.assertRaises(PodError) as refused:
+                    port.calls.clear()
+                    recheck(Path("/fixture"), issue_binding(), port=port)
+                self.assertEqual(refused.exception.code, expected)
+                self.assertEqual([call[0] for call in port.calls], calls)
+        for recheck in (issue_recheck_live, issue_recheck):
+            port = RecordingIssuePort()
+            port.unreadable = True
+            with patch("pod.github.repository_context", return_value={"repository": "acme/widgets"}), \
+                 self.assertRaises(PodError) as refused:
+                recheck(Path("/fixture"), issue_binding(), port=port)
+            self.assertEqual(refused.exception.code, "issue_access_unavailable")
 
 
 class RepositoryAndIssueTests(unittest.TestCase):
