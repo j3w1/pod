@@ -33,7 +33,7 @@ def baseline_status() -> types.ModuleType:
 
 
 # R114 and R121 add only these fields; every earlier field and render line is compared unchanged.
-READINESS = ("readiness", "successor_claim", "record_capacity")
+READINESS = ("readiness", "successor_claim", "record_capacity", "worker_tabs")
 
 
 def assert_render_after_readiness(test: unittest.TestCase, observed: dict, rendered: str, expected: str) -> None:

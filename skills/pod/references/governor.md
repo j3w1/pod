@@ -2,6 +2,8 @@
 
 Governor ALLOW/REUSE/DEFER never overrides project authority. Efficiency exceptions never lift authority or correctness. Mutation needs the existing owner and stable native current Run/coordinator/generation binding; missing proof permits direct work/read-only status. Establish/adopt through Orca; join only exact objective assignments.
 
+Record required unit audits as assurance obligations with `unit`, using the Governor unit identifier; the binding cannot be changed on an existing row. Release gates its own unit's required audits and every unbound audit. The separate release gate still waits for every outstanding objective assignment; the objective label and final acceptance still need every assurance.
+
 Group corrections in one delivery unit. `internal governor-prepare` freezes candidate bindings; its acknowledgement supplies the next request. Changed inputs open a generation; tracked dirt leaves it unfrozen. `governor-preflight` records configured checks; CI-triggering push is validation.
 
 `governor-status` reads Governor state. Use `governor-execute` directly for push, PR update, workflow dispatch, rerun, diagnostic and cancellation. `governor` reserves caller execution: ALLOW permits, REUSE attaches work/proof, DEFER names hold. Gates, validation and read-only review may overlap on one frozen candidate; merge/release/deploy waits for valid results. Execute the bound commit; merge/release/deploy remain decide-only. Lost responses stay UNKNOWN; `governor-reconcile` reads provider state without resubmission.

@@ -976,7 +976,8 @@
       "offline_test": [
         "tests.test_orca_adapter.OrcaAdapterTests.test_three_exact_worker_argv_shapes",
         "tests.test_operations.AdmissionTests.test_status_exposes_native_discoverability_without_ui_claim_or_write",
-        "tests.test_operations.AdmissionTests.test_missing_native_terminal_keeps_visibility_unknown"
+        "tests.test_operations.AdmissionTests.test_missing_native_terminal_keeps_visibility_unknown",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -985,7 +986,9 @@
       "required_evidence": [
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -993,7 +996,9 @@
       "required_evidence": [
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1697,7 +1702,8 @@
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_branch_shared_with_another_worktree_is_protected_and_changes_expect",
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_prepared_but_unpublished_remote_branch_is_not_offered",
         "tests.test_cleanup_plan.CleanupPlanTests.test_a_retargeted_publication_never_claims_a_foreign_remote_branch",
-        "tests.test_cleanup_plan.CleanupPlanTests.test_an_older_publication_row_never_settles_on_a_retargeted_branch"
+        "tests.test_cleanup_plan.CleanupPlanTests.test_an_older_publication_row_never_settles_on_a_retargeted_branch",
+        "tests.test_skill_validation.SkillValidationTests.test_repository_bundle_is_valid"
       ],
       "status": "NOT_RUN"
     },
@@ -1908,7 +1914,12 @@
         "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_stale_proof_stays_held_until_explicit_scoped_waiver",
         "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_genuinely_removed_trusted_audit_can_be_withdrawn",
         "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_optional_coordinator_assurance_is_not_a_new_release_gate",
-        "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_current_receipt_with_changed_source_is_invalidated"
+        "tests.test_issue29_boundaries.RequiredAuditTests.test_governor_current_receipt_with_changed_source_is_invalidated",
+        "tests.test_unit_audits.UnitAuditTests.test_two_units_merge_without_withdrawing_later_audit",
+        "tests.test_unit_audits.UnitAuditTests.test_unbound_audit_gates_both_units",
+        "tests.test_unit_audits.UnitAuditTests.test_an_existing_unbound_audit_cannot_be_rebound",
+        "tests.test_unit_audits.UnitAuditTests.test_label_and_acceptance_need_every_assurance",
+        "tests.test_unit_audits.UnitAuditTests.test_running_later_audit_still_holds_objective_wide_release"
       ],
       "status": "NOT_RUN"
     },
@@ -2033,7 +2044,10 @@
         "tests.test_runtime_continuity.ProvenContinuityTests.test_checkpoint_records_generation_and_proven_change_rebinds_checkpoint_write",
         "tests.test_runtime_continuity.ProvenContinuityTests.test_governor_mutation_report_read_and_new_admission_each_rebind_and_continue",
         "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_admission_proven_absent_rebinds_then_continues_recovery",
-        "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_state_alone_without_a_lookup_result_does_not_rebind"
+        "tests.test_runtime_continuity.ProvenContinuityTests.test_reserved_state_alone_without_a_lookup_result_does_not_rebind",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_report_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_without_admissions"
       ],
       "status": "NOT_RUN"
     },
@@ -2103,7 +2117,8 @@
       "offline_test": [
         "tests.test_input_refusals.OperationFieldRefusalTests.test_every_operation_names_operation_record_and_both_fields_without_values",
         "tests.test_input_refusals.OperationFieldRefusalTests.test_non_object_names_only_the_expected_type",
-        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths"
+        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths",
+        "tests.test_request_contract.DiscoveryTests.test_shape_and_text_refusals_give_whole_constant_contract_without_values"
       ],
       "status": "NOT_RUN"
     },
@@ -2117,7 +2132,28 @@
         "tests.test_input_refusals.ExactRefusalTests.test_caller_supplied_error_keeps_obligation_refusals_unchanged",
         "tests.test_input_refusals.ExactRefusalTests.test_echoed_names_are_bounded_and_stripped_of_control_characters",
         "tests.test_input_refusals.ExactRefusalTests.test_other_invalid_refusals_do_not_gain_an_operation",
-        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths"
+        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths",
+        "tests.test_request_contract.DiscoveryTests.test_discovered_contract_builds_successful_first_requests",
+        "tests.test_request_contract.BoundTests.test_packet_text_and_list_bounds",
+        "tests.test_request_contract.BoundTests.test_packet_nested_record_bounds",
+        "tests.test_request_contract.BoundTests.test_checkpoint_and_map_collection_bounds",
+        "tests.test_request_contract.BoundTests.test_obligation_text_and_collection_bounds",
+        "tests.test_request_contract.BoundTests.test_boundary_and_wait_bounds",
+        "tests.test_request_contract.BoundTests.test_external_and_withdrawal_bounds",
+        "tests.test_request_contract.BoundTests.test_evidence_and_acceptance_bounds",
+        "tests.test_request_contract.BoundTests.test_short_evidence_and_acceptance_request_bounds",
+        "tests.test_request_contract.BoundTests.test_admission_and_its_full_map_bounds",
+        "tests.test_request_contract.BoundTests.test_disposition_bounds",
+        "tests.test_request_contract.BoundTests.test_report_bounds",
+        "tests.test_request_contract.BoundTests.test_governor_action_and_diagnostic_bounds",
+        "tests.test_request_contract.BoundTests.test_verification_proposal_and_authority_bounds",
+        "tests.test_request_contract.BoundTests.test_packet_total_bound",
+        "tests.test_request_contract.RepairTests.test_policy_mismatch_from_different_project_is_repaired_by_named_config_and_map_reads",
+        "tests.test_request_contract.RepairTests.test_checkpoint_policy_mismatch_names_all_known_digests_and_refreshes",
+        "tests.test_request_contract.RepairTests.test_pending_replay_from_other_project_names_digests_and_recovers_in_objective_project",
+        "tests.test_request_contract.BoundTests.test_provenance_source_text_bounds",
+        "tests.test_request_contract.BoundTests.test_policy_citation_line_bound",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_same_requests_keep_genuine_0150_refusal_codes"
       ],
       "status": "NOT_RUN"
     },
@@ -2578,7 +2614,23 @@
         "tests.test_issue41_corrections.RefusalCorrectionTests.test_nested_refusals_keep_known_obligation_and_hide_refused_values",
         "tests.test_issue41_corrections.RefusalCorrectionTests.test_review_record_siblings_keep_known_assurance_and_hide_refused_values",
         "tests.test_issue41_corrections.RefusalCorrectionTests.test_kernel_operation_tags_preserve_codes_details_and_first_referents",
-        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths"
+        "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths",
+        "tests.test_request_contract.RepairTests.test_text_shape_and_stored_only_refusals_are_repaired_from_their_contract",
+        "tests.test_request_contract.RepairTests.test_candidate_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_criteria_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_plan_revision_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_worktree_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_objective_source_mismatch_repair_uses_named_reads",
+        "tests.test_request_contract.RepairTests.test_reservation_packet_id_mismatch_names_the_freeze_without_echoing_it",
+        "tests.test_request_contract.RepairTests.test_invalid_frozen_packet_id_keeps_the_prior_entry_code",
+        "tests.test_request_contract.RepairTests.test_plan_mismatch_names_all_differences",
+        "tests.test_request_contract.RepairTests.test_report_restates_settled_executors_with_update_in_same_request",
+        "tests.test_request_contract.RepairTests.test_admission_restates_full_obligations_in_same_request",
+        "tests.test_request_contract.RepairTests.test_checkpoint_restates_settled_executors_in_its_map",
+        "tests.test_request_contract.RepairTests.test_wait_refusal_names_every_restatement_up_to_the_map_bound",
+        "tests.test_request_contract.RepairTests.test_policy_mismatch_from_different_project_is_repaired_by_named_config_and_map_reads",
+        "tests.test_request_contract.RepairTests.test_checkpoint_policy_mismatch_names_all_known_digests_and_refreshes",
+        "tests.test_request_contract.RepairTests.test_pending_replay_from_other_project_names_digests_and_recovers_in_objective_project"
       ],
       "status": "NOT_RUN"
     },
@@ -2938,7 +2990,8 @@
         "tests.test_output_acknowledgements.GovernorAcknowledgementTests.test_classification_drives_correction_without_echoing_the_stored_row",
         "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_triage_and_generated_proposal_ids_drive_real_adoption_and_replay",
         "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_bindings_support_reload_without_echoing_future_stored_fields",
-        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_delivery_and_closure_acknowledgements_support_real_followup"
+        "tests.test_output_acknowledgements.AcknowledgementBoundaryTests.test_checkpoint_delivery_and_closure_acknowledgements_support_real_followup",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3355,7 +3408,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_working_reads_the_same_for_the_owner_a_live_peer_and_a_reader_outside_orca",
-        "tests.test_status_selection.StatusSelectionTests.test_a_run_that_selects_one_objective_carries_the_same_readiness"
+        "tests.test_status_selection.StatusSelectionTests.test_a_run_that_selects_one_objective_carries_the_same_readiness",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3366,7 +3420,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_waiting_names_the_party_and_what_it_must_supply",
-        "tests.test_readiness.ProjectionTests.test_wait_classes_name_their_party_or_none"
+        "tests.test_readiness.ProjectionTests.test_wait_classes_name_their_party_or_none",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3380,7 +3435,8 @@
         "tests.test_readiness.StateTests.test_a_merged_candidate_with_a_pending_readback_never_reads_safe",
         "tests.test_readiness.StateTests.test_merge_decided_but_unrecorded_names_the_merge_outcome",
         "tests.test_readiness.ProjectionTests.test_delivery_under_way_finalizes_and_the_line_stays_short",
-        "tests.test_readiness.ProjectionTests.test_the_plain_line_names_each_record_by_its_kind"
+        "tests.test_readiness.ProjectionTests.test_the_plain_line_names_each_record_by_its_kind",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3391,7 +3447,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_closed_reads_closed_after_main_advances",
-        "tests.test_readiness.StateTests.test_a_closed_objective_still_reads_closed_after_its_worktree_is_removed"
+        "tests.test_readiness.StateTests.test_a_closed_objective_still_reads_closed_after_its_worktree_is_removed",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3402,7 +3459,8 @@
       ],
       "offline_test": [
         "tests.test_readiness.StateTests.test_closed_with_external_work_names_each_gate_and_who_acts",
-        "tests.test_readiness.ProjectionTests.test_gate_parties_decide_who_acts_after_closure"
+        "tests.test_readiness.ProjectionTests.test_gate_parties_decide_who_acts_after_closure",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3413,7 +3471,10 @@
         "live_native",
         "independent_review"
       ],
-      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_names_its_recovery_routes_for_every_non_owner_reader",
+      "offline_test": [
+        "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_names_its_recovery_routes_for_every_non_owner_reader",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3423,7 +3484,10 @@
         "live_native",
         "independent_review"
       ],
-      "offline_test": "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_with_a_pending_effect_names_the_carry_or_the_exact_refusal",
+      "offline_test": [
+        "tests.test_readiness.LostCoordinatorTests.test_a_lost_coordinator_with_a_pending_effect_names_the_carry_or_the_exact_refusal",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3434,7 +3498,8 @@
       "offline_test": [
         "tests.test_readiness.EndedTests.test_an_owner_retirement_says_why_pod_needs_no_coordinator",
         "tests.test_readiness.EndedTests.test_a_continued_record_names_its_successor_and_the_successor_reads_its_own_work",
-        "tests.test_readiness.EndedTests.test_unknown_and_unreadable_objectives_are_unavailable_with_the_reason"
+        "tests.test_readiness.EndedTests.test_unknown_and_unreadable_objectives_are_unavailable_with_the_reason",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3449,7 +3514,8 @@
         "tests.test_readiness.CompatibilityTests.test_a_lost_coordinator_and_its_handoff_fields",
         "tests.test_readiness.CompatibilityTests.test_a_closed_objective",
         "tests.test_readiness.CompatibilityTests.test_a_claimed_predecessor_and_its_successor",
-        "tests.test_readiness.CompatibilityTests.test_a_retired_objective"
+        "tests.test_readiness.CompatibilityTests.test_a_retired_objective",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -3458,7 +3524,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_readiness.ListLabelTests.test_the_list_carries_a_record_only_label_without_orca",
+      "offline_test": [
+        "tests.test_readiness.ListLabelTests.test_the_list_carries_a_record_only_label_without_orca",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -3614,7 +3683,8 @@
         "tests.test_finalization.FinalizationTests.test_the_next_action_follows_the_first_remaining_record",
         "tests.test_finalization.FinalizationTests.test_closure_ends_finalization_and_only_then_reports_finished",
         "tests.test_finalization.FinalizationTests.test_a_mapless_objective_has_no_delivery_record_or_closure_to_write",
-        "tests.test_finalization.FinalizationTests.test_the_projection_reads_and_changes_nothing"
+        "tests.test_finalization.FinalizationTests.test_the_projection_reads_and_changes_nothing",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
       ],
       "status": "NOT_RUN"
     },
@@ -4529,6 +4599,359 @@
         "independent_review"
       ],
       "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A359",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TitleTests.test_investigator_and_optional_purpose",
+        "tests.test_worker_tabs.TitleTests.test_reviewer_and_finer_role",
+        "tests.test_worker_tabs.TitleTests.test_optional_title_fields_obey_their_bounds"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A360",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TitleTests.test_implementer_omits_identifier_path_credential_status_and_route_shapes",
+        "tests.test_worker_tabs.TitleTests.test_headless_start_and_empty_safe_title_have_reason_without_command",
+        "tests.test_worker_tabs.TitleTests.test_deferred_start_returns_title_without_rename",
+        "tests.test_worker_tabs.TitleTests.test_reuse_gets_a_new_title_and_exact_same_handle",
+        "tests.test_worker_tabs.TitleTests.test_adapter_refuses_terminal_rename",
+        "tests.test_worker_tabs.TitleTests.test_unresolved_start_returns_title_and_honest_uncertainty"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A361",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command",
+        "tests.test_worker_tabs.TableTests.test_pending_unknown_and_unreadable",
+        "tests.test_worker_tabs.TableTests.test_owned_report_ack_leads_with_exactly_one_and_relays_native_release",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_owned_predecessor_release_is_still_owed_without_closure_timing",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_owned_retired_record_release_is_still_owed_without_closure_timing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A362",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_user_owned_and_external",
+        "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change",
+        "tests.test_worker_tabs.TableTests.test_unreported_user_owned_status_and_checkpoint_ack_wait_for_report",
+        "tests.test_worker_tabs.TableTests.test_unreported_external_status_and_checkpoint_ack_wait_for_report",
+        "tests.test_worker_tabs.TableTests.test_report_ack_waits_for_another_workers_unrecorded_report",
+        "tests.test_worker_tabs.TableTests.test_unreported_user_owned_closing_ack_and_status_name_owner_decision",
+        "tests.test_worker_tabs.TableTests.test_unreported_external_closing_ack_and_status_name_owner_decision",
+        "tests.test_worker_tabs.TableTests.test_unreported_discarded_user_owned_ack_and_status_allow_late_report",
+        "tests.test_worker_tabs.TableTests.test_unreported_discarded_external_ack_and_status_allow_late_report",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_unreported_user_owned_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_discarded_user_owned_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_unreported_external_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.ContinuedTabTests.test_discarded_external_predecessor_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_unreported_user_owned_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_discarded_user_owned_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_unreported_external_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RetiredTabTests.test_discarded_external_retired_record_names_owner_decision",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_user_owned_route_mismatch_names_owner_decision_before_and_after_discard",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_external_route_mismatch_names_owner_decision_before_and_after_discard",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_start_receipt_only_mismatch_accepts_report_and_supplies_close",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_discarded_start_receipt_only_mismatch_accepts_report_and_supplies_close"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A363",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_not_materialized_disconnected_and_reused",
+        "tests.test_worker_tabs.TableTests.test_coordinator_setup_and_other_objective_excluded",
+        "tests.test_worker_tabs.ClosureTests.test_active_report_never_relays_close",
+        "tests.test_worker_tabs.ClosureTests.test_checkpoint_accepts_kept_and_absent",
+        "tests.test_worker_tabs.ClosureTests.test_checkpoint_ignores_reused_and_unrelated_terminals",
+        "tests.test_worker_tabs.ClosureTests.test_report_accepts_own_kept_and_absent",
+        "tests.test_worker_tabs.ClosureTests.test_report_ignores_reused_and_unrelated_terminals"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A364",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_native_read_failure_names_the_read_without_writing",
+        "tests.test_worker_tabs.TableTests.test_pending_unknown_and_unreadable",
+        "tests.test_worker_tabs.OwnerKeepTests.test_revocation_disconnection_reuse_and_pending_precedence",
+        "tests.test_worker_tabs.TableTests.test_status_runtime_change_names_continuity_instead_of_an_unreadable_tab"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A365",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_connected_tabs_ignore_stale_liveness_and_preserve_retained_terminals",
+        "tests.test_worker_tabs.TableTests.test_owned_retained_and_missing_release_command"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A366",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_checkpoint_refuses_owned_retained_and_pending",
+        "tests.test_worker_tabs.ClosureTests.test_report_refuses_own_owned_retained_pending_and_unreadable_tab",
+        "tests.test_worker_tabs.ClosureTests.test_effective_refresh_cannot_write_before_tab_refusal",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal",
+        "tests.test_worker_tabs.ClosureTests.test_unrecorded_owner_request_is_retained_and_still_blocks_both_routes",
+        "tests.test_worker_tabs.ClosureTests.test_closing_route_mismatch_precedes_tab_body_and_map_validation",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_malformed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A367",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.OwnerKeepTests.test_checkpoint_keep_survives_ownership_change",
+        "tests.test_worker_tabs.OwnerKeepTests.test_report_keep_survives_ownership_change",
+        "tests.test_worker_tabs.OwnerKeepTests.test_revocation_disconnection_reuse_and_pending_precedence",
+        "tests.test_worker_tabs.OwnerKeepTests.test_keep_needs_recorded_instruction_and_exact_objective",
+        "tests.test_worker_tabs.OwnerKeepTests.test_recorded_revocation_gives_close_on_both_closing_routes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A368",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_existing_closure_keeps_its_bytes_but_names_every_open_tab",
+        "tests.test_finalization.ClosureOrderTests.test_a_closure_recorded_before_this_rule_still_validates",
+        "tests.test_worker_tabs.OwnerKeepTests.test_owner_can_revoke_after_closure_without_changing_the_closure_report",
+        "tests.test_worker_tabs.ClosureTests.test_closed_refusals_use_known_rows_or_name_the_status_read",
+        "tests.test_worker_tabs.ReadinessWordingTests.test_open_summaries_keep_work_wait_and_finalization_detail",
+        "tests.test_worker_tabs.ReadinessWordingTests.test_closed_external_summary_keeps_gate_and_party_detail"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A369",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.RetentionTests.test_required_correction_delta_review_then_release",
+        "tests.test_worker_tabs.RetentionTests.test_implementer_retained_for_corrections_and_delta_review_of_its_result"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A370",
+      "required_evidence": [
+        "unit",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_skill_validation.SkillValidationTests.test_repository_bundle_is_valid"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A371",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_unit_audits.UnitAuditTests.test_two_units_merge_without_withdrawing_later_audit"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A372",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_unit_audits.UnitAuditTests.test_unbound_audit_gates_both_units",
+        "tests.test_unit_audits.UnitAuditTests.test_an_existing_unbound_audit_cannot_be_rebound"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A373",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_unit_audits.UnitAuditTests.test_binding_is_assurance_only_validated_and_immutable",
+        "tests.test_unit_audits.UnitAuditTests.test_an_existing_unbound_audit_cannot_be_rebound"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A374",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_unit_audits.SingleUnitCompatibilityTests.test_genuine_0150_single_unit_decisions_codes_and_journal_rows_match"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A375",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_unit_audits.UnitAuditTests.test_label_and_acceptance_need_every_assurance",
+        "tests.test_unit_audits.UnitAuditTests.test_running_later_audit_still_holds_objective_wide_release"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A376",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_request_contract.DiscoveryTests.test_discovered_contract_builds_successful_first_requests",
+        "tests.test_request_contract.BoundTests.test_packet_text_and_list_bounds",
+        "tests.test_request_contract.BoundTests.test_packet_nested_record_bounds",
+        "tests.test_request_contract.BoundTests.test_checkpoint_and_map_collection_bounds",
+        "tests.test_request_contract.BoundTests.test_obligation_text_and_collection_bounds",
+        "tests.test_request_contract.BoundTests.test_boundary_and_wait_bounds",
+        "tests.test_request_contract.BoundTests.test_external_and_withdrawal_bounds",
+        "tests.test_request_contract.BoundTests.test_evidence_and_acceptance_bounds",
+        "tests.test_request_contract.BoundTests.test_short_evidence_and_acceptance_request_bounds",
+        "tests.test_request_contract.BoundTests.test_admission_and_its_full_map_bounds",
+        "tests.test_request_contract.BoundTests.test_disposition_bounds",
+        "tests.test_request_contract.BoundTests.test_report_bounds",
+        "tests.test_request_contract.BoundTests.test_governor_action_and_diagnostic_bounds",
+        "tests.test_request_contract.BoundTests.test_verification_proposal_and_authority_bounds",
+        "tests.test_request_contract.BoundTests.test_packet_total_bound",
+        "tests.test_request_contract.BoundTests.test_provenance_source_text_bounds",
+        "tests.test_request_contract.BoundTests.test_policy_citation_line_bound",
+        "tests.test_request_contract.BoundTests.test_authorization_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_finding_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_finding_group_member_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_worker_tab_instruction_discovery_bounds_and_complete_refusals",
+        "tests.test_request_contract.BoundTests.test_authorization_relay_bounds_keep_complete_refusal_data"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A377",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_request_contract.RepairTests.test_text_shape_and_stored_only_refusals_are_repaired_from_their_contract",
+        "tests.test_request_contract.RepairTests.test_candidate_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_criteria_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_plan_revision_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_worktree_mismatch_repair",
+        "tests.test_request_contract.RepairTests.test_objective_source_mismatch_repair_uses_named_reads",
+        "tests.test_request_contract.RepairTests.test_reservation_packet_id_mismatch_names_the_freeze_without_echoing_it",
+        "tests.test_request_contract.RepairTests.test_invalid_frozen_packet_id_keeps_the_prior_entry_code",
+        "tests.test_request_contract.RepairTests.test_plan_mismatch_names_all_differences",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_same_requests_keep_genuine_0150_refusal_codes",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_malformed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A378",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_request_contract.RepairTests.test_report_restates_settled_executors_with_update_in_same_request",
+        "tests.test_request_contract.RepairTests.test_admission_restates_full_obligations_in_same_request",
+        "tests.test_request_contract.RepairTests.test_checkpoint_restates_settled_executors_in_its_map",
+        "tests.test_request_contract.RepairTests.test_wait_refusal_names_every_restatement_up_to_the_map_bound",
+        "tests.test_issue41_corrections.RefusalCorrectionTests.test_kernel_operation_tags_preserve_codes_details_and_first_referents"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A379",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_request_contract.RepairTests.test_policy_mismatch_from_different_project_is_repaired_by_named_config_and_map_reads",
+        "tests.test_request_contract.RepairTests.test_checkpoint_policy_mismatch_names_all_known_digests_and_refreshes",
+        "tests.test_request_contract.RepairTests.test_pending_replay_from_other_project_names_digests_and_recovers_in_objective_project"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A380",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_report_rebinds_atomically_without_tabs",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_closing_checkpoint_rebinds_without_admissions",
+        "tests.test_worker_tabs.ClosureTests.test_runtime_change_cannot_rebind_before_a_closing_refusal",
+        "tests.test_worker_tabs.ClosureTests.test_continuity_difference_is_not_an_unreadable_tab",
+        "tests.test_worker_tabs.ClosureTests.test_closing_continuity_ambiguity_keeps_its_owner_decision_route",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
+      ],
       "status": "NOT_RUN"
     }
   ]

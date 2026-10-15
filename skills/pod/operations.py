@@ -9,6 +9,7 @@ import re
 from typing import Protocol
 from uuid import UUID
 
+from .contracts import policy_mismatch
 from .errors import PodError
 from .ledger import (admission_identity, binding_valid, bound_assignments as _bound_assignments,
                      objective_root, read, reserve,
@@ -89,8 +90,12 @@ def _check_native_placement(native_port, selector: str, binding: dict | None) ->
 def _assignment_evidence(shown: dict, admission: dict) -> dict:
     """Project settlement for one already-bound assignment, never terminal ownership."""
     binding = admission.get("native_binding")
-    if not binding_valid(binding) or shown.get("runtime") != admission.get("runtime"):
+    if not binding_valid(binding):
         raise PodError("native_assignment_unverified", "Exact assignment runtime or binding differs")
+    if shown.get("runtime") != admission.get("runtime"):
+        detail = ({"reason": "runtime_changed"} if isinstance(shown.get("runtime"), str)
+                  and shown["runtime"] else None)
+        raise PodError("native_assignment_unverified", "Exact assignment runtime or binding differs", detail)
     result = shown.get("result") if isinstance(shown, dict) else None
     dispatch = result.get("dispatch") if isinstance(result, dict) else None
     projection = result.get("projection") if isinstance(result, dict) else None
@@ -151,6 +156,12 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
         terminal_readback={key: observed_terminal[key] for key in ("handle", "tabId", "worktreeId", "connected",
                            "writable", "orphaned") if key in observed_terminal} or None,
         retained_reason=ownership.get("retainedReason") or worker.get("retainedReason") or worker.get("retainReason"))
+    if "role" in projection:
+        facts["native_role"] = projection["role"]
+    if isinstance(projection.get("nextAction"), dict):
+        facts["native_next_action"] = projection["nextAction"]
+    if resource is not None or result.get("terminal") is not None:
+        facts["worker_terminal"] = worker.get("agentTerminalHandle")
     if worker.get("agentTerminalHandle") != handle:
         facts.update(tab=None, placement_readback="unavailable")
         return facts
@@ -210,8 +221,21 @@ class OrcaPort:
         if not isinstance(assignments, tuple) or any(not isinstance(row, dict) for row in assignments):
             raise PodError("native_assignment_unverified", "Assignment evidence request is malformed")
         binding_before = current_run() if expected_runs else None
-        evidence = [_assignment_evidence(self.show_worker(row["native_binding"]["dispatchId"]), row)
-                    for row in assignments]
+        evidence = []
+        for row in assignments:
+            try:
+                shown = self.show_worker(row["native_binding"]["dispatchId"])
+            except PodError as exc:
+                # Preserve the native read's code, with the precise read to repeat.
+                # This adds no observation and never promotes unknown settlement.
+                from .worker_tabs import project as tab_project
+                failed = tab_project({"owner": owner, "checkpoint": {"objective": row.get("objective")}},
+                                     row, {}, settled=True, failure=exc.code)
+                exc.detail = {**(exc.detail or {}), "worker_tabs": [failed], "next_action": failed["wording"]}
+                raise
+            # Identity/runtime disagreement is a continuity refusal, not an
+            # unreadable terminal or a reason to repeat worker-show.
+            evidence.append(_assignment_evidence(shown, row))
         binding_after = current_run() if expected_runs else None
         observed = binding_before or binding_after
         if observed is not None:
@@ -752,8 +776,11 @@ def _current_authority(project: Path, objective: str, admission: dict, *, issue_
     if not isinstance(expected, dict) or not isinstance(checkpoint_value, dict):
         raise PodError("checkpoint_binding_changed", "Checkpoint binding is unavailable")
     from .config import effective
-    if effective(project)["revision"] != checkpoint_value.get("policy_revision"):
-        raise PodError("policy_revision_mismatch", "Governor policy changed before replay")
+    effective_revision = effective(project)["revision"]
+    if effective_revision != checkpoint_value.get("policy_revision"):
+        raise policy_mismatch("Governor policy changed before replay",
+                              checkpoint=checkpoint_value.get("policy_revision"),
+                              packet=expected.get("policy_revision"), effective=effective_revision, replay=True)
     if any(expected.get(key) != checkpoint_value.get(key) for key in keys):
         raise PodError("checkpoint_binding_changed", "Checkpoint semantics changed before replay")
     _check_objective_source(project, expected.get("objective_source"), issue_port=issue_port)

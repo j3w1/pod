@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 from typing import Callable, Iterator
 
+from .contracts import bound, fields, required, input_record, policy_mismatch
 from .errors import PodError
 from .history import load_context, prepare_context, publish_context
 from . import gitio
@@ -302,12 +303,14 @@ def _run_references(state: dict) -> dict[str, str]:
 
 def require_authority(project: Path, objective: str, *, owner: str,
                       state: dict | None = None, run_id: str | None = None,
-                      native_port=None, expected_runtime: str | None = None, claim: str | None = None) -> dict:
+                      native_port=None, expected_runtime: str | None = None, claim: str | None = None,
+                      persist_rebind: bool = True) -> dict:
     """Join a stable native current Run to this objective's persisted owner and refs.
 
     Every caller passing ``state`` holds the objective lock, so a proven runtime
-    continuity is rebound and recorded here before the existing checks repeat
-    against the new runtime. ``expected_runtime`` is the runtime the caller's own
+    continuity is rebound before the existing checks repeat against the new
+    runtime. Closing writes defer its persistence to their successful write.
+    ``expected_runtime`` is the runtime the caller's own
     mutation already observed; continuity only rebinds to that runtime.
     """
     from .operations import OrcaPort
@@ -343,14 +346,14 @@ def require_authority(project: Path, objective: str, *, owner: str,
         if not locked:
             raise
         continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                      expected_runtime=expected_runtime)
+                                      expected_runtime=expected_runtime, persist=persist_rebind)
         if continuity is None:
             raise
         native = port.read_native(owner, authority_runs=selected, assignments=bound_assignments(state))
     else:
         if locked and native.get("runtime") not in set(refs.values()):
             continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                          current=native, expected_runtime=expected_runtime)
+                                          current=native, expected_runtime=expected_runtime, persist=persist_rebind)
             if continuity is not None and bound_assignments(state):
                 native = port.read_native(owner, authority_runs=selected,
                                           assignments=bound_assignments(state))
@@ -595,7 +598,8 @@ def _ambiguous(objective: str, verdict: dict) -> PodError:
 
 
 def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, port,
-                     current: dict | None = None, expected_runtime: str | None = None) -> dict | None:
+                     current: dict | None = None, expected_runtime: str | None = None,
+                     persist: bool = True) -> dict | None:
     """Under the caller's objective lock: rebind a proven continuity and record it.
 
     Returns None when no continuity path applies or continuity is disproven, so the
@@ -626,11 +630,16 @@ def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, 
     if verdict["classification"] == "disproven" or current.get("authoritative") is not True:
         return None
     entry = _apply_continuity(state, verdict, provenance="automatic")
-    _write(_path(project, objective), state)
-    events = _CONTINUITY_EVENTS.get()
-    if events is not None:
-        events.append(entry)
+    if persist:
+        _write(_path(project, objective), state)
+        _record_continuity_event(entry)
     return entry
+
+
+def _record_continuity_event(entry: dict | None) -> None:
+    events = _CONTINUITY_EVENTS.get()
+    if entry is not None and events is not None:
+        events.append(entry)
 
 
 def continuity_locked(project: Path, objective: str, *, owner: str, port,
@@ -913,16 +922,17 @@ def _authorization_granted(project: Path, objective: str):
     return granted
 
 
+@input_record("verification")
 def validate_verification(value: object) -> dict:
     """The checkpoint's current verification context: dependencies and environment (R41)."""
     record = exact(value, {"dependencies", "environment"}, {"dependencies", "environment"},
                    name="verification")
-    if (not isinstance(record["dependencies"], list) or len(record["dependencies"]) > 64
+    if (not isinstance(record["dependencies"], list) or len(record["dependencies"]) > bound("verification", "dependencies", "max_items")
             or len(set(map(str, record["dependencies"]))) != len(record["dependencies"])):
         raise PodError("invalid_checkpoint", "Verification dependencies are a bounded unique list")
     for item in record["dependencies"]:
-        bounded_text(item, name="dependency", limit=512)
-    bounded_text(record["environment"], name="environment", limit=512)
+        bounded_text(item, name="dependency", limit=bound("verification", "dependencies", "items")["max_length"])
+    bounded_text(record["environment"], name="environment", limit=bound("verification", "environment"))
     return {"dependencies": list(record["dependencies"]), "environment": record["environment"]}
 
 
@@ -965,9 +975,17 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
         decisions = context_decisions(state, _read_journal(_record_path(project, objective)))
     except PodError:
         decisions = context_decisions(state)
+    from .worker_tabs import rows as tab_rows
+    placements = {row["admission_id"]: row["placement"] for row in (native or {}).get("assignments", [])
+                  if isinstance(row.get("placement"), dict)}
+    outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
-            "owner_decisions": decisions,
-            "outstanding": _outstanding_ids(state, native),
+            "worker_tabs": tab_rows(state, placements, outstanding=outstanding),
+            # Tab intent is shown by status/acknowledgements, never added to the
+            # immutable closure report. It can outlive objective closure.
+            "owner_decisions": [row for row in decisions
+                                if row.get("decision", {}).get("kind") != "keep_worker_tab"],
+            "outstanding": outstanding,
             "ceiling": ceiling, "delegation": delegation,
             "constraints": state.get("constraints", []),
             "criteria": list(criteria if criteria is not None else checkpoint_value.get("criteria", [])),
@@ -998,7 +1016,7 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
     if state is None:
         return {"state": None, "map": None, "ctx": None, "status": status_projection(None, {}),
                 "label": label_qualification(None, {}, candidate), "report": None, "settlement": "none"}
-    settlement, failure = "observed", None
+    settlement, failure, runtime_changed = "observed", None, False
     if native is None:
         from .operations import OrcaPort
         bound = tuple(row for row in state["admissions"].values()
@@ -1008,6 +1026,7 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
         except PodError as exc:
             # The exact read is all-or-nothing; keep its code so status can name it (A1).
             native, settlement, failure = None, "unverified", exc.code
+            runtime_changed = (exc.detail or {}).get("reason") == "runtime_changed"
     ctx = kernel_context(project, objective, state, native)
     map_state = map_of(state)
     view = {"state": state, "map": map_state, "ctx": ctx, "settlement": settlement,
@@ -1019,6 +1038,9 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
                           for row in (native or {}).get("assignments", [])
                           if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
                           and isinstance(row.get("placement"), dict)}
+    from .worker_tabs import rows as tab_rows
+    view["worker_tabs"] = tab_rows(state, view["placements"], outstanding=ctx["outstanding"], failure=failure,
+                                   runtime_changed=runtime_changed)
     return view
 
 
@@ -1091,8 +1113,12 @@ def map_read(project: Path, objective: str) -> dict:
         remaining = finalization(state, _read_journal(_record_path(project, objective)))
     except PodError:
         remaining = None
+    from .worker_tabs import finalization as tab_finalization
+    remaining = tab_finalization(remaining, view.get("worker_tabs", []))
     return {"schema": "pod-map-view/v1", "seq": map_state["seq"], "next_seq": map_state["seq"] + 1,
             "revision": map_state["revision"], "candidate": state["checkpoint"].get("candidate"),
+            **{key: state["checkpoint"].get(key) for key in
+               ("criteria", "plan_revision", "objective_source", "worktree", "policy_revision")},
             "governance": map_state["governance"], "delivery": map_state.get("delivery"),
             "closure": map_state.get("closure"), "obligations": restatable_rows(map_state),
             "acceptances": {ob["id"]: ob["acceptances"] for ob in map_state["obligations"]
@@ -1122,6 +1148,7 @@ def _map_refusal_context(exc: PodError, state: dict) -> PodError:
     return exc
 
 
+@input_record("checkpoint")
 def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
                       native: dict, previous: dict | None = None) -> tuple[dict, dict, list]:
     from .config import effective
@@ -1136,16 +1163,12 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
         value = {**{key: previous[key] for key in carried if key in previous}, **value}
         value.setdefault("native_refs", [])
         value.setdefault("policy_revision", effective(project)["revision"])
-    allowed = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
-               "assignments", "questions", "verification_gaps", "next_safe_action",
-               "route_decisions", "objective", "objective_source", "worktree", "blocker",
-               "remaining_gates", "verification"} | MAP_INPUT
-    required = {"schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs",
-                "assignments", "questions", "verification_gaps", "next_safe_action"}
-    exact(value, allowed, required, name="checkpoint")
+    allowed = fields("checkpoint")
+    required_fields = required("checkpoint")
+    exact(value, allowed, required_fields, name="checkpoint")
     if value["schema"] != CHECKPOINT_SCHEMA or not isinstance(native.get("runtime"), str):
         raise PodError("invalid_checkpoint", f"Checkpoint needs {CHECKPOINT_SCHEMA} and current native runtime readback")
-    if (not isinstance(value["criteria"], list) or len(value["criteria"]) > 64
+    if (not isinstance(value["criteria"], list) or len(value["criteria"]) > bound("checkpoint", "criteria", "max_items")
             or any(not isinstance(item, str) or not item for item in value["criteria"])
             or not isinstance(value["candidate"], str) or not value["candidate"]):
         raise PodError("invalid_checkpoint", "Checkpoint criteria and candidate are bounded text")
@@ -1171,7 +1194,7 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     proposed = {key: value[key] for key in MAP_INPUT if key in value}
     core = {key: item for key, item in value.items() if key not in MAP_INPUT}
     dispositions = proposed.pop("dispositions", [])
-    if not isinstance(dispositions, list) or len(dispositions) > 16:
+    if not isinstance(dispositions, list) or len(dispositions) > bound("map", "dispositions", "max_items"):
         raise refuse("obligation_unaccounted", "disposition_invalid", "dispositions are a bounded list", record='checkpoint')
     return core, proposed, dispositions
 
@@ -1289,6 +1312,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
                              verification=core.get("verification"))
+        ctx["operation"] = "checkpoint"
         ctx["governance_refresh"] = refresh
         ctx["derived_adoption"] = derived_adoption
         ctx["recorded_questions"] = previous.get("questions", [])
@@ -1307,6 +1331,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                  "a disposition names a recorded admission", record='checkpoint map transition')
                 row["disposition"] = disposition(row, request, ctx, seq=prior_map["seq"] + 1)
         if proposed.get("close") is True and not (prior_map or {}).get("closure"):
+            from .worker_tabs import require_closed_tabs
+            require_closed_tabs(ctx["worker_tabs"])
             from .succession import refuse_incomplete
             # A new closure proves that no incomplete claim, from any writer, names this objective as successor
             # (R118); a repeated one answers from the recorded closure as before (R117).
@@ -1327,6 +1353,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     return map_state, ctx
 
 
+@input_record("checkpoint")
 def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
     """Persist one validated checkpoint; while a map exists, every write is a map transition."""
     from .bundle import running_identity
@@ -1349,11 +1376,12 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         recorded_refs = {(row["runId"], row["runtime"]) for row in previous.get("native_refs", [])
                          if isinstance(row, dict)}
         authority = require_authority(project, objective, owner=owner, state=state,
-                                      expected_runtime=native["runtime"])
+                                      expected_runtime=native["runtime"],
+                                      persist_rebind=not (isinstance(proposed, dict) and proposed.get("close") is True))
         if native["runtime"] != authority["runtime"]:
             raise PodError("native_authority_unverified", "Checkpoint runtime differs from current Run")
         supplied = core["native_refs"]
-        if (not isinstance(supplied, list) or len(supplied) > 32
+        if (not isinstance(supplied, list) or len(supplied) > bound("checkpoint", "native_refs", "max_items")
                 or any(not isinstance(row, dict) or not isinstance(row.get("runId"), str)
                        or not isinstance(row.get("runtime"), str) for row in supplied)):
             raise PodError("native_authority_unverified", "Checkpoint Run references are malformed")
@@ -1372,6 +1400,13 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                 project, objective, state, authority, core, previous, proposed, dispositions, native)
         except PodError as exc:
             _map_refusal_context(exc, state)
+            from .worker_tabs import rows as tab_rows
+            tabs = tab_rows(state, {item["admission_id"]: item["placement"]
+                            for item in authority.get("native", {}).get("assignments", [])
+                            if isinstance(item.get("placement"), dict)},
+                            outstanding=_outstanding_ids(state, authority.get("native")))
+            if tabs:
+                exc.detail = {**(exc.detail or {}), "worker_tabs": tabs}
             raise
         state["owner"] = owner
         identity = running_identity()
@@ -1383,7 +1418,16 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                "bundle_digest": identity["bundle_digest"],
                                **({"continuity": continuity} if continuity else {})}
         _write(path, state, native=authority.get("native"))
+        if isinstance(proposed, dict) and proposed.get("close") is True:
+            _record_continuity_event(authority.get("continuity"))
         result = dict(state)
+        # Acknowledgements use the accepted closure/dispositions with the same
+        # native facts; the pre-write rows can still promise a future report.
+        from .worker_tabs import rows as tab_rows
+        placements = {item["admission_id"]: item["placement"]
+                      for item in authority.get("native", {}).get("assignments", [])
+                      if isinstance(item.get("placement"), dict)}
+        result["worker_tabs"] = tab_rows(state, placements, outstanding=(ctx or {}).get("outstanding", []))
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx)
         return result
@@ -1477,9 +1521,13 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
     # The personal file is read after every other check under the objective lock.
     snapshot = load(project)
     if snapshot["policy_revision"] != checkpoint_value.get("policy_revision"):
-        raise PodError("policy_revision_mismatch", "Governor policy changed since checkpoint")
+        raise policy_mismatch("Governor policy changed since checkpoint",
+                              checkpoint=checkpoint_value.get("policy_revision"),
+                              packet=body.get("policy_revision"), effective=snapshot["policy_revision"])
     if body.get("policy_revision") != snapshot["policy_revision"]:
-        raise PodError("policy_revision_mismatch", "Packet Governor policy changed")
+        raise policy_mismatch("Packet Governor policy changed",
+                              checkpoint=checkpoint_value.get("policy_revision"),
+                              packet=body.get("policy_revision"), effective=snapshot["policy_revision"])
     revision_changed = body.get("route", {}).get("preference_revision") != snapshot["revision"]
     if snapshot.get("setup"):
         # A kept 0.6.x file names its route setup rather than an empty worker ceiling.
@@ -1636,13 +1684,24 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             raise PodError("native_authority_unverified", "Admission Run runtime differs from objective")
         checkpoint_value = state.get("checkpoint")
         body = frozen_packet.get("body") if isinstance(frozen_packet, dict) else None
-        if (not isinstance(body, dict) or frozen_packet.get("packet_id") != packet_id
-                or body.get("candidate") != checkpoint_value.get("candidate")
-                or body.get("criteria") != checkpoint_value.get("criteria")
-                or body.get("plan_revision") != plan_revision
-                or body.get("objective_source") != checkpoint_value.get("objective_source")
-                or body.get("worktree") != checkpoint_value.get("worktree")):
-            raise PodError("packet_plan_mismatch", "Packet differs from current checkpoint")
+        differing = []
+        if not isinstance(body, dict):
+            differing.append("packet_id")
+        else:
+            if frozen_packet.get("packet_id") != packet_id:
+                differing.append("packet_id")
+            differing.extend(key for key in ("candidate", "criteria", "objective_source", "worktree")
+                             if body.get(key) != checkpoint_value.get(key))
+            if body.get("plan_revision") != plan_revision:
+                differing.append("plan_revision")
+        if differing:
+            reads = {key: ("pod internal packet: freeze the corrected body; use its packet_id" if key == "packet_id"
+                           else "pod internal map: " + key) for key in differing}
+            action = ("read the named fields from pod internal map in the objective's project; correct the packet body "
+                      "and the admission plan_revision, then call pod internal packet to freeze it and retry this admission")
+            raise PodError("packet_plan_mismatch", "Packet differs in fields: " + ", ".join(differing)
+                           + ". Next: " + action,
+                           {"fields": differing, "reads": reads, "next_action": action})
         bound_sources = [*body["sources"], *({"path": ref["path"], "state": "present",
                           "sha256": ref["sha256"]} for ref in body["context"]
                          if ref["kind"] in ("source", "instruction"))]
@@ -1674,6 +1733,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         # The caller verified launch-preference capability for this runtime before reserving.
         ctx = kernel_context(project, objective, state, native, candidate=checkpoint_value.get("candidate"),
                              delegation="available")
+        ctx["operation"] = "admission"
         admission_refusal(map_state, body, ctx, admission_id=admission_id)
         require_governance_current(project, map_state)
         snapshot = _reserve_route(project, checkpoint_value, body, state, requested, task_id,
@@ -1700,26 +1760,34 @@ def update_admission(project: Path, objective: str, *, owner: str, admission_id:
     """
     path = _path(project, objective)
     with _lock(path):
-        state = _read(path)
-        if state["owner"] != owner or admission_id not in state["admissions"]:
-            from .handoff import refuse_nonowner
-            refuse_nonowner(project, objective, state, owner, code="unknown_admission")
-            raise PodError("unknown_admission", "No owned admission identity")
-        if open_required:
-            _require_open(state)
-        authority = require_authority(project, objective, owner=owner, state=state,
-                                      run_id=state["admissions"][admission_id]["run_id"],
-                                      expected_runtime=expected_runtime)
-        if expected_runtime is not None and authority["runtime"] != expected_runtime:
-            raise PodError("native_authority_unverified", "Update evidence was read at another runtime")
-        row = state["admissions"][admission_id]
-        admitted = ("admitted_seq" in row, row.get("admitted_seq"))
-        update(row)
-        if admitted != ("admitted_seq" in row, row.get("admitted_seq")):
-            raise PodError("admission_conflict", "The admission's reservation sequence is immutable")
-        row["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _write(path, state)
-        return row
+        return _update_admission_locked(project, objective, state=_read(path), owner=owner,
+                                        admission_id=admission_id, update=update,
+                                        open_required=open_required, expected_runtime=expected_runtime)
+
+
+def _update_admission_locked(project: Path, objective: str, *, state: dict, owner: str,
+                             admission_id: str, update: Callable[[dict], None],
+                             open_required: bool = False, expected_runtime: str | None = None) -> dict:
+    """The existing admission update, for a caller already holding the objective lock."""
+    if state["owner"] != owner or admission_id not in state["admissions"]:
+        from .handoff import refuse_nonowner
+        refuse_nonowner(project, objective, state, owner, code="unknown_admission")
+        raise PodError("unknown_admission", "No owned admission identity")
+    if open_required:
+        _require_open(state)
+    authority = require_authority(project, objective, owner=owner, state=state,
+                                  run_id=state["admissions"][admission_id]["run_id"],
+                                  expected_runtime=expected_runtime)
+    if expected_runtime is not None and authority["runtime"] != expected_runtime:
+        raise PodError("native_authority_unverified", "Update evidence was read at another runtime")
+    row = state["admissions"][admission_id]
+    admitted = ("admitted_seq" in row, row.get("admitted_seq"))
+    update(row)
+    if admitted != ("admitted_seq" in row, row.get("admitted_seq")):
+        raise PodError("admission_conflict", "The admission's reservation sequence is immutable")
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write(_path(project, objective), state)
+    return row
 
 
 def _stored_ingestion(row: dict) -> dict:
@@ -1761,8 +1829,11 @@ def _report_written_ids(map_state: dict, admission_id: str) -> dict:
 
 
 def consume_report(project: Path, objective: str, *, owner: str, admission_id: str,
-                   observation: dict, accompanying: dict | None = None, findings: list | None = None,
-                   proposals: list | None = None, result_commit: str | None = None) -> dict:
+                   observation: dict | None, accompanying: dict | None = None, findings: list | None = None,
+                   proposals: list | None = None, result_commit: str | None = None,
+                   route_refresh: dict | None = None, route_mismatch: bool = False,
+                   report_placement: dict | None = None, packet_body: dict | None = None,
+                   prepare=None) -> dict:
     """Report consumption is a map write: Git result ingestion, triage and proposals, atomically.
 
     The worker report is an observation. Changed paths come from Git, never from the
@@ -1776,17 +1847,59 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         row = state["admissions"].get(admission_id)
         if state["owner"] != owner or row is None:
             raise PodError("unknown_admission", "No owned admission identity")
+        prepared_continuity = None
+        if prepare is not None:
+            prepared = prepare(state, row)
+            observation = prepared["observation"]
+            route_refresh, route_mismatch = prepared["route_refresh"], prepared["route_mismatch"]
+            report_placement = prepared["report_placement"]
+            prepared_continuity = prepared["continuity"]
+        if route_mismatch:
+            _update_admission_locked(project, objective, state=state, owner=owner,
+                                     admission_id=admission_id,
+                                     update=lambda item: item["route_decision"].update(route_mismatch=True),
+                                     expected_runtime=row["runtime"])
+            raise PodError("route_mismatch", "Native effective route changed after start")
         # The report path read its fresh identity at the observation's runtime (A2).
         observed_runtime = (observation.get("native_binding") or {}).get("runtime")
+        closing = isinstance(accompanying, dict) and accompanying.get("close") is True
         authority = require_authority(project, objective, owner=owner, state=state, run_id=row["run_id"],
-                                      expected_runtime=observed_runtime)
+                                      expected_runtime=observed_runtime, persist_rebind=not closing)
         if observed_runtime is not None and authority["runtime"] != observed_runtime:
             raise PodError("native_authority_unverified", "Report identity was read at another runtime")
         map_state = map_of(state)
         if map_state is None:
             raise refuse("unbound_assignment", "no_map", "a report joins an obligation map", record='consume report')
-        _require_open(state)
         ctx = kernel_context(project, objective, state, authority.get("native"))
+        ctx["operation"] = "report"
+        try:
+            _require_open(state)
+        except PodError as exc:
+            if ctx["worker_tabs"]:
+                exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
+            raise
+        from .worker_tabs import require_closed_tabs, project as tab_project, rows as tab_rows
+        if closing:
+            require_closed_tabs(ctx["worker_tabs"])
+        if route_refresh:
+            row["route_decision"].update(effective=route_refresh["effective"], effective_unknown=False)
+            row["effective_evidence"]["effective"] = route_refresh["effective"]
+            if route_refresh["inherited"] is not None:
+                row["effective_evidence"]["inherited"] = route_refresh["inherited"]
+
+        def tab_output():
+            # Report acknowledgement uses the handler's original worker-show,
+            # with the newly accepted correction records; it reads nothing more.
+            placements = {item["admission_id"]: item["placement"]
+                          for item in authority.get("native", {}).get("assignments", [])
+                          if isinstance(item.get("placement"), dict)}
+            if report_placement is not None:
+                placements[admission_id] = report_placement
+            tabs = tab_rows(state, placements, outstanding=ctx["outstanding"])
+            worker = tab_project(state, row, placements.get(admission_id, {}), settled=True,
+                                 packet_body=packet_body, acknowledgement=True)
+            tabs = [worker if item["admission"] == admission_id else item for item in tabs]
+            return {"worker_tabs": tabs, "worker_tab": worker}
         settled = admission_id not in ctx["outstanding"]
         if not settled:
             raise PodError("report_attempt_unverified", "The exact Dispatch has not settled natively. Next: read its native settlement before consuming the report")
@@ -1802,7 +1915,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                     "written": _report_written_ids(map_state, admission_id),
                     "map": {"seq": map_state["seq"], "revision": map_state["revision"],
                             "quiescence": map_state["quiescence"]},
-                    "report": report_projection(map_state, ctx)}
+                    "report": report_projection(map_state, ctx), **tab_output()}
         ingestion = {"status": "not_applicable"}
         if row["role"] == "implement":
             if prior_report is not None:
@@ -1827,7 +1940,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 return {"ingestion": _stored_ingestion(row), "settled": True,
                         "written": _report_written_ids(map_state, admission_id),
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
-                        "report": report_projection(map_state, ctx)}
+                        "report": report_projection(map_state, ctx), **tab_output()}
             if value.get("close") is True and not map_state.get("closure"):
                 from .succession import refuse_incomplete
                 refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's new closure (R118).
@@ -1836,6 +1949,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             new_map = accept_write(map_state, value, ctx, triaged=triaged)
         except PodError as exc:
             _map_refusal_context(exc, state)
+            if ctx["worker_tabs"]:
+                exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
             raise
         state["checkpoint"] = {**state["checkpoint"], **new_map}
         if observation.get("status") == "validated_observation" and report_value.get("outcome") == "succeeded":
@@ -1849,11 +1964,13 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                         failure["cleared_at"] = row["report"]["consumed_at"]
                         failure["cleared_by"] = admission_id
         _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
+        if closing:
+            _record_continuity_event(prepared_continuity or authority.get("continuity"))
         return {"ingestion": ingestion, "settled": settled,
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
                         "quiescence": new_map["quiescence"]},
-                "report": report_projection(state["checkpoint"], ctx)}
+                "report": report_projection(state["checkpoint"], ctx), **tab_output()}
 
 
 def state_inventory(project: Path) -> dict:
@@ -1982,11 +2099,20 @@ def constraints_update(project: Path, objective: str, *, owner: str,
             from .handoff import refuse_nonowner
             refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
             raise PodError("coordinator_conflict", "Constraint belongs to another coordinator")
-        _require_open(state)
+        tab_instruction = (action == "add" and isinstance(value, dict) and value.get("kind") == "keep_worker_tab")
+        try:
+            _require_open(state)
+        except PodError as exc:
+            # An owner's tab keep/revocation changes no map or closure report.
+            # Continuation and historical retirement still refuse all writes.
+            if not tab_instruction or exc.code != "objective_closed":
+                raise
         require_authority(project, objective, owner=owner, state=state)
         if action == "add":
             snapshot = load(project)
             row = validate_constraint(value, snapshot)
+            if row["kind"] == "keep_worker_tab" and row["value"]["objective"] != objective:
+                raise PodError("invalid_constraint", "Worker-tab instruction must name this objective")
             if not isinstance(row.get("id"), str) or not row["id"] or len(row["id"]) > 128:
                 raise PodError("invalid_constraint", "Constraint id is required")
             if any(c.get("id") == row["id"] for c in state["constraints"]):
@@ -1996,6 +2122,8 @@ def constraints_update(project: Path, objective: str, *, owner: str,
             matches = [c for c in state["constraints"] if c.get("id") == constraint_id]
             if len(matches) != 1:
                 raise PodError("unknown_constraint", "Constraint id is unavailable")
+            if matches[0]["kind"] == "keep_worker_tab":
+                raise PodError("constraint_authority", "Record revocation as a new user_direct keep_worker_tab instruction with keep false")
             matches[0]["active"] = False
         else:
             raise PodError("invalid_constraint_action", "Constraint action is unsupported")

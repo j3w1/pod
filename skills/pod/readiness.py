@@ -270,7 +270,8 @@ def _summary(block: dict) -> str:
 
 
 def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict | None,
-           map_error: str | None, failure: dict | None, owner_reader: bool, port=None) -> dict:
+           map_error: str | None, failure: dict | None, owner_reader: bool, port=None,
+           worker_tabs: list | None = None) -> dict:
     """Status's readiness block and, for a non-owner reader, the facts a successor claim would check (R114).
 
     `root` is the record's state directory. Only a reader other than the recorded coordinator reads that
@@ -346,4 +347,15 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
                                                  None), "routes": routes})
     if "summary" not in block:
         block["summary"] = _summary(block)
+    tabs = worker_tabs if worker_tabs is not None else (view or {}).get("worker_tabs", [])
+    if tabs:
+        from .worker_tabs import finalization, wording
+        if block["state"] == "closed":
+            block["summary"] = "Closed: " + wording(tabs)
+        elif block["state"] == "closed_external":
+            block["summary"] = block["summary"].replace(
+                "Pod needs nothing more and its coordinator may close.", wording(tabs))
+        else:
+            block["summary"] += " " + wording(tabs)
+        block["finalization"] = finalization(block.get("finalization"), tabs)
     return out

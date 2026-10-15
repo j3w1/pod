@@ -18,6 +18,8 @@ Keep this conversation, model, effort and settings as coordinator; pool edits ne
 
 Close only with every obligation satisfied or validly withdrawn with reason, a final report, final-candidate gates and independent review required by work/project, and Governor-recorded delivery. Withdrawal is not passing verification. Separate implementation, local checks, independent review, hosted CI, live native proof, project acceptance and merge; name uncertainty, unresolved native references and next safe action.
 
+Worker tabs are done when no releasable finished tab remains except an owner-kept one; every other kept tab is closed under the standing authorization or named with Orca's close failure or its need for an owner decision; the final report names every owner-kept tab, including one Orca has since marked user-owned.
+
 Continue through implementation, verification and corrections. Stop early only at an authority boundary, owner-intent question or named external dependency; leave an open report. Use direct work when sufficient. Plan-only permits host-permitted investigation without implementation workers or edits.
 
 ## Boundaries
@@ -33,7 +35,8 @@ Never infer physical capacity or count other objectives' workers.
 
 Use `pod config --json`, `pod doctor --json`, `pod status --objective ID`, `pod internal <op> --input FILE` (or `-`); fallback `~/.local/bin/pod`; missing launcher: `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh`.
 Do not run source-checkout helpers or create another configuration source.
-Acknowledgements retain next-request/recovery facts; refusals list accepted/optional fields and next action.
+Before writing a packet, report, checkpoint/map, admission or Governor action, read `internal contract` with `record` naming that input record or `all` for the bounded field table.
+Acknowledgements retain next-request/recovery facts; shape/text refusals list every bounded field, complete accepted/optional names and next action.
 Read config at intake, new-session continuation, preference-change notice and after `preference_changed`, `preference_revision_stale`, `policy_revision_mismatch`, `setup_required`, `installed_version_changed`.
 Every map-bearing write, including full checkpoint/report and admission maps, carries next `seq`; read map on resume/`map_stale`.
 `internal brief` is an optional read-only uncertain-input dry run for checkpoints.
@@ -49,6 +52,7 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - EEL authoring/revision: [template](references/eel-template.md).
 - Map/worktree/packets or delegation: [planning](references/planning.md).
 - First admission/supervision: [Orca](references/orca-boundary.md).
+- Accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
 - Any route choice: [models](references/models.md).
 - Failure/resume/reload: [recovery](references/recovery.md).
 - Proof/review/REUSE: [verification](references/verification.md).

@@ -21,44 +21,34 @@ import hashlib
 import re
 from typing import Any, Callable
 
+from .contracts import (TABLE, UNIT, IDENTIFIER, SURFACE, SOURCE, LINES, GOVERNANCE_PATHS, KINDS, PROVENANCES, STATES,
+                        WAIT_CLASSES, PARTIES, ROLES, VERDICTS, PROPOSAL_SOURCES, bound, fields, required,
+                        SEVERITIES, TRIAGE, input_record, annotate, current)
 from .errors import PodError
 from .gitio import OBJECT_ID
 from .util import (digest, exact, _field_names, owner_decision, decision_channel, channel_fields,
                    CHANNEL_FIELDS, DECISION_FIELDS)
 import unicodedata
 
-KINDS = ("criterion", "delivery", "assurance", "correction", "steer", "subgoal")
-PROVENANCES = ("objective", "user_direct", "project_policy", "coordinator")
-STATES = ("unassigned", "active", "waiting", "blocked_external", "satisfied", "withdrawn")
 TERMINAL = ("satisfied", "withdrawn")
-WAIT_CLASSES = ("dependency", "contract_unsettled", "sequenced", "ownership", "capacity",
-                "integration_pending", "input_unavailable", "authority", "user_hold")
 EXTERNAL_WAITS = ("authority", "user_hold", "input_unavailable")
-PARTIES = ("owner", "user", "provider", "third_party")
-ROLES = ("implement", "investigate", "review")
-SEVERITIES = ("blocker", "major", "minor", "info")
-TRIAGE = ("required_correction", "advisory")
-PROPOSAL_SOURCES = ("worker_report", "reviewer_advisory", "issue", "repository",
-                    "fetched_documentation", "coordinator_caution")
-GOVERNANCE_PATHS = (".pod/config.yaml", "AGENTS.md", "CLAUDE.md")
 AUTHORIZED_SCOPES = ("publish", "merge", "release", "deploy")
-MAX_OBLIGATIONS = 96
-MAX_PROPOSALS = 64
-MAX_SERVES = 16
-MAX_EVIDENCE = 16
-MAX_FINDINGS = 32
-MAX_ACCEPTANCES = 16
-VERDICTS = ("accepted", "rejected")
-MAX_CITED_LINES = 64
+MAX_OBLIGATIONS = bound("map", "obligations", "max_items")
+MAX_PROPOSALS = bound("map", "proposals", "max_items")
+MAX_SERVES = bound("packet", "serves", "max_items")
+MAX_EVIDENCE = bound("obligation", "evidence", "max_items")
+MAX_FINDINGS = bound("report request", "triage", "max_items")
+MAX_ACCEPTANCES = bound("map", "acceptances", "max_items")
+MAX_CITED_LINES = bound("policy citation", "lines", "max_lines")
 MAX_GOVERNANCE_TEXT = 1_048_576
 CHURN_THRESHOLD = 3
 
-_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
-_SURFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
-_LINES = re.compile(r"([1-9][0-9]{0,6})(?:-([1-9][0-9]{0,6}))?\Z")
+_ID = re.compile(IDENTIFIER)
+_SURFACE = re.compile(SURFACE)
+_LINES = re.compile(LINES)
 _COMMIT = OBJECT_ID
-_SOURCE = re.compile(r"[!-~]{1,128}\Z")
-_ACCEPTANCE_FIELDS = {"source", "verdict", "candidate", "evidence"}
+_SOURCE = re.compile(SOURCE)
+_ACCEPTANCE_FIELDS = fields("acceptance")
 
 NEXT_ACTIONS = {
     "unbound_assignment": "admit only a packet that serves unsatisfied obligations of the current map revision",
@@ -74,16 +64,15 @@ NEXT_ACTIONS = {
 }
 
 # Proposed map fields a caller may send; everything else in a stored map is stamped here.
-MAP_INPUT = {"seq", "obligations", "proposals", "governance", "governance_refresh",
-             "revision_authority", "reopen", "close", "rebind", "dispositions", "delivery", "update", "reuse",
-             "acceptances"}
+MAP_INPUT = fields("map")
 MAP_STORED = {"seq", "revision", "obligations", "proposals", "governance", "governance_sources",
               "coordinator_slot", "quiescence", "closure", "observations", "reopened",
               "governance_history", "delivery", "revision_decisions"}
 
 
 def refuse(code: str, detail: str, message: str, *, next_action: str | None = None,
-           accepted: set[str] | None = None, optional: set[str] | None = None,
+           accepted: set[str] | None = None, optional: set[str] | None = None, restate: list[str] | None = None,
+           bounded_fields: dict | None = None,
            **referent: Any) -> PodError:
     """One boundary refusal naming its detail, referent and next safe action."""
     actions = {
@@ -106,18 +95,28 @@ def refuse(code: str, detail: str, message: str, *, next_action: str | None = No
     if accepted is not None:
         referent.update(accepted=_field_names(accepted, complete=True)[0],
                         optional=_field_names(optional or set(), complete=True)[0])
+    if bounded_fields is not None:
+        referent["bounded_fields"] = bounded_fields
+    if restate is not None:
+        # Map ids have already passed the 96-row/64-character identifier bounds.
+        referent["restate"] = list(restate)
     named = ", ".join(f"{key}={value}" for key, value in sorted(referent.items()))
     text = f"{detail}: {message}" + (f" ({named})" if named else "") + f". Next: {action}"
     return PodError(code, text, {"detail": detail, "referent": referent, "next_action": action})
 
 
 def _text(value: Any, name: str, *, code: str = "obligation_invalid", detail: str = "malformed",
-          limit: int = 512, obligation: str | None = None) -> str:
+          limit: int | None = None, obligation: str | None = None) -> str:
+    if limit is None:
+        spec = TABLE.get(current(), {}).get("fields", {}).get(name, {})
+        limit = spec.get("max_length", TABLE["obligation"]["fields"]["check"]["max_length"])
     if not isinstance(value, str) or not value.strip() or len(value) > limit or "\x00" in value:
         length = len(value) if isinstance(value, str) else None
-        raise refuse(code, detail, f"{name} must be bounded, nonempty text (limit {limit}, length {length})",
-                     field=name, limit=limit, length=length,
-                     **({"obligation": obligation} if obligation is not None else {}))
+        error = refuse(code, detail, f"{name} must be bounded, nonempty text (limit {limit}, length {length})",
+                       field=name, limit=limit, length=length,
+                       **({"obligation": obligation} if obligation is not None else {}))
+        annotate(error, current())
+        raise error
     return value
 
 
@@ -131,22 +130,24 @@ def _ident(value: Any, name: str, *, code: str = "obligation_invalid", obligatio
 def _exact(value: Any, fields: set[str], required: set[str], name: str, *,
            code: str = "obligation_invalid", obligation: str | None = None) -> dict:
     if not isinstance(value, dict) or set(value) - fields or required - set(value):
+        from .contracts import bounded_fields
+        contract = {"bounded_fields": bounded_fields(name)} if name in TABLE else {}
         if not isinstance(value, dict):
-            raise refuse(code, "malformed", f"{name} must be a JSON object", record=name, expected="object", accepted=fields, optional=fields-required, **({"obligation": obligation} if obligation is not None else {}))
+            raise refuse(code, "malformed", f"{name} must be a JSON object", record=name, expected="object", accepted=fields, optional=fields-required, **contract, **({"obligation": obligation} if obligation is not None else {}))
         missing, m = _field_names(required - set(value))
         unsupported, u = _field_names(set(value) - fields)
         known = obligation or value.get("id")
         referent = {"obligation": known} if isinstance(known, str) and _ID.fullmatch(known) else {}
         raise refuse(code, "malformed", f"{name} has missing or unsupported fields: missing {missing}; unsupported {unsupported}",
                      record=name, missing=missing, unsupported=unsupported, omitted=m+u,
-                     accepted=fields, optional=fields-required, **referent)
+                     accepted=fields, optional=fields-required, **contract, **referent)
     return value
 
 
 # --------------------------------------------------------------------------- boundaries
 
 def _path(value: Any, *, code: str, obligation: str | None = None) -> str:
-    if (not isinstance(value, str) or not value or len(value) > 512 or "\x00" in value
+    if (not isinstance(value, str) or not value or len(value) > bound("boundary", "paths", "items")["max_length"] or "\x00" in value
             or value.startswith("/") or "\\" in value):
         raise refuse(code, "malformed", "boundary paths are repo-relative", record="boundary path", **({"obligation": obligation} if obligation is not None else {}))
     parts = [part for part in value.split("/") if part not in ("", ".")]
@@ -155,14 +156,15 @@ def _path(value: Any, *, code: str, obligation: str | None = None) -> str:
     return "/".join(parts) or "."
 
 
+@input_record("boundary")
 def boundary(value: Any, *, code: str = "obligation_invalid", obligation: str | None = None) -> dict:
     """Declared editing boundary: repo-relative path prefixes plus named surfaces."""
     if value is None:
         return {"paths": [], "surfaces": []}
-    record = _exact(value, {"paths", "surfaces"}, set(), "boundary", code=code, obligation=obligation)
+    record = _exact(value, fields("boundary"), required("boundary"), "boundary", code=code, obligation=obligation)
     paths, surfaces = record.get("paths", []), record.get("surfaces", [])
-    if (not isinstance(paths, list) or len(paths) > 64 or not isinstance(surfaces, list)
-            or len(surfaces) > 32):
+    if (not isinstance(paths, list) or len(paths) > bound("boundary", "paths", "max_items") or not isinstance(surfaces, list)
+            or len(surfaces) > bound("boundary", "surfaces", "max_items")):
         raise refuse(code, "malformed", "boundary is a bounded list of paths and surfaces", record='boundary',
                      **({"obligation": obligation} if obligation is not None else {}))
     for surface in surfaces:
@@ -263,9 +265,9 @@ def bound_governance_digest(state: dict) -> str:
     return governance_digest([{**row, "base": base} for row in sources] if base is not None else sources)
 
 
+@input_record("policy citation")
 def _cite(source: Any, observed: dict | None, sources: list[dict], *, obligation: str | None = None) -> dict:
-    record = _exact(source, {"path", "lines", "revision", "quote_sha256", "base", "gone"},
-                    {"path", "lines"}, "policy citation", obligation=obligation)
+    record = _exact(source, fields("policy citation"), required("policy citation"), "policy citation", obligation=obligation)
     bound = {row["path"]: row for row in sources}
     if record["path"] not in bound or bound[record["path"]]["revision"] is None:
         raise refuse("obligation_invalid", "governance_source_unrecognized",
@@ -323,17 +325,14 @@ def _relocate(source: dict, observed: dict, sources: list[dict]) -> dict:
 
 # --------------------------------------------------------------------------- records
 
-_OBLIGATION_FIELDS = {"id", "kind", "provenance", "introduced_seq", "parent", "check", "resolves",
-                      "stop_condition", "boundary", "source", "state", "executor", "wait", "external",
-                      "evidence", "withdrawal", "adopts", "reuse", "scope", "question", "candidate",
-                      "existing_evidence", "insufficiency", "uncovered_risk", "findings", "finding",
-                      "definition", "receipts", "proof_scope", "acceptances"}
+_OBLIGATION_FIELDS = fields("obligation")
 _DEFINITION = ("check", "resolves", "stop_condition", "scope", "question", "insufficiency",
                "existing_evidence", "uncovered_risk", "proof_scope")
 _STATE_FIELDS = {"active": "executor", "waiting": "wait", "blocked_external": "external",
                  "withdrawn": "withdrawal"}
 
 
+@input_record("obligation")
 def _structure(raw: Any) -> dict:
     row = _exact(raw, _OBLIGATION_FIELDS, {"id", "kind", "provenance"}, "obligation")
     ob = dict(row)
@@ -353,7 +352,7 @@ def _structure(raw: Any) -> dict:
     ob["boundary"] = boundary(ob.get("boundary"), obligation=ob["id"])
     if "proof_scope" in ob:
         scope = ob["proof_scope"]
-        if ob["kind"] == "assurance" or not isinstance(scope, list) or len(scope) > 64:
+        if ob["kind"] == "assurance" or not isinstance(scope, list) or len(scope) > bound("obligation", "proof_scope", "max_items"):
             raise refuse("obligation_invalid", "malformed", "proof_scope is a bounded path list on non-assurance obligations",
                          obligation=ob["id"], field="proof_scope")
         if not scope and (ob["kind"] != "subgoal" or ob["provenance"] != "coordinator"):
@@ -375,10 +374,13 @@ def _structure(raw: Any) -> dict:
                              "assurance records scope, question, candidate, existing evidence and insufficiency",
                              obligation=ob["id"])
         ob["scope"] = boundary(ob["scope"], obligation=ob["id"])
-        _text(ob["candidate"], "candidate", limit=128, obligation=ob["id"])
+        _text(ob["candidate"], "candidate", limit=bound("obligation", "candidate"), obligation=ob["id"])
+        if "unit" in ob and (not isinstance(ob["unit"], str) or not UNIT.fullmatch(ob["unit"])):
+            raise refuse("obligation_invalid", "malformed", "unit is a Governor delivery-unit identifier",
+                         field="unit", obligation=ob["id"])
     else:
         for key in ("scope", "question", "candidate", "existing_evidence", "insufficiency", "uncovered_risk",
-                    "findings"):
+                    "findings", "unit"):
             if key in ob:
                 raise refuse("obligation_invalid", "malformed", f"only assurance records {key}", obligation=ob["id"])
     if "finding" in ob and ob["kind"] != "correction":
@@ -410,6 +412,7 @@ def _structure(raw: Any) -> dict:
     return ob
 
 
+@input_record("acceptance")
 def _acceptance(raw: Any, fields: set[str], *, obligation: str | None) -> dict:
     """One coordinator judgement of an outside result; the source is the caller's opaque id."""
     row = _exact(raw, fields, fields, "acceptance", obligation=obligation)
@@ -420,8 +423,8 @@ def _acceptance(raw: Any, fields: set[str], *, obligation: str | None) -> dict:
     if row["verdict"] not in VERDICTS:
         raise refuse("obligation_invalid", "malformed", "verdict allowed: " + ", ".join(VERDICTS),
                      field="verdict", **({"obligation": obligation} if obligation is not None else {}))
-    _text(row["candidate"], "candidate", limit=128, obligation=obligation)
-    _text(row["evidence"], "evidence", limit=1024, obligation=obligation)
+    _text(row["candidate"], "candidate", limit=bound("acceptance", "candidate"), obligation=obligation)
+    _text(row["evidence"], "evidence", limit=bound("acceptance", "evidence"), obligation=obligation)
     return row
 
 
@@ -479,17 +482,18 @@ def _write_acceptances(rows: dict[str, dict], prior_rows: dict[str, dict], reque
         ob["acceptances"] = [*ob.get("acceptances", []), {**request, "seq": seq}]
 
 
+@input_record("proposal")
 def _proposal(raw: Any) -> dict:
-    row = _exact(raw, {"id", "source", "origin_ref", "summary", "status"},
-                 {"id", "source", "origin_ref", "summary", "status"}, "proposal")
+    row = _exact(raw, fields("proposal"), required("proposal"), "proposal")
     _ident(row["id"], "proposal id")
-    if row["source"] not in PROPOSAL_SOURCES or row["status"] not in ("open", "adopted"):
+    if row["source"] not in PROPOSAL_SOURCES or row["status"] not in TABLE["proposal"]["fields"]["status"]["allowed"]:
         raise refuse("obligation_invalid", "malformed", "proposal source allowed: " + ", ".join(PROPOSAL_SOURCES) + "; status allowed: open, adopted", proposal=row["id"])
-    _text(row["origin_ref"], "origin_ref", limit=256)
+    _text(row["origin_ref"], "origin_ref", limit=bound("proposal", "origin_ref"))
     _text(row["summary"], "summary")
     return dict(row)
 
 
+@input_record("revision authority")
 def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> dict | None:
     if value is None:
         return None
@@ -497,9 +501,9 @@ def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> d
     if record["provenance"] != "user_direct":
         raise refuse("obligation_invalid", "provenance_unauthorized",
                      "a map revision is authorized only by a direct user instruction", record='authority')
-    _text(record["instruction"], "instruction", limit=1024)
+    _text(record["instruction"], "instruction", limit=bound("revision authority", "instruction"))
     if "question" in record:
-        _text(record["question"], "question", limit=512)
+        _text(record["question"], "question", limit=bound("revision authority", "question"))
     return owner_decision(record, kind=kind, stored=stored)
 
 
@@ -583,6 +587,7 @@ def _first(value: dict, key: str, default: Any) -> Any:
     return value[key] if key in value else default
 
 
+@input_record("governance")
 def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
                       user: bool, refresh: bool) -> tuple:
     # Governance: declared at intake, read at the base, refreshed only by an explicit revision.
@@ -592,7 +597,7 @@ def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
         declared = _exact(value.get("governance"), {"base_ref", "selection", "exclude", "base"},
                           {"base_ref"}, "governance")
         if declared["base_ref"] is not None:
-            _text(declared["base_ref"], "base_ref", limit=256)
+            _text(declared["base_ref"], "base_ref", limit=bound("governance", "base_ref"))
         exclude = declared.get("exclude", [])
         if (not isinstance(exclude, list) or any(item not in GOVERNANCE_PATHS for item in exclude)
                 or len(set(exclude)) != len(exclude)):
@@ -702,7 +707,7 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
             ctx["candidate_check"](ob["candidate"])
         ob["definition"] = definition_id(ob)
         if earlier is not None:
-            for key in ("kind", "provenance", "parent"):
+            for key in ("kind", "provenance", "parent", "unit"):
                 if ob.get(key) != earlier.get(key):
                     raise refuse("obligation_invalid", "redefinition_unauthorized",
                                  f"an obligation's {key} is immutable", obligation=ob["id"])
@@ -751,7 +756,7 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
         if ob["provenance"] == "user_direct" and isinstance(ob.get("source"), dict):
             authority = ctx.get("revision_authority") or {}
             if "instruction" in ob["source"]:
-                _text(ob["source"]["instruction"], "instruction", limit=1024, obligation=ob["id"])
+                _user_instruction(ob["source"], ob["id"])
             if CHANNEL_FIELDS & set(ob["source"]):
                 source_authority = owner_decision(ob["source"], kind="question" if "question" in authority else "revision")
                 if channel_fields(source_authority) != channel_fields(authority):
@@ -860,7 +865,7 @@ def expand_update(prior: dict | None, value: dict) -> dict:
         raise refuse("map_stale", "map_stale", "re-read with pod internal map before an update",
                      current_seq=current_seq, expected=expected, revision=revision)
     changes = value["update"]
-    if not isinstance(changes, dict) or len(changes) > MAX_OBLIGATIONS:
+    if not isinstance(changes, dict) or len(changes) > bound("map", "update", "max_items"):
         raise refuse("obligation_invalid", "malformed", "update is a bounded mapping of obligation ids", record='expand update')
     rows = {row["id"]: deepcopy(row) for row in (prior or {}).get("obligations", [])}
     for key, patch in changes.items():
@@ -899,6 +904,7 @@ def restatable_rows(state: dict) -> list[dict]:
     return rows
 
 
+@input_record("map")
 def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
     """Validate one proposed map write against the prior accepted map and current facts.
 
@@ -1099,22 +1105,39 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
         raise
 
 
+@input_record("objective source")
+def _objective_source(value: Any, obligation: str) -> dict:
+    source = _exact(value, fields("objective source"), required("objective source"), "objective source", obligation=obligation)
+    _text(source["ref"], "source ref", limit=bound("objective source", "ref"), obligation=obligation)
+    return source
+
+
+@input_record("user source")
+def _user_source(value: Any, obligation: str) -> dict:
+    source = _exact(value, fields("user source"), required("user source"), "user source", obligation=obligation)
+    owner_decision(source, kind="question" if "question" in source else "revision", stored=True)
+    _user_instruction(source, obligation)
+    if "ref" in source:
+        _text(source["ref"], "source ref", limit=bound("user source", "ref"), obligation=obligation)
+    return source
+
+
+@input_record("user source")
+def _user_instruction(source: dict, obligation: str) -> None:
+    _text(source["instruction"], "instruction", limit=bound("user source", "instruction"), obligation=obligation)
+
+
 def _introduce(ob: dict, intake: bool, user: bool, observed: dict | None, sources: list[dict],
                criteria: list[str]) -> None:
     provenance, kind = ob["provenance"], ob["kind"]
     if provenance == "objective":
-        source = _exact(ob.get("source"), {"ref"}, {"ref"}, "objective source", obligation=ob["id"])
-        _text(source["ref"], "source ref", limit=256, obligation=ob["id"])
+        source = _objective_source(ob.get("source"), ob["id"])
         if kind not in ("criterion", "delivery") or not intake:
             raise refuse("obligation_invalid", "provenance_unauthorized",
                          "objective provenance enters criteria and delivery obligations at intake",
                          obligation=ob["id"])
     elif provenance == "user_direct":
-        source = _exact(ob.get("source"), {"instruction", "ref", "question", *CHANNEL_FIELDS}, {"instruction"}, "user source", obligation=ob["id"])
-        owner_decision(source, kind="question" if "question" in source else "revision", stored=True)
-        _text(source["instruction"], "instruction", limit=1024, obligation=ob["id"])
-        if "ref" in source:
-            _text(source["ref"], "source ref", limit=256, obligation=ob["id"])
+        source = _user_source(ob.get("source"), ob["id"])
         if not user:
             raise refuse("obligation_invalid", "provenance_unauthorized",
                          "a user_direct obligation enters only by a direct user revision", obligation=ob["id"])
@@ -1143,9 +1166,10 @@ def _ancestry(rows: dict[str, dict]) -> None:
             seen.add(cursor["id"])
 
 
+@input_record("withdrawal")
 def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
-    record = _exact(ob["withdrawal"], {"by", "reason", "instruction", *CHANNEL_FIELDS}, {"by", "reason"}, "withdrawal", obligation=ob["id"])
-    _text(record["reason"], "reason", limit=1024, obligation=ob["id"])
+    record = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"), "withdrawal", obligation=ob["id"])
+    _text(record["reason"], "reason", limit=bound("withdrawal", "reason"), obligation=ob["id"])
     by = record["by"]
     allowed = (by == "user_direct" and user
                or by == "project_policy" and ob["provenance"] == "project_policy"
@@ -1163,6 +1187,32 @@ def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
     elif CHANNEL_FIELDS & set(record):
         raise refuse("obligation_invalid", "malformed", "only owner withdrawals carry an owner decision channel", obligation=ob["id"])
     return result
+
+
+@input_record("external")
+def _external_record(ob: dict) -> dict:
+    external = _exact(ob["external"], fields("external"), required("external"), "external",
+                      code="obligation_unaccounted", obligation=ob["id"])
+    if external["party"] not in PARTIES:
+        raise refuse("obligation_unaccounted", "external_invalid",
+                     "an external block names owner, user, provider or third_party", obligation=ob["id"])
+    return external
+
+
+@input_record("external")
+def _external_text(ob: dict, field: str) -> None:
+    _text(ob["external"][field], field, code="obligation_unaccounted", detail="external_invalid",
+          limit=bound("external", field), obligation=ob["id"])
+
+
+def _restate_action(ctx: dict) -> str:
+    operation = ctx.get("operation", "checkpoint")
+    reading = "read pod internal map for next_seq, restatable obligations and current outstanding/settled attempts; "
+    if operation == "admission":
+        return reading + "put the full obligations restatement in map.obligations in this same admission request with map.seq = next_seq (map.update is not accepted)"
+    if operation == "report":
+        return reading + "put the restating map with its update in this same report request; use map.seq = next_seq"
+    return reading + "restate every named obligation in this checkpoint's map, with seq = next_seq"
 
 
 def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, *, reuse_failures: dict | None = None) -> None:
@@ -1198,7 +1248,12 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                     raise refuse("obligation_unaccounted", "active_admission_settled",
                                  "the executing admission has settled; restate as waiting, blocked_external, "
                                  "satisfied with evidence, or withdrawn with authority",
-                                 next_action="re-read with pod internal map, then choose the valid restatement",
+                                 next_action=_restate_action(ctx),
+                                 restate=[row["id"] for row in rows.values() if row["state"] == "active"
+                                          and row.get("executor") != "coordinator"
+                                          and row.get("executor") in admissions
+                                          and row["id"] in (admissions[row["executor"]].get("serves") or [])
+                                          and row["executor"] not in outstanding],
                                  obligation=ob["id"], admission=executor)
             else:
                 for key in outstanding:
@@ -1208,15 +1263,9 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                                      "the coordinator-held boundary overlaps an outstanding admission",
                                      obligation=ob["id"], admission=key)
         if state == "blocked_external":
-            external = _exact(ob["external"], {"party", "need", "unblocks_when"},
-                              {"party", "need", "unblocks_when"}, "external", code="obligation_unaccounted",
-                              obligation=ob["id"])
-            if external["party"] not in PARTIES:
-                raise refuse("obligation_unaccounted", "external_invalid",
-                             "an external block names owner, user, provider or third_party", obligation=ob["id"])
+            external = _external_record(ob)
             for field in ("need", "unblocks_when"):
-                _text(external[field], field, code="obligation_unaccounted", detail="external_invalid",
-                      obligation=ob["id"])
+                _external_text(ob, field)
                 if external[field] in rows or external[field] in admissions:
                     raise refuse("obligation_unaccounted", "external_invalid",
                                  "an external block never names an internal referent", obligation=ob["id"])
@@ -1271,11 +1320,12 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                              obligation=served, admission=key)
 
 
+@input_record("wait")
 def _wait_record(ob: dict) -> dict:
     wait = ob["wait"]
     if not isinstance(wait, dict) or wait.get("class") not in WAIT_CLASSES:
         raise refuse("wait_invalid", "unclassified", "wait class allowed: " + ", ".join(WAIT_CLASSES), obligation=ob["id"])
-    record = _exact(wait, {"class", "referent", "rationale", "revisit_when", "inputs"}, {"class", "referent"},
+    record = _exact(wait, fields("wait"), required("wait"),
                     "wait", code="wait_invalid", obligation=ob["id"])
     for key in ("rationale", "revisit_when"):
         if key in record:
@@ -1286,6 +1336,7 @@ def _wait_record(ob: dict) -> dict:
     return record
 
 
+@input_record("wait")
 def _validate_wait(ob: dict, rows: dict[str, dict], ctx: dict, outstanding: set[str],
                    admissions: dict, held: list[dict], pending: dict) -> str | None:
     wait = _wait_record(ob)
@@ -1327,7 +1378,7 @@ def _validate_wait(ob: dict, rows: dict[str, dict], ctx: dict, outstanding: set[
                          obligation=name, referent=referent)
     elif cls == "capacity":
         ceiling = ctx.get("ceiling", 0)
-        if (not isinstance(referent, list) or len(referent) > 8
+        if (not isinstance(referent, list) or len(referent) > bound("wait", "referent", "capacity")["max_items"]
                 or any(not isinstance(item, str) for item in referent)):
             raise refuse("wait_invalid", "unknown_referent", "capacity names the reservations holding the ceiling",
                          obligation=name)
@@ -1417,10 +1468,12 @@ def _waits(state: dict, rows: dict[str, dict], ctx: dict) -> None:
             edges[ob["id"]] = edge
     if violations:
         first = violations[0][1]
-        first.detail["dependents"] = [key for key, _ in violations[:8]]
-        first.detail["remaining"] = max(0, len(violations) - 8)
-        first.args = (str(first) + "; affected dependents: " + ", ".join(key for key, _ in violations[:8])
-                      + (f"; +{len(violations)-8} more" if len(violations) > 8 else ""),)
+        first.detail["dependents"] = [key for key, _ in violations]
+        first.detail["remaining"] = 0
+        first.detail["next_action"] = _restate_action(ctx)
+        first.detail["referent"]["restate"] = [key for key, _ in violations]
+        first.args = (str(first).rsplit(". Next: ", 1)[0] + "; affected dependents: " + ", ".join(key for key, _ in violations)
+                      + "; Next: " + _restate_action(ctx),)
         raise first
     try:
         _check_wait_cycles(edges)
@@ -1433,10 +1486,12 @@ def _waits(state: dict, rows: dict[str, dict], ctx: dict) -> None:
                 cursor = edges[cursor]
             if cursor in seen:
                 affected.append(name)
-        exc.detail["dependents"] = affected[:8]
-        exc.detail["remaining"] = max(0, len(affected) - 8)
-        exc.args = (str(exc) + "; affected dependents: " + ", ".join(affected[:8])
-                    + (f"; +{len(affected)-8} more" if len(affected) > 8 else ""),)
+        exc.detail["dependents"] = affected
+        exc.detail["next_action"] = _restate_action(ctx)
+        exc.detail["referent"]["restate"] = affected
+        exc.detail["remaining"] = 0
+        exc.args = (str(exc).rsplit(". Next: ", 1)[0] + "; affected dependents: " + ", ".join(affected)
+                    + "; Next: " + _restate_action(ctx),)
         raise
 
 
@@ -1929,9 +1984,9 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
     """The map write that accompanies an admission row: served obligations become active."""
     binding = admission_refusal(state, body, ctx, admission_id=admission_id)
     base = dict(accompanying) if accompanying is not None else {}
-    if set(base) - {"seq", "obligations", "proposals"}:
+    if set(base) - fields("admission map"):
         raise refuse("obligation_invalid", "malformed", "an admission carries only obligations and proposals; unsupported "
-                     + ", ".join(_field_names(set(base) - {"seq", "obligations", "proposals"})[0]), record="admission map")
+                     + ", ".join(_field_names(set(base) - {"seq", "obligations", "proposals"})[0]), record="admission map", accepted=fields("admission map"), optional=fields("admission map"))
     obligations = [dict(row) for row in base.get("obligations", state["obligations"])]
     for row in obligations:
         if row.get("id") in binding["serves"]:
@@ -1949,6 +2004,7 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
 
 # --------------------------------------------------------------------------- results and review
 
+@input_record("disposition")
 def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
     """One disposition for a settled implementation result; a record, never a deletion."""
     record = _exact(request, {"admission", "integrated_into", "discarded", "reason", "attestation"},
@@ -1965,14 +2021,14 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
                      "a disposition is integrated_into or discarded", admission=key)
     for field in ("reason", "attestation"):
         if field in record:
-            _text(record[field], field, code="obligation_unaccounted", detail="disposition_invalid", limit=1024)
+            _text(record[field], field, code="obligation_unaccounted", detail="disposition_invalid", limit=bound("disposition", field))
     if "discarded" in record:
         if record["discarded"] is not True or "reason" not in record:
             raise refuse("obligation_unaccounted", "disposition_invalid", "discarding a result needs a reason",
                          admission=key)
         return {"kind": "discarded", "reason": record["reason"], "seq": seq}
     candidate = _text(record["integrated_into"], "integrated_into", code="obligation_unaccounted",
-                      detail="disposition_invalid", limit=128)
+                      detail="disposition_invalid", limit=bound("disposition", "integrated_into"))
     result = row.get("result") or {}
     if row.get("changed_paths") is None:
         if result.get("base") is not None or "attestation" not in record:

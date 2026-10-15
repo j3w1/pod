@@ -402,6 +402,10 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         if failure is not None:
             result["native_settlement_failure"] = failure
         result.update(_objective_details(state, view, workers, failure))
+        from .worker_tabs import rows as tab_rows
+        result["worker_tabs"] = ((view or {}).get("worker_tabs") if view is not None else None)
+        if result["worker_tabs"] is None:
+            result["worker_tabs"] = tab_rows(state, {}, failure=(failure or {}).get("code") or "worker_terminal_unverified")
     if result["installed_version_drift"]:
         result["blocker"] = "installed_version_changed"
         result["next_safe_action"] = RELOAD_ACTION
@@ -452,7 +456,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         # New fields only: every earlier field above keeps its exact value (R114).
         error = result["obligations"].get("error") if isinstance(result.get("obligations"), dict) else None
         result.update(assess(project, objective, state, record_root, view=view, map_error=error,
-                             failure=result.get("native_settlement_failure"), owner_reader=handoff is None))
+                             failure=result.get("native_settlement_failure"), owner_reader=handoff is None,
+                             worker_tabs=result.get("worker_tabs")))
     if state is not None and record_root is not None:
         from .history import capacity
         try:
@@ -583,6 +588,9 @@ def render(result: dict) -> None:
         for terminal in result.get("retained_terminals", []):
             print(f"Retained terminal: {terminal['terminal']} (dispatch {terminal['dispatch']})"
                   + (f"; reason: {terminal.get('reason') or 'unknown'}" if "reason" in terminal else ""))
+        for terminal in result.get("worker_tabs", []):
+            print(f"Worker tab: {clean(terminal['terminal'] or terminal['dispatch'])} "
+                  f"({clean(terminal['state'])}, dispatch {clean(terminal['dispatch'])}); {clean(terminal['wording'])}")
         for line in result.get("progress", []):
             print(f"Progress: {line}")
         if result.get("gates"):

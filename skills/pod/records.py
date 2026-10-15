@@ -11,6 +11,7 @@ import os
 import stat
 from typing import Any
 
+from .contracts import TABLE, bound, fields, required, input_record, annotate
 from .errors import PodError
 from .util import bounded_text, digest, exact
 
@@ -19,21 +20,19 @@ import re
 # Integration observations retain the existing SHA-1-only contract.
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 
-PACKET_SCHEMA = "pod-packet/v3"
-PACKET_FIELDS = {"schema", "objective", "criteria", "responsibility", "scope", "actions",
-                 "candidate", "context", "dependencies", "route", "policy_revision",
-                 "plan_revision", "report_contract", "sources", "objective_source", "worktree",
-                 "placement", "serves", "role", "boundary", "map_revision", "resolves",
-                 "stop_condition", "delta_from"}
-PACKET_REQUIRED = PACKET_FIELDS - {"objective_source", "worktree", "placement", "resolves",
-                                   "stop_condition", "delta_from"}
-REPORT_FIELDS = {"schema", "assignment", "attempt", "candidate", "outcome", "scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"}
-EVIDENCE_FIELDS = {"schema", "criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "timestamp", "status", "reference", "reviewer_attempt", "definition"}
+PACKET_SCHEMA = TABLE["packet"]["fields"]["schema"]["allowed"][0]
+PACKET_FIELDS = fields("packet")
+PACKET_REQUIRED = required("packet")
+REPORT_FIELDS = fields("report")
+EVIDENCE_FIELDS = fields("evidence")
 
 
-def _list(value: Any, name: str, limit: int = 64) -> list:
+def _list(value: Any, name: str, limit: int | None = None) -> list:
+    if limit is None:
+        from .contracts import current
+        limit = bound(current() or "packet", name, "max_items")
     if not isinstance(value, list) or len(value) > limit:
-        raise PodError("invalid_" + name, f"{name} must be a bounded list")
+        raise PodError("invalid_" + name, f"{name} must be a list with at most {limit} items")
     return value
 
 
@@ -68,20 +67,66 @@ def _excluded_source_path(value: str) -> bool:
 
 
 def _safe_relative(value: str) -> bool:
-    return (isinstance(value, str) and bool(value) and len(value) <= 512
+    return (isinstance(value, str) and bool(value) and len(value) <= bound("packet", "scope", "items")["max_length"]
             and not Path(value).is_absolute() and ".." not in Path(value).parts
             and not _excluded_source_path(value))
 
 
 def _strings(value: Any, name: str) -> None:
+    from .contracts import current
     for item in _list(value, name):
-        bounded_text(item, name=name, limit=512)
+        bounded_text(item, name=name, limit=bound(current() or "packet", name, "items")["max_length"])
 
 
 def _sha256(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
 
 
+@input_record("context_reference")
+def _context_reference(item: Any) -> dict:
+    ref = exact(item, fields("context_reference"), required("context_reference"), name="context_reference")
+    if ref["kind"] in ("source", "instruction"):
+        if set(ref) != set(TABLE["context_reference"]["variants"][ref["kind"]]) or not _safe_relative(ref["path"]):
+            raise PodError("invalid_context", "Context source must be a bound safe path")
+        if not _sha256(ref["sha256"]):
+            raise PodError("invalid_context", "Context source digest is invalid")
+    elif ref["kind"] == "summary":
+        if set(ref) != set(TABLE["context_reference"]["variants"][ref["kind"]]):
+            raise PodError("invalid_context", "Summary context must be a bound reference")
+        bounded_text(ref["id"], name="summary id", limit=bound("context_reference", "id"))
+        if not _sha256(ref["binding_digest"]):
+            raise PodError("invalid_context", "Summary binding digest is invalid")
+    else:
+        raise PodError("invalid_context", "Unsupported context reference")
+    return ref
+
+
+@input_record("source")
+def _source(item: Any) -> dict:
+    ref = exact(item, fields("source"), required("source"), name="source")
+    if not _safe_relative(ref["path"]) or ref["state"] not in TABLE["source"]["fields"]["state"]["allowed"]:
+        raise PodError("invalid_source", "Packet source is not a safe bound path")
+    if ref["state"] == "present" and not _sha256(ref.get("sha256")):
+        raise PodError("invalid_source", "Present source needs a content digest")
+    return ref
+
+
+@input_record("packet_route")
+def _packet_route(route_value: Any) -> dict:
+    required_fields = set(TABLE["packet_route"]["required_by_agent"][
+        "direct" if isinstance(route_value, dict) and route_value.get("agent") == "direct" else "other"])
+    try:
+        route = exact(route_value, fields("packet_route"), required_fields, name="packet_route")
+        for key, value in route.items():
+            if value is not None:
+                bounded_text(value, name="route " + key, limit=bound("packet_route", key))
+    except PodError as exc:
+        annotate(exc, "packet_route", optional=fields("packet_route") - required_fields)
+        raise
+    return route
+
+
+@input_record("packet")
 def packet(value: Any) -> dict:
     p = exact(value, PACKET_FIELDS, PACKET_REQUIRED, name="packet")
     if p["schema"] != PACKET_SCHEMA:
@@ -89,89 +134,71 @@ def packet(value: Any) -> dict:
     from .obligations import packet_binding
     packet_binding(p)
     for key in ("objective", "responsibility", "candidate", "policy_revision", "plan_revision", "report_contract"):
-        bounded_text(p[key], name=key)
+        bounded_text(p[key], name=key, limit=bound("packet", key))
+    from .worker_tabs import title
+    for key in ("role_label", "purpose"):
+        if key in p:
+            bounded_text(p[key], name=key, limit=bound("packet", key))
     for key in ("criteria", "actions", "dependencies"):
         _strings(p[key], key)
     for item in _list(p["scope"], "scope"):
         if not _safe_relative(item):
             raise PodError("invalid_scope", "Packet scope must be a safe relative path")
     for item in _list(p["context"], "context"):
-        ref = exact(item, {"kind", "path", "sha256", "id", "binding_digest"}, {"kind"}, name="context_reference")
-        if ref["kind"] in ("source", "instruction"):
-            if set(ref) != {"kind", "path", "sha256"} or not _safe_relative(ref["path"]):
-                raise PodError("invalid_context", "Context source must be a bound safe path")
-            if not _sha256(ref["sha256"]):
-                raise PodError("invalid_context", "Context source digest is invalid")
-        elif ref["kind"] == "summary":
-            if set(ref) != {"kind", "id", "binding_digest"}:
-                raise PodError("invalid_context", "Summary context must be a bound reference")
-            bounded_text(ref["id"], name="summary id", limit=128)
-            if not _sha256(ref["binding_digest"]):
-                raise PodError("invalid_context", "Summary binding digest is invalid")
-        else:
-            raise PodError("invalid_context", "Unsupported context reference")
+        _context_reference(item)
     for item in _list(p["sources"], "sources"):
-        ref = exact(item, {"path", "state", "sha256"}, {"path", "state"}, name="source")
-        if not _safe_relative(ref["path"]) or ref["state"] not in ("present", "absent", "unavailable"):
-            raise PodError("invalid_source", "Packet source is not a safe bound path")
-        if ref["state"] == "present" and not _sha256(ref.get("sha256")):
-            raise PodError("invalid_source", "Present source needs a content digest")
+        _source(item)
     if "objective_source" in p:
         from .github import validate_issue_binding
         validate_issue_binding(p["objective_source"])
     for field in ("worktree", "placement"):
         if field in p:
             worktree_binding(p[field])
-    route_value = p["route"]
-    route = exact(route_value, {"agent", "model", "effort", "context", "reason", "preference_revision"},
-                  {"agent"} if isinstance(route_value, dict) and route_value.get("agent") == "direct" else
-                  {"agent", "model", "effort", "context", "reason", "preference_revision"},
-                  name="packet_route")
-    for key, value in route.items():
-        if value is not None:
-            bounded_text(value, name="route " + key, limit=256)
-    if len(str(p)) > 65536:
+    _packet_route(p["route"])
+    if len(str(p)) > TABLE["packet"]["max_repr_length"]:
         raise PodError("invalid_packet", "Packet is too large")
-    return {"packet_id": digest(p), "body": p}
+    return {"packet_id": digest(p), "body": p, "title": title(p)}
 
 
+@input_record("worktree_binding")
 def worktree_binding(value: Any) -> dict:
     """Exact Git repository, key, worktree path and branch of an objective or placement."""
-    worktree = exact(value, {"repository", "repo_key", "path", "branch"},
-                     {"repository", "repo_key", "path", "branch"}, name="worktree_binding")
+    worktree = exact(value, fields("worktree_binding"), required("worktree_binding"), name="worktree_binding")
     if ((worktree["repository"] is not None
          and (not isinstance(worktree["repository"], str)
               or worktree["repository"].count("/") != 1))
             or not _sha256(worktree["repo_key"])
             or not isinstance(worktree["path"], str) or not Path(worktree["path"]).is_absolute()
-            or len(worktree["path"]) > 4096
+            or len(worktree["path"]) > bound("worktree_binding", "path")
             or (worktree["branch"] is not None
                 and (not isinstance(worktree["branch"], str) or not worktree["branch"]
-                     or len(worktree["branch"]) > 256))):
+                     or len(worktree["branch"]) > bound("worktree_binding", "branch")))):
         raise PodError("invalid_worktree_binding", "Packet worktree identity is malformed")
     return worktree
 
 
+@input_record("report")
 def report_record(value: Any) -> dict:
     """Complete report observation shape, shared by consumption and stored reads."""
     r = exact(value, REPORT_FIELDS, REPORT_FIELDS, name="report")
-    if r["schema"] != "pod-report/v1":
+    if r["schema"] != TABLE["report"]["fields"]["schema"]["allowed"][0]:
         raise PodError("report_binding_mismatch", "Report does not bind the frozen packet")
     for key in ("assignment", "attempt", "candidate"):
-        bounded_text(r[key], name=key, limit=256)
-    if r["outcome"] not in ("succeeded", "failed", "partial", "blocked", "uncertain"):
+        bounded_text(r[key], name=key, limit=bound("report", key))
+    if r["outcome"] not in TABLE["report"]["fields"]["outcome"]["allowed"]:
         raise PodError("invalid_report", "Report outcome is invalid")
     for key in ("scope", "files", "checks", "failures", "evidence", "uncertainty", "questions"):
         _strings(r[key], key)
     return r
 
 
+@input_record("report")
 def report(value: Any, frozen: dict, native_binding: dict) -> dict:
     if not isinstance(frozen, dict) or not isinstance(frozen.get("body"), dict) or digest(frozen["body"]) != frozen.get("packet_id"):
         raise PodError("report_binding_mismatch", "Frozen packet content identity changed")
     packet(frozen["body"])
     r = exact(value, REPORT_FIELDS, REPORT_FIELDS, name="report")
-    if r["schema"] != "pod-report/v1" or r["candidate"] != frozen["body"]["candidate"] or r["assignment"] != frozen["packet_id"]:
+    if r["schema"] != TABLE["report"]["fields"]["schema"]["allowed"][0] or r["candidate"] != frozen["body"]["candidate"] or r["assignment"] != frozen["packet_id"]:
         raise PodError("report_binding_mismatch", "Report does not bind the frozen packet")
     r = report_record(r)
     binding = exact(native_binding, {"runtime", "runId", "taskId", "dispatchId", "workerId"},
@@ -191,6 +218,7 @@ def report(value: Any, frozen: dict, native_binding: dict) -> dict:
     return {"status": "validated_observation", "observation": r, "native_binding": binding}
 
 
+@input_record("evidence")
 def evidence_record(value: Any) -> dict:
     """Canonical detailed receipt shape, shared by acceptance and obligation maps.
 
@@ -199,7 +227,7 @@ def evidence_record(value: Any) -> dict:
     within its obligation, so a new observation needs a new reference.
     """
     e = exact(value, EVIDENCE_FIELDS, EVIDENCE_FIELDS - {"reviewer_attempt", "definition"}, name="evidence")
-    if e["schema"] != "pod-evidence/v1" or e["status"] not in ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+    if e["schema"] != TABLE["evidence"]["fields"]["schema"]["allowed"][0] or e["status"] not in TABLE["evidence"]["fields"]["status"]["allowed"]:
         raise PodError("invalid_evidence", "Invalid evidence schema or status")
     if "definition" in e and not _sha256(e["definition"]):
         raise PodError("invalid_evidence", "Evidence definition is a SHA256 fingerprint")
@@ -212,13 +240,13 @@ def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str
              sources: list | None = None, dependencies: list | None = None,
              environment: str | None = None) -> dict:
     e = evidence_record(value)
-    if e["schema"] != "pod-evidence/v1" or e["criterion"] != criterion or e["candidate"] != candidate or e["policy_revision"] != policy_revision:
+    if e["schema"] != TABLE["evidence"]["fields"]["schema"]["allowed"][0] or e["criterion"] != criterion or e["candidate"] != candidate or e["policy_revision"] != policy_revision:
         raise PodError("stale_evidence", "Evidence does not bind current criterion, candidate and policy")
     if (sources is not None and e["sources"] != sources or
             dependencies is not None and e["dependencies"] != dependencies or
             environment is not None and e["environment"] != environment):
         raise PodError("stale_evidence", "Evidence source, dependency or environment binding changed")
-    if e["status"] not in ("PASS", "FAILED", "NOT_RUN", "UNAVAILABLE"):
+    if e["status"] not in TABLE["evidence"]["fields"]["status"]["allowed"]:
         raise PodError("invalid_evidence", "Invalid evidence status")
     return e
 

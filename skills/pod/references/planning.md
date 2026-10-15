@@ -1,6 +1,6 @@
 # Planning
 
-Map criteria, delivery, dependencies and required audits with provenance and checks. Bind trusted audit rules at intake as cited `project_policy` assurances, never optional model constraints, with scope, question, candidate, existing proof and insufficiency. Trivial direct work needs no map. Keep one coordinator-held active obligation; unfinished work needs action, an external block or controlling wait, reconsidered when resolved.
+Map criteria, delivery, dependencies and required audits with provenance and checks. Bind trusted audit rules at intake as cited `project_policy` assurances, never optional model constraints, with scope, question, candidate, existing proof and insufficiency. Record each delivery unit's audit with the assurance's `unit` field. Trivial direct work needs no map. Keep one coordinator-held active obligation; unfinished work needs action, an external block or controlling wait, reconsidered when resolved.
 
 Before isolated implementation, reuse the objective worktree and its branch or explicitly request `--branch orca/<task-slug>`; bind repository/common-dir, branch and path; display labels prove nothing. Preserve unrelated work. Concurrent writers use per-assignment `placement` worktrees and merge ancestry; settle shared contracts before overlapping edits.
 

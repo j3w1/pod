@@ -335,8 +335,8 @@ class DiagnosticsBoundaryTests(ProductionCase):
         self.intake(*subs)
         rows=self.stored();rows[0].pop("executor");rows[0].update(state="satisfied",evidence=[self.proof("O1")])
         with self.assertRaises(PodError) as caught:self.write(rows)
-        self.assertEqual(caught.exception.detail["dependents"],[f"S{i}" for i in range(8)])
-        self.assertEqual(caught.exception.detail["remaining"],2)
+        self.assertEqual(caught.exception.detail["dependents"],[f"S{i}" for i in range(10)])
+        self.assertEqual(caught.exception.detail["remaining"],0)
         self.assertEqual(caught.exception.detail["referent"]["obligation"],"S0")
         self.assertEqual(caught.exception.detail["referent"]["referent"],"O1")
         for row in rows[1:]:

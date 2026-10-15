@@ -25,6 +25,7 @@ from typing import Any, Iterator
 import yaml
 
 from .catalog import by_id, route_keys, supported_route
+from .contracts import ACTION_KINDS, EFFECT_PREFIXES, bound
 from .errors import PodError
 from .util import digest, exact, explicit_home, native_home
 
@@ -44,10 +45,8 @@ REPLACED = {"claude-sonnet-5": "claude-sonnet-5-5", "gpt-6-sol": "gpt-6.1-sol"}
 SETUP_SCHEMA = "pod-route-setup/v1"
 BACKUP_SUFFIX = ".pod-v1"
 SETUP_ACTION = "open pod in a terminal and confirm the route setup"
-GOVERNED_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "remote_diagnostic",
-                  "merge", "release", "deploy", "cancel_validation")
+GOVERNED_KINDS = ACTION_KINDS
 TRIGGER_KINDS = ("push", "pr_update")
-EFFECT_PREFIXES = ("workflow:", "deploy:", "release:")
 WASTE_GOVERNOR_FIELDS = {"mode", "cancel_superseded_validation", "preflight", "triggers",
                          "transient_retries", "host_control", "exceptions"}
 DEFAULT_GOVERNOR = {"mode": "enforce", "cancel_superseded_validation": True,
@@ -180,13 +179,13 @@ def _strings(value: Any, name: str) -> list[str]:
 
 
 def validate_effects(value: Any, *, name: str = "effects") -> list[str]:
-    if (not isinstance(value, list) or len(value) > 16
+    if (not isinstance(value, list) or len(value) > bound("action", "effects", "max_items")
             or any(not isinstance(item, str) for item in value)
             or len(set(value)) != len(value)):
         raise PodError("invalid_" + name, f"{name} must be a bounded unique list")
     for item in value:
         if (not isinstance(item, str) or not item.startswith(EFFECT_PREFIXES)
-                or len(item) > 256 or not item.split(":", 1)[1]):
+                or len(item) > bound("action", "effects", "items")["max_length"] or not item.split(":", 1)[1]):
             raise PodError("invalid_" + name, f"{name} entries name a downstream effect")
     return value
 
