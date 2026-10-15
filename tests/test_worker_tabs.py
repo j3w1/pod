@@ -269,9 +269,12 @@ class TableTests(TabCase):
         self.table((("release_pending", "release_pending", True, True),
                     ("release_unknown", "release_pending", True, True), ("unreadable", "unreadable", True, True)))
 
-    def test_excluded_and_absent_rows(self):
+    def test_not_materialized_disconnected_and_reused(self):
         self.table((("not_materialized", "not_materialized", False, False), ("disconnected", "disconnected", False, False),
-                    ("reused_later", "reused_later", False, False), ("coordinator", "excluded", False, False),
+                    ("reused_later", "reused_later", False, False)))
+
+    def test_coordinator_setup_and_other_objective_excluded(self):
+        self.table((("coordinator", "excluded", False, False),
                     ("setup", "excluded", False, False), ("other_objective", "excluded", False, False)))
 
     def test_connected_tabs_ignore_stale_liveness_and_preserve_retained_terminals(self):
@@ -348,13 +351,21 @@ class ClosureTests(TabCase):
             self.assertEqual(caught.exception.code, "worker_tabs_open")
             self.assertEqual(before, self.saved())
 
-    def test_checkpoint_accepts_kept_absent_and_excluded(self):
-        self.closing(tuple((case, False) for case in ("user_owned", "external", "not_materialized", "disconnected",
-                     "reused_later", "coordinator", "setup", "other_objective")), report_route=False)
+    def test_checkpoint_accepts_kept_and_absent(self):
+        self.closing(tuple((case, False) for case in ("user_owned", "external", "not_materialized", "disconnected")),
+                     report_route=False)
 
-    def test_report_accepts_own_kept_absent_and_excluded(self):
-        self.closing(tuple((case, False) for case in ("user_owned", "external", "not_materialized", "disconnected",
-                     "reused_later", "coordinator", "setup", "other_objective")), report_route=True)
+    def test_checkpoint_ignores_reused_and_unrelated_terminals(self):
+        self.closing(tuple((case, False) for case in ("reused_later", "coordinator", "setup", "other_objective")),
+                     report_route=False)
+
+    def test_report_accepts_own_kept_and_absent(self):
+        self.closing(tuple((case, False) for case in ("user_owned", "external", "not_materialized", "disconnected")),
+                     report_route=True)
+
+    def test_report_ignores_reused_and_unrelated_terminals(self):
+        self.closing(tuple((case, False) for case in ("reused_later", "coordinator", "setup", "other_objective")),
+                     report_route=True)
 
     def test_route_refresh_and_mismatch_cannot_write_before_tab_refusal(self):
         from pod.ledger import update_admission

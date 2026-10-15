@@ -4609,10 +4609,13 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_worker_tabs.TableTests.test_excluded_and_absent_rows",
+        "tests.test_worker_tabs.TableTests.test_not_materialized_disconnected_and_reused",
+        "tests.test_worker_tabs.TableTests.test_coordinator_setup_and_other_objective_excluded",
         "tests.test_worker_tabs.ClosureTests.test_active_report_never_relays_close",
-        "tests.test_worker_tabs.ClosureTests.test_checkpoint_accepts_kept_absent_and_excluded",
-        "tests.test_worker_tabs.ClosureTests.test_report_accepts_own_kept_absent_and_excluded"
+        "tests.test_worker_tabs.ClosureTests.test_checkpoint_accepts_kept_and_absent",
+        "tests.test_worker_tabs.ClosureTests.test_checkpoint_ignores_reused_and_unrelated_terminals",
+        "tests.test_worker_tabs.ClosureTests.test_report_accepts_own_kept_and_absent",
+        "tests.test_worker_tabs.ClosureTests.test_report_ignores_reused_and_unrelated_terminals"
       ],
       "status": "NOT_RUN"
     },
