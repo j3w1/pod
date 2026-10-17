@@ -187,12 +187,13 @@ automatic adoptions cannot grow the report or status by repeating their rows.
 
 ### R120 — Record every owner decision's channel
 
-Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343), [A356](#a356)
+Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343), [A356](#a356), [A419](#a419), [A420](#a420), [A421](#a421), [A422](#a422), [A423](#a423), [A424](#a424), [A425](#a425)
 
 One shared validator checks owner-authority inputs: `provenance: user_direct`,
 `instruction`, optional `channel` (`session` by default, or `relayed`), and `relay`
 exactly when relayed. A relay contains bounded nonempty `reference` and
-`owner_source` text identifying the relay and the verified owner source. Existing
+`owner_source` text identifying the relay and the verified owner source; publish/merge
+inputs may omit `owner_source`, since their host verifier supplies it. Existing
 kind-specific inputs that lacked provenance/instruction retain their fields and
 accept these common fields additively. Every new accepted decision stores its
 channel and, when relayed, the complete relay. Existing records without a channel
@@ -200,23 +201,50 @@ read as `channel: session` with `channel_recorded: false` and text "session (ear
 
 The exhaustive relayed list is: owner answers to an already recorded question,
 governance snapshot adoption/retarget, withdrawal, R110 continuation instructions
-recorded as `claim`, and retirement (R112). A general `revision_authority` answer supplies
+recorded as `claim`, retirement (R112), and the verified publish/merge authorizations below. A general `revision_authority` answer supplies
 `question`, resolving to a string or the `id`/`reference` of a question previously
 recorded in the checkpoint; Pod preserves that reference. A question added in the
 same write is not a previously recorded question. A relayed general revision
 without that binding refuses `relayed_decision_refused` with a next action.
 
-Every `pod-authorization/v1` scope (`publish`, `merge`, `release`, `deploy`) requires
-`session`; a relayed authorization refuses `relayed_authorization_refused` and names
-typed consent in the coordinator's session as its next action. Every other kind
+For a relayed `pod-authorization/v1`, exactly one scope, `publish` or `merge`, may
+be verified by the optional host command in the personal config. It is absent by
+default and cannot come from project policy, an issue or worker input. The command
+must confirm the relay reference, action scope, objective, prepared commit and tree,
+canonical repository, remote and base branch, and the governed merge request's
+`action.pr`, which must equal `authorization.pr`. The authorization names its target as `<remote>/<base>`. Pod stores the
+verifier's owner source in `relay.owner_source`, replacing any caller assertion, and
+keeps `channel: relayed` and the complete confirmed verdict as `relay_verification`.
+The [interface verifier contract](interface.md#relayed-authorization-verifier) defines
+the bounded invocation, JSON fields, refusals and next actions. A free-text source,
+recorded-question answer or caller-supplied verdict never grants authorization.
+
+Each `single_use` key binds one confirmed authorization. An identical authorization
+may be recorded again idempotently and supports its existing action scope (publish
+still covers R92's push/PR/CI effects). Changing action scope, objective, commit,
+tree, target, PR or decision identity refuses reuse. Durable host-state use receipts
+survive Governor journal compaction and objective closure. Governor invokes the
+current verifier on each forward authorization boundary, including a repeat, and
+again immediately before a managed effect against the current prepared binding;
+denial, binding drift and candidate movement cannot reuse consent. Merge stays
+decide-only: the caller must merge the verified PR and exact commit, and Pod cannot
+intercept an external caller's later command. Read-only status and
+closure reporting use stored evidence without invoking the verifier.
+
+`release`, `deploy` and combined relayed scopes still refuse
+`relayed_authorization_refused`, naming typed consent in the coordinator's session.
+Every other kind
 requires session too, including owner handoff R105, runtime continuity R98,
 direct-user route/delegation constraints, general revisions/reopen without a recorded-question answer,
 user-cleared route failures and Governor efficiency exceptions. Such a relay refuses
 `relayed_decision_refused`. Missing/partial relay or relay alongside session refuses.
 A recorded question answer permits only the answer it conveys; a mailbox message
 alone is never a decision or authority. The coordinator classifies the channel
-honestly; Pod cannot prove where a keystroke came from or independently verify a
-relay's claimed owner source.
+honestly and must never relabel an agent-retyped relay as session. Pod cannot prove
+where a keystroke came from: a false session claim with all relay metadata stripped
+is mechanically indistinguishable from session consent. For the existing other
+relayed kinds, Pod still cannot independently verify the claimed owner source;
+publish/merge trust only the configured host verifier's confirmation.
 
 Channels remain with revision history, governance decisions, obligation sources,
 withdrawals, reopens, constraints, continuity decisions, claims, retirement entries,
@@ -230,7 +258,10 @@ read faithfully carry the `decision_channels` discriminator whenever a stored ch
 or relay key is present, or a stored closure report carries `decision_channels`,
 in contexts and Governor journals alike, so those readers
 refuse rather than misread carried consent, relay provenance or the closure format; earlier
-records, claims, closures and retirements retain their original meaning.
+records, claims, closures and retirements retain their original meaning. Verified
+authorization records and contexts containing them use `decision_channels: 2`;
+genuine 0.17.0 readers refuse them. Other channel-bearing records retain `1` and
+existing records read unchanged, without conversion.
 
 Owner revision decisions have no count cap. R121 moves earlier rows unchanged and
 the record's byte capacity contract governs fit; `governance_history` retains its
@@ -238,10 +269,18 @@ separate 64-candidate and 64-owner-decision bounds; derived adoptions spend no o
 
 - <a id="a339"></a>**A339** — Every owner-decision surface uses the shared validator, stores default `session` or the supplied honest channel and includes it in status/report projections; derived adoptions use R119's bounded projection, with full rows only in governance history and full owner decisions unchanged, including owners interleaved among adoptions.
 - <a id="a340"></a>**A340** — A complete verified-source relay is accepted for snapshot adoption, withdrawal, a recorded question answer, claim and retirement, preserving the reference/source and showing `relayed` in status and closure reports.
-- <a id="a341"></a>**A341** — All authorization scopes refuse relayed consent with `relayed_authorization_refused`; handoff, runtime continuity, constraints, Governor exceptions and other unlisted kinds refuse `relayed_decision_refused`, naming session consent as the next action.
-- <a id="a342"></a>**A342** — Missing or partial relay, empty/oversized reference or owner source, a relay with session, unsupported channel or an unresolved question reference refuses without a write; newly supplied questions cannot authorize the same write. Through public `internal governor` merge/publish and `governor-execute` publish, a declared relay missing its complete relay or session consent carrying a relay refuses `invalid_decision_relay`, and an unsupported authorization channel refuses `invalid_decision_channel`; each names consent typed in the coordinator's own session and writes no journal row.
+- <a id="a341"></a>**A341** — Relayed release, deploy and combined authorization scopes refuse `relayed_authorization_refused`; publish/merge without a configured verifier refuse `relay_verifier_unconfigured`. Handoff, runtime continuity, constraints, Governor exceptions and other unlisted kinds keep `relayed_decision_refused`, naming session consent as the next action.
+- <a id="a342"></a>**A342** — Missing or partial relay, empty/oversized reference or supplied owner source, a relay with session, unsupported channel or an unresolved question reference refuses without a write; newly supplied questions cannot authorize the same write. Through public `internal governor` merge/publish and `governor-execute` publish, missing relay/reference or session consent carrying a relay refuses `invalid_decision_relay`, and an unsupported authorization channel refuses `invalid_decision_channel`; each names session consent and writes no journal row. A publish/merge relay with only its reference proceeds to host verification; other relay kinds still require owner_source.
 - <a id="a343"></a>**A343** — Genuine earlier-writer records, claims, closures and retirements read unchanged with session channels marked as earlier records; earlier readers refuse contexts and journals with stored channel or relay keys, and contexts whose stored closure report carries `decision_channels`, preserving bytes. Genuine 0.13.3 refuses a candidate closure without any owner decision at the context marker, and a candidate-written carried journal rather than losing carried-consent recognition; the current reader still validates that closure and detects carried consent, and R118 preflight counts the marker before any claim write. A pre-channel retirement replays the same decision with omitted or explicit default `session` and no relay; other decisions still refuse `objective_retired`.
 - <a id="a356"></a>**A356** — Eighty successive owner-authorized writes are accepted and read back with every revision decision, without a count refusal; the record byte capacity contract and R121 relocation still govern fit.
+
+- <a id="a419"></a>**A419** — Public Governor execution accepts verified publish consent and its exact target/candidate; merge accepts verified consent naming its PR. The stored channel remains relayed, caller owner_source is replaced by the verifier's source, and status/closure show it without running the command.
+- <a id="a420"></a>**A420** — The verifier is absent by default and only personal config accepts its bounded absolute command argv. Absent configuration, nonzero/unavailable command, timeout (including closed stdout), malformed/oversized/duplicate-key JSON and explicit denial each refuse with distinct codes and next actions, without a journal write, remote effect or echoed verifier output.
+- <a id="a421"></a>**A421** — Verifier mismatches on reference, action, objective, commit, tree, repository, remote, base or merge PR refuse before effects. A relayed merge requires action.pr matching authorization.pr, rather than trusting an authorization-only echo. Current remote identity (including a publication's push URL) and the prepared target are rechecked at the Governor boundary.
+- <a id="a422"></a>**A422** — Repeating a verified authorization rechecks the host and attaches to the same action row. A consumed single_use key cannot authorize another action scope, objective, candidate, tree, repository/base or PR, even after journal retention removes the original row; receipts do not evict. Concurrent claims serialize and only the same confirmed authorization is idempotent.
+- <a id="a423"></a>**A423** — Candidate movement after consent holds managed execution; movement or revocation between admission and the managed mutation recheck fails the admitted row without a remote effect. A verifier that later denies the decision holds a repeated merge. Caller-supplied relay_verification cannot bypass the boundary; decide-only merge retains its caller-execution limit.
+- <a id="a424"></a>**A424** — Release/deploy remain session-only and session input with relay metadata still refuses. Coordinators never relabel a relay as session; proof explicitly cannot detect hidden origins after all relay metadata has been stripped.
+- <a id="a425"></a>**A425** — Genuine 0.17.0 session records read unchanged. Genuine 0.17.0 refuses a newly verified authorization and its journal/context, preserving bytes; existing other relays retain their behavior and discriminator.
 
 - <a id="a371"></a>**A371** — With A's required audit satisfied and B's audit open but unadmitted, A's merge allows without withdrawing B; B defers assurance_unbound until its own audit is satisfied.
 - <a id="a372"></a>**A372** — An assurance without unit binding gates both units, including unchanged records written before the rule.

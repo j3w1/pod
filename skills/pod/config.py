@@ -35,7 +35,8 @@ V1_SCHEMA = "pod/v1"
 ROUTE_STATES = ("enabled", "disabled")
 REFRESH_SETTINGS = ("automatic", "manual")
 DEFAULT_WORKER_CAPACITY = 2
-PERSONAL_FIELDS = {"schema", "routes", "preferred", "pinned", "workers", "refresh", "waste_governor"}
+PERSONAL_FIELDS = {"schema", "routes", "preferred", "pinned", "workers", "refresh", "waste_governor",
+                   "authorization_verifier"}
 # The 0.6.x personal shape, read only to explain and convert it.
 V1_IDS = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5",
           "gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
@@ -321,6 +322,14 @@ def validate(value: Any, *, project: bool = False) -> dict:
         raise PodError("invalid_config", "refresh must be automatic or manual")
     if "waste_governor" in doc:
         _validate_waste_governor(doc["waste_governor"])
+    if "authorization_verifier" in doc:
+        command = doc["authorization_verifier"]
+        if (not isinstance(command, list) or not 1 <= len(command) <= 16
+                or any(not isinstance(arg, str) or not arg or len(arg) > 4096 or "\x00" in arg
+                       for arg in command)
+                or not Path(command[0]).is_absolute()):
+            raise PodError("invalid_config", "authorization_verifier needs 1-16 command arguments, "
+                           "each at most 4096 characters, with an absolute executable path")
     return doc
 
 
@@ -427,6 +436,7 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
             "setup": {"from_schema": V1_SCHEMA, "action": SETUP_ACTION} if older else None,
             "pin_diagnostic": None if document else diagnostic.get("pinned"),
             "preferred_diagnostic": None if document else diagnostic.get("preferred"),
+            "authorization_verifier": document.get("authorization_verifier") if document else None,
             "policy_revision": digest(governor), "waste_governor": governor, "provenance": provenance}
 
 

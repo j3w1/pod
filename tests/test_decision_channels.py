@@ -137,7 +137,7 @@ class SharedDecisionTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(PodError):
                 owner_decision(value, kind="governance")
 
-    def test_all_authorization_scopes_require_session(self):
+    def test_unverified_authorization_never_grants_authority(self):
         from pod.governor import _check_authority
         for scope in ("publish", "merge", "release", "deploy"):
             with self.subTest(scope=scope):
@@ -202,10 +202,10 @@ class PublicAuthorizationChannelTests(unittest.TestCase):
         before = path.read_bytes()
         calls = deepcopy(case.remote.calls)
         shapes = (
-            ({"channel": "relayed", "relay": RELAY}, "relayed_authorization_refused"),
+            ({"channel": "relayed", "relay": RELAY}, "relay_verifier_unconfigured"),
             ({"channel": "relayed"}, "invalid_decision_relay"),
             ({"channel": "relayed", "relay": {}}, "invalid_decision_relay"),
-            ({"channel": "relayed", "relay": {"reference": "message"}}, "invalid_decision_relay"),
+            ({"channel": "relayed", "relay": {"reference": "message"}}, "relay_verifier_unconfigured"),
             ({"channel": "relayed", "relay": {"reference": "message", "owner_source": ""}}, "invalid_decision_relay"),
             ({"channel": "relayed", "relay": {"reference": "r" * 513, "owner_source": "verified"}}, "invalid_decision_relay"),
             ({"channel": "session", "relay": RELAY}, "invalid_decision_relay"),
@@ -217,10 +217,13 @@ class PublicAuthorizationChannelTests(unittest.TestCase):
                     target="origin/candidate", unit="delivery", effects=["workflow:ci.yml"],
                     authorization=case.consent("publish")))
                 request["authorization"].update(fields)
+                request["authorization"]["target"] = "origin/target"
+                if merge:
+                    request["authorization"]["pr"] = 23
                 with self.assertRaises(PodError) as caught:
                     case.op(operation, action=request)
                 self.assertEqual(caught.exception.code, code)
-                self.assertIn("typed in the coordinator's own session", caught.exception.detail["next_action"])
+                self.assertIn("session", caught.exception.detail["next_action"])
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(case.remote.calls, calls)
 

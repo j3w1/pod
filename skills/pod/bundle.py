@@ -20,7 +20,7 @@ BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agen
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py", "cli.py", "config.py", "context.py", "contracts.py",
                   "errors.py", "github.py", "gitio.py", "handoff.py", "history.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py", "listing.py",
                   "obligations.py", "observations.py", "operations.py", "orca.py", "placement.py", "readiness.py", "records.py",
-                  "retirement.py", "routes.py", "selection.py", "sources.py", "succession.py",
+                  "relay.py", "retirement.py", "routes.py", "selection.py", "sources.py", "succession.py",
                   "pod_ticks.py", "skill_validation.py", "status.py", "term.py", "tui.py", "tui_render.py",
                   "tui_state.py", "traces.py", "util.py", "worker_tabs.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))

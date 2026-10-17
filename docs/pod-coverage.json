@@ -4215,7 +4215,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_decision_channels.SharedDecisionTests.test_all_authorization_scopes_require_session",
+        "tests.test_decision_channels.SharedDecisionTests.test_unverified_authorization_never_grants_authority",
         "tests.test_decision_channels.SharedDecisionTests.test_complete_relays_are_accepted_only_for_the_exhaustive_kind_list",
         "tests.test_decision_channels.HandoffChannelTests.test_owner_handoff_requires_session_and_records_it",
         "tests.test_decision_channels.DecisionChannelTests.test_constraints_and_governor_exceptions_require_session",
@@ -5456,6 +5456,142 @@
         "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D9_keeps_label_after_B2",
         "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D11_keeps_label_after_B2",
         "tests.test_pod_ticks_corrections.StatusLabelCorrections.test_D3_keeps_label_after_body_drift_C2"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A419",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_relayed_authorization.RelayAcceptanceTests.test_publish_executes_with_verifier_source_and_honest_channel",
+        "tests.test_relayed_authorization.RelayAcceptanceTests.test_merge_binds_pr_and_replays_one_record_after_fresh_verification",
+        "tests.test_relayed_authorization.RelayAcceptanceTests.test_status_and_closure_show_relay_without_running_verifier"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A420",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_relayed_authorization.RelayConfigTests.test_verifier_is_absent_by_default_and_project_cannot_supply_it",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_absent_verifier_refuses_all_forward_entries",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_nonzero_and_unavailable_verifier_are_failures_without_output",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_timeout_kills_a_blocked_verifier",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_timeout_also_bounds_a_verifier_that_closed_stdout",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_malformed_json_utf8_duplicate_and_oversized_output_refuse",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_missing_fields_and_invalid_verdict_values_refuse",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_explicit_denial_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A421",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_relayed_authorization.RelayRefusalTests.test_action_objective_and_reference_mismatches_refuse",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_commit_and_tree_mismatches_refuse",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_repository_remote_base_and_pr_mismatches_refuse",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_governed_merge_pr_must_match_authorization_before_verification",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_current_remote_identity_is_checked_at_the_boundary",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_publish_uses_the_actual_push_repository",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_changed_prepared_base_refuses_old_authorization"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A422",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_relayed_authorization.RelayAcceptanceTests.test_merge_binds_pr_and_replays_one_record_after_fresh_verification",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_one_key_cannot_authorize_another_action_or_pr",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_new_candidate_cannot_reuse_consumed_key",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_another_objective_cannot_reuse_consumed_key",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_replay_receipts_survive_journal_loss_and_apply_across_objectives",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_concurrent_different_claims_allow_only_one_use",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_receipts_do_not_appear_as_unattributed_objectives"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A423",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_candidate_movement_after_consent_holds_managed_effect",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_candidate_movement_between_admission_and_effect_refuses",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_revocation_between_admission_and_effect_refuses",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_verifier_is_rechecked_and_revocation_holds_replay",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_caller_cannot_supply_verifier_evidence_as_authority",
+        "tests.test_relayed_authorization.RelayBoundaryTests.test_changed_verdict_identity_between_admission_and_effect_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A424",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_relayed_authorization.RelayRefusalTests.test_release_deploy_and_combined_scopes_remain_session_only",
+        "tests.test_relayed_authorization.RelayRefusalTests.test_session_with_relay_metadata_refuses_and_stripped_origins_are_not_provable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A425",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_relayed_authorization.RelayCompatibilityTests.test_genuine_0170_refuses_verified_journal_context_and_authorization",
+        "tests.test_relayed_authorization.RelayCompatibilityTests.test_genuine_0170_session_journal_reads_unchanged",
+        "tests.test_relayed_authorization.RelayAcceptanceTests.test_ordinary_session_consent_and_other_relay_kinds_need_no_verifier"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A426",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_populated_questions_preserve_identity_choices_and_resolution",
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_explicit_empty_is_complete",
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_changed_question_retains_id_and_reports_new_checkpoint_sequence"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A427",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_legacy_string_and_partial_objects_expose_missing_facts",
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_missing_legacy_questions_are_unavailable_not_empty",
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_unsupported_questions_container_is_unavailable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A428",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_unreadable_record_is_explicitly_unavailable",
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_row_count_and_byte_bounds_report_partial_not_complete",
+        "tests.test_recorded_questions.RecordedQuestionStatusTests.test_oversized_fact_and_missing_sequence_are_partial_without_invention",
+        "tests.test_readiness.CompatibilityTests.test_open_work_for_the_owner_and_a_peer"
       ],
       "status": "NOT_RUN"
     }

@@ -156,7 +156,7 @@ def verify_merge_result(project: Path, row: dict, unit: dict | None, governance:
                                 "prepare and authorize the exact current candidate", record=record_id)
     try:
         authorization = validate_authorization(row["action"].get("authorization"),
-                                               candidate=candidate["commit"], tree=candidate["tree"], kind="merge")
+                                               candidate=candidate["commit"], tree=candidate["tree"], kind="merge", stored=True)
     except PodError:
         authorization = None
     if authorization is None:

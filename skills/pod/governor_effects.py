@@ -483,6 +483,7 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
     journal = _read_journal(_record_path(project, objective))
     row = _find_row(journal, admitted["record_id"])
     try:
+        _revalidate_relay(project, objective, owner=owner, row=row)
         outcome, provider, detail = _perform(
             remote, row, unit, journal, pull_request, clock=later,
             intent=lambda provider: _record_intent(project, objective, owner=owner, record_id=admitted["record_id"],
@@ -502,6 +503,31 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
                                 outcome=outcome, provider=provider, detail=detail, now=later())
     result.update({"outcome": settled["outcome"], "receipt": settled["receipt"]})
     return result
+
+
+def _revalidate_relay(project: Path, objective: str, *, owner: str, row: dict) -> None:
+    """Recheck confirmed consent and the current prepared candidate immediately before an effect."""
+    consent = row["action"].get("authorization") or {}
+    if consent.get("channel") != "relayed":
+        return
+    from .config import effective
+    from .governor import _owned_state, _read_journal, _record_path, _verify_relay
+    from .ledger import map_of, require_governance_current
+    from .relay import check_use, refusal
+    with _lock(_path(project, objective)):
+        state = _owned_state(project, objective, owner, _path(project, objective), version=True)
+        require_governance_current(project, map_of(state))
+        current = _read_journal(_record_path(project, objective))["units"].get(row["action"]["unit"])
+        binding = current.get("candidate") if current else None
+        if (binding is None or binding["id"] != row.get("candidate_id")
+                or binding["commit"] != consent["candidate"] or binding["tree"] != consent["tree"]
+                or binding.get("dirty_paths")):
+            raise refusal("relay_verifier_mismatch", fields=["candidate"])
+        confirmed = _verify_relay(project, objective, consent, binding, current,
+                                  effective(project)["preferences"].get("authorization_verifier"), pr=row["action"].get("pr"))
+        if confirmed["relay_verification"] != consent.get("relay_verification"):
+            raise refusal("relay_verifier_mismatch", fields=["relay_verification"])
+        check_use(project, confirmed["relay_verification"], consume=True)
 
 
 def rerun_unattributable(provenance: dict) -> str | None:

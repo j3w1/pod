@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .bundle import RELOAD_ACTION, checkpoint_identity, identity_drift_message, identity_label, identity_matches, running_identity
@@ -18,6 +19,78 @@ PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferre
                    "max_active", "refresh", "errors", "setup")
 # Objective status reads preferences only; observations stay with `pod models`.
 NOT_READ = {"status": "not_read", "sources": {}}
+QUESTION_LIMIT = 64
+QUESTION_BYTES = 32 * 1024
+QUESTION_FACT_BYTES = 4096
+
+
+def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavailable") -> dict:
+    """Only recorded facts, including explicit gaps in the earlier opaque question forms."""
+    result = {"schema": "pod-recorded-questions/v1", "status": "unavailable",
+              "checkpoint": {"seq": None, "revision": None}, "items": [], "total": None,
+              "truncated": False, "missing": [], "reason": reason}
+    if not isinstance(checkpoint, dict):
+        result["missing"] = ["checkpoint"]
+        return result
+    for field in ("seq", "revision"):
+        value = checkpoint.get(field)
+        if type(value) is int and value >= 0:
+            result["checkpoint"][field] = value
+        else:
+            result["missing"].append("checkpoint." + field)
+    questions = checkpoint.get("questions")
+    if not isinstance(questions, list):
+        result.update(reason="questions_missing" if "questions" not in checkpoint else "questions_unsupported")
+        result["missing"].append("questions")
+        return result
+
+    def text(value, limit):
+        if isinstance(value, str) and value.strip() and len(value) <= limit:
+            try:
+                value.encode("utf-8")
+                return value
+            except UnicodeError:
+                pass
+        return None
+
+    def fact(value):
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            return (json.loads(encoded), True) if len(encoded) <= QUESTION_FACT_BYTES else (None, False)
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            return None, False
+
+    result.update(total=len(questions), status="complete", reason=None)
+    for index, raw in enumerate(questions[:QUESTION_LIMIT]):
+        source = raw if isinstance(raw, dict) else {"reference": raw, "text": raw} if isinstance(raw, str) else {}
+        row = {"index": index, "id": text(source.get("id"), 512), "reference": text(source.get("reference"), 512),
+               "text": text(source.get("text", source.get("question")), 4096),
+               "choices": None, "resolution": None, "missing": []}
+        if row["id"] is None and row["reference"] is None:
+            row["missing"].append("identity")
+        if row["text"] is None:
+            row["missing"].append("text")
+        choices, valid = fact(source.get("choices"))
+        if "choices" in source and valid:
+            row["choices"] = choices
+        else:
+            row["missing"].append("choices")
+        resolution = {key: source[key] for key in ("resolution", "resolved", "answer", "status") if key in source}
+        resolution, valid = fact(resolution)
+        if resolution and valid:
+            row["resolution"] = resolution
+        else:
+            row["missing"].append("resolution")
+        projected = {**result, "items": [*result["items"], row]}
+        if len(json.dumps(projected, ensure_ascii=False).encode("utf-8")) > QUESTION_BYTES - 512:
+            break
+        result["items"].append(row)
+    result["truncated"] = len(result["items"]) < len(questions)
+    if result["truncated"]:
+        result["missing"].append("items")
+    if result["missing"] or any(row["missing"] for row in result["items"]):
+        result.update(status="partial", reason="projection_limit" if result["truncated"] else "question_facts_missing")
+    return result
 
 
 def _attention(native: dict | None) -> dict | str:
@@ -201,6 +274,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
               "routes": project_routes(project, preferences=preferences, observations=NOT_READ)["summary"],
               "constraints": [], "route_decisions": [], "route_mismatch": False,
               "active_constraints": [],
+              "recorded_questions": recorded_questions(None),
               "effective_unknown": False,
               "installed_version_drift": False, "blocker": None,
               "next_safe_action": "select a native Run", "usage": "unknown", "cost": "unknown"}
@@ -274,6 +348,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                             else "inspect the objective state")})
         if objective is not None:
             result["readiness"] = unavailable(exc.code, f"the objective record cannot be read ({exc.code})")
+            result["recorded_questions"] = recorded_questions(None, reason=exc.code)
         if exc.code == "record_too_large":
             from .history import CONTEXT_LIMIT, WARN_AT, COMPACT_AT
             result["record_capacity"] = {"status": "unavailable", "physical_bytes": (exc.detail or {}).get("current_bytes"),
@@ -300,6 +375,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                             "the record is not converted")})
         return result
     checkpoint = state.get("checkpoint") if state else None
+    result["recorded_questions"] = recorded_questions(checkpoint)
     recorded = checkpoint_identity(checkpoint) if checkpoint else None
     drift = bool(checkpoint and not identity_matches(recorded, running))
     admissions = list(state["admissions"].values()) if state else []

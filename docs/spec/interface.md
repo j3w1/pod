@@ -16,9 +16,9 @@ Maintain one canonical inline skill router with relevant-on-demand references an
 
 ### R48 — Read-only status and doctor report preferences
 
-Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175), [A230](#a230), [A406](#a406)
+Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175), [A230](#a230), [A406](#a406), [A426](#a426), [A427](#a427), [A428](#a428)
 
-Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status adds current exact release, terminal, ownership, retained reason and Dispatch stage facts, labels placement warnings start-time and renders every blocked result without a traceback. An unknown objective names its id, repository context and state root searched. R133 adds the last observed PoD ticks, authorship, criteria and due/blocked states from the ledger. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
+Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status adds current exact release, terminal, ownership, retained reason and Dispatch stage facts, labels placement warnings start-time and renders every blocked result without a traceback. An unknown objective names its id, repository context and state root searched. R133 adds the last observed PoD ticks, authorship, criteria and due/blocked states from the ledger; R135 adds the recorded-question projection. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
 
 ### R49 — The one-shot installer places both agent
 
@@ -264,7 +264,22 @@ The final report lists every PoD's tick state against its criteria, every tick w
 
 Type: B,I · Scenarios: [A411](#a411), [A412](#a412)
 
-The root VERSION is 0.17.0; its bundle link remains the sole version source. Bundle pod_ticks.py and references/pod-ticks.md. Under R71 the reference is triggered for ticking, a due tick/untick, readback confirmation or closing an issue-bound objective, and supplies the protocol, closing-refusal steps, honest authorship, final-report limitations and residual race. SKILL.md names the final-report requirement; README has a short implemented-behavior mention. No word caps apply. Existing contexts lacking pod_ticks, tick requests lacking the optional intent time, and all earlier closures read without conversion; no existing schema changes, parallel body store, Governor row or Orca write are introduced. Offline tests replace only the remote/native ports, except the explicitly labelled D2/D7 mapping controls. Milestone gates, hosted CI, preceding-mechanism independent audit, owner acceptance, install and controlled disposable native trials remain separate evidence; missing live/provider evidence stays NOT_RUN.
+The root VERSION and its bundle link remain the sole version source. Bundle pod_ticks.py and references/pod-ticks.md. Under R71 the reference is triggered for ticking, a due tick/untick, readback confirmation or closing an issue-bound objective, and supplies the protocol, closing-refusal steps, honest authorship, final-report limitations and residual race. SKILL.md names the final-report requirement; README has a short implemented-behavior mention. No word caps apply. Existing contexts lacking pod_ticks, tick requests lacking the optional intent time, and all earlier closures read without conversion; no existing schema changes, parallel body store, Governor row or Orca write are introduced. Offline tests replace only the remote/native ports, except the explicitly labelled D2/D7 mapping controls. Milestone gates, hosted CI, preceding-mechanism independent audit, owner acceptance, install and controlled disposable native trials remain separate evidence; missing live/provider evidence stays NOT_RUN.
+
+### R135 — Expose only recorded checkpoint question facts
+
+Type: B,H · Scenarios: [A426](#a426), [A427](#a427), [A428](#a428)
+
+Public status for a selected objective adds `recorded_questions` with the versioned
+contract below. Project only its existing checkpoint questions, sequence and
+revision, including recorded identity, text, choices and resolution facts. Preserve
+older string/object forms without converting stored records, inventing an id or
+inferring resolution. Explicit empty lists are complete; missing/unreadable records
+or an unsupported questions container are unavailable, never evidence of no
+questions. Missing row facts and bounded truncation are partial and name their
+gaps. The projection is read-only and adds no question store, native scrape,
+private-service dependency, decision permission or lifecycle authority. Every prior
+status field and human rendering keeps its behavior.
 
 ## Acceptance scenarios
 
@@ -447,3 +462,123 @@ may add a minimal owned PATH block when needed. There is no package, tag or rele
 ### PoD tick status contract
 
 `pod_ticks` is additive to objective status and checkpoint/report acknowledgements. A direct objective returns `{status: not_applicable, lines: []}`. An issue-bound objective gives status observed or closed, facts_current, its last read status/reason, and lines ordered by PoD number. Each line has pod, ticked (bool or null for a nonunique line), checkboxes (last observed states for every occurrence in body order), occurrences (null for stale facts), authorship, criteria (`id`, `state`, `current`), proven, status, direction (tick/untick or null), due, blocked (code/reason plus table row and GitHub status/message when applicable), and facts_current. A due line includes the exact structured request and command. Latest request detail includes its seq, intent digests, held result and readback. waiting_on_admissions names an admission that must settle first, without changing readiness. blocked_at_closure preserves the direction, block and last checkbox/authorship even after due becomes false. Unknown optional fields remain ignorable.
+
+### Relayed authorization verifier
+
+R120 permits verified relayed `publish` or `merge` consent through the existing
+Governor operations. No verifier is installed or configured by default. The host
+may set `authorization_verifier` in its one personal `pod/v2` config to an argv
+list of 1-16 nonempty strings, each at most 4096 characters without NUL; the first
+is an absolute executable path. Project config cannot set it. Pod uses that argv
+directly, without a shell, from `/`, omitting Python path/home overrides. It sends
+one JSON object and a newline on stdin and closes stdin. References and expected
+bindings are never interpolated into a shell command or appended to argv. Keep
+credentials out of command arguments and verdict fields.
+
+The command is a trusted, read-only host decision lookup. It must authenticate the
+owner source and confirm the decision independently; echoing Pod's expectation
+is insufficient. It must return a stable `single_use` key for the decision, unique
+across the host's decisions, and the same verdict on repeated verification. Pod
+owns consumption; the verifier must support these repeated reads, including at a
+later Governor boundary. The contract adds no relay transport or owner service.
+
+Pod bounds the whole invocation to five seconds and stdout to 16 KiB, kills a
+timed-out/overflowing process group and discards stderr. Stdout must be one UTF-8
+JSON object, without duplicate or unsupported keys. Raw output, arguments and
+exception text never appear in refusal diagnostics. Nonzero exit and unavailable
+executables both count as command failure.
+
+The request has exactly these fields. A verdict repeats them and adds the four
+fields in the second table; no wrapper is used.
+
+| Request field | Contract |
+| --- | --- |
+| `schema` | `pod-relay-verification/v1`. |
+| `reference` | Authorization `relay.reference`, nonempty UTF-8 text up to 512 characters. |
+| `action` | Exactly `publish` or `merge`, the authorization's sole scope. |
+| `objective` | Current objective id, nonempty text up to 256 characters. |
+| `candidate` | Object with exactly `commit` and `tree`, full lowercase Git ids of one format (40 or 64 hex characters), from the prepared unit. |
+| `target` | Object with exactly `repository`, `remote`, `base`: canonical GitHub `owner/repo`, prepared remote name and base branch, each nonempty text up to 256 characters. Repository comes from the remote's current single URL; publication uses its push URL. Missing, ambiguous or non-GitHub identity refuses. |
+| `pr` | `null` for publish; the governed merge request's `action.pr` (integer 1-2147483647), which must equal `authorization.pr`. |
+
+| Verdict addition | Contract |
+| --- | --- |
+| `verified` | Boolean. Only `true` with every expected field equal confirms consent; `false` denies it. |
+| `owner_source` | Nonempty UTF-8 text up to 512 characters, supplied by the verifier and stored in `relay.owner_source`. |
+| `decided_at` | Timezone-aware ISO timestamp, normalized to UTC. |
+| `single_use` | Nonempty UTF-8 text up to 512 characters; stable, unique decision-use key. |
+
+A relayed authorization uses existing `pod-authorization/v1` fields, with exactly
+one scope, `channel: relayed`, `relay.reference` and target `<remote>/<base>`;
+merge additionally requires equal `pr` values on the action and authorization. An input `relay.owner_source` is optional and
+never trusted. Pod stores the complete confirmed verdict in `relay_verification`;
+callers cannot submit that stored-only field as authorization. Project governance
+performs the decided merge on that verified PR with `--match-head-commit` naming
+the authorized commit. Release/deploy and combined relayed scopes remain refused.
+Merge stays decide-only: project governance must invoke the Governor at its merge
+boundary and execute that exact request; Pod cannot intercept a later external
+merge command. Managed execution rechecks the verifier and current prepared
+candidate immediately before its effect. Failure after admission marks that row
+FAILED with the refusal code and performs no effect; it never silently resubmits.
+
+| Refusal code | Next action |
+| --- | --- |
+| `relay_verifier_unconfigured` | Configure the personal host command or obtain session consent. |
+| `relay_verifier_failed` | Repair the verifier, then retry the same decision, or obtain session consent. |
+| `relay_verifier_timeout` | Resolve its timeout, then retry the same decision, or obtain session consent. |
+| `relay_verifier_malformed` | Correct the JSON contract or obtain session consent. |
+| `relay_verifier_mismatch` | Obtain a decision for the exact expected binding; diagnostics name only differing fields. |
+| `relay_verifier_denied` | Obtain a positive verified decision or session consent. |
+| `relay_authorization_reused` | Obtain a fresh decision with a new key for this authorization. |
+
+Verifier refusals occur before journal writes or remote effects. Local use receipts
+under the Pod state root's `.relay-authorizations/` directory hash the key and
+confirmed authorization, serialize first use across objectives and never evict.
+They remain separate from objective records and journal compaction. A receipt is
+written before the action row; interruption then permits only the same confirmed
+authorization to retry. Deleting or replacing this trusted state loses local replay
+protection; a host must preserve it. Status/closure report recorded confirmation
+without running the verifier and do not attest its current availability or verdict.
+New verified rows and contexts containing them carry `decision_channels: 2` so
+genuine 0.17.0 readers refuse them; old records and other relays retain their formats.
+
+### Recorded-question status contract
+
+`pod status --objective ID --json`, and a status selecting one objective by Run,
+add `recorded_questions` with exactly this supported schema. Consumers must inspect
+its status and gaps: absent or unavailable projection never means an empty list.
+Native status failure does not erase question facts already read from the checkpoint.
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | `pod-recorded-questions/v1`. |
+| `status` | `complete`, `partial` or `unavailable`. |
+| `checkpoint` | Object with `seq` and `revision`, each the recorded nonnegative integer or `null` when missing/unsupported. |
+| `items` | Ordered projected rows, each with `index` (zero-based recorded position), `id`, `reference`, `text`, `choices`, `resolution` and `missing`. Position is not a stable question identity. |
+| `total` | Recorded list length, including unsupported or unprojected rows; `null` when the list is unavailable. |
+| `truncated` | Whether count/byte bounds omitted any recorded rows. |
+| `missing` | Top-level missing facts: `checkpoint`, `checkpoint.seq`, `checkpoint.revision`, `questions`, or `items` when truncated. |
+| `reason` | `null` for complete; `question_facts_missing` or `projection_limit` for partial; `checkpoint_unavailable`, `questions_missing`, `questions_unsupported`, or the record-read failure code for unavailable. |
+
+A row copies nonempty UTF-8 `id` and `reference` strings up to 512 characters and
+`text` up to 4096 characters; object `question` supplies text only when `text` is
+absent. An earlier string form supplies its recorded reference and text, with no invented
+id. `choices` preserves any recorded JSON value of at most 4096 encoded UTF-8 bytes.
+`resolution` is an object containing only the recorded `resolution`, `resolved`,
+`answer` and `status` keys, with their JSON values unchanged and the whole object
+bounded to 4096 bytes. Their meaning is not inferred; an absent resolution is
+unknown. Missing/unsupported/oversized fields become `null` and are named in the
+row's `missing` list as `identity` (neither id nor reference), `text`, `choices` or
+`resolution`. Explicit recorded `choices: null` stays distinct from an absent
+choices field through that list. Other object keys remain unprojected.
+
+At most 64 rows and 32 KiB of encoded projection are returned. A complete explicit
+empty list has `items: []`, `total: 0`, `truncated: false` and no gaps. Any missing
+row fact, missing checkpoint sequence/revision or truncation makes a readable list
+partial; a missing/unsupported list or unreadable checkpoint is unavailable with
+`total: null`. These are observations of recorded questions, not authority to answer
+them or proof that unrecorded questions do not exist.
+
+- <a id="a426"></a>**A426** — Public status projects populated questions and explicit empty lists with recorded ids/references, text, choices and resolution facts, checkpoint seq/revision and complete status. A changed question keeps its recorded id and exposes the new text/resolution and checkpoint sequence without writing on read.
+- <a id="a427"></a>**A427** — Existing string questions and partial/unsupported row forms remain readable with explicit missing facts and partial status; no id or resolution is invented. Missing questions and unsupported containers report unavailable with unknown total, rather than complete emptiness.
+- <a id="a428"></a>**A428** — A failed record read reports unavailable with its code. Missing sequence/revision, oversized facts, count and byte limits report explicit partial gaps/truncation. The projection preserves every prior status field and rendering, introduces no effect and does not change stored records or question authority.
