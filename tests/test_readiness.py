@@ -411,11 +411,7 @@ class CompatibilityTests(ReadinessCase):
             results.append((json.loads(json.dumps(result)), output.getvalue()))
         (expected, expected_text), (observed, observed_text) = results
         self.assertTrue(set(NEW_FIELDS) & set(observed) and not set(NEW_FIELDS) & set(expected))
-        prior_fields = {key: value for key, value in observed.items() if key not in NEW_FIELDS + DECISION_FIELDS}
-        if isinstance(prior_fields.get("report"), dict):
-            prior_fields["report"] = {key: value for key, value in prior_fields["report"].items()
-                                      if key != "standing_authorization"}
-        self.assertEqual(prior_fields, expected)
+        self.assertEqual({key: value for key, value in observed.items() if key not in NEW_FIELDS + DECISION_FIELDS}, expected)
         lines = observed_text.splitlines(keepends=True)
         self.assertEqual(lines[0].rstrip("\n"), observed["readiness"]["summary"])
         added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ", "PoD#", "Mode: ")
