@@ -373,6 +373,11 @@ def _op_constraint(request: dict) -> dict:
                               value=request.get("value"), constraint_id=request.get("id"))
 
 
+def _op_standing_authorization(request: dict) -> dict:
+    from .standing import operate
+    return operate(request)
+
+
 def _op_route_failure(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "admission_id", "kind",
                     "source", "retry_after", "clear", "cleared_by", "decision"},
@@ -649,6 +654,7 @@ _OPERATIONS = {
     'integration-observe': _op_integration_observe,
     'checkpoint': _op_checkpoint,
     'constraint': _op_constraint,
+    'standing-authorization': _op_standing_authorization,
     'route-failure': _op_route_failure,
     'governor': _op_governor,
     'governor-outcome': _op_governor_outcome,
@@ -763,6 +769,8 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
                 if key in checkpoint["observations"]}
         if "report" in result:
             acknowledgement["report"] = result["report"]
+        if "standing_authorization" in result:
+            acknowledgement["standing_authorization"] = result["standing_authorization"]
     elif operation == "report":
         observation = result["observation"]
         acknowledgement.pop("observation")
@@ -831,6 +839,12 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
             acknowledgement["next_safe_action"] = checkpoint["next_safe_action"]
     acknowledgement["objective"] = request["objective"]
     if operation in ("checkpoint", "report"):
+        from .standing import projection as standing_projection
+        acknowledgement["standing_authorization"] = (result.get("standing_authorization")
+            or (result.get("report") or {}).get("standing_authorization") or standing_projection({}))
+        if isinstance(acknowledgement.get("report"), dict):
+            acknowledgement["report"] = {**acknowledgement["report"],
+                                         "standing_authorization": acknowledgement["standing_authorization"]}
         acknowledgement["worker_tabs"] = result.get("worker_tabs", [])
         acknowledgement["pod_ticks"] = result.get("pod_ticks", {"status": "not_applicable", "lines": []})
         if "pod_tick_intake" in result:

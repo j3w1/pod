@@ -484,14 +484,23 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
     row = _find_row(journal, admitted["record_id"])
     try:
         _revalidate_relay(project, objective, owner=owner, row=row)
+        _revalidate_standing(project, objective, owner=owner, row=row, now=later())
         outcome, provider, detail = _perform(
             remote, row, unit, journal, pull_request, clock=later,
             intent=lambda provider: _record_intent(project, objective, owner=owner, record_id=admitted["record_id"],
                                                    provider=provider))
     except PodError as exc:
-        _record_execution(project, objective, owner=owner, record_id=admitted["record_id"],
-                          outcome="UNKNOWN" if _uncertain(exc) else "FAILED", provider=None,
-                          detail=exc.code, now=later())
+        try:
+            _record_execution(project, objective, owner=owner, record_id=admitted["record_id"],
+                              outcome="UNKNOWN" if _uncertain(exc) else "FAILED", provider=None,
+                              detail=exc.code, now=later())
+        except PodError as settlement:
+            if "standing" in (row["action"].get("authorization") or {}) and settlement.code in (
+                    "objective_continued", "objective_retired"):
+                # Loss of predecessor authority forbids even an outcome write. Its untouched pending
+                # intention belongs to the existing successor/readback path, never a remote retry.
+                raise exc from None
+            raise
         raise
     except BaseException as exc:
         # A port that answered in an unexpected shape, or a defect here, leaves the remote
@@ -503,6 +512,32 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
                                 outcome=outcome, provider=provider, detail=detail, now=later())
     result.update({"outcome": settled["outcome"], "receipt": settled["receipt"]})
     return result
+
+
+def _revalidate_standing(project: Path, objective: str, *, owner: str, row: dict,
+                         now: datetime | None = None) -> None:
+    """A recorded intention grants no effect after its standing decision or binding changes."""
+    consent = row["action"].get("authorization") or {}
+    if "standing" not in consent:
+        return
+    from .governor import _owned_state, _read_journal, _record_path, merge_target_name
+    from .ledger import map_of, require_governance_current
+    from .standing import state as standing_state
+    with _lock(_path(project, objective)):
+        context = _read(_path(project, objective))
+        decisions = context.get("standing_authorization", {}).get("decisions", [])
+        current = _read_journal(_record_path(project, objective))["units"].get(row["action"]["unit"])
+        binding = current.get("candidate") if current else None
+        if (standing_state(context, now=now) != "active" or not decisions
+                or decisions[-1]["id"] != consent["standing"]["id"]
+                or not set(consent["scope"]) <= set(decisions[-1]["scope"])
+                or binding is None or binding["id"] != row.get("candidate_id")
+                or binding["commit"] != consent["candidate"] or binding["tree"] != consent["tree"]
+                or binding.get("dirty_paths") or merge_target_name(current) != consent.get("target")):
+            raise PodError("standing_authorization_inactive", "Standing authorization or its prepared candidate is no longer active",
+                           {"next_action": "obtain current owner consent or reconfirm yolo for this objective"})
+        _owned_state(project, objective, owner, _path(project, objective), version=True)
+        require_governance_current(project, map_of(context))
 
 
 def _revalidate_relay(project: Path, objective: str, *, owner: str, row: dict) -> None:

@@ -228,7 +228,8 @@ def verify_merge_result(project: Path, row: dict, unit: dict | None, governance:
         raise _delivery_refusal("method_mismatch", "Provider merge method differs from the verified result",
                                 "reconcile the provider merge readback", method=method)
     return {"target_ref": target_ref, "base": base, "result": result, "candidate": head, "tree": tree,
-            "method": method, "authorization_reference": authorization["reference"], "provider": dict(provider)}
+            "method": method, "authorization_reference": (authorization["standing"]["reference"]
+                if "standing" in authorization else authorization["reference"]), "provider": dict(provider)}
 
 
 MAX_RESULT_SCAN = 512

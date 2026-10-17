@@ -428,7 +428,9 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     plan_hash, fingerprints = _expect_change(expect, resources, observed_target)
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]
+    from .standing import cleanup_projection
     return {"schema": "pod-cleanup-plan/v1", "objective": objective,
+            "standing_authorization": cleanup_projection(state, resources),
             "target": observed_target,
             "resources": resources, "digest": plan_hash,
             "expect": {"plan": plan_hash, "resources": fingerprints},
