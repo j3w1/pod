@@ -59,5 +59,5 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - Any route choice: [models](references/models.md).
 - Failure/resume/reload: [recovery](references/recovery.md).
 - Proof/review/REUSE: [verification](references/verification.md).
-- Delivery/Git/CI/deployment: [Governor](references/governor.md).
+- Delivery/Git/CI/deployment, or yolo mode on or off: [Governor](references/governor.md).
 - Worktree/branch deletion: [cleanup](references/cleanup.md).
