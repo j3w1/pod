@@ -741,10 +741,16 @@ class ReleaseCapacityTests(AbsentCase):
 
     def test_a_request_names_at_most_sixty_four_paths(self):
         paths = [str(self.root / f"path-{index}") for index in range(65)]
-        with self.assertRaises(PodError) as caught:
-            self.retire(objectives=self.request(*paths))
-        self.assertEqual(caught.exception.code, "invalid_request")
-        self.assertIn("1 to 64", str(caught.exception))
+        found = self.retire(objectives=[{"objective": "unknown", "release": paths[:64]}])
+        self.assertEqual(found["objectives"][0]["condition"], "objective_unknown")  # Sixty-four pass validation.
+        for objectives, words in (
+                (self.request(*paths), "1 to 64"),
+                ([{"objective": "first", "release": paths[:33]}, {"objective": "second", "release": paths[33:]}],
+                 "at most 64 paths across its objectives")):
+            with self.subTest(words=words), self.assertRaises(PodError) as caught:
+                self.retire(objectives=objectives)
+            self.assertEqual(caught.exception.code, "invalid_request")
+            self.assertIn(words, str(caught.exception))
 
 
 class ConcurrencyTests(AbsentCase):
