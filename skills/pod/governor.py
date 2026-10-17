@@ -729,7 +729,7 @@ def merge_target_name(unit: dict | None) -> str | None:
 
 
 def applicable_authorization(unit: dict, authorization: object, *, candidate: str | None,
-                             tree: str | None, scope: str) -> bool:
+                             tree: str | None, scope: str, context: dict | None = None) -> bool:
     """Both delivery status and authority waits require the same current target truth."""
     relayed = isinstance(authorization, dict) and authorization.get("channel") == "relayed"
     standing = isinstance(authorization, dict) and "standing" in authorization
@@ -744,10 +744,18 @@ def applicable_authorization(unit: dict, authorization: object, *, candidate: st
                 or candidate != bound["commit"] or tree != bound["tree"]):
             return False
     try:
-        return validate_authorization(authorization, candidate=candidate, tree=tree,
-                                      kind=scope, target=target, stored=True) is not None
+        consent = validate_authorization(authorization, candidate=candidate, tree=tree,
+                                         kind=scope, target=target, stored=True)
     except PodError:
         return False
+    if consent is not None and standing:
+        from .standing import state as standing_state
+        decisions = (context or {}).get("standing_authorization", {}).get("decisions", [])
+        if (standing_state(context or {}) != "active" or not decisions
+                or decisions[-1]["id"] != consent["standing"]["id"]
+                or not set(consent["scope"]) <= set(decisions[-1]["scope"])):
+            return False
+    return consent is not None
 
 
 def pushed_branch(row: dict, unit: dict | None) -> dict | None:
@@ -2131,7 +2139,7 @@ def discover_triggers(project: Path) -> dict:
     return proposal
 
 
-def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
+def _unit_delivery(unit: dict, rows: list[dict], *, context: dict | None = None) -> dict:
     """Whether this unit's current candidate holds publish/merge consent, and its hosted-check state.
 
     Consent counts only when an ALLOW row for the exact prepared commit carries an authorization that still
@@ -2149,7 +2157,7 @@ def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
                     continue
                 granted = applicable_authorization(
                     unit, row["action"].get("authorization"), candidate=binding["commit"],
-                    tree=binding["tree"], scope=scope)
+                    tree=binding["tree"], scope=scope, context=context)
                 if granted:
                     break
         authorization[scope] = "RECORDED" if granted else "MISSING"
@@ -2160,14 +2168,14 @@ def _unit_delivery(unit: dict, rows: list[dict]) -> dict:
     return {"authorization": authorization, "hosted_checks": hosted}
 
 
-def _unit_projection(unit: dict, actions: list[dict]) -> dict:
+def _unit_projection(unit: dict, actions: list[dict], *, context: dict | None = None) -> dict:
     binding = unit.get("candidate")
     rows = [row for row in actions if row["action"]["unit"] == unit["name"] and row["decision"] == "ALLOW"]
     active = [{"record_id": row["record_id"], "kind": row["action"]["kind"], "target": row["action"]["target"],
                "provider": row["receipt"].get("provider")} for row in rows if row["outcome"] == "pending"]
     unresolved = [row["record_id"] for row in rows if row["outcome"] == "UNKNOWN"]
     last = unit.get("last_decision")
-    delivery = _unit_delivery(unit, rows)
+    delivery = _unit_delivery(unit, rows, context=context)
     return {"generation": unit["generation"], "branch": unit.get("branch"), "tasks": unit.get("tasks", []),
             "candidate": ({key: binding[key] for key in ("id", "commit", "tree", "dirty_paths", "prepared_at",
                                                           "policy_revision")}
@@ -2186,13 +2194,14 @@ def objective_delivery_reporting(project: Path, objective: str) -> dict:
     """Read only exact Governor evidence for the obligation report."""
     try:
         journal = _read_journal(_record_path(project, objective))
+        context = _read(_path(project, objective))
     except PodError:
         return {"units": {}, "hosted_checks": "UNAVAILABLE"}
     units = {}
     for name, unit in journal["units"].items():
         rows = [row for row in journal["actions"] if row["action"]["unit"] == unit.get("name", name)
                 and row["decision"] == "ALLOW"]
-        units[name] = _unit_delivery(unit, rows)
+        units[name] = _unit_delivery(unit, rows, context=context)
     statuses = [unit["hosted_checks"] for unit in units.values()]
     hosted = ("RECORDED_PASS_UNVERIFIED" if "RECORDED_PASS_UNVERIFIED" in statuses
               else "PENDING" if "PENDING" in statuses else "FAILED" if "FAILED" in statuses
@@ -2298,7 +2307,7 @@ def status_at(root: Path, *, project: Path | None = None,
         "admissions": {}, "interventions": {}, "checkpoint": None}
     journal = _read_journal(root / "governor.json")
     policy = effective(project) if project is not None else None
-    units = {name: _unit_projection(unit, journal["actions"]) for name, unit in journal["units"].items()}
+    units = {name: _unit_projection(unit, journal["actions"], context=state) for name, unit in journal["units"].items()}
     result = {"schema": SCHEMA,
               "phase": _phase(state, journal["actions"], None, _checkpoint(state).get("candidate"),
                               native_projection),

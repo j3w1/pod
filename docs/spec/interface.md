@@ -18,7 +18,7 @@ Maintain one canonical inline skill router with relevant-on-demand references an
 
 Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175), [A230](#a230), [A406](#a406), [A426](#a426), [A427](#a427), [A428](#a428), [A440](#a440)
 
-Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status adds current exact release, terminal, ownership, retained reason and Dispatch stage facts, labels placement warnings start-time and renders every blocked result without a traceback. An unknown objective names its id, repository context and state root searched. R133 adds the last observed PoD ticks, authorship, criteria and due/blocked states from the ledger; R135 adds the recorded-question projection; R139 adds the standing-authorization projection. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
+Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. Run-selected status includes Governor authorization rows in `owner_decisions`, using the same inventory as objective-selected status. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status adds current exact release, terminal, ownership, retained reason and Dispatch stage facts, labels placement warnings start-time and renders every blocked result without a traceback. An unknown objective names its id, repository context and state root searched. R133 adds the last observed PoD ticks, authorship, criteria and due/blocked states from the ledger; R135 adds the recorded-question projection; R139 adds the standing-authorization projection. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
 
 ### R49 — The one-shot installer places both agent
 
@@ -226,7 +226,7 @@ An own tick with an empty mapping makes an untick due; an unticked empty mapping
 
 Type: B,H · Scenarios: [A386](#a386), [A387](#a387), [A388](#a388), [A389](#a389), [A390](#a390), [A391](#a391), [A392](#a392), [A393](#a393), [A394](#a394), [A395](#a395), [A396](#a396), [A397](#a397), [A414](#a414), [A415](#a415), [A416](#a416), [A417](#a417), [A418](#a418)
 
-The dedicated `pod internal pod-tick` request takes project, objective, owner and integer pod (0–999999999). The recorded coordinator's Run authority and an open objective are required; closed objectives, objectives under historical retirement and continued objectives refuse with objective_closed, objective_retired or objective_continued before any issue read/write. A direct objective is not applicable. There is no Governor tick kind, Orca mutation, publish authorization or per-objective consent. OD-5 is standing authority for this bounded body edit alone.
+The dedicated `pod internal pod-tick` request takes project, objective, owner and integer pod (0-999999999). The recorded coordinator's Run authority and an open objective are required; closed objectives, objectives under historical retirement and continued objectives refuse with objective_closed, objective_retired or objective_continued before any issue read/write. A direct objective is not applicable. There is no Governor tick kind, Orca mutation, publish authorization or per-objective consent. OD-5 is standing authority for this bounded body edit alone, separate from both the yolo record and the worker-tab standing close authorization.
 
 R10's ordered table governs each request: A checks objective and repository; B immediately runs issue_recheck_live with the binding (the intended digest while recovering), refusing body/amendment drift, role changes, unreadable sources and CLOSED; C checks the line is unique; D decides from current records/proof and that body; E classifies the result and readback. CLOSED is tested explicitly and refuses issue_reconciliation_required with reason closed_issue_requires_intent_reconciliation even when the ordinary recheck reports body drift first. No allow_closed or reopen is used. A later outside reopen permits ticking only once the ordinary recheck passes.
 
@@ -291,11 +291,16 @@ with its scope, exclusions, widening and source, or `normal`), each effect autho
 under it and each clarification the host's responder decided (R136-R138). The
 acknowledgement of the checkpoint that records `delivery` carries the same projection,
 and so does the stored closure report of an objective that holds the record, so a final
-report can name the mode and its effects. A closure of an objective that never held the
+report can name the mode and its effects. The closure projection also records `at_closure`:
+its UTC observation time, mode, `ran_in_yolo`, the last activation id (or null) and
+`active_until_closure`, making explicit that the objective ran in yolo until closure
+when that was true. Later expiry does not erase that historical fact. A closure of an objective that never held the
 record keeps its earlier shape and channel discriminator, so earlier readers still read
 it, and readers show its mode as `normal`. The projection reads
 stored facts only. It never runs the verifier and attests nothing about the host's
-present decision. Each standing decision is also listed among the owner decisions of
+present decision. An unreadable Governor journal cannot turn a committed checkpoint
+into a refusal: its acknowledgement uses a journal-less standing projection, as the
+other ledger readers do. Each standing decision is also listed among the owner decisions of
 status and the closure report, as kind `standing_authorization` with its channel (R120).
 `internal cleanup-plan` adds the coverage R137 defines.
 
@@ -657,7 +662,8 @@ A write returns `standing_authorization` (the projection), the stored `decision`
 `answer` row and the `context_revision`. A relayed `activate`, `revoke` or `answer`
 is written only after the verifier confirms it. A full record refuses
 `standing_authorization_full` (an activation at 31 or more decisions) or
-`responder_answers_full` (64 answers), without a write.
+`responder_answers_full` (16 answers), without a write. R136/R138's complete encoded
+row limits also apply and are exposed by `internal contract` as `stored_max_bytes`.
 
 `pod status --objective ID --json`, and a status selecting one objective by Run, add
 `standing_authorization` for every such objective, with this schema. An objective
@@ -674,6 +680,7 @@ stores nothing and runs no verifier.
 | `effects` | `total`, `truncated` and `items`: the newest 64 journal rows authorized under yolo, each with `record_id`, `kind`, `scope`, `candidate`, `tree`, `target`, `pr`, `decision`, `outcome`, `at` and `standing`. |
 | `responder_decisions` | `total`, `truncated` and `items`: the newest 64 answers, each with `id`, `question`, `text`, `responder_source`, `at` and `under`. |
 | `history` | `total` and `items`: every decision's `id`, `operation`, `at` and `channel`. |
+| `at_closure` | Present for a closed objective holding the standing record: `utc`, `mode`, boolean `ran_in_yolo`, last activation `decision` id (or null), and boolean `active_until_closure`, captured at closure. |
 
 Text status prints one line, such as "Mode: yolo (publish, merge, release, install,
 cleanup; session since T)" or "Mode: normal", naming the state and reason when yolo is
@@ -681,4 +688,4 @@ not active (for example "yolo suspended: scope changed"). Unknown optional field
 ignorable. `internal cleanup-plan` adds `standing_authorization` with `mode`,
 `decision`, `covers` and `asks`, as R137 defines them.
 
-- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Lists keep the newest 64 and say when they are truncated, and none of these reads runs the verifier.
+- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier.

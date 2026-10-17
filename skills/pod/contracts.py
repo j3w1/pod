@@ -250,6 +250,8 @@ TABLE["responder answer"] = definition({
     "question": text(512), "text": text(4096),
     "relay": {"type": "object", "fields": {"reference": text(512)}},
 }, ("question", "text", "relay"))
+TABLE["standing decision"]["stored_max_bytes"] = 4 * 1024
+TABLE["responder answer"]["stored_max_bytes"] = 8 * 1024
 TABLE["standing authorization"] = definition({
     **{key: text(4096) for key in ("project", "objective", "owner")},
     "action": choice(("activate", "revoke", "answer", "show")),

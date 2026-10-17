@@ -32,7 +32,7 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   decides when it is ambiguous; repeating worker-show cannot repair continuity.
 - For a finished user-owned or external tab of this objective, after its report
   is recorded, run the exact close command Pod supplies under the owner's
-  standing authorization. This never applies to active, coordinator, setup,
+  worker-tab standing close authorization. This never applies to active, coordinator, setup,
   reused-later, other-objective or owner-kept terminals. If Orca refuses, name
   the tab and failure in the final report.
   Once closure, continuation or historical retirement is recorded without its
@@ -51,6 +51,8 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   Until then, give no close command.
 - A disconnected or not-materialized terminal needs nothing. A terminal reused
   for a later Dispatch belongs to that assignment alone.
+
+The worker-tab standing close authorization is independent of the objective's yolo record. Its conditions apply whether yolo is on or off; activating or revoking yolo changes no worker-tab close authority.
 
 Retain only while required corrections or a delta review of that worker's result
 are pending, or on a recorded owner request. An implementer's cycle follows

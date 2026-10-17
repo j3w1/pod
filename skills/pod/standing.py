@@ -7,15 +7,17 @@ import hashlib
 from pathlib import Path
 import re
 
-from .contracts import STANDING_EXCLUSIONS, STANDING_SCOPES, fields, required, input_record
+from .contracts import STANDING_EXCLUSIONS, STANDING_SCOPES, TABLE, fields, required, input_record
 from .errors import FieldRefusal, PodError
-from .util import bounded_text, digest, exact, normalize_timestamp, owner_decision
+from .util import bounded_text, digest, encoded, exact, normalize_timestamp, owner_decision
 
 SCHEMA = "pod-standing-authorization/v1"
 STATUS_SCHEMA = "pod-standing-authorization-status/v1"
 DEFAULT_SCOPE = STANDING_SCOPES[:-1]
 MAX_DECISIONS = 32
-MAX_ANSWERS = 64
+MAX_ANSWERS = 16
+MAX_DECISION_BYTES = TABLE["standing decision"]["stored_max_bytes"]
+MAX_ANSWER_BYTES = TABLE["responder answer"]["stored_max_bytes"]
 _STORED_DECISION = {"id", "operation", "utc", "seq", "binding", "exclusions", "relay_verification"}
 
 
@@ -65,6 +67,8 @@ def state(context: dict, *, now: datetime | None = None) -> str:
             or context.get("historical_retirement")):
         return "ended"
     latest = decisions[-1]
+    if any(row["seq"] > latest["seq"] for row in (context.get("checkpoint") or {}).get("reopened", [])):
+        return "ended"
     if latest["operation"] == "revoke":
         return "revoked"
     if latest.get("expires_at") is not None:
@@ -117,6 +121,15 @@ def _request_fields(operation: str, decision: dict) -> dict:
     return {"operation": operation, **{key: decision.get(key) for key in ("scope", "widening", "expires_at")}}
 
 
+def _row_fit(row: dict, *, answer: bool = False) -> None:
+    limit = MAX_ANSWER_BYTES if answer else MAX_DECISION_BYTES
+    size = len(encoded(row, compact=True))
+    if size > limit:
+        raise PodError("invalid_standing_authorization", "Standing row exceeds its encoded byte limit",
+                       {"row_bytes": size, "limit_bytes": limit,
+                        "next_action": "shorten the decision or answer and its relay metadata"})
+
+
 def validate_record(value: object) -> None:
     """Validate stored facts without treating them as a fresh authorization or answer."""
     from .relay import validate_verdict
@@ -132,6 +145,7 @@ def validate_record(value: object) -> None:
                 raise ValueError("observation")
         activations = set()
         for index, raw in enumerate(record["decisions"], 1):
+            _row_fit(raw)
             row = exact(raw, fields("standing decision") | _STORED_DECISION,
                         {"id", "operation", "utc", "seq", *required("standing decision")}, name="standing decision")
             if row["id"] != f"Y{index}" or row["operation"] not in ("activate", "revoke"):
@@ -163,6 +177,7 @@ def validate_record(value: object) -> None:
             elif "relay_verification" in row:
                 raise ValueError("session verdict")
         for index, raw in enumerate(record["answers"], 1):
+            _row_fit(raw, answer=True)
             row = exact(raw, {"id", "question", "text", "decided_by", "responder_source", "relay", "relay_verification", "utc", "under"},
                         {"id", "question", "text", "decided_by", "responder_source", "relay", "relay_verification", "utc", "under"}, name="responder answer")
             _answer({key: row[key] for key in ("question", "text", "relay")})
@@ -201,6 +216,11 @@ def _verify(project: Path, objective: str, context: dict, reference: str, action
     request = {"schema": relay.SCHEMA, "reference": reference, "action": action, "objective": objective,
                "candidate": None, "target": _target(project, context), "pr": None, action: binding}
     verdict = relay.verify(command, request)
+    record = context.get("standing_authorization", {})
+    if any(row.get("relay_verification", {}).get("single_use") == verdict["single_use"]
+           for row in [*record.get("decisions", []), *record.get("answers", [])]):
+        raise relay.refusal("relay_authorization_reused")
+    # An identical receipt without its row is an interrupted write, which may finish once.
     relay.check_use(project, verdict)
     return verdict
 
@@ -232,8 +252,12 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
     path = _path(project, objective)
     with _lock(path):
         context = _read(path)
+        try:
+            journal = _read_journal(_record_path(project, objective))
+        except PodError:
+            journal = None
         if action == "show":
-            return {"standing_authorization": projection(context, _read_journal(_record_path(project, objective)), now=moment)}
+            return {"standing_authorization": projection(context, journal, now=moment)}
         if context["owner"] != owner:
             from .handoff import refuse_nonowner
             refuse_nonowner(project, objective, context, owner, code="coordinator_conflict")
@@ -241,9 +265,16 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
         _require_open(context)
         require_authority(project, objective, owner=owner, state=context)
         current = state(context, now=moment)
+        record = context.get("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": []})
+        verdict = None
+        if decision is not None and decision["channel"] == "relayed":
+            verdict = _verify(project, objective, context, decision["relay"]["reference"], "standing", _request_fields(action, decision))
+        elif action == "answer" and record["answers"]:
+            verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
+                              {key: answer[key] for key in ("question", "text")})
         if action == "revoke" and current not in ("active", "suspended", "expired"):
             return {"state": current, "changed": False}
-        record = context.setdefault("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": []})
+        context["standing_authorization"] = record
         if action == "answer":
             if current != "active":
                 raise PodError("responder_answer_requires_yolo", "Responder answers require active yolo",
@@ -253,13 +284,15 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                     and answer["question"] in (question.get("id"), question.get("reference")) for question in questions):
                 raise PodError("decision_question_unrecorded", "Responder answer must name a currently recorded question",
                                {"next_action": "record the question first"})
+            if verdict is None:
+                verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
+                                  {key: answer[key] for key in ("question", "text")})
             if len(record["answers"]) >= MAX_ANSWERS:
                 raise PodError("responder_answers_full", "Responder answer history is full")
-            verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
-                              {key: answer[key] for key in ("question", "text")})
             row = {**answer, "id": f"A{len(record['answers']) + 1}", "decided_by": "responder",
                    "responder_source": verdict["responder_source"], "relay_verification": verdict,
                    "utc": _timestamp(moment), "under": record["decisions"][-1]["id"]}
+            _row_fit(row, answer=True)
             record["answers"].append(row)
         else:
             if action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1:
@@ -278,10 +311,8 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                 row.update(binding={"scope_digest": scope_digest(context)},
                            exclusions=[item for item in STANDING_EXCLUSIONS if item not in row["widening"]])
             if decision["channel"] == "relayed":
-                verdict = _verify(project, objective, context, decision["relay"]["reference"], "standing", _request_fields(action, decision))
                 row.update(relay={"reference": verdict["reference"], "owner_source": verdict["owner_source"]}, relay_verification=verdict)
-            else:
-                verdict = None
+            _row_fit(row)
             record["decisions"].append(row)
         # Validate fit before consuming an otherwise valid receipt. The context writer is atomic.
         validate_record(record)
@@ -294,11 +325,12 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             from .relay import check_use
             check_use(project, verdict, consume=True)
         _write(path, context)
-        return {"standing_authorization": projection(context, _read_journal(_record_path(project, objective)), now=moment),
+        return {"standing_authorization": projection(context, journal, now=moment),
                 "answer" if action == "answer" else "decision": row, "context_revision": context["revision"]}
 
 
-def projection(context: dict, journal: dict | None = None, *, now: datetime | None = None) -> dict:
+def projection(context: dict, journal: dict | None = None, *, now: datetime | None = None,
+               closure_utc: str | None = None) -> dict:
     record = context.get("standing_authorization", {})
     decisions = record.get("decisions", [])
     latest = next((row for row in reversed(decisions) if row["operation"] == "activate"), None)
@@ -321,13 +353,25 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
     answers = [{**{key: row[key] for key in ("id", "question", "text", "responder_source", "under")}, "at": row["utc"]}
                for row in record.get("answers", [])]
     current = state(context, now=now)
-    return {"schema": STATUS_SCHEMA, "mode": "yolo" if current == "active" else "normal", "state": current,
+    result = {"schema": STATUS_SCHEMA, "mode": "yolo" if current == "active" else "normal", "state": current,
             "reason": suspension_reason(context) if current == "suspended" else None,
             "decision": decision,
             "effects": {"total": len(effects), "truncated": len(effects) > 64, "items": effects[-64:]},
             "responder_decisions": {"total": len(answers), "truncated": len(answers) > 64, "items": answers[-64:]},
             "history": {"total": len(decisions), "items": [{**{key: row[key] for key in ("id", "operation", "channel")},
                                                            "at": row["utc"]} for row in decisions]}}
+    checkpoint = context.get("checkpoint") or {}
+    closure = checkpoint.get("closure")
+    if closure and record:
+        stored = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {})
+        stamp = normalize_timestamp(stored.get("utc") or closure_utc or _timestamp(_clock(now)),
+                                    field="Standing closure time", code="state_unsupported")
+        before = {**context, "checkpoint": {**checkpoint, "closure": None}}
+        active = state(before, now=datetime.fromisoformat(stamp.replace("Z", "+00:00"))) == "active"
+        result["at_closure"] = {"utc": stamp, "mode": "yolo" if active else "normal",
+                                "ran_in_yolo": latest is not None,
+                                "decision": latest["id"] if latest else None, "active_until_closure": active}
+    return result
 
 
 def synthesize(context: dict, binding: dict | None, unit: dict | None, scopes: set[str], *,

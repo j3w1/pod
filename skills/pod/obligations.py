@@ -2125,8 +2125,11 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
         if "standing_context" in ctx or standing_normal:
             from .standing import projection as standing_projection
             context = ctx.get("standing_context", {})
+            closure_utc = ((context.get("checkpoint") or {}).get("closure") or {}).get(
+                "report", {}).get("standing_authorization", {}).get("at_closure", {}).get("utc")
             result["standing_authorization"] = standing_projection(
-                {**context, "checkpoint": {**(context.get("checkpoint") or {}), **state}}, ctx.get("standing_journal"))
+                {**context, "checkpoint": {**(context.get("checkpoint") or {}), **state}}, ctx.get("standing_journal"),
+                closure_utc=closure_utc)
             if "standing_context" in ctx:
                 result["decision_channels"] = 3
     if state.get("delivery") is not None:

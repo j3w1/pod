@@ -908,6 +908,7 @@ def _authorization_granted(project: Path, objective: str):
         from .governor import _read_journal, _record_path, applicable_authorization
         try:
             journal = _read_journal(_record_path(project, objective))
+            context = _read(_path(project, objective))
         except PodError:
             return False
         kinds = ("push", "pr_update") if scope == "publish" else (scope,)
@@ -919,7 +920,7 @@ def _authorization_granted(project: Path, objective: str):
             tree = bound.get("tree") if bound.get("commit") == row.get("commit") else None
             return applicable_authorization(unit, row["action"].get("authorization"),
                                             candidate=row.get("commit") or row["action"]["candidate"],
-                                            tree=tree, scope=scope)
+                                            tree=tree, scope=scope, context=context)
         # A row carried from a lost coordinator records the predecessor's consent, never this objective's (R118).
         return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
                    and not isinstance(row.get("carried_from"), dict)
@@ -1462,7 +1463,11 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             result["report"] = report_projection(state["checkpoint"], ctx, standing_normal=True)
         from .standing import projection as standing_projection
         from .governor import _read_journal, _record_path
-        result["standing_authorization"] = standing_projection(state, _read_journal(_record_path(project, objective)))
+        try:
+            journal = _read_journal(_record_path(project, objective))
+        except PodError:
+            journal = None
+        result["standing_authorization"] = standing_projection(state, journal)
         return result
 
 
