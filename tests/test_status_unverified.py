@@ -33,13 +33,15 @@ def baseline_status() -> types.ModuleType:
 
 
 # Additive status fields; every earlier field and render line is compared unchanged.
-READINESS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions")
+READINESS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization")
 
 
 def assert_render_after_readiness(test: unittest.TestCase, observed: dict, rendered: str, expected: str) -> None:
     """The readiness summary is the new first line; the earlier rendering follows it byte for byte."""
     first, rest = rendered.split("\n", 1)
     test.assertEqual(first, observed["readiness"]["summary"])
+    test.assertEqual(rest.count("Mode: normal\n"), 1)
+    rest = rest.replace("Mode: normal\n", "", 1)
     test.assertEqual(rest, expected)
 
 

@@ -167,6 +167,11 @@ def verify(command: list[str] | None, request: dict) -> dict:
         raise refusal("relay_verifier_denied")
     binding_fields = BINDING_FIELDS | ({request["action"]} if request["action"] in ("standing", "answer") else set())
     mismatches = sorted(key for key in binding_fields if verdict.get(key) != request[key])
+    if request["action"] in ("standing", "answer") and "target" in mismatches:
+        mismatches.remove("target")
+        mismatches.extend("target." + key for key in request["target"]
+                          if verdict["target"][key] != request["target"][key])
+        mismatches.sort()
     if mismatches:
         raise refusal("relay_verifier_mismatch", fields=mismatches)
     return verdict

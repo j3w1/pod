@@ -5719,7 +5719,8 @@
       "offline_test": [
         "tests.test_standing_authorization.StandingRefusalTests.test_unconfigured_denied_and_mismatched_relay_activation_write_nothing",
         "tests.test_standing_authorization.StandingRefusalTests.test_reused_key_and_mismatched_question_or_answer_write_nothing",
-        "tests.test_standing_authorization.StandingRefusalTests.test_caller_cannot_supply_standing_or_verification_and_constraints_still_refuse"
+        "tests.test_standing_authorization.StandingRefusalTests.test_caller_cannot_supply_standing_or_verification_and_constraints_still_refuse",
+        "tests.test_standing_authorization.StandingRefusalTests.test_repository_verifier_mismatch_names_the_exact_target_field"
       ],
       "status": "NOT_RUN"
     },

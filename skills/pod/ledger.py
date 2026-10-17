@@ -988,7 +988,8 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
-            **({"standing_context": state, "standing_journal": journal} if "standing_authorization" in state else {}),
+            "standing_journal": journal,
+            **({"standing_context": state} if "standing_authorization" in state else {}),
             "worker_tabs": tab_rows(state, placements, outstanding=outstanding),
             # Tab intent is shown by status/acknowledgements, never added to the
             # immutable closure report. It can outlive objective closure.
@@ -1042,16 +1043,8 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
             "settlement_failure": failure,
             "status": status_projection(map_state, ctx),
             "label": label_qualification(map_state, ctx, candidate if candidate is not None else ctx["candidate"])}
-    view["report"] = report_projection(map_state, ctx) if map_state is not None else None
-    if view["report"] is not None and "standing_authorization" not in view["report"]:
-        # The read projection is additive; an older stored closure retains its exact report bytes.
-        from .standing import projection as standing_projection
-        from .governor import _read_journal, _record_path
-        try:
-            journal = _read_journal(_record_path(project, objective))
-        except PodError:
-            journal = None
-        view["report"]["standing_authorization"] = standing_projection(state, journal)
+    # Read-side reports include normal mode while older stored closures retain their exact shape.
+    view["report"] = report_projection(map_state, ctx, standing_normal=True) if map_state is not None else None
     view["placements"] = {row["admission_id"]: row["placement"]
                           for row in (native or {}).get("assignments", [])
                           if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
@@ -1466,7 +1459,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if introducing or rebound:
             result["pod_tick_intake"] = tick_intake(state, map_state)
         if map_state:
-            result["report"] = report_projection(state["checkpoint"], ctx)
+            result["report"] = report_projection(state["checkpoint"], ctx, standing_normal=True)
         from .standing import projection as standing_projection
         from .governor import _read_journal, _record_path
         result["standing_authorization"] = standing_projection(state, _read_journal(_record_path(project, objective)))
@@ -1961,7 +1954,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                     "written": _report_written_ids(map_state, admission_id),
                     "map": {"seq": map_state["seq"], "revision": map_state["revision"],
                             "quiescence": map_state["quiescence"]},
-                    "report": report_projection(map_state, ctx), **tab_output()}
+                    "report": report_projection(map_state, ctx, standing_normal=True), **tab_output()}
         ingestion = {"status": "not_applicable"}
         if row["role"] == "implement":
             if prior_report is not None:
@@ -1986,7 +1979,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 return {"ingestion": _stored_ingestion(row), "settled": True,
                         "written": _report_written_ids(map_state, admission_id),
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
-                        "report": report_projection(map_state, ctx), **tab_output()}
+                        "report": report_projection(map_state, ctx, standing_normal=True), **tab_output()}
             if value.get("close") is True and not map_state.get("closure"):
                 from .succession import refuse_incomplete
                 refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's new closure (R118).
@@ -2016,7 +2009,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
                         "quiescence": new_map["quiescence"]},
-                "report": report_projection(state["checkpoint"], ctx), **tab_output()}
+                "report": report_projection(state["checkpoint"], ctx, standing_normal=True), **tab_output()}
 
 
 def state_inventory(project: Path) -> dict:

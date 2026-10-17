@@ -34,6 +34,7 @@ REQUIRED = {
     "integration-observe": ("project", "candidate"),
     "checkpoint": (*OWNED, "value"),
     "constraint": (*OWNED, "action"),
+    "standing-authorization": (*OWNED, "action"),
     "route-failure": (*OWNED, "admission_id", "kind", "source"),
     "governor": (*OWNED, "action"),
     "governor-outcome": (*OWNED, "record_id", "outcome"),
@@ -75,8 +76,8 @@ class OperationFieldRefusalTests(unittest.TestCase):
                 code, stdout, stderr = self.invoke(operation, request)
                 self.assertEqual(code, 1)
                 envelope = json.loads(stdout)
-                record = "packet" if operation == "packet" else "request"
-                self.assertEqual(envelope["error"]["code"], f"invalid_{record}")
+                record = "packet" if operation == "packet" else "standing authorization" if operation == "standing-authorization" else "request"
+                self.assertEqual(envelope["error"]["code"], f"invalid_{record.replace(' ', '_')}")
                 message = envelope["error"]["message"]
                 for name in (operation, record, dropped, "unexpected_field"):
                     self.assertIn(name, message)
@@ -87,7 +88,7 @@ class OperationFieldRefusalTests(unittest.TestCase):
                                   "optional": envelope["error"]["detail"]["optional"],
                                   **({"bounded_fields": envelope["error"]["detail"]["bounded_fields"],
                                       "next_action": envelope["error"]["detail"]["next_action"]}
-                                     if operation in ("packet", "admission") else {})})
+                                     if operation in ("packet", "admission", "standing-authorization") else {})})
                 shape = envelope["error"]["detail"]
                 self.assertEqual(set(shape["accepted"]) - set(shape["optional"]), set(required))
                 self.assertEqual(shape["accepted"], sorted(shape["accepted"]))

@@ -143,7 +143,7 @@ class StandingRecordTests(StandingCase):
         for fields in invalid:
             with self.subTest(fields=fields):
                 exc = self.refusal("invalid_standing_authorization", self.activate, **fields)
-                self.assertEqual(exc.detail["record"], "standing authorization")
+                self.assertIn(exc.detail["record"], ("standing authorization", "standing decision"))
                 self.assertTrue(exc.detail["bounded_fields"])
         self.assertFalse(self.requests.exists())
 
@@ -405,6 +405,15 @@ class StandingResponderTests(StandingCase):
 
 
 class StandingRefusalTests(StandingCase):
+    def test_repository_verifier_mismatch_names_the_exact_target_field(self):
+        self.control(changes={"target.repository": "other/widgets"})
+        exc = self.refusal("relay_verifier_mismatch", self.activate, channel="relayed", relay={"reference": "standing-one"})
+        self.assertEqual(exc.detail["fields"], ["target.repository"])
+        self.control()
+        git(self.project, "remote", "set-url", "origin", "not-a-github-remote")
+        exc = self.refusal("relay_verifier_mismatch", self.activate, channel="relayed", relay={"reference": "standing-one"})
+        self.assertEqual(exc.detail["fields"], ["target.repository"])
+
     def test_unconfigured_denied_and_mismatched_relay_activation_write_nothing(self):
         self.configure(None)
         fields = {"channel": "relayed", "relay": {"reference": "standing-one"}}
@@ -862,4 +871,3 @@ finally:
             _verify_relay(self.project, "objective", request["authorization"], previous_binding,
                           self.journal()["units"]["delivery"], self.command, pr=request.get("pr"))
             self.assertEqual(self.requests.read_text(), earlier)
-

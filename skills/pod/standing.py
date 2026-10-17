@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 
 from .contracts import STANDING_EXCLUSIONS, STANDING_SCOPES, fields, required, input_record
-from .errors import PodError
+from .errors import FieldRefusal, PodError
 from .util import bounded_text, digest, exact, normalize_timestamp, owner_decision
 
 SCHEMA = "pod-standing-authorization/v1"
@@ -223,6 +223,9 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
         moment = _clock(now)
         decision = _decision(request["decision"], action, moment) if expected == "decision" else None
         answer = _answer(request["answer"]) if expected == "answer" else None
+    except FieldRefusal as exc:
+        exc.code = "invalid_standing_authorization"
+        raise
     except (PodError, ValueError, TypeError, UnicodeError) as exc:
         raise PodError("invalid_standing_authorization", "Malformed standing authorization input") from exc
     project, objective, owner = Path(request["project"]), request["objective"], request["owner"]

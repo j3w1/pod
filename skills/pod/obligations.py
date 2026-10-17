@@ -2074,7 +2074,7 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
 
 
 
-def report_projection(state: dict, ctx: dict) -> dict:
+def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) -> dict:
     """R43 report content derived from the map: nothing here is asserted by a caller."""
     rows = state["obligations"]
     legacy_report = ctx.get("legacy_decision_report", False)
@@ -2122,12 +2122,13 @@ def report_projection(state: dict, ctx: dict) -> dict:
         result["owner_decisions"] = decisions
     if not legacy_report:
         result["decision_channels"] = 1
-        if "standing_context" in ctx:
+        if "standing_context" in ctx or standing_normal:
             from .standing import projection as standing_projection
-            context = ctx["standing_context"]
+            context = ctx.get("standing_context", {})
             result["standing_authorization"] = standing_projection(
                 {**context, "checkpoint": {**(context.get("checkpoint") or {}), **state}}, ctx.get("standing_journal"))
-            result["decision_channels"] = 3
+            if "standing_context" in ctx:
+                result["decision_channels"] = 3
     if state.get("delivery") is not None:
         result["delivery"] = deepcopy(state["delivery"])
     if status == "quiescent":
