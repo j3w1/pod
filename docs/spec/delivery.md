@@ -18,7 +18,7 @@ Before Pod-mediated remote action, return explainable ALLOW, REUSE or DEFER from
 
 Type: H · Scenarios: [A83](#a83), [A164](#a164), [A165](#a165), [A166](#a166)
 
-Remote delivery needs one owner decision before the first remote Git mutation when applicable authorization is absent: merge remotely, keep local, or defer. Show repository, target, candidate commit/tree and scope. Remote merge consent covers push/PR, required CI, merge of that exact candidate with `--match-head-commit`, and stated post-merge installation/verification; record exact `publish` and `merge` authorizations. Routine validation needs no later prompt. A changed candidate or target needs fresh consent; deployments, new provider effects and spending remain outside it. Local-only defers every remote kind and reports hosted checks `NOT_RUN`; defer uses `user_hold`. Project governance still owns acceptance, merge and release.
+Remote delivery needs one owner decision before the first remote Git mutation when applicable authorization is absent: merge remotely, keep local, or defer. Show repository, target, candidate commit/tree and scope. Remote merge consent covers push/PR, required CI, merge of that exact candidate with `--match-head-commit`, and stated post-merge installation/verification; record exact `publish` and `merge` authorizations. Routine validation needs no later prompt. A changed candidate or target needs fresh consent; deployments, new provider effects and spending remain outside it. Local-only defers every remote kind and reports hosted checks `NOT_RUN`; defer uses `user_hold`. While a standing authorization (R136) is active and covers `publish` and `merge`, it answers this decision as merge remotely for each exact candidate, without a new prompt (R137). Project governance still owns acceptance, merge and release.
 
 ### R61 — Govern expensive Pod-mediated remote actions with
 
@@ -30,7 +30,7 @@ Govern expensive Pod-mediated remote actions with one deterministic kernel insid
 
 Type: H · Scenarios: [A164](#a164), [A165](#a165), [A166](#a166), [A186](#a186), [A386](interface.md#a386)
 
-Before the first remote Git mutation, obtain the one three-way delivery decision in R59 unless exact applicable authorization already exists. A `publish` authorization binds push/PR, workflow dispatch, rerun, remote diagnostic and cancellation to the prepared candidate commit and tree, and `merge` binds merge to that same pair and the unit's prepared target. Both retain the stated continuation; candidate or target movement invalidates consent. Release-purpose admission preserves non-withdrawn project_policy audits bound to its delivery unit and unbound audits as R129 specifies, using existing candidate proof validity; missing/invalid proof defers with correctness `assurance_unbound`. Scoped waivers/trusted source removal remain distinct from passing review, while publication/validation can overlap required review and optional coordinator assurance gains no new gate. Status and authority-wait readers use the same applicable-target truth: an unbound/missing unit has no applicable merge consent even with an older target-less row. Actual merge refusal remains unchanged. Local-only and defer authorize no remote effect, and routine post-merge checks do not create a separate approval step. R131's bounded PES checkbox edit uses OD-5 standing authority and is not a publish or merge effect.
+Before the first remote Git mutation, obtain the one three-way delivery decision in R59 unless exact applicable authorization already exists. A `publish` authorization binds push/PR, workflow dispatch, rerun, remote diagnostic and cancellation to the prepared candidate commit and tree, and `merge` binds merge to that same pair and the unit's prepared target. Both retain the stated continuation; candidate or target movement invalidates consent. While a standing authorization (R136) is active and its scope covers `publish` and `merge`, it answers the three-way decision as merge remotely for each exact candidate, without a new prompt; an explicit authorization on the request takes precedence (R137). Release-purpose admission preserves non-withdrawn project_policy audits bound to its delivery unit and unbound audits as R129 specifies, using existing candidate proof validity; missing/invalid proof defers with correctness `assurance_unbound`. Scoped waivers/trusted source removal remain distinct from passing review, while publication/validation can overlap required review and optional coordinator assurance gains no new gate. Status and authority-wait readers use the same applicable-target truth: an unbound/missing unit has no applicable merge consent even with an older target-less row. Actual merge refusal remains unchanged. Local-only and defer authorize no remote effect, and routine post-merge checks do not create a separate approval step. R131's bounded PES checkbox edit uses OD-5 standing authority and is not a publish or merge effect.
 
 ### R93 — Verified delivery record
 
@@ -187,7 +187,7 @@ automatic adoptions cannot grow the report or status by repeating their rows.
 
 ### R120 — Record every owner decision's channel
 
-Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343), [A356](#a356), [A419](#a419), [A420](#a420), [A421](#a421), [A422](#a422), [A423](#a423), [A424](#a424), [A425](#a425)
+Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343), [A356](#a356), [A419](#a419), [A420](#a420), [A421](#a421), [A422](#a422), [A423](#a423), [A424](#a424), [A425](#a425), [A441](#a441)
 
 One shared validator checks owner-authority inputs: `provenance: user_direct`,
 `instruction`, optional `channel` (`session` by default, or `relayed`), and `relay`
@@ -201,7 +201,9 @@ read as `channel: session` with `channel_recorded: false` and text "session (ear
 
 The exhaustive relayed list is: owner answers to an already recorded question,
 governance snapshot adoption/retarget, withdrawal, R110 continuation instructions
-recorded as `claim`, retirement (R112), and the verified publish/merge authorizations below. A general `revision_authority` answer supplies
+recorded as `claim`, retirement (R112), the verified publish/merge authorizations below,
+and the verified standing-authorization activation and revocation of R136. A responder's
+answer (R138) is never an owner decision and appears on no owner list. A general `revision_authority` answer supplies
 `question`, resolving to a string or the `id`/`reference` of a question previously
 recorded in the checkpoint; Pod preserves that reference. A question added in the
 same write is not a previously recorded question. A relayed general revision
@@ -218,6 +220,10 @@ keeps `channel: relayed` and the complete confirmed verdict as `relay_verificati
 The [interface verifier contract](interface.md#relayed-authorization-verifier) defines
 the bounded invocation, JSON fields, refusals and next actions. A free-text source,
 recorded-question answer or caller-supplied verdict never grants authorization.
+The same verifier also confirms a relayed standing activation or revocation and a
+responder answer through the interface contract's `standing` and `answer` actions; their
+`single_use` keys, receipts and refusals work as below, and neither is a
+`pod-authorization/v1`.
 
 Each `single_use` key binds one confirmed authorization. An identical authorization
 may be recorded again idempotently and supports its existing action scope (publish
@@ -231,8 +237,11 @@ decide-only: the caller must merge the verified PR and exact commit, and Pod can
 intercept an external caller's later command. Read-only status and
 closure reporting use stored evidence without invoking the verifier.
 
-`release`, `deploy` and combined relayed scopes still refuse
-`relayed_authorization_refused`, naming typed consent in the coordinator's session.
+`release`, `deploy` and combined relayed scopes of a `pod-authorization/v1` still refuse
+`relayed_authorization_refused`, naming typed consent in the coordinator's session. A
+verified standing activation is the one relayed record that may name `release`, and
+`deploy` when widened, because the verifier confirms its exact scope; each effect under
+it stays bounded by R137.
 Every other kind
 requires session too, including owner handoff R105, runtime continuity R98,
 direct-user route/delegation constraints, general revisions/reopen without a recorded-question answer,
@@ -248,7 +257,8 @@ publish/merge trust only the configured host verifier's confirmation.
 
 Channels remain with revision history, governance decisions, obligation sources,
 withdrawals, reopens, constraints, continuity decisions, claims, retirement entries,
-route-failure clear decisions and Governor authorization/exception rows. Status and closure reports
+route-failure clear decisions, standing-authorization decisions and Governor
+authorization/exception rows. Status and closure reports
 show the channel of every owner decision they list, and distinguish R119's bounded
 derived-adoption projection from full owner decisions. A carried Governor row's
 authorization and efficiency exception remain predecessor decisions, omitted from
@@ -260,8 +270,11 @@ in contexts and Governor journals alike, so those readers
 refuse rather than misread carried consent, relay provenance or the closure format; earlier
 records, claims, closures and retirements retain their original meaning. Verified
 authorization records and contexts containing them use `decision_channels: 2`;
-genuine 0.17.0 readers refuse them. Other channel-bearing records retain `1` and
-existing records read unchanged, without conversion.
+genuine 0.17.0 readers refuse them. A context that holds a `standing_authorization`
+record, and a Governor journal holding a row whose authorization carries `standing`
+(R137), use `decision_channels: 3`; genuine 0.18.0 readers refuse them. Other
+channel-bearing records retain `1` and existing records read unchanged, without
+conversion.
 
 Owner revision decisions have no count cap. R121 moves earlier rows unchanged and
 the record's byte capacity contract governs fit; `governance_history` retains its
@@ -287,3 +300,86 @@ separate 64-candidate and 64-owner-decision bounds; derived adoptions spend no o
 - <a id="a373"></a>**A373** — Only an assurance accepts a valid Governor unit identifier; it can name an unprepared unit, and no later write can add, remove or change an existing row's binding, even with revision authority.
 - <a id="a374"></a>**A374** — Genuine 0.15.0 single-unit missing-proof, satisfied-proof and attached-action decisions, codes and complete journal rows match on the same inputs and clock; existing records validate without conversion.
 - <a id="a375"></a>**A375** — A's merge can pass its assurance gate while the objective's label and final acceptance remain withheld for B's open audit; admitting B's running audit still defers release with integration_unsettled, and satisfying every audit qualifies the objective.
+
+### R136 — Record a standing authorization ("yolo") for one objective
+
+Type: H · Scenarios: [A429](#a429), [A430](#a430), [A433](#a433), [A434](#a434), [A435](#a435), [A436](#a436), [A438](#a438), [A441](#a441)
+
+The owner may put one objective in yolo mode by recording a standing authorization, an owner decision of its own kind that the Governor applies to each exact candidate as it comes (R137). While it is active, the coordinator does not wait for the owner at the effects it covers. It removes only the wait for consent: it is not blanket permission, and no Pod gate changes.
+
+The objective context holds one append-only `standing_authorization` record, `pod-standing-authorization/v1`, with at most 32 `decisions` and at most 64 responder `answers` (R138). A decision uses R120's shared validator (`provenance: user_direct`, `instruction`, optional `channel`, and `relay` exactly when relayed) and adds a Pod-assigned `id` (`Y1`, `Y2`, ... in order), an `operation` (`activate` or `revoke`), `utc` from Pod's own clock, never from the caller, and the map `seq` current when it was recorded. The record also holds `observed`, Pod's latest matching read of the bound source (below). An activation also records:
+
+- `scope`: a nonempty set of `publish`, `merge`, `release`, `install` and `cleanup`; all five when omitted. `deploy` is in scope only through a widening.
+- `widening`: the exclusions the owner explicitly removed, by name; none by default. Naming `deploy` also adds it to `scope`, as in "yolo including deploy".
+- `exclusions`, computed by Pod: `deploy`, `paid_resources`, `secrets`, `unique_deletion` and `scope_growth`, minus the widening. Each keeps its normal owner question: production deployment, new paid or cloud resources, secrets, deleting unique or unmerged material, and work beyond the objective's scope. Pod enforces only `deploy` (outside the scope), a merge that names no pull request and unique material in cleanup mechanically (R137). It records and shows the other exclusions, and the coordinator keeps asking the owner about them.
+- `expires_at`, optional: a zoned timestamp later than now, stored in UTC.
+- `binding`, computed by Pod: a digest of the objective's scope, which detects a material change (below). It covers the bound issue's repository, number, locator and amendments, the issue body with every task-list checkbox marker (`[x]` or `[X]` at the start of a list item) normalized to `[ ]`, and the criteria. A direct objective's binding covers its criteria only.
+
+The owner turns it on at any time:
+
+- At start, the owner types `/pod <link> yolo`. The coordinator records the activation right after intake and before any admission.
+- Later, the owner types a plain instruction in the coordinator's own session, such as "use yolo from now on". The coordinator turns it into the exact decision (scope, widening, expiry) and records it with `channel: session`. Text an executor, a host agent or a mailbox relayed is `relayed`, never session (R120).
+- A relayed activation is accepted only when the host verifier's `standing` action confirms exactly this objective, operation, scope, widening and expiry (R139). Pod stores the complete verdict, takes `relay.owner_source` from it and consumes its `single_use` key. Without a configured verifier it refuses `relay_verifier_unconfigured`; other verifier failures reuse the existing relay codes.
+- An activation of an issue-bound objective reads the bound issue live through the existing issue recheck. A live body that differs from the bound digest, an unreconciled edit, refuses `issue_reconciliation_required` without a write; reconcile first.
+- An activation made while one is active replaces it, which is how a later widening or narrowing is recorded. One made while suspended is the owner's re-confirmation.
+- Activating restarts and reopens nothing. A consent wait that deferred `authorization_missing` is satisfied at the Governor's next check.
+
+"Stop yolo", typed in the session or verified-relayed, records a revocation and ends yolo at once; the next effect needs normal consent again. A revocation is accepted whenever the state is `active`, `suspended` or `expired`; when yolo was never on or is already revoked it writes nothing and reports the current state. Objective closure ends it too.
+
+The record keeps at most 32 decisions, and the last row is reserved so that a revocation always fits: an activation refuses `standing_authorization_full`, writing nothing, when the record already holds 31 or more decisions. Nothing is evicted, so the history stays complete.
+
+One function of the record and the objective context gives the state, used by every reader; the mode is `yolo` only in the state `active`:
+
+- `none`: no decision. `revoked`: the latest decision is a revocation.
+- `ended`: the objective is closed, continued by a successor claim or under historical retirement (R112).
+- `expired`: the latest activation's `expires_at` has passed.
+- `suspended`: Pod cannot show that the objective's scope is the one the owner confirmed. Reason `scope_changed`: Pod's latest observation of the bound issue body, with the current amendments and criteria, gives a digest different from the activation's `binding`. Reason `scope_unobserved`: the objective's current bound source is one Pod has not observed (the source digest differs from `observed`), so a stale binding is never hidden. Any change of body text other than checkbox markers, of the amendments or of the criteria is material, and Pod cannot judge wording, so every such change counts. Checkbox-only edits, including a tick Pod itself wrote (R131), are not scope, and a metadata-only issue edit changes no digest. A material change ends only when the owner activates again; `scope_unobserved` also ends when a later Pod read shows the scope unchanged.
+- `active`: otherwise.
+
+Whenever Pod itself reads the bound issue body for the objective's current source and it matches the bound digest, which happens at an activation, at a reconciling or introducing checkpoint and at a tick's readback and rebind, an objective that holds the record stores `observed`: the current source digest and the body scope digest. An objective without the record gains no field.
+
+Yolo belongs to one objective. A successor claim, a continuation or another objective never inherits it, and the record is not copied; the owner turns it on there if wanted. Runtime continuity and owner handoff of the same objective keep it. A carried Governor row (R118) authorizes nothing new. A host stop halts work as before. Pod records no host-stop state and adds no stop detector. A host whose stop is meant to end yolo must turn that stop into a verified relayed revocation (verifier action `standing`, operation `revoke`) for each objective with yolo on, before work resumes, so a resume can never silently restore a standing authorization from before the stop. Pod provides only that verified revocation path; the host's side is its own and stays NOT_RUN until the host proves it, and Pod fixtures never establish it.
+
+`pod internal standing-authorization` writes the record. It needs the recorded coordinator with current native authority, writes under the context lock without a map seq (like a constraint) and refuses a closed objective, a continued one and one under historical retirement with the existing codes `objective_closed`, `objective_continued` and `objective_retired`. Malformed input refuses `invalid_standing_authorization` with the record's bounded fields and writes nothing.
+
+### R137 — Apply a standing authorization to each exact candidate, never to more
+
+Type: H · Scenarios: [A431](#a431), [A432](#a432), [A433](#a433), [A434](#a434), [A437](#a437)
+
+The Governor's authority step is the only enforcement change. An action that carries an explicit `authorization` is decided exactly as before and yolo is not consulted, so explicit exact consent takes precedence. A caller-supplied authorization that contains `standing` refuses `invalid_authorization`: `standing` is stored evidence, never caller input.
+
+When the action carries none and the state is `active`, the Governor synthesizes an authorization covering every scope the action needs: `publish` for push, pull-request update, workflow dispatch, rerun, remote diagnostic and cancellation, and `merge`, `release` or `deploy` for an action of that kind. It does so only when each needed scope is in the active decision's `scope`. The synthesized `pod-authorization/v1` names the unit's bound `candidate` commit and `tree`, the sorted needed `scope`, `utc`, the target `<remote>/<base>` when the unit has one and, for merge, the action's `pr`. It also carries a stored-only `standing` object: the decision `id`, its `reference` (`standing_authorization/decisions/<index>`) and its `channel`. It carries no provenance, instruction, channel or relay. It is not an owner decision, so it is on no owner-decision inventory and appears as an effect (R139) instead. Every effect still names its candidate, tree, target and PR.
+
+Yolo is not applied, and the request defers `authorization_missing` with a detail naming what yolo does not cover, when:
+
+- a needed scope is outside the decision's `scope`, such as `deploy` unless widened, or a narrowed scope;
+- a merge names no `pr`;
+- the unit has no prepared binding or target;
+- the state is not `active`.
+
+Every other reason class and gate is unchanged: correctness, efficiency, `assurance_unbound`, readiness, failure classification, governance currency, the candidate, target and PR binding, exact-head merge with `--match-head-commit`, hosted CI, required review and the finding caps. Merge, release and deploy stay decide-only.
+
+Immediately before a managed remote effect, under the context lock, the Governor rechecks a row whose authorization carries `standing`. The state must still be `active` with the same decision id, the decision must still cover the row's scopes and the unit's prepared binding must be unchanged: the same candidate, commit and tree, and no dirty paths. Otherwise the row records FAILED with `standing_authorization_inactive` and no remote effect happens. The recheck reads Pod's own record and never runs the host verifier. Decide-only merge, release and deploy keep the caller-execution limit of R120: Pod cannot intercept an external caller's later command. Status counts a standing-synthesized row as a RECORDED authorization in a unit's delivery projection.
+
+The scopes `install` and `cleanup` have no Governor action. `install` lets the coordinator perform the stated post-merge installation and verification (R59) without asking. `cleanup` is applied by `internal cleanup-plan` (R94): with an active record that has `cleanup` in scope, the plan lists integrated worktrees and branches and merged remote heads as covered, lists unique material as asking unless `unique_deletion` was widened, and never covers protected resources. With yolo off nothing is covered. Pod still deletes nothing itself; deletion keeps R94's fresh guarded plan and guarded commands.
+
+### R138 — Follow a verified responder's answer only under yolo, never as the owner's
+
+Type: B,H · Scenarios: [A438](#a438), [A439](#a439)
+
+While the state is `active`, the coordinator follows the answer of the host's designated responder to a question recorded in the checkpoint, when the answer arrives through the verified answer path. `pod internal standing-authorization` with action `answer` takes the `question` (up to 512 characters, naming a currently recorded checkpoint question by id or reference), the answer `text` (up to 4096) and `relay.reference`. The host verifier's `answer` action must confirm it (R139); the verdict supplies `responder_source`. Pod stores an answer row (`A1`, `A2`, ...) with `question`, `text`, `decided_by: responder`, `responder_source`, `relay`, the complete `relay_verification`, `utc` and `under`, the id of the active decision. At most 64 are kept. The write changes no question and no other record.
+
+An answer is never an owner decision and never authority. It cannot activate, widen or revoke yolo, adopt governance, withdraw, or grant an authorization, and it is on no owner-decision inventory. Without active yolo it refuses `responder_answer_requires_yolo`, whose next action is to ask the owner as before; the responder's pick may be recorded in the question's `choices` as a recommendation, and Pod adds no recommendation field of its own. A question that is not recorded refuses `decision_question_unrecorded`.
+
+- <a id="a429"></a>**A429** - A yolo activation typed in the session right after intake and before any admission, and another in the middle of the objective, each store the shared owner-decision fields with `channel: session`, Pod's own time and the current binding. Omitted fields take the defaults: all five scopes, the default exclusions, no widening and no expiry. Nothing restarts or reopens, and a request that deferred `authorization_missing` decides ALLOW at the next Governor check.
+- <a id="a430"></a>**A430** - A relayed activation is recorded only when the verifier's `standing` action confirms exactly this objective, operation, scope, widening and expiry. `relay.owner_source` comes from the verdict, the complete verdict is stored and its `single_use` key is consumed.
+- <a id="a431"></a>**A431** - With yolo active, push, pull-request update, workflow dispatch, rerun, remote diagnostic, cancellation, merge naming its PR and release each decide ALLOW without supplied consent. Each row names its candidate, tree, target, PR and standing decision, and managed execution performs the effect. Explicit exact consent still works and takes precedence.
+- <a id="a432"></a>**A432** - The exclusions still ask. A deploy decision defers `authorization_missing` unless widened, as does a request needing a scope the decision narrowed away, and a merge that names no PR. `internal cleanup-plan` shows unique material as asking, and `paid_resources`, `secrets` and `scope_growth` are recorded and shown as excluded.
+- <a id="a433"></a>**A433** - An explicit widening such as "yolo including deploy" records the widening and adds `deploy` to the scope. A deploy decision then decides ALLOW and status shows the widening.
+- <a id="a434"></a>**A434** - "Stop yolo", typed in the session or verified-relayed, ends yolo at once: the next decision defers. A row admitted under yolo and not yet performed fails `standing_authorization_inactive` at the managed recheck with no remote effect. A revocation when yolo was never on writes nothing. After 31 activations a revocation still succeeds and ends yolo, and a further activation refuses `standing_authorization_full`.
+- <a id="a435"></a>**A435** - Closure ends yolo and the closure report shows it. A successor claim, a continuation or another objective never inherits it, and carried rows authorize nothing new.
+- <a id="a436"></a>**A436** - A reconciled change of requirement text, an amendment change and a criteria change each suspend yolo with `scope_changed` until a new owner activation, which refuses `issue_reconciliation_required` while a live edit is unreconciled. A tick Pod itself wrote (R131), a checkbox-only edit and a metadata-only issue edit keep yolo active. A bound source Pod has not observed suspends it with `scope_unobserved`, and a passed `expires_at` stops it.
+- <a id="a437"></a>**A437** - The gates stay. A failed hosted CI run, a missing required audit, governance drift, candidate movement and a target or PR mismatch still defer or refuse exactly as without yolo.
+- <a id="a438"></a>**A438** - Forged or mismatched relays refuse without a write: no configured verifier, a denial, a mismatched objective, operation, scope, question or answer, a reused `single_use` key, and a caller-supplied `standing` or `relay_verification`. A relayed constraint still refuses `relayed_decision_refused`. A missing, ambiguous or non-GitHub repository identity refuses `relay_verifier_mismatch` naming `target.repository`.
+- <a id="a439"></a>**A439** - With yolo active, a verified responder answer to a recorded question is stored with `decided_by: responder`, is on no owner-decision inventory and grants no authority. Without active yolo it refuses `responder_answer_requires_yolo`, and an unrecorded question refuses `decision_question_unrecorded`.
+- <a id="a441"></a>**A441** - Genuine 0.18.0 refuses a context holding `standing_authorization` and a journal holding a `standing` authorization at `decision_channels: 3`, preserving bytes. Existing records, session consent, verified publish and merge relays and R120's refusals are unchanged, and publish and merge verifier requests are byte-identical.
