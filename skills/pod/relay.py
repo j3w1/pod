@@ -1,0 +1,156 @@
+"""Host verification and durable single-use receipts for publish/merge consent."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import selectors
+import signal
+import subprocess
+import time
+
+from .errors import PodError
+from .contracts import bound
+from .util import atomic_json, bounded_json, bounded_text, digest, exact, normalize_timestamp
+
+SCHEMA = "pod-relay-verification/v1"
+TIMEOUT_S = 5
+MAX_VERDICT = 16 * 1024
+BINDING_FIELDS = {"schema", "reference", "action", "objective", "candidate", "target", "pr"}
+VERDICT_FIELDS = BINDING_FIELDS | {"verified", "owner_source", "decided_at", "single_use"}
+NEXT = {
+    "relay_verifier_unconfigured": "configure authorization_verifier in the personal config, or obtain session consent",
+    "relay_verifier_failed": "repair the host verifier and retry the same decision, or obtain session consent",
+    "relay_verifier_timeout": "resolve the host verifier timeout and retry the same decision, or obtain session consent",
+    "relay_verifier_malformed": "correct the host verifier JSON contract, or obtain session consent",
+    "relay_verifier_mismatch": "obtain a verified owner decision for this exact action, objective, candidate and target",
+    "relay_verifier_denied": "obtain a positive verified owner decision, or obtain session consent",
+    "relay_authorization_reused": "obtain a fresh owner decision with a new single_use key for this authorization",
+}
+
+
+def refusal(code: str, *, fields: list[str] | None = None) -> PodError:
+    # Verifier output, stderr, arguments and exception text never become diagnostics.
+    return PodError(code, f"Relayed authorization refused: {code}. Next: {NEXT[code]}",
+                    {"next_action": NEXT[code], **({"fields": fields} if fields else {})})
+
+
+def _output(command: list[str], request: dict) -> bytes:
+    """Bound memory and wall time, including a child that never closes stdout."""
+    process = None
+    try:
+        deadline = time.monotonic() + TIMEOUT_S
+        process = subprocess.Popen(command, cwd="/", stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, start_new_session=True,
+                                   env={k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")})
+        pending = memoryview(json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode() + b"\n")
+        os.set_blocking(process.stdin.fileno(), False)
+        output = bytearray()
+        with selectors.DefaultSelector() as ready:
+            ready.register(process.stdout, selectors.EVENT_READ)
+            ready.register(process.stdin, selectors.EVENT_WRITE)
+            while ready.get_map():
+                remaining = deadline - time.monotonic()
+                events = ready.select(max(0, remaining))
+                if remaining <= 0 or not events:
+                    raise refusal("relay_verifier_timeout")
+                for key, _ in events:
+                    if key.fileobj is process.stdin:
+                        pending = pending[os.write(process.stdin.fileno(), pending):]
+                        if not pending:
+                            ready.unregister(process.stdin)
+                            process.stdin.close()
+                    else:
+                        block = os.read(process.stdout.fileno(), min(4096, MAX_VERDICT + 1 - len(output)))
+                        if not block:
+                            ready.unregister(process.stdout)
+                        output.extend(block)
+                        if len(output) > MAX_VERDICT:
+                            raise refusal("relay_verifier_malformed")
+        process.wait(timeout=max(0, deadline - time.monotonic()))
+        if process.returncode:
+            raise refusal("relay_verifier_failed")
+        return bytes(output)
+    except subprocess.TimeoutExpired:
+        raise refusal("relay_verifier_timeout") from None
+    except OSError:
+        raise refusal("relay_verifier_failed") from None
+    finally:
+        if process is not None:
+            # Also stop descendants retaining the pipe after the command itself exited.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            process.stdin.close()
+            process.stdout.close()
+
+
+def _unique(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate field")
+        value[key] = item
+    return value
+
+
+def validate_verdict(value: object) -> dict:
+    """Validate stored evidence too, without invoking the host on read-only paths."""
+    try:
+        verdict = exact(value, VERDICT_FIELDS, VERDICT_FIELDS, name="relay verdict")
+        if verdict["schema"] != SCHEMA or type(verdict["verified"]) is not bool:
+            raise ValueError("verdict")
+        if verdict["action"] not in ("publish", "merge"):
+            raise ValueError("action")
+        for key, limit in (("reference", 512), ("objective", 256), ("owner_source", 512), ("single_use", 512)):
+            bounded_text(verdict[key], name=key, limit=limit).encode("utf-8")
+        candidate = exact(verdict["candidate"], {"commit", "tree"}, {"commit", "tree"}, name="relay candidate")
+        from .gitio import OBJECT_ID
+        if (any(not isinstance(v, str) or not OBJECT_ID.fullmatch(v) for v in candidate.values())
+                or len(candidate["commit"]) != len(candidate["tree"])):
+            raise ValueError("candidate")
+        target = exact(verdict["target"], {"repository", "remote", "base"}, {"repository", "remote", "base"},
+                       name="relay target")
+        for field in target:
+            bounded_text(target[field], name=field, limit=256).encode("utf-8")
+        if ((verdict["action"] == "publish" and verdict["pr"] is not None)
+                or (verdict["action"] == "merge" and (type(verdict["pr"]) is not int
+                    or not bound("authorization", "pr", "min") <= verdict["pr"] <= bound("authorization", "pr", "max")))):
+            raise ValueError("pr")
+        decided = normalize_timestamp(verdict["decided_at"], field="relay decision time",
+                                      code="relay_verifier_malformed")
+        return {**verdict, "decided_at": decided}
+    except (PodError, ValueError, TypeError, UnicodeError):
+        raise refusal("relay_verifier_malformed") from None
+
+
+def verify(command: list[str] | None, request: dict) -> dict:
+    if not command:
+        raise refusal("relay_verifier_unconfigured")
+    try:
+        value = json.loads(_output(command, request).decode("utf-8"), object_pairs_hook=_unique)
+    except (ValueError, UnicodeError, RecursionError):
+        raise refusal("relay_verifier_malformed") from None
+    verdict = validate_verdict(value)
+    if not verdict["verified"]:
+        raise refusal("relay_verifier_denied")
+    mismatches = sorted(key for key in BINDING_FIELDS if verdict[key] != request[key])
+    if mismatches:
+        raise refusal("relay_verifier_mismatch", fields=mismatches)
+    return verdict
+
+
+def check_use(project: Path, verdict: dict, *, consume: bool = False) -> None:
+    """One non-evicting receipt per key across all objectives, independent of journal retention."""
+    from .ledger import _lock, state_root
+    path = state_root(project) / ".relay-authorizations" / (digest(verdict["single_use"]) + ".json")
+    receipt = {"schema": "pod-relay-use/v1", "authorization": digest(verdict)}
+    with _lock(path):
+        if path.exists() or path.is_symlink():
+            if bounded_json(path, limit=1024) != receipt:
+                raise refusal("relay_authorization_reused")
+        elif consume:
+            atomic_json(path, receipt, limit=1024)

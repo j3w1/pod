@@ -14,9 +14,9 @@ The user controls one personal pool of exact routes. Each supported route is ena
 
 ### R11 — Read one personal YAML authority
 
-Type: B,H · Scenarios: [A05](../coordination.md#a05), [A32](../interface.md#a32), [A46](#a46), [A76](#a76)
+Type: B,H · Scenarios: [A05](../coordination.md#a05), [A32](../interface.md#a32), [A46](#a46), [A76](#a76), [A420](../delivery.md#a420)
 
-Read one personal `pod/v2` YAML authority for route states, Preferred, Pin, maximum active workers and the automatic-refresh setting. Project `.pod/config.yaml` keeps `schema: pod/v1` and may hold only restrictive Governor policy; the personal file may also carry personal Governor policy. Objective constraints retain provenance without becoming another preference file.
+Read one personal `pod/v2` YAML authority for route states, Preferred, Pin, maximum active workers and the automatic-refresh setting. Project `.pod/config.yaml` keeps `schema: pod/v1` and may hold only restrictive Governor policy; the personal file may also carry personal Governor policy and R120's optional host `authorization_verifier` command. Objective constraints retain provenance without becoming another preference file.
 
 ### R12 — Parse bounded YAML safely
 

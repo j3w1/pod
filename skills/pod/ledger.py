@@ -196,7 +196,7 @@ def _validate_context(value: object) -> dict:
     if "pod_ticks" in state:
         from .pod_ticks import validate
         validate(state["pod_ticks"])
-    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] != 1):
+    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2)):
         raise PodError("state_unsupported", "Decision channel representation is unsupported")
     from .succession import validate_link
     for name in _SUCCESSION_FIELDS & set(state):

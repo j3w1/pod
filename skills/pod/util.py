@@ -34,7 +34,8 @@ def _decision_relay(value):
     return relay
 
 
-def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
+def owner_decision(value: dict, *, kind: str, stored: bool = False,
+                   verified_authorization: bool = False) -> dict:
     """Validate the shared owner-decision fields; stored reads never add or rewrite fields.
 
     The enclosing boundary validates its own facts and provenance. Older inputs without
@@ -59,8 +60,18 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False) -> dict:
         raise PodError("invalid_decision_relay", "A complete relay is required exactly for channel relayed",
                        {"next_action": "classify the channel honestly and provide relay reference and owner_source only for relayed decisions"})
     if channel == "relayed":
-        _decision_relay(value["relay"])
-        if kind not in RELAYED_DECISIONS:
+        if kind == "authorization" and verified_authorization:
+            relay = exact(value["relay"], fields("authorization relay"), required("authorization relay"),
+                          name="authorization relay")
+            for field in relay:
+                bounded_text(relay[field], name=field, limit=bound("authorization relay", field))
+                try:
+                    relay[field].encode("utf-8")
+                except UnicodeEncodeError:
+                    raise PodError("invalid_decision_text", "Relay fields must be UTF-8 text") from None
+        else:
+            _decision_relay(value["relay"])
+        if kind not in RELAYED_DECISIONS and not (kind == "authorization" and verified_authorization):
             code = "relayed_authorization_refused" if kind == "authorization" else "relayed_decision_refused"
             action = "obtain the owner's decision typed in the coordinator's own session for this decision kind"
             raise PodError(code, f"A relayed {kind} decision is refused. Next: {action}",
@@ -148,11 +159,17 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
 
 def protect_decision_record(value: dict) -> None:
     """Earlier readers must refuse channel fields and closure reports they cannot read faithfully."""
-    def carries_channel(item):
-        return (isinstance(item, dict) and (bool((CHANNEL_FIELDS | {"decision_channels"}) & item.keys()) or any(carries_channel(v) for v in item.values()))
-                or isinstance(item, list) and any(carries_channel(v) for v in item))
-    if carries_channel(value):
-        value["decision_channels"] = 1
+    def representation(item):
+        if isinstance(item, dict):
+            own = (2 if "relay_verification" in item or item.get("decision_channels") == 2
+                   else 1 if (CHANNEL_FIELDS | {"decision_channels"}) & item.keys() else 0)
+            return max([own, *(representation(v) for v in item.values())])
+        if isinstance(item, list):
+            return max((representation(v) for v in item), default=0)
+        return 0
+    version = representation(value)
+    if version:
+        value["decision_channels"] = version
 _ZONED_TIMESTAMP = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})\Z")
 

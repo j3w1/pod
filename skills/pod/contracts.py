@@ -37,6 +37,7 @@ ACTION_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "r
                 "merge", "release", "deploy", "cancel_validation")
 PURPOSES = ("validation", "diagnostic", "checkpoint", "release", "cancellation")
 AUTHORIZATION_SCOPES = ("publish", "merge", "release", "deploy")
+PR_NUMBER = {"type": "integer", "min": 1, "max": 2147483647}
 SEVERITIES = ("blocker", "major", "minor", "info")
 TRIAGE = ("required_correction", "advisory")
 
@@ -167,6 +168,7 @@ TABLE = {
     "admission map": definition({"seq": _MAP_FIELDS["seq"], "obligations": _MAP_FIELDS["obligations"],
                                  "proposals": _MAP_FIELDS["proposals"]}),
     "action": definition({"kind": choice(ACTION_KINDS), **{key: text() for key in ("candidate", "target", "reason")},
+                          "pr": PR_NUMBER,
                           "unit": ident(), "purpose": choice(PURPOSES), "effects": {**items(16, {"type": "text", "max_length": 256, "prefixes": list(EFFECT_PREFIXES), "nonempty_suffix": True}), "unique": True},
                           "authorization": record("authorization"), "diagnostic": record("diagnostic"),
                           "evidence": items(16, text()),
@@ -225,11 +227,15 @@ TABLE["authorization"] = definition({
     "scope": {**items(8, choice(AUTHORIZATION_SCOPES)), "min_items": 1},
     "utc": {"type": "text", "form": "timezone-aware ISO timestamp"},
     "provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
-    "channel": {**choice(("session", "relayed")), "form": "relayed authorization is refused"},
-    "relay": record("decision_relay"),
+    "channel": {**choice(("session", "relayed")), "form": "relayed publish/merge requires the host verifier"},
+    "relay": record("authorization relay"),
+    "pr": {**PR_NUMBER, "form": "required for relayed merge only; equals action.pr"},
+    "relay_verification": {"type": "object", "form": "stored verifier verdict; never caller authority"},
 }, ("schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"))
 TABLE["decision_relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
                                      ("reference", "owner_source"))
+TABLE["authorization relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
+                                          ("reference",))
 TABLE["finding"] = definition({
     "finding": ident(), "severity": choice(SEVERITIES), "triage": choice(TRIAGE),
     "summary": text(512),
