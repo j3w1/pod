@@ -43,9 +43,12 @@ ADMISSION_ROW = {"kind", "id", "role", "state", "dispatch", "reported"}
 NATIVE = {"runtime", "owner", "runs", "dispatches", "exited_terminals"}
 PRESERVED_OUTCOMES = ("pending", "UNKNOWN", "FAILED")
 MAX_OBJECTIVES = 16
-MAX_PATHS = 8
 MAX_RECORDS = 64
 MAX_LISTED = 64
+# A decision releases as many paths as it can leave retained: a record with at most 64 recorded worktrees can
+# release them all in one decision (its record accepts no later write). The whole request names at most as many,
+# which bounds the native reads made while every requested objective lock is held.
+MAX_PATHS = MAX_LISTED
 MAX_DELIVERY = 16
 ACTION = ("Read it with pod status --objective {}; the owner's historical retirement released its worktrees: "
           "it is not completed, and its record accepts no writes.")
@@ -788,6 +791,8 @@ def _requested(value: object) -> list[dict]:
         rows.append({"objective": row["objective"], "release": list(row["release"])})
     if len({row["objective"] for row in rows}) != len(rows):
         raise PodError("invalid_request", "Each objective is named once")
+    if sum(len(row["release"]) for row in rows) > MAX_PATHS:
+        raise PodError("invalid_request", f"A request releases at most {MAX_PATHS} paths across its objectives")
     return rows
 
 
