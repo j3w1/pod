@@ -288,9 +288,12 @@ Type: B · Scenarios: [A432](delivery.md#a432), [A440](#a440)
 Public status for a selected objective adds `standing_authorization`, the versioned
 projection defined under the standing-authorization status contract: the mode (`yolo`
 with its scope, exclusions, widening and source, or `normal`), each effect authorized
-under it and each clarification the host's responder decided (R136-R138). The closure
-report and the acknowledgement of the checkpoint that records `delivery` carry the same
-projection, so a final report can name the mode and its effects. The projection reads
+under it and each clarification the host's responder decided (R136-R138). The
+acknowledgement of the checkpoint that records `delivery` carries the same projection,
+and so does the stored closure report of an objective that holds the record, so a final
+report can name the mode and its effects. A closure of an objective that never held the
+record keeps its earlier shape and channel discriminator, so earlier readers still read
+it, and readers show its mode as `normal`. The projection reads
 stored facts only. It never runs the verifier and attests nothing about the host's
 present decision. Each standing decision is also listed among the owner decisions of
 status and the closure report, as kind `standing_authorization` with its channel (R120).
