@@ -695,6 +695,64 @@ class DecisionTests(AbsentCase):
         self.assertEqual(later, {"objective": "retired", "reconcile": "replayed"})
 
 
+class ReleaseCapacityTests(AbsentCase):
+    """A decision releases every recorded worktree a record can leave retained, not only eight (A268)."""
+
+    def many(self, count):
+        """Delivered history whose workers each ran in their own task worktree, one after another."""
+        self.prepare()
+        self.write([self.criterion(), *(self.sub(f"S{index}", boundary={"paths": [f"area{index}"]})
+                                        for index in range(count))])
+        paths = []
+        for index in range(count):
+            path = str(self.root / f"task-{index}")
+            git(self.project, "worktree", "add", "-q", "-b", f"task-{index}", path)
+            frozen = self.packet([f"S{index}"], boundary={"paths": [f"area{index}"]})
+            admission = guarded_start(self.project, "objective", owner="owner", run="run", task=f"task-{index}",
+                                      plan_revision="plan", frozen_packet=frozen, worktree="path:" + path,
+                                      port=self.port)["admission"]
+            self.settle(admission)
+            rows = self.stored()
+            for row in rows:
+                if row["id"] == f"S{index}":  # Restated as the delivered-history fixture does.
+                    row.pop("executor", None)
+                    row.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+            self.report(admission, frozen, map={"obligations": rows})
+            self.instances[path] = f"wt2:local:task-{index}"
+            paths.append(path)
+        self.op("checkpoint", value=self.core(obligations=self.stored(), worktree=self.binding()))
+        self.lose()
+        return paths
+
+    def test_more_than_eight_recorded_worktrees_retire_in_one_decision(self):
+        release = sorted([*self.many(8), self.where()])  # Nine: one more than the earlier limit.
+        self.assertGreater(len(release), 8)
+        found = self.retire(objectives=self.request(*release))
+        verdict = found["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+        self.assertEqual((verdict["facts"]["retained"], verdict["facts"]["unrecorded_locations"]), ([], "none"))
+        self.assertEqual([row["path"] for row in verdict["facts"]["locations"]], release)
+        decision = self.decide(objectives=self.request(*release))
+        self.assertEqual(self.retire(decision, objectives=self.request(*release))["status"], "retired")
+        entry = read(self.project, "objective")["historical_retirement"]
+        self.assertEqual(entry["released"], release)
+        block = self.status()["retirement"]
+        self.assertEqual((block["released"], block["retained"]), (release, []))
+
+    def test_a_request_names_at_most_sixty_four_paths(self):
+        paths = [str(self.root / f"path-{index}") for index in range(65)]
+        found = self.retire(objectives=[{"objective": "unknown", "release": paths[:64]}])
+        self.assertEqual(found["objectives"][0]["condition"], "objective_unknown")  # Sixty-four pass validation.
+        for objectives, words in (
+                (self.request(*paths), "1 to 64"),
+                ([{"objective": "first", "release": paths[:33]}, {"objective": "second", "release": paths[33:]}],
+                 "at most 64 paths across its objectives")):
+            with self.subTest(words=words), self.assertRaises(PodError) as caught:
+                self.retire(objectives=objectives)
+            self.assertEqual(caught.exception.code, "invalid_request")
+            self.assertIn(words, str(caught.exception))
+
+
 class ConcurrencyTests(AbsentCase):
     """Review 1 F1: a path that changes while Pod reads, or after it read, never retires on the old facts."""
 
