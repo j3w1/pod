@@ -5,9 +5,78 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import objective_root, read
-from pod.status import QUESTION_BYTES
+from pod.status import QUESTION_BYTES, status
 from tests.kernel_support import KernelCase
 from tests import test_status_selection as selection
+
+
+class RecordedQuestionSelectionTests(KernelCase):
+    def selected(self, *args):
+        return selection.StatusSelectionTests.status(self, *args)
+
+    def test_no_current_run_omits_projection(self):
+        observed = status(self.project, None, current_run_fn=lambda: {"run": None})
+        self.assertEqual(observed["status"], "selection_required")
+        self.assertNotIn("recorded_questions", observed)
+
+    def test_current_run_read_failure_omits_projection(self):
+        def unavailable():
+            raise PodError("fixture_native_unavailable", "unavailable")
+        observed = status(self.project, None, current_run_fn=unavailable)
+        self.assertEqual((observed["status"], observed["blocker"]), ("unavailable", "fixture_native_unavailable"))
+        self.assertNotIn("recorded_questions", observed)
+
+    def test_ambiguous_run_omits_projection_without_writing(self):
+        self.intake()
+        self.write([self.criterion()], objective="second", governance={"base_ref": "target"})
+        paths = [objective_root(self.project, key) / "context.json" for key in ("objective", "second")]
+        before = [path.read_bytes() for path in paths]
+        observed = self.selected("--run", "run")
+        self.assertEqual(observed["status"], "selection_required")
+        self.assertEqual({row["objective"] for row in observed["choices"]}, {"objective", "second"})
+        self.assertNotIn("recorded_questions", observed)
+        self.assertEqual([path.read_bytes() for path in paths], before)
+
+    def test_run_without_matching_objective_omits_projection(self):
+        self.intake()
+        observed = self.selected("--run", "other")
+        self.assertEqual((observed["status"], observed["objective"]), ("observed", None))
+        self.assertNotIn("recorded_questions", observed)
+
+    def test_superseded_run_omits_projection(self):
+        superseded = [{"objective": "earlier", "blocked": True, "converted": False}]
+        with patch("pod.ledger.superseded_for_run", return_value=superseded):
+            observed = self.selected("--run", "run")
+        self.assertEqual((observed["status"], observed["blocker"]), ("blocked", "objective_superseded"))
+        self.assertEqual(observed["superseded"], superseded)
+        self.assertNotIn("recorded_questions", observed)
+
+    def test_run_record_read_failure_omits_projection(self):
+        with patch("pod.status.contexts_for_run", side_effect=PodError("fixture_unreadable", "unavailable")):
+            observed = self.selected("--run", "run")
+        self.assertEqual((observed["status"], observed["blocker"]), ("blocked", "fixture_unreadable"))
+        self.assertNotIn("recorded_questions", observed)
+
+    def test_explicit_unknown_objective_has_unavailable_projection(self):
+        observed = self.selected("--objective", "unknown")
+        self.assertEqual((observed["status"], observed["blocker"]), ("blocked", "objective_unknown"))
+        projection = observed["recorded_questions"]
+        self.assertEqual((projection["status"], projection["total"], projection["missing"]),
+                         ("unavailable", None, ["checkpoint"]))
+
+    def test_explicit_objective_keeps_projection_on_run_mismatch(self):
+        self.intake(questions=[])
+        observed = self.selected("--run", "other", "--objective", "objective")
+        self.assertEqual(observed["blocker"], "objective_run_mismatch")
+        self.assertEqual(observed["recorded_questions"]["status"], "complete")
+
+    def test_single_objective_run_has_same_projection_as_explicit_selection(self):
+        self.intake(questions=[{"id": "question", "text": "Choose", "choices": ["yes"], "resolved": False}])
+        by_run = self.selected("--run", "run")
+        by_name = self.selected("--objective", "objective")
+        self.assertEqual(by_run["objective"], "objective")
+        self.assertEqual(by_run["recorded_questions"], by_name["recorded_questions"])
+        self.assertEqual(by_run["recorded_questions"]["status"], "complete")
 
 
 class RecordedQuestionStatusTests(KernelCase):

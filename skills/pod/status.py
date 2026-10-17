@@ -274,7 +274,6 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
               "routes": project_routes(project, preferences=preferences, observations=NOT_READ)["summary"],
               "constraints": [], "route_decisions": [], "route_mismatch": False,
               "active_constraints": [],
-              "recorded_questions": recorded_questions(None),
               "effective_unknown": False,
               "installed_version_drift": False, "blocker": None,
               "next_safe_action": "select a native Run", "usage": "unknown", "cost": "unknown"}
@@ -311,6 +310,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             superseded = superseded_for_run(run) if context_root is None else []
         else:
             state = read(project, objective)
+            result["recorded_questions"] = recorded_questions(state.get("checkpoint") if state else None)
             if state is None or not isinstance(state.get("checkpoint"), dict):
                 from .ledger import state_root
                 result.update({"status": "blocked", "blocker": "objective_unknown",
@@ -375,7 +375,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                             "the record is not converted")})
         return result
     checkpoint = state.get("checkpoint") if state else None
-    result["recorded_questions"] = recorded_questions(checkpoint)
+    if state is not None:
+        result["recorded_questions"] = recorded_questions(checkpoint)
     recorded = checkpoint_identity(checkpoint) if checkpoint else None
     drift = bool(checkpoint and not identity_matches(recorded, running))
     admissions = list(state["admissions"].values()) if state else []

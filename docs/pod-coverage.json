@@ -5591,6 +5591,15 @@
         "tests.test_recorded_questions.RecordedQuestionStatusTests.test_unreadable_record_is_explicitly_unavailable",
         "tests.test_recorded_questions.RecordedQuestionStatusTests.test_row_count_and_byte_bounds_report_partial_not_complete",
         "tests.test_recorded_questions.RecordedQuestionStatusTests.test_oversized_fact_and_missing_sequence_are_partial_without_invention",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_no_current_run_omits_projection",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_current_run_read_failure_omits_projection",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_ambiguous_run_omits_projection_without_writing",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_run_without_matching_objective_omits_projection",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_superseded_run_omits_projection",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_run_record_read_failure_omits_projection",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_explicit_unknown_objective_has_unavailable_projection",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_explicit_objective_keeps_projection_on_run_mismatch",
+        "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_single_objective_run_has_same_projection_as_explicit_selection",
         "tests.test_readiness.CompatibilityTests.test_open_work_for_the_owner_and_a_peer"
       ],
       "status": "NOT_RUN"

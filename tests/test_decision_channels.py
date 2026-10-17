@@ -223,7 +223,13 @@ class PublicAuthorizationChannelTests(unittest.TestCase):
                 with self.assertRaises(PodError) as caught:
                     case.op(operation, action=request)
                 self.assertEqual(caught.exception.code, code)
-                self.assertIn("session", caught.exception.detail["next_action"])
+                if code == "relay_verifier_unconfigured":
+                    self.assertEqual(caught.exception.detail["next_action"],
+                                     "configure authorization_verifier in the personal config, or obtain session consent")
+                else:
+                    self.assertEqual(caught.exception.detail["next_action"],
+                                     "obtain the owner's consent typed in the coordinator's own session "
+                                     "for this exact candidate and scope")
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(case.remote.calls, calls)
 

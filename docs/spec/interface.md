@@ -475,6 +475,10 @@ one JSON object and a newline on stdin and closes stdin. References and expected
 bindings are never interpolated into a shell command or appended to argv. Keep
 credentials out of command arguments and verdict fields.
 
+Genuine 0.17.0 rejects a config containing `authorization_verifier`. For rollback,
+the host must remove that key to restore config readability; this does not make
+new verified records readable by older versions.
+
 The command is a trusted, read-only host decision lookup. It must authenticate the
 owner source and confirm the decision independently; echoing Pod's expectation
 is insufficient. It must return a stable `single_use` key for the decision, unique
@@ -518,7 +522,9 @@ the authorized commit. Release/deploy and combined relayed scopes remain refused
 Merge stays decide-only: project governance must invoke the Governor at its merge
 boundary and execute that exact request; Pod cannot intercept a later external
 merge command. Managed execution rechecks the verifier and current prepared
-candidate immediately before its effect. Failure after admission marks that row
+candidate immediately before its effect. Caller-performed publish reservations
+have the same external-caller pre-effect revalidation limit as merge; use managed
+`governor-execute` for the rechecked publish path. Failure after admission marks that row
 FAILED with the refusal code and performs no effect; it never silently resubmits.
 
 | Refusal code | Next action |
