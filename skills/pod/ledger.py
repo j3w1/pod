@@ -192,11 +192,14 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "pod_ticks"}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    if "standing_authorization" in state:
+        from .standing import validate_record
+        validate_record(state["standing_authorization"])
     if "pod_ticks" in state:
         from .pod_ticks import validate
         validate(state["pod_ticks"])
-    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2)):
+    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2, 3)):
         raise PodError("state_unsupported", "Decision channel representation is unsupported")
     from .succession import validate_link
     for name in _SUCCESSION_FIELDS & set(state):
@@ -975,14 +978,17 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
     from .util import context_decisions
     from .governor import _read_journal, _record_path
     try:
-        decisions = context_decisions(state, _read_journal(_record_path(project, objective)))
+        journal = _read_journal(_record_path(project, objective))
+        decisions = context_decisions(state, journal)
     except PodError:
+        journal = None
         decisions = context_decisions(state)
     from .worker_tabs import rows as tab_rows
     placements = {row["admission_id"]: row["placement"] for row in (native or {}).get("assignments", [])
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
+            **({"standing_context": state, "standing_journal": journal} if "standing_authorization" in state else {}),
             "worker_tabs": tab_rows(state, placements, outstanding=outstanding),
             # Tab intent is shown by status/acknowledgements, never added to the
             # immutable closure report. It can outlive objective closure.
@@ -1037,6 +1043,15 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
             "status": status_projection(map_state, ctx),
             "label": label_qualification(map_state, ctx, candidate if candidate is not None else ctx["candidate"])}
     view["report"] = report_projection(map_state, ctx) if map_state is not None else None
+    if view["report"] is not None and "standing_authorization" not in view["report"]:
+        # The read projection is additive; an older stored closure retains its exact report bytes.
+        from .standing import projection as standing_projection
+        from .governor import _read_journal, _record_path
+        try:
+            journal = _read_journal(_record_path(project, objective))
+        except PodError:
+            journal = None
+        view["report"]["standing_authorization"] = standing_projection(state, journal)
     view["placements"] = {row["admission_id"]: row["placement"]
                           for row in (native or {}).get("assignments", [])
                           if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
@@ -1317,6 +1332,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
                              verification=core.get("verification"))
+        if "standing_authorization" in state:
+            ctx["standing_context"] = {**state, "checkpoint": {**(state.get("checkpoint") or {}), **core}}
         ctx["operation"] = "checkpoint"
         ctx["governance_refresh"] = refresh
         ctx["derived_adoption"] = derived_adoption
@@ -1450,6 +1467,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             result["pod_tick_intake"] = tick_intake(state, map_state)
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx)
+        from .standing import projection as standing_projection
+        from .governor import _read_journal, _record_path
+        result["standing_authorization"] = standing_projection(state, _read_journal(_record_path(project, objective)))
         return result
 
 

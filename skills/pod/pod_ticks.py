@@ -147,11 +147,14 @@ def _validate_block(block: dict) -> None:
         raise PodError("state_unsupported", "PoD block is malformed")
 
 
-def _facts(ledger: dict, source: dict, body: str) -> None:
+def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None) -> None:
     from .github import pod_lines
     lines = {str(number): [line["ticked"] for line in rows] for number, rows in pod_lines(body).items()}
     ledger["facts"] = {"source": digest(source), "body_sha256": _hash(body), "lines": lines}
     ledger["read"] = {"status": "read", "reason": None}
+    if context is not None:
+        from .standing import observe
+        observe(context, source, body)
     # Once an unticked or missing line is observed, earlier success
     # no longer establishes continuous authorship of a later tick.
     ledger["authors"] = {key: author for key, author in ledger["authors"].items()
@@ -169,7 +172,7 @@ def refresh(state: dict, project: Path, source: dict) -> None:
         if live is None or _hash(live["body"]) != source["body_sha256"]:
             ledger["read"] = {"status": "not_read", "reason": result.get("reason") or "body_digest_mismatch"}
         else:
-            _facts(ledger, source, live["body"])
+            _facts(ledger, source, live["body"], context=state)
     except PodError as exc:
         ledger["read"] = {"status": "not_read", "reason": exc.code}
 
@@ -431,7 +434,8 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
             if row is not None or live is not None and pod in pod_lines(live["body"]):
                 ticks["requests"][key] = deepcopy(request)
                 if live is not None:
-                    _facts(ticks, {**source, "body_sha256": _hash(live["body"])}, live["body"])
+                    _facts(ticks, {**source, "body_sha256": _hash(live["body"])}, live["body"],
+                           context=recorded if _hash(live["body"]) == source["body_sha256"] else None)
                 store._write(path, recorded)
         ctx = store.kernel_context(project, objective, recorded, None)
         exc.detail = {**(exc.detail or {}), "pod": pod, "direction": request["direction"],
@@ -457,7 +461,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                             "code": "line_missing", "reason": "line_missing", "row": "C2",
                             "readback": {"body_sha256": _hash(body), "state": live["state"], "ticked": None},
                             "pod_ticks": projection(state, store.map_of(state), ctx, project=project, objective=objective)})
-        _facts(ledger, source, body)
+        _facts(ledger, source, body, context=state)
         ctx = store.kernel_context(project, objective, state, None)
         view = projection(state, store.map_of(state), ctx, project=project, objective=objective)
         row = next((row for row in view["lines"] if row["pod"] == pod), None)
@@ -598,7 +602,7 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             state["checkpoint"]["objective_source"] = {**source, "body_sha256": now}
             ledger["last_rebind"] = digest(state["checkpoint"]["objective_source"])
         if live is not None:
-            _facts(ledger, state["checkpoint"]["objective_source"], live["body"])
+            _facts(ledger, state["checkpoint"]["objective_source"], live["body"], context=state)
             # Drift observations are stale facts: never pretend that their body
             # is the checkpoint binding, even though status retains the readback.
             if now != state["checkpoint"]["objective_source"]["body_sha256"]:

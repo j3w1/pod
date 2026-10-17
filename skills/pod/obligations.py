@@ -2122,6 +2122,12 @@ def report_projection(state: dict, ctx: dict) -> dict:
         result["owner_decisions"] = decisions
     if not legacy_report:
         result["decision_channels"] = 1
+        if "standing_context" in ctx:
+            from .standing import projection as standing_projection
+            context = ctx["standing_context"]
+            result["standing_authorization"] = standing_projection(
+                {**context, "checkpoint": {**(context.get("checkpoint") or {}), **state}}, ctx.get("standing_journal"))
+            result["decision_channels"] = 3
     if state.get("delivery") is not None:
         result["delivery"] = deepcopy(state["delivery"])
     if status == "quiescent":

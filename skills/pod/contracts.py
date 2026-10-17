@@ -231,11 +231,31 @@ TABLE["authorization"] = definition({
     "relay": record("authorization relay"),
     "pr": {**PR_NUMBER, "form": "required for relayed merge only; equals action.pr"},
     "relay_verification": {"type": "object", "form": "stored verifier verdict; never caller authority"},
+    "standing": {"type": "object", "stored_only": True, "form": "standing decision id, reference and channel; never caller authority"},
 }, ("schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference"))
 TABLE["decision_relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
                                      ("reference", "owner_source"))
 TABLE["authorization relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
                                           ("reference",))
+STANDING_SCOPES = ("publish", "merge", "release", "install", "cleanup", "deploy")
+STANDING_EXCLUSIONS = ("deploy", "paid_resources", "secrets", "unique_deletion", "scope_growth")
+TABLE["standing decision"] = definition({
+    "provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
+    "channel": choice(("session", "relayed")), "relay": record("authorization relay"),
+    "scope": {**items(6, choice(STANDING_SCOPES)), "min_items": 1, "unique": True},
+    "widening": {**items(5, choice(STANDING_EXCLUSIONS)), "unique": True},
+    "expires_at": {"type": "text", "nullable": True, "form": "future timezone-aware ISO timestamp"},
+}, ("provenance", "instruction"))
+TABLE["responder answer"] = definition({
+    "question": text(512), "text": text(4096),
+    "relay": {"type": "object", "fields": {"reference": text(512)}},
+}, ("question", "text", "relay"))
+TABLE["standing authorization"] = definition({
+    **{key: text(4096) for key in ("project", "objective", "owner")},
+    "action": choice(("activate", "revoke", "answer", "show")),
+    "decision": {**record("standing decision"), "fields": TABLE["standing decision"]["fields"]},
+    "answer": {**record("responder answer"), "fields": TABLE["responder answer"]["fields"]},
+}, ("project", "objective", "owner", "action"))
 TABLE["finding"] = definition({
     "finding": ident(), "severity": choice(SEVERITIES), "triage": choice(TRIAGE),
     "summary": text(512),

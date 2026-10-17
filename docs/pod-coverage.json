@@ -5605,6 +5605,162 @@
         "tests.test_readiness.CompatibilityTests.test_open_work_for_the_owner_and_a_peer"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A429",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_standing_authorization.StandingRecordTests.test_activation_at_intake_and_mid_objective_satisfies_next_check",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A430",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_standing_authorization.StandingRecordTests.test_relay_activation_confirms_scope_operation_expiry_and_consumes_key",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A431",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingGovernorTests.test_all_remote_action_kinds_receive_exact_standing_evidence",
+        "tests.test_standing_authorization.StandingGovernorTests.test_managed_push_and_pr_execute_and_delivery_counts_recorded",
+        "tests.test_standing_authorization.StandingGovernorTests.test_managed_dispatch_and_diagnostic_perform_without_consent_wait",
+        "tests.test_standing_authorization.StandingGovernorTests.test_managed_failed_job_rerun_keeps_classification_and_attempt_binding",
+        "tests.test_standing_authorization.StandingGovernorTests.test_managed_cancellation_only_reaches_older_validation_in_its_unit",
+        "tests.test_standing_authorization.StandingGovernorTests.test_explicit_exact_consent_takes_precedence_and_bad_consent_never_falls_back"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A432",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingGovernorTests.test_excluded_scopes_merge_without_pr_and_unprepared_targets_still_ask",
+        "tests.test_standing_authorization.StandingCleanupTests.test_cleanup_projection_covers_integrated_asks_unique_and_never_covers_protected"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A433",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_standing_authorization.StandingGovernorTests.test_explicit_deploy_widening_covers_all_needed_effect_scopes",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A434",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingRecordTests.test_revoke_is_immediate_and_revoke_when_off_is_a_noop",
+        "tests.test_standing_authorization.StandingRecordTests.test_verified_relay_revoke_and_replacement_preserve_history",
+        "tests.test_standing_authorization.StandingGovernorTests.test_revocation_between_admission_and_effect_fails_row_without_effect",
+        "tests.test_standing_authorization.StandingCapacityTests.test_activation_reserves_last_slot_so_revoke_always_fits"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A435",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingVisibilityTests.test_end_states_and_other_objectives_never_inherit_consent",
+        "tests.test_standing_authorization.StandingSuccessionTests.test_real_successor_claim_carries_effect_but_never_standing_authority",
+        "tests.test_standing_authorization.StandingVisibilityTests.test_status_text_run_selection_and_closure_share_projection_without_verifier",
+        "tests.test_standing_authorization.StandingSuccessionTests.test_successor_claim_between_admission_and_effect_preserves_pending_predecessor"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A436",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingRecordTests.test_expiry_and_criteria_change_suspend_until_owner_reconfirmation",
+        "tests.test_standing_authorization.StandingSourceTests.test_activation_reads_current_issue_and_refuses_unreconciled_body",
+        "tests.test_standing_authorization.StandingSourceTests.test_pod_tick_rebind_keeps_scope_active",
+        "tests.test_standing_authorization.StandingSourceTests.test_checkbox_reconciliation_and_metadata_only_edits_keep_active",
+        "tests.test_standing_authorization.StandingSourceTests.test_reconciled_requirement_text_suspends_and_owner_reconfirms",
+        "tests.test_standing_authorization.StandingSourceTests.test_amendment_change_suspends",
+        "tests.test_standing_authorization.StandingSourceTests.test_unobserved_rebind_fails_closed_until_matching_observation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A437",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingGovernorTests.test_red_hosted_ci_stays_a_failure_and_classification_gate",
+        "tests.test_standing_authorization.StandingGovernorTests.test_target_candidate_and_missing_audit_gates_stay",
+        "tests.test_standing_authorization.StandingGovernorTests.test_governance_drift_still_refuses_before_a_journal_write",
+        "tests.test_standing_authorization.StandingGovernorTests.test_candidate_movement_between_admission_and_effect_fails_row_without_effect"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A438",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingRefusalTests.test_unconfigured_denied_and_mismatched_relay_activation_write_nothing",
+        "tests.test_standing_authorization.StandingRefusalTests.test_reused_key_and_mismatched_question_or_answer_write_nothing",
+        "tests.test_standing_authorization.StandingRefusalTests.test_caller_cannot_supply_standing_or_verification_and_constraints_still_refuse"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A439",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingResponderTests.test_verified_active_answer_is_responder_observation_and_never_authority",
+        "tests.test_standing_authorization.StandingResponderTests.test_without_active_yolo_answers_keep_owner_route_and_unrecorded_questions_refuse",
+        "tests.test_standing_authorization.StandingResponderTests.test_answer_cannot_carry_owner_decisions_or_verifier_proof",
+        "tests.test_standing_authorization.StandingCapacityTests.test_sixty_four_verified_answers_fit_and_next_refuses_without_write"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A440",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingVisibilityTests.test_status_text_run_selection_and_closure_share_projection_without_verifier",
+        "tests.test_standing_authorization.StandingVisibilityTests.test_delivery_checkpoint_acknowledgement_contains_the_same_mode_and_effects",
+        "tests.test_standing_authorization.StandingVisibilityTests.test_projection_bounds_newest_effects_and_preserves_history"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A441",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_standing_authorization.StandingCompatibilityTests.test_genuine_0180_refuses_standing_context_and_journal_preserving_bytes",
+        "tests.test_standing_authorization.StandingCompatibilityTests.test_genuine_0180_session_and_verified_relay_records_read_unchanged",
+        "tests.test_standing_authorization.StandingCompatibilityTests.test_publish_and_merge_verifier_requests_are_byte_identical_to_0180",
+        "tests.test_standing_authorization.StandingCompatibilityTests.test_normal_closure_keeps_genuine_0180_shape_and_readers_add_normal_mode",
+        "tests.test_standing_authorization.StandingCompatibilityTests.test_ordinary_payload_vocabulary_does_not_select_new_discriminator"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }
