@@ -3260,7 +3260,9 @@
         "tests.test_retirement_absent.NativeIdentityTests.test_a_decided_batch_retires_the_others_and_refuses_that_objective_alone",
         "tests.test_decision_channels.RetirementChannelTests.test_earlier_retirement_replays_explicit_default_session_only",
         "tests.test_retirement_absent.PreservationTests.test_retiring_an_absent_path_keeps_history_and_reads_back_its_reservations",
-        "tests.test_retirement_capacity.RetirementCapacityTests.test_full_record_compacts_settled_history_before_entry_pointer"
+        "tests.test_retirement_capacity.RetirementCapacityTests.test_full_record_compacts_settled_history_before_entry_pointer",
+        "tests.test_retirement_absent.ReleaseCapacityTests.test_more_than_eight_recorded_worktrees_retire_in_one_decision",
+        "tests.test_retirement_absent.ReleaseCapacityTests.test_a_request_names_at_most_sixty_four_paths"
       ],
       "status": "NOT_RUN"
     },

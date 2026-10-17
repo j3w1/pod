@@ -43,9 +43,11 @@ ADMISSION_ROW = {"kind", "id", "role", "state", "dispatch", "reported"}
 NATIVE = {"runtime", "owner", "runs", "dispatches", "exited_terminals"}
 PRESERVED_OUTCOMES = ("pending", "UNKNOWN", "FAILED")
 MAX_OBJECTIVES = 16
-MAX_PATHS = 8
 MAX_RECORDS = 64
 MAX_LISTED = 64
+# A decision can release as many recorded worktrees as it can leave retained, so no record whose retained list
+# fits is left with worktrees no retirement can ever release (its record accepts no later write).
+MAX_PATHS = MAX_LISTED
 MAX_DELIVERY = 16
 ACTION = ("Read it with pod status --objective {}; the owner's historical retirement released its worktrees: "
           "it is not completed, and its record accepts no writes.")
