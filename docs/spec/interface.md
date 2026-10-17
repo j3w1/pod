@@ -294,8 +294,8 @@ and so does the stored closure report of an objective that holds the record, so 
 report can name the mode and its effects. The closure projection also records `at_closure`:
 its UTC observation time, mode, `ran_in_yolo`, the last activation id (or null) and
 `active_until_closure`, making explicit that the objective ran in yolo until closure
-when that was true. Later expiry does not erase that historical fact. A closure of an objective that never held the
-record keeps its earlier shape and channel discriminator, so earlier readers still read
+when that was true. Later expiry preserves those closure fields. A closure of an
+objective that never held the record keeps its earlier shape and channel discriminator, so earlier readers still read
 it, and readers show its mode as `normal`. The projection reads
 stored facts only. It never runs the verifier and attests nothing about the host's
 present decision. An unreadable Governor journal cannot turn a committed checkpoint
