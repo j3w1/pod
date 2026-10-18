@@ -242,6 +242,26 @@ class StandingOrderingTests(StandingCase):
         self.relay_time(1, "before-unavailable-stop")
         self.assert_stale(self.at, 3, relayed=True, key="before-unavailable-stop")
 
+    def test_e1_session_decision_time_is_recorded_after_lock_authority_read(self):
+        from pod.ledger import require_authority
+        self.at(0)
+        self.at(2, "revoke")
+        clock = [self.MOMENT + timedelta(seconds=1)]
+
+        def authority(*args, **kwargs):
+            result = require_authority(*args, **kwargs)
+            clock[0] = self.MOMENT + timedelta(seconds=3)
+            return result
+
+        request = {"project": str(self.project), "objective": "objective", "owner": "owner", "action": "activate",
+                   "decision": DECISION}
+        with patch("pod.standing._clock", side_effect=lambda now: now if now is not None else clock[0]), \
+                patch("pod.ledger.require_authority", side_effect=authority):
+            row = standing.operate(request)["decision"]
+        self.assertEqual(row["utc"], "2030-01-01T00:00:03Z")
+        self.relay_time(2.5, "before-session-recording")
+        self.assert_stale(self.at, 4, relayed=True, key="before-session-recording", stopped=False)
+
     def test_e5_future_activation_refuses_and_future_stop_uses_receipt_barrier(self):
         self.at(0)
         self.at(1, "revoke")
@@ -1370,6 +1390,16 @@ class StandingCapacityTests(StandingCase):
         self.assertEqual(result["largest_sections"][0]["section"], "standing_authorization")
         self.assertIn("standing_authorization section is bounded and needs no maintenance", result["next_action"])
         self.assertEqual(self.saved(), before)
+
+    def test_e5_stale_and_future_relays_refuse_before_full_history_cap(self):
+        for code, seconds in (("standing_authorization_stale", 10), ("standing_authorization_future", 61)):
+            with self.subTest(code=code):
+                self.control(changes={"single_use": code, "decided_at": (self.MOMENT + timedelta(seconds=seconds)).isoformat()})
+                request = {"project": str(self.project), "objective": "objective", "owner": "owner", "action": "activate",
+                           "decision": {**DECISION, "channel": "relayed", "relay": {"reference": code}}}
+                receipts = self.receipts()
+                self.refusal(code, standing.operate, request, now=self.MOMENT + timedelta(seconds=60))
+                self.assertEqual(self.receipts(), receipts)
 
     def test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom(self):
         from pod.history import CONTEXT_LIMIT

@@ -5755,7 +5755,8 @@
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_revocation_2",
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_revocation_3",
         "tests.test_standing_ordering.StandingOracleInventoryTests.test_every_arrival_order_runs_once_in_bounded_named_groups",
-        "tests.test_standing_authorization.StandingOrderingTests.test_e1_failed_noop_verifier_uses_receipt_and_blocks_older_activation"
+        "tests.test_standing_authorization.StandingOrderingTests.test_e1_failed_noop_verifier_uses_receipt_and_blocks_older_activation",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e1_session_decision_time_is_recorded_after_lock_authority_read"
       ],
       "status": "NOT_RUN"
     },
@@ -5838,7 +5839,8 @@
         "tests.test_standing_authorization.StandingResponderTests.test_interrupted_relay_answer_receipt_can_complete_exactly_one_row",
         "tests.test_standing_authorization.StandingCapacityTests.test_recorded_keys_refuse_replay_before_full_history_checks",
         "tests.test_standing_authorization.StandingResponderTests.test_e6_unrecorded_question_precedes_preflight_and_target_checks",
-        "tests.test_standing_authorization.StandingOrderingTests.test_e5_future_activation_refuses_and_future_stop_uses_receipt_barrier"
+        "tests.test_standing_authorization.StandingOrderingTests.test_e5_future_activation_refuses_and_future_stop_uses_receipt_barrier",
+        "tests.test_standing_authorization.StandingCapacityTests.test_e5_stale_and_future_relays_refuse_before_full_history_cap"
       ],
       "status": "NOT_RUN"
     },

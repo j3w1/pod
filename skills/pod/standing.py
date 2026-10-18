@@ -45,7 +45,9 @@ def _instant(stamp: str) -> datetime:
 def _barrier(record: dict) -> datetime | None:
     # Earlier standing writers kept these facts separately. Read them faithfully;
     # new events fold them into the same monotonic authority boundary.
-    times = [record[key] for key in ("not_before", "closed_at", "reopened_at") if key in record]
+    if "not_before" in record:
+        return _instant(record["not_before"])
+    times = [record[key] for key in ("closed_at", "reopened_at") if key in record]
     times += [decision_time(row) for row in record.get("decisions", [])]
     return max(map(_instant, times), default=None)
 
@@ -374,6 +376,10 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             raise PodError("coordinator_conflict", "Standing authorization belongs to another coordinator")
         _require_open(context)
         require_authority(project, objective, owner=owner, state=context)
+        if decision is not None and decision["channel"] == "session":
+            # Session time belongs to recording under this lock, not to an
+            # earlier request that may have waited behind another decision.
+            moment = _clock(now)
         current = state(context, now=moment)
         record = context.get("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": []})
         if action == "revoke" and current not in ("active", "suspended", "expired"):
@@ -406,6 +412,8 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
         verdict = None
         if decision is not None and decision["channel"] == "relayed":
             verdict = _verify(project, objective, context, decision["relay"]["reference"], "standing", _request_fields(action, decision))
+            _fresh(context, {"channel": "relayed", "operation": action, "utc": _timestamp(moment),
+                             "relay_verification": verdict})
         elif action == "answer" and record["answers"]:
             verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
                               {key: answer[key] for key in ("question", "text")})
@@ -431,6 +439,8 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                     raise PodError("issue_reconciliation_required", "Execution Spec changed or closed; reconcile before activating yolo",
                                    {"reason": checked.get("reason")})
                 observe(context, source, live["body"])
+            if decision["channel"] == "session":
+                moment = _clock(now)
             row = {**decision, "id": f"Y{len(record['decisions']) + 1}", "operation": action,
                    "utc": _timestamp(moment), "seq": (context.get("checkpoint") or {}).get("seq", 0)}
             if action == "activate":
@@ -438,6 +448,8 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                            exclusions=[item for item in STANDING_EXCLUSIONS if item not in row["widening"]])
             if decision["channel"] == "relayed":
                 row.update(relay={"reference": verdict["reference"], "owner_source": verdict["owner_source"]}, relay_verification=verdict)
+                # A live issue read above may be the first material observation.
+                # Apply the same predicate against that newly observed barrier.
                 _fresh(context, row)
             _row_fit(row)
             _raise_barrier(record, decision_time(row))
