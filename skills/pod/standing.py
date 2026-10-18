@@ -50,19 +50,51 @@ def _raise_barrier(record: dict, stamp: str) -> None:
     record["not_before"] = _timestamp(max(_barrier(record) or _instant(stamp), _instant(stamp)))
 
 
-def observe_scope(context: dict, *, now: datetime | None = None, scope_change: bool = True) -> None:
-    """Remember each material transition, separately from sticky suspension."""
+def _unread_identity(context: dict, source: dict | None = None) -> str:
+    checkpoint = context.get("checkpoint") or {}
+    source = source if source is not None else checkpoint.get("objective_source")
+    return digest({"unread_source": digest(source), "criteria": checkpoint.get("criteria", [])})
+
+
+def scope_identity(context: dict) -> str:
+    """The one observer predicate: the material scope Pod can attest for the bound source now.
+
+    A bound source whose body Pod has not read is its own identity, so an unread rebind is a
+    transition (fail closed). Reading the body of that same bound source later only learns it.
+    """
+    source = (context.get("checkpoint") or {}).get("objective_source")
+    if source is not None and context.get("standing_authorization", {}).get("observed", {}).get("source") != digest(source):
+        return _unread_identity(context)
+    return scope_digest(context)
+
+
+def observe_scope(context: dict, *, now: datetime | None = None) -> None:
+    """At each record write: every distinct transition raises the barrier; learning does not."""
     record = context.get("standing_authorization")
     if record is None:
         return
-    current = scope_digest(context)
+    current = scope_identity(context)
     previous = record.get("observed_scope_digest")
+    issue_bound = (context.get("checkpoint") or {}).get("objective_source") is not None
+    learned = issue_bound and previous == _unread_identity(context)
     record["observed_scope_digest"] = current
-    if scope_change and previous is not None and previous != current:
+    if previous is not None and previous != current and not learned:
         _raise_barrier(record, _timestamp(_clock(now)))
     latest = next((row for row in reversed(record.get("decisions", [])) if row["operation"] == "activate"), None)
-    if scope_change and latest is not None and latest["binding"]["scope_digest"] != current:
+    if latest is not None and current == scope_digest(context) and latest["binding"]["scope_digest"] != current:
         record["scope_changed_for"] = latest["id"]
+
+
+def carry_tick(context: dict, old_source: dict) -> None:
+    """Pod's own confirmed tick flips one checkbox: it carries the observation to the new source."""
+    record = context.get("standing_authorization")
+    if record is None:
+        return
+    observed = record.get("observed")
+    if observed is not None and observed.get("source") == digest(old_source):
+        observed["source"] = digest((context.get("checkpoint") or {}).get("objective_source"))
+    if record.get("observed_scope_digest") == _unread_identity(context, old_source):
+        record["observed_scope_digest"] = _unread_identity(context)
 
 
 def checkpoint_times(context: dict, previous: dict | None, checkpoint: dict) -> None:
@@ -123,14 +155,16 @@ def scope_digest(context: dict) -> str:
     return digest(binding)
 
 
-def observe(context: dict, source: dict, body: str, *, scope_change: bool = True) -> None:
-    """Record a bound body already read by Pod; checkbox marks carry no scope."""
+def observe(context: dict, source: dict, body: str) -> None:
+    """Record a bound body already read by Pod; checkbox marks carry no scope.
+
+    Transitions are decided once, at the record write, against the checkpoint being written.
+    """
     if "standing_authorization" not in context or hashlib.sha256(body.encode()).hexdigest() != source["body_sha256"]:
         return
     normalized = re.sub(r"(?m)^([ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+)\[[xX]\](?=[ \t\r]|$)", r"\1[ ]", body)
     context["standing_authorization"]["observed"] = {
         "source": digest(source), "body_scope_sha256": hashlib.sha256(normalized.encode()).hexdigest()}
-    observe_scope(context, scope_change=scope_change)
 
 
 def suspension_reason(context: dict) -> str | None:
@@ -408,8 +442,9 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             # earlier request that may have waited behind another decision.
             moment = _clock(now)
         current = state(context, now=moment)
+        created = "standing_authorization" not in context
         record = context.get("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": [],
-                                                       "observed_scope_digest": scope_digest(context)})
+                                                       "observed_scope_digest": scope_identity(context)})
         if action == "revoke" and current not in ("active", "suspended", "expired"):
             before = encoded(record, compact=True)
             stamp = _timestamp(moment)
@@ -446,10 +481,10 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             if checked["status"] != "current":
                 raise PodError("issue_reconciliation_required", "Execution Spec changed or closed; reconcile before activating yolo",
                                {"reason": checked.get("reason")})
-            # A new exact-bound decision can confirm this freshly read scope.
-            # Do not manufacture a later time barrier before checking its digest;
-            # previously recorded suspension and stop/lifecycle barriers remain.
-            observe(context, source, live["body"], scope_change=False)
+            # A new exact-bound decision can confirm this freshly read scope. The
+            # read itself raises no barrier before the digest check; transitions
+            # are decided at the write, and recorded barriers remain.
+            observe(context, source, live["body"])
         if decision is not None and decision["channel"] == "relayed":
             try:
                 verdict = _verify(project, objective, context, decision["relay"]["reference"], "standing",
@@ -498,6 +533,11 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             if action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1:
                 raise PodError("standing_authorization_full", "Standing owner-decision history is full")
             _raise_barrier(record, decision_time(row))
+            if created and action == "activate" and decision["channel"] == "relayed":
+                # The never-record exception covers only this first activation: the
+                # record starts at its receipt, so other pre-record relays need a
+                # fresh owner decision.
+                _raise_barrier(record, row["utc"])
             if action == "activate":
                 record.pop("scope_changed_for", None)
             record["decisions"].append(row)

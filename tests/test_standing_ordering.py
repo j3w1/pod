@@ -93,8 +93,8 @@ CASES = tuple((name, order) for name in SCENARIOS for order in ORDERS)
 
 class StandingArrivalOracleTests(StandingCase, GroupedTable):
     MOMENT = datetime(2030, 1, 1, tzinfo=timezone.utc)
-    GROUPS = {f"test_{name}_{group + 1}": tuple((name, order) for order in ORDERS[group * 8:(group + 1) * 8])
-              for name in SCENARIOS for group in range(3)}
+    GROUPS = {f"test_{name}_{group + 1}": tuple((name, order) for order in ORDERS[group * 6:(group + 1) * 6])
+              for name in SCENARIOS for group in range(4)}
 
     def setUp(self):
         super().setUp()
@@ -186,7 +186,7 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
             aliases = {2: 0} if name in ("duplicate_activation", "future_retry_after_stop") else {2: 1} if name == "duplicate_revocation" else {}
             arrivals += [(10 + index, relays[item], f"relay-{aliases.get(item, item)}", True) for index, item in enumerate(order)]
             events, refused_future_keys = [], set()
-            record_exists = False
+            record_exists, cutoff = False, None
 
             def scope_at(moment, *, decision=False):
                 # Declarative direct-objective scope, independent of the kernel's
@@ -221,6 +221,13 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
                     if (key in refused_future_keys or scope_at(event[1], decision=True) != scope_at(arrival)
                             or any(event[1] <= time for time in failed_stops)):
                         continue
+                    # A first relayed activation that creates a never-existing record
+                    # starts that record at its receipt: other relays decided before
+                    # then need a fresh decision. Later decisions keep owner time.
+                    if cutoff is not None and event[1] <= cutoff:
+                        continue
+                    if not record_exists:
+                        cutoff = arrival
                 # Only a genuinely never-record objective lacks the history of
                 # intermediate revisions. A stop creates a record without a grant.
                 if event[0] in ("scope", "scope3", "restore", "restore2") and not record_exists:
@@ -250,6 +257,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_four_relays_3(self):
         self.rows()
 
+    def test_four_relays_4(self):
+        self.rows()
+
     def test_stop_while_none_1(self):
         self.rows()
 
@@ -257,6 +267,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_stop_while_none_3(self):
+        self.rows()
+
+    def test_stop_while_none_4(self):
         self.rows()
 
     def test_stop_between_arrivals_1(self):
@@ -268,6 +281,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_stop_between_arrivals_3(self):
         self.rows()
 
+    def test_stop_between_arrivals_4(self):
+        self.rows()
+
     def test_stop_while_ended_1(self):
         self.rows()
 
@@ -275,6 +291,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_stop_while_ended_3(self):
+        self.rows()
+
+    def test_stop_while_ended_4(self):
         self.rows()
 
     def test_scope_before_arrivals_1(self):
@@ -286,6 +305,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_scope_before_arrivals_3(self):
         self.rows()
 
+    def test_scope_before_arrivals_4(self):
+        self.rows()
+
     def test_scope_between_arrivals_1(self):
         self.rows()
 
@@ -293,6 +315,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_scope_between_arrivals_3(self):
+        self.rows()
+
+    def test_scope_between_arrivals_4(self):
         self.rows()
 
     def test_lifecycle_before_arrivals_1(self):
@@ -304,6 +329,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_lifecycle_before_arrivals_3(self):
         self.rows()
 
+    def test_lifecycle_before_arrivals_4(self):
+        self.rows()
+
     def test_lifecycle_between_arrivals_1(self):
         self.rows()
 
@@ -311,6 +339,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_lifecycle_between_arrivals_3(self):
+        self.rows()
+
+    def test_lifecycle_between_arrivals_4(self):
         self.rows()
 
     def test_newer_after_scope_1(self):
@@ -322,6 +353,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_newer_after_scope_3(self):
         self.rows()
 
+    def test_newer_after_scope_4(self):
+        self.rows()
+
     def test_newer_after_lifecycle_1(self):
         self.rows()
 
@@ -329,6 +363,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_newer_after_lifecycle_3(self):
+        self.rows()
+
+    def test_newer_after_lifecycle_4(self):
         self.rows()
 
     def test_session_activation_between_1(self):
@@ -340,6 +377,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_session_activation_between_3(self):
         self.rows()
 
+    def test_session_activation_between_4(self):
+        self.rows()
+
     def test_stop_tie_1(self):
         self.rows()
 
@@ -347,6 +387,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_stop_tie_3(self):
+        self.rows()
+
+    def test_stop_tie_4(self):
         self.rows()
 
     def test_scope_tie_1(self):
@@ -358,6 +401,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_scope_tie_3(self):
         self.rows()
 
+    def test_scope_tie_4(self):
+        self.rows()
+
     def test_reopen_tie_1(self):
         self.rows()
 
@@ -365,6 +411,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_reopen_tie_3(self):
+        self.rows()
+
+    def test_reopen_tie_4(self):
         self.rows()
 
     def test_future_verdicts_1(self):
@@ -376,6 +425,8 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_future_verdicts_3(self):
         self.rows()
 
+    def test_future_verdicts_4(self):
+        self.rows()
 
     def test_future_after_stop_1(self):
         self.rows()
@@ -384,6 +435,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_future_after_stop_3(self):
+        self.rows()
+
+    def test_future_after_stop_4(self):
         self.rows()
 
     def test_future_stop_session_1(self):
@@ -395,6 +449,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_future_stop_session_3(self):
         self.rows()
 
+    def test_future_stop_session_4(self):
+        self.rows()
+
     def test_duplicate_activation_1(self):
         self.rows()
 
@@ -404,6 +461,8 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_duplicate_activation_3(self):
         self.rows()
 
+    def test_duplicate_activation_4(self):
+        self.rows()
 
     def test_duplicate_revocation_1(self):
         self.rows()
@@ -412,6 +471,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_duplicate_revocation_3(self):
+        self.rows()
+
+    def test_duplicate_revocation_4(self):
         self.rows()
 
     def test_scope_never_on_1(self):
@@ -423,6 +485,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_scope_never_on_3(self):
         self.rows()
 
+    def test_scope_never_on_4(self):
+        self.rows()
+
     def test_stop_while_none_then_scope_1(self):
         self.rows()
 
@@ -430,6 +495,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_stop_while_none_then_scope_3(self):
+        self.rows()
+
+    def test_stop_while_none_then_scope_4(self):
         self.rows()
 
     def test_scope_twice_relays_between_1(self):
@@ -441,6 +509,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_scope_twice_relays_between_3(self):
         self.rows()
 
+    def test_scope_twice_relays_between_4(self):
+        self.rows()
+
     def test_scope_twice_relays_after_1(self):
         self.rows()
 
@@ -448,6 +519,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_scope_twice_relays_after_3(self):
+        self.rows()
+
+    def test_scope_twice_relays_after_4(self):
         self.rows()
 
     def test_future_retry_after_stop_1(self):
@@ -459,6 +533,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_future_retry_after_stop_3(self):
         self.rows()
 
+    def test_future_retry_after_stop_4(self):
+        self.rows()
+
     def test_unverifiable_stop_while_on_1(self):
         self.rows()
 
@@ -466,6 +543,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_unverifiable_stop_while_on_3(self):
+        self.rows()
+
+    def test_unverifiable_stop_while_on_4(self):
         self.rows()
 
     def test_scope_restore_holder_old_1(self):
@@ -477,6 +557,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_scope_restore_holder_old_3(self):
         self.rows()
 
+    def test_scope_restore_holder_old_4(self):
+        self.rows()
+
     def test_scope_restore_holder_new_1(self):
         self.rows()
 
@@ -484,6 +567,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_scope_restore_holder_new_3(self):
+        self.rows()
+
+    def test_scope_restore_holder_new_4(self):
         self.rows()
 
     def test_scope_restore_never_on_1(self):
@@ -495,6 +581,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_scope_restore_never_on_3(self):
         self.rows()
 
+    def test_scope_restore_never_on_4(self):
+        self.rows()
+
     def test_holder_BCB_1(self):
         self.rows()
 
@@ -502,6 +591,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_holder_BCB_3(self):
+        self.rows()
+
+    def test_holder_BCB_4(self):
         self.rows()
 
     def test_holder_revoked_BCB_1(self):
@@ -513,6 +605,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_holder_revoked_BCB_3(self):
         self.rows()
 
+    def test_holder_revoked_BCB_4(self):
+        self.rows()
+
     def test_stop_none_ABA_1(self):
         self.rows()
 
@@ -520,6 +615,9 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         self.rows()
 
     def test_stop_none_ABA_3(self):
+        self.rows()
+
+    def test_stop_none_ABA_4(self):
         self.rows()
 
     def test_control_reconfirmed_BCB_1(self):
@@ -531,9 +629,11 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_control_reconfirmed_BCB_3(self):
         self.rows()
 
+    def test_control_reconfirmed_BCB_4(self):
+        self.rows()
 
 class StandingOracleInventoryTests(unittest.TestCase):
     def test_every_arrival_order_runs_once_in_bounded_named_groups(self):
-        assert_grouped_table(self, StandingArrivalOracleTests, CASES, limit=8)
+        assert_grouped_table(self, StandingArrivalOracleTests, CASES, limit=6)
         self.assertEqual(len(ORDERS), 24)
         self.assertEqual(len(CASES), 768)

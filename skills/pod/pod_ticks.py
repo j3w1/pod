@@ -601,6 +601,9 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
         if rebind:
             state["checkpoint"]["objective_source"] = {**source, "body_sha256": now}
             ledger["last_rebind"] = digest(state["checkpoint"]["objective_source"])
+            # Pod's own confirmed tick flips one checkbox: no material scope moves.
+            from .standing import carry_tick
+            carry_tick(state, source)
         if live is not None:
             _facts(ledger, state["checkpoint"]["objective_source"], live["body"], context=state)
             # Drift observations are stale facts: never pretend that their body

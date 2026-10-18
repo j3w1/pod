@@ -159,12 +159,38 @@ class StandingOrderingTests(StandingCase):
         self.assert_stale(self.at, 3, relayed=True, stopped=False)
 
     def test_n1_newer_relay_follows_activation_recorded_late(self):
+        # On an existing record (here created by a stop), owner time orders decisions:
+        # a late-recorded older relay never makes a genuinely newer decision stale.
+        self.at(0, "revoke")
         self.relay_time(1, "first")
         self.at(10, relayed=True, key="first")
         self.relay_time(3, "newer")
         result = self.at(11, relayed=True, key="newer")
         self.assertEqual(result["standing_authorization"]["state"], "active")
         self.assertEqual(result["decision"]["id"], "Y2")
+
+    def test_r5_2_first_record_creating_relay_sets_one_time_receipt_cutoff(self):
+        self.relay_time(1, "first")
+        created = self.at(10, relayed=True, key="first")
+        self.assertEqual(created["decision"]["relay_verification"]["decided_at"], "2030-01-01T00:00:01Z")
+        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], "2030-01-01T00:00:10Z")
+        # Another decision made before the record existed needs a fresh owner decision.
+        self.relay_time(3, "in-flight-before-record")
+        self.assert_stale(self.at, 11, relayed=True, key="in-flight-before-record", stopped=False)
+        self.relay_time(12, "after-record")
+        result = self.at(13, relayed=True, key="after-record", widening=["deploy"])
+        self.assertEqual(result["decision"]["id"], "Y2")
+        self.assertEqual(self.case.op("governor", action=self.proposed("deploy"))["decision"], "ALLOW")
+
+    def test_r5_2_creation_cutoff_never_loses_a_newer_stop(self):
+        self.relay_time(1, "first")
+        self.at(10, relayed=True, key="first")
+        # The stop was decided after the activation but before its delayed receipt.
+        self.relay_time(5, "stop")
+        result = self.at(11, "revoke", relayed=True, key="stop")
+        self.assertEqual(result["standing_authorization"]["state"], "revoked")
+        for kind in ("push", "deploy"):
+            self.assertEqual(self.case.op("governor", action=self.proposed(kind))["decision"], "DEFER")
 
     def test_n1_old_revoke_refuses_after_session_activation_but_tie_keeps_stop(self):
         self.at(2)
@@ -1488,7 +1514,9 @@ class StandingSourceTests(TickCase):
                         "relay": {"reference": "before-observed-B"}})
         self.assertEqual(caught.exception.code, "standing_authorization_stale")
         self.assertEqual(self.saved(), before)
-        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], "2030-01-01T00:00:02Z")
+        # The unread rebind at t4 is itself a transition (R5-1). Round 4 asserted t2 here,
+        # which encoded the gap; that expectation is superseded.
+        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], "2030-01-01T00:00:04Z")
 
     def test_f1_restored_scope_keeps_holder_suspended_until_fresh_confirmation(self):
         from pod.config import personal_path
@@ -1804,6 +1832,146 @@ class StandingSourceTests(TickCase):
         from pod.pod_ticks import refresh
         refresh(context, self.project, context["checkpoint"]["objective_source"])
         _write(_path(self.project, "objective"), context)
+        self.assertEqual(self.summary()["state"], "active")
+
+    # R5-1: one observer predicate joins each observation to the actual bound source.
+    # An unread changed source is its own identity (a fail-closed transition); learning
+    # the body of that same bound source, or Pod's own tick, is not a transition.
+    def _at(self, seconds):
+        return patch("pod.standing._clock", return_value=StandingOrderingTests.MOMENT + timedelta(seconds=seconds))
+
+    def _rebind(self, seconds, *, read=True):
+        with self._at(seconds):
+            if read:
+                self.rebind()
+            else:
+                with patch("pod.pod_ticks.refresh"):
+                    self.rebind()
+
+    def _saved_relay(self, *, decided, arrival, confirmed, reference):
+        from pod.config import personal_path
+        import yaml
+        moment = StandingOrderingTests.MOMENT
+        path = personal_path(self.project)
+        config = yaml.safe_load(path.read_text()); config["authorization_verifier"] = ["/bin/false"]
+        path.write_text(yaml.safe_dump(config))
+
+        def output(command, request):
+            # The host verifier returns the digest it saved with the owner's decision.
+            return json.dumps({**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
+                               "decided_at": (moment + timedelta(seconds=decided)).isoformat(), "single_use": reference,
+                               "standing": {**request["standing"], "scope_digest": confirmed}}).encode()
+
+        with patch("pod.relay._output", side_effect=output), self._at(arrival), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            return self.op("standing-authorization", action="activate", decision={**DECISION, "channel": "relayed",
+                           "relay": {"reference": reference}, "widening": ["deploy"]})
+
+    def _assert_saved_relay_stale(self, **relay):
+        from pod.ledger import state_root
+        before = self.saved()
+        receipts = {item.name: item.read_bytes() for item in (state_root(self.project) / ".relay-authorizations").glob("*.json")}
+        with self.assertRaises(PodError) as caught:
+            self._saved_relay(**relay)
+        self.assertEqual(caught.exception.code, "standing_authorization_stale")
+        self.assertEqual(self.saved(), before)
+        self.assertEqual({item.name: item.read_bytes()
+                          for item in (state_root(self.project) / ".relay-authorizations").glob("*.json")}, receipts)
+        for kind in ("push", "deploy"):
+            result = self.op("governor", action=self.action(kind, authorization=None))
+            self.assertEqual(result["decision"], "DEFER")
+
+    def _not_before(self):
+        return read(self.project, "objective")["standing_authorization"]["not_before"]
+
+    def _holder_bcb(self, *, restore_read):
+        self.bind(); self.prepare()
+        with self._at(0):
+            self.activate()
+        self.issue.body += "\nRequirement B."
+        self._rebind(2)
+        confirmed = self.summary()["scope_digest"]
+        body_b = self.issue.body
+        self.issue.body += "\nRequirement C."
+        self._rebind(4, read=False)
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:04Z")
+        self.issue.body = body_b
+        self._rebind(5, read=restore_read)
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:05Z")
+        self._assert_saved_relay_stale(decided=3, arrival=10, confirmed=confirmed, reference="owner-on-B")
+
+    def test_r5_1_unread_intermediate_rebind_fences_holder_bcb(self):
+        self._holder_bcb(restore_read=True)
+
+    def test_r5_1_unread_restore_also_fences_holder_bcb(self):
+        self._holder_bcb(restore_read=False)
+
+    def test_r5_1_decision_on_the_live_scope_after_an_unread_rebind_is_accepted(self):
+        self.bind(); self.prepare()
+        with self._at(0):
+            self.activate()
+        self.issue.body += "\nRequirement C."
+        self._rebind(4, read=False)
+        confirmed = self.summary()["scope_digest"]
+        result = self._saved_relay(decided=6, arrival=10, confirmed=confirmed, reference="owner-on-C")
+        self.assertEqual(result["standing_authorization"]["state"], "active")
+        # Learning the body of the same bound source during the activation is no transition.
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:06Z")
+
+    def test_r5_1_stop_created_record_first_read_by_pod_tick_moves_no_barrier(self):
+        self.bind(); self.prepare()
+        with self._at(0):
+            self.op("standing-authorization", action="revoke", decision=DECISION)
+        confirmed = self.summary()["scope_digest"]
+        self.prove()
+        with self._at(2):
+            self.assertEqual(self.tick()["status"], "confirmed")
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:00Z")
+        result = self._saved_relay(decided=1, arrival=10, confirmed=confirmed, reference="owner-on-A")
+        self.assertEqual(result["standing_authorization"]["state"], "active")
+
+    def test_r5_1_stop_created_record_first_read_by_a_checkpoint_moves_no_barrier(self):
+        self.bind(); self.prepare()
+        with self._at(0):
+            self.op("standing-authorization", action="revoke", decision=DECISION)
+        confirmed = self.summary()["scope_digest"]
+        # A reconciling checkpoint's own production refresh reads the unchanged bound body.
+        context = read(self.project, "objective")
+        from pod.pod_ticks import refresh
+        refresh(context, self.project, context["checkpoint"]["objective_source"])
+        with self._at(2):
+            _write(_path(self.project, "objective"), context)
+        self.assertIn("observed", read(self.project, "objective")["standing_authorization"])
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:00Z")
+        result = self._saved_relay(decided=1, arrival=10, confirmed=confirmed, reference="owner-on-A")
+        self.assertEqual(result["standing_authorization"]["state"], "active")
+
+    def test_r5_1_stop_created_unread_change_then_restore_refuses_the_older_grant(self):
+        self.bind(); self.prepare()
+        with self._at(0):
+            self.op("standing-authorization", action="revoke", decision=DECISION)
+        confirmed = self.summary()["scope_digest"]
+        body_a = self.issue.body
+        self.issue.body += "\nRequirement B."
+        self._rebind(2, read=False)
+        self.issue.body = body_a
+        self._rebind(4)
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:04Z")
+        self._assert_saved_relay_stale(decided=1, arrival=10, confirmed=confirmed, reference="owner-on-A")
+
+    def test_r5_1_unread_checkbox_edit_fails_closed_then_learning_moves_no_barrier(self):
+        self.bind(); self.prepare()
+        with self._at(0):
+            self.activate()
+        self.issue.body = self.issue.body.replace("[ ]", "[x]")
+        self._rebind(2, read=False)
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:02Z")
+        context = read(self.project, "objective")
+        from pod.pod_ticks import refresh
+        refresh(context, self.project, context["checkpoint"]["objective_source"])
+        with self._at(4):
+            _write(_path(self.project, "objective"), context)
+        self.assertEqual(self._not_before(), "2030-01-01T00:00:02Z")
         self.assertEqual(self.summary()["state"], "active")
 
 
