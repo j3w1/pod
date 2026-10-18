@@ -5767,7 +5767,21 @@
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_retry_after_stop_3",
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_unverifiable_stop_while_on_1",
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_unverifiable_stop_while_on_2",
-        "tests.test_standing_ordering.StandingArrivalOracleTests.test_unverifiable_stop_while_on_3"
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_unverifiable_stop_while_on_3",
+        "tests.test_standing_authorization.StandingScopeHistoryTests.test_r4_1_stop_created_record_remembers_aba_without_any_activation",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_1_stop_created_issue_record_remembers_aba_and_accepts_a_newer_decision",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_BCB_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_BCB_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_BCB_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_revoked_BCB_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_revoked_BCB_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_revoked_BCB_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_none_ABA_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_none_ABA_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_none_ABA_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_control_reconfirmed_BCB_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_control_reconfirmed_BCB_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_control_reconfirmed_BCB_3"
       ],
       "status": "NOT_RUN"
     },
@@ -5845,7 +5859,28 @@
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_restore_holder_new_3",
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_restore_never_on_1",
         "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_restore_never_on_2",
-        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_restore_never_on_3"
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_restore_never_on_3",
+        "tests.test_standing_authorization.StandingScopeHistoryTests.test_r4_1_holder_bcb_refuses_grant_before_the_intermediate_change",
+        "tests.test_standing_authorization.StandingScopeHistoryTests.test_r4_1_revoked_holder_bcb_keeps_each_scope_barrier",
+        "tests.test_standing_authorization.StandingScopeHistoryTests.test_r4_1_identical_observations_keep_the_latest_change_time",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_1_issue_body_bcb_refuses_the_saved_grant_without_writes_or_effects",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_1_revoked_issue_holder_remembers_every_body_change",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_1_stop_created_issue_record_remembers_aba_and_accepts_a_newer_decision",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_1_own_live_read_preserves_an_earlier_observed_scope_barrier",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_BCB_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_BCB_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_BCB_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_revoked_BCB_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_revoked_BCB_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_holder_revoked_BCB_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_none_ABA_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_none_ABA_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_none_ABA_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_control_reconfirmed_BCB_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_control_reconfirmed_BCB_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_control_reconfirmed_BCB_3",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_1_repeated_issue_observations_do_not_move_the_barrier",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_1_never_record_issue_aba_accepts_only_the_saved_restored_content"
       ],
       "status": "NOT_RUN"
     },
@@ -5885,7 +5920,8 @@
         "tests.test_standing_authorization.StandingScopeDigestTests.test_f2_refusal_does_not_overwrite_an_interrupted_or_accepted_receipt",
         "tests.test_standing_authorization.StandingScopeDigestTests.test_f2_same_key_concurrent_future_refusals_leave_one_durable_marker",
         "tests.test_standing_authorization.StandingOrderingTests.test_f2_future_activation_key_stays_refused_after_stop_and_clock_catches_up",
-        "tests.test_standing_authorization.StandingRecordTests.test_a3_record_without_its_required_barrier_refuses_without_derivation"
+        "tests.test_standing_authorization.StandingRecordTests.test_a3_record_without_its_required_barrier_refuses_without_derivation",
+        "tests.test_standing_authorization.StandingScopeHistoryTests.test_r4_1_missing_or_malformed_history_cannot_use_the_never_record_exception"
       ],
       "status": "NOT_RUN"
     },
@@ -5928,7 +5964,8 @@
         "tests.test_standing_authorization.StandingGuidanceTests.test_n4_delivery_projection_names_current_consent_and_historical_effects",
         "tests.test_standing_authorization.StandingVisibilityTests.test_e4_no_decision_closure_status_has_stable_or_absent_at_closure",
         "tests.test_standing_authorization.StandingSourceTests.test_f1_never_yolo_issue_status_exposes_normalized_digest_without_writes",
-        "tests.test_standing_authorization.StandingSourceTests.test_f1_unobserved_status_and_failed_explicit_reads_name_the_missing_digest"
+        "tests.test_standing_authorization.StandingSourceTests.test_f1_unobserved_status_and_failed_explicit_reads_name_the_missing_digest",
+        "tests.test_standing_authorization.StandingSourceTests.test_r4_2_show_releases_the_objective_lock_before_its_live_issue_read"
       ],
       "status": "NOT_RUN"
     },

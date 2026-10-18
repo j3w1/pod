@@ -307,7 +307,13 @@ an issue objective needs a matching recorded source observation. Otherwise the
 digest is `null`, with `scope_digest_reason` `no_record` or `scope_unobserved`,
 never an inferred hash. The explicit `pod internal standing-authorization` action
 `show` may use the existing read-only live issue recheck to compute the normalized
-digest without any write or coordinator write authority. `scope_digest_source`
+digest without any write or coordinator write authority. It takes a short context
+and journal snapshot under the objective lock, releases the lock for the bounded
+live issue read and digest calculation, then rechecks the context under the lock.
+A writer can proceed during the remote read. If the context changed, show returns
+the newer offline mode projection with a null digest, reason `context_changed`
+and `scope_digest_next_action` to retry and save the digest with the actual owner
+decision; it never returns the stale digest or writes context or receipts. `scope_digest_source`
 says `live_issue` when it did, `recorded` for a matching stored observation, or
 `criteria` for a direct objective. If the live check fails or needs reconciliation,
 the digest is `null` with the precise refusal reason; reconcile and read again.
@@ -720,7 +726,8 @@ stores nothing and runs no verifier.
 | `state` | `none`, `active`, `suspended`, `revoked`, `expired` or `ended` (R136). |
 | `reason` | For `suspended`, `scope_changed` or `scope_unobserved`; otherwise `null`. |
 | `scope_digest` | Current material scope digest when computable; `null` otherwise. Public status uses recorded facts only; explicit standing show may read an unobserved issue. |
-| `scope_digest_reason` | `null` with a digest; otherwise `no_record`, `scope_unobserved`, or the explicit read's source/reconciliation refusal reason. |
+| `scope_digest_reason` | `null` with a digest; otherwise `no_record`, `scope_unobserved`, the explicit read's source/reconciliation refusal reason, or `context_changed` when show's snapshot changed during the read. |
+| `scope_digest_next_action` | Present only when show detects `context_changed`: retry show and save its digest with the actual owner decision. |
 | `scope_digest_source` | `criteria`, `recorded`, or `live_issue`; `null` when the digest is unavailable. |
 | `decision` | `null`, or the latest activation: `id`, `scope`, `exclusions`, `widening`, `expires_at`, `since`, `channel` and, when relayed, `relay_reference` and `owner_source`. |
 | `effects` | `total`, `truncated` and `items`: the newest 64 journal rows authorized under yolo, each with `record_id`, `kind`, `scope`, `candidate`, `tree`, `target`, `pr`, `decision`, `outcome`, `at` and `standing`. |
@@ -734,4 +741,4 @@ not active (for example "yolo suspended: scope changed"). Unknown optional field
 ignorable. `internal cleanup-plan` adds `standing_authorization` with `mode`,
 `decision`, `covers` and `asks`, as R137 defines them.
 
-- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier. Public status stays offline: it exposes the current material scope_digest from recorded facts, or null with no_record/scope_unobserved when unavailable. Standing show can explicitly read an unobserved issue source, reports scope_digest_source live_issue, and returns null with a precise reason if unavailable or unreconciled, without writing context or receipts or requiring coordinator write authority. Status and show agree once the observation exists. The host saves this digest with the exact owner decision, rather than echoing a later request. `delivery_authorization` names current applicable consent, while `standing_authorization.effects` retains completed yolo effects after a stop or replacement. The closure references standing decision rows without copying verdicts and bounds responder text to a 256-byte encoded prefix.
+- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier. Public status stays offline: it exposes the current material scope_digest from recorded facts, or null with no_record/scope_unobserved when unavailable. Standing show can explicitly read an unobserved issue source, reports scope_digest_source live_issue, and returns null with a precise reason if unavailable or unreconciled, without writing context or receipts or requiring coordinator write authority. Show releases the objective lock before its bounded live read and digest calculation; a concurrent normal writer completes during that read. If the snapshot changed, show returns a null digest with context_changed and a retry next action, preserving the writer's context and all receipts. Status and show agree once the observation exists. The host saves this digest with the exact owner decision, rather than echoing a later request. `delivery_authorization` names current applicable consent, while `standing_authorization.effects` retains completed yolo effects after a stop or replacement. The closure references standing decision rows without copying verdicts and bounds responder text to a 256-byte encoded prefix.

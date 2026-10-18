@@ -50,14 +50,19 @@ def _raise_barrier(record: dict, stamp: str) -> None:
     record["not_before"] = _timestamp(max(_barrier(record) or _instant(stamp), _instant(stamp)))
 
 
-def observe_scope(context: dict, *, now: datetime | None = None) -> None:
-    """Keep suspension sticky if a changed scope later returns to its old digest."""
-    record = context.get("standing_authorization", {})
-    latest = next((row for row in reversed(record.get("decisions", [])) if row["operation"] == "activate"), None)
-    if (latest is not None and record.get("scope_changed_for") != latest["id"]
-            and latest["binding"]["scope_digest"] != scope_digest(context)):
-        record["scope_changed_for"] = latest["id"]
+def observe_scope(context: dict, *, now: datetime | None = None, scope_change: bool = True) -> None:
+    """Remember each material transition, separately from sticky suspension."""
+    record = context.get("standing_authorization")
+    if record is None:
+        return
+    current = scope_digest(context)
+    previous = record.get("observed_scope_digest")
+    record["observed_scope_digest"] = current
+    if scope_change and previous is not None and previous != current:
         _raise_barrier(record, _timestamp(_clock(now)))
+    latest = next((row for row in reversed(record.get("decisions", [])) if row["operation"] == "activate"), None)
+    if scope_change and latest is not None and latest["binding"]["scope_digest"] != current:
+        record["scope_changed_for"] = latest["id"]
 
 
 def checkpoint_times(context: dict, previous: dict | None, checkpoint: dict) -> None:
@@ -105,7 +110,7 @@ def _fresh(context: dict, row: dict) -> None:
     if stale:
         raise PodError("standing_authorization_stale", "Relayed standing decision predates the current authority boundary",
                        {"reason": "decision_time_stale",
-                        "next_action": "obtain a fresh owner decision after the latest standing decision, stop or lifecycle change"})
+                        "next_action": "obtain a fresh owner decision after the latest standing decision, stop, observed scope change or lifecycle change"})
 
 
 def scope_digest(context: dict) -> str:
@@ -125,8 +130,7 @@ def observe(context: dict, source: dict, body: str, *, scope_change: bool = True
     normalized = re.sub(r"(?m)^([ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+)\[[xX]\](?=[ \t\r]|$)", r"\1[ ]", body)
     context["standing_authorization"]["observed"] = {
         "source": digest(source), "body_scope_sha256": hashlib.sha256(normalized.encode()).hexdigest()}
-    if scope_change:
-        observe_scope(context)
+    observe_scope(context, scope_change=scope_change)
 
 
 def suspension_reason(context: dict) -> str | None:
@@ -218,8 +222,8 @@ def validate_record(value: object) -> None:
     """Validate stored facts without treating them as a fresh authorization or answer."""
     from .relay import validate_verdict
     try:
-        record = exact(value, {"schema", "decisions", "answers", "observed", "closed_at", "reopened_at", "not_before", "scope_changed_for"},
-                       {"schema", "decisions", "answers", "not_before"}, name="standing record")
+        record = exact(value, {"schema", "decisions", "answers", "observed", "closed_at", "reopened_at", "not_before", "scope_changed_for", "observed_scope_digest"},
+                       {"schema", "decisions", "answers", "not_before", "observed_scope_digest"}, name="standing record")
         if record["schema"] != SCHEMA or not isinstance(record["decisions"], list) or not isinstance(record["answers"], list):
             raise ValueError("record")
         if len(record["decisions"]) > MAX_DECISIONS or len(record["answers"]) > MAX_ANSWERS:
@@ -227,6 +231,8 @@ def validate_record(value: object) -> None:
         for key in ("closed_at", "reopened_at", "not_before"):
             if key in record:
                 normalize_timestamp(record[key], field=key, code="state_unsupported")
+        if not isinstance(record["observed_scope_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["observed_scope_digest"]):
+            raise ValueError("scope observation")
         if "observed" in record:
             observed = exact(record["observed"], {"source", "body_scope_sha256"}, {"source", "body_scope_sha256"}, name="standing observation")
             if any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item) for item in observed.values()):
@@ -280,7 +286,8 @@ def validate_record(value: object) -> None:
                     or row["relay"]["reference"] != verdict["reference"] or row["responder_source"] != verdict["responder_source"]):
                 raise ValueError("answer verdict")
     except (PodError, ValueError, TypeError, KeyError, UnicodeError):
-        raise PodError("state_unsupported", "Standing authorization record is malformed") from None
+        raise PodError("state_unsupported", "Standing authorization record is malformed",
+                       {"next_action": "recover the existing standing record; missing history cannot use the never-record exception"}) from None
 
 
 def _target(project: Path, context: dict) -> dict:
@@ -361,26 +368,48 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
         raise PodError("invalid_standing_authorization", "Malformed standing authorization input") from exc
     project, objective, owner = Path(request["project"]), request["objective"], request["owner"]
     path = _path(project, objective)
+    if action == "show":
+        with _lock(path):
+            context = _read(path)
+            try:
+                journal = _read_journal(_record_path(project, objective))
+            except PodError:
+                journal = None
+        shown = projection(context, journal, now=moment, project=project)
+        with _lock(path):
+            current = _read(path)
+            if current != context:
+                try:
+                    journal = _read_journal(_record_path(project, objective))
+                except PodError:
+                    journal = None
+        if current != context:
+            shown = projection(current, journal, now=moment)
+            shown.update(scope_digest=None, scope_digest_reason="context_changed", scope_digest_source=None,
+                         scope_digest_next_action="retry standing show and save its digest with the actual owner decision")
+        return {"standing_authorization": shown}
     with _lock(path):
         context = _read(path)
         try:
             journal = _read_journal(_record_path(project, objective))
         except PodError:
             journal = None
-        if action == "show":
-            return {"standing_authorization": projection(context, journal, now=moment, project=project)}
         if context["owner"] != owner:
             from .handoff import refuse_nonowner
             refuse_nonowner(project, objective, context, owner, code="coordinator_conflict")
             raise PodError("coordinator_conflict", "Standing authorization belongs to another coordinator")
         _require_open(context)
         require_authority(project, objective, owner=owner, state=context)
+        if context.get("decision_channels") == 3 and "standing_authorization" not in context:
+            raise PodError("state_unsupported", "Standing authorization history is unavailable",
+                           {"next_action": "recover the existing standing record; the never-record content-identity exception does not apply"})
         if decision is not None and decision["channel"] == "session":
             # Session time belongs to recording under this lock, not to an
             # earlier request that may have waited behind another decision.
             moment = _clock(now)
         current = state(context, now=moment)
-        record = context.get("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": []})
+        record = context.get("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": [],
+                                                       "observed_scope_digest": scope_digest(context)})
         if action == "revoke" and current not in ("active", "suspended", "expired"):
             before = encoded(record, compact=True)
             stamp = _timestamp(moment)

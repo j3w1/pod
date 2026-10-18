@@ -78,7 +78,14 @@ SCENARIOS = {
                                    (("activate", 1, False), ("revoke", -1, False), ("activate", 5, True), ("activate", 7, False))),
     "scope_restore_never_on": ((("scope", 2, False), ("restore", 4, False)),
                                  (("activate", 1, False), ("revoke", -1, False), ("activate", 1.5, True), ("revoke", -2, False))),
-
+    "holder_BCB": (ON + (("scope", 2, False), ("scope3", 4, False), ("restore2", 5, False)),
+                     (("activate", 3, False), ("revoke", -1, False), ("activate", 3.5, True), ("revoke", -2, False))),
+    "holder_revoked_BCB": (ON + (("revoke", 1, False), ("scope", 2, False), ("scope3", 4, False), ("restore2", 5, False)),
+                             (("activate", 3, False), ("revoke", -1, False), ("activate", 3.5, True), ("revoke", -2, False))),
+    "stop_none_ABA": ((("revoke", 0.5, False), ("scope", 2, False), ("restore", 4, False)),
+                        (("activate", 1, False), ("revoke", -1, False), ("activate", 1.5, True), ("revoke", -2, False))),
+    "control_reconfirmed_BCB": (ON + (("scope", 2, False), ("activate", 2.5, False), ("scope3", 4, False), ("restore2", 5, False)),
+                                 (("activate", 3, False), ("revoke", -1, False), ("activate", 3.5, True), ("revoke", -2, False))),
 }
 ORDERS = tuple(permutations(range(4)))
 CASES = tuple((name, order) for name in SCENARIOS for order in ORDERS)
@@ -158,11 +165,11 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
             self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
         elif kind == "reopen":
             self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
-        elif kind == "restore":
+        elif kind in ("restore", "restore2"):
             rows = self.case.stored()
             rows[-1].pop("wait", None)
             rows[-1].update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "restore the original scope"})
-            self.case.write(rows, criteria=["PoD#1"], revision_authority=DECISION)
+            self.case.write(rows, criteria=["PoD#1"] if kind == "restore" else ["PoD#1", "PoD#2"], revision_authority=DECISION)
         else:
             number = 3 if kind == "scope3" else 2
             added = {"id": f"O{number}", "kind": "criterion", "provenance": "user_direct",
@@ -179,6 +186,7 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
             aliases = {2: 0} if name in ("duplicate_activation", "future_retry_after_stop") else {2: 1} if name == "duplicate_revocation" else {}
             arrivals += [(10 + index, relays[item], f"relay-{aliases.get(item, item)}", True) for index, item in enumerate(order)]
             events, refused_future_keys = [], set()
+            record_exists = False
 
             def scope_at(moment, *, decision=False):
                 # Declarative direct-objective scope, independent of the kernel's
@@ -192,6 +200,8 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
                             count = 3 if kind == "scope3" else 2
                         elif kind == "restore":
                             count = 1
+                        elif kind == "restore2":
+                            count = 2
                 criteria = [f"PoD#{index}" for index in range(1, count + 1)]
                 return hashlib.sha256(json.dumps({"criteria": criteria}, sort_keys=True,
                                                 separators=(",", ":")).encode()).hexdigest()
@@ -211,10 +221,12 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
                     if (key in refused_future_keys or scope_at(event[1], decision=True) != scope_at(arrival)
                             or any(event[1] <= time for time in failed_stops)):
                         continue
-                # Without any prior grant, no record of an intermediate scope
-                # revision exists: the documented limit uses content identity.
-                if event[0] in ("scope", "scope3", "restore") and not any(item[0] == "activate" for item in events):
+                # Only a genuinely never-record objective lacks the history of
+                # intermediate revisions. A stop creates a record without a grant.
+                if event[0] in ("scope", "scope3", "restore", "restore2") and not record_exists:
                     continue
+                if event[0] in ("activate", "revoke", "failed_stop"):
+                    record_exists = True
                 if event[0] != "failed_stop":
                     events.append((event[0], min(event[1], arrival) if relayed else event[1], event[2]))
             # Independent declarative oracle: the latest decision/event wins;
@@ -483,9 +495,45 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
     def test_scope_restore_never_on_3(self):
         self.rows()
 
+    def test_holder_BCB_1(self):
+        self.rows()
+
+    def test_holder_BCB_2(self):
+        self.rows()
+
+    def test_holder_BCB_3(self):
+        self.rows()
+
+    def test_holder_revoked_BCB_1(self):
+        self.rows()
+
+    def test_holder_revoked_BCB_2(self):
+        self.rows()
+
+    def test_holder_revoked_BCB_3(self):
+        self.rows()
+
+    def test_stop_none_ABA_1(self):
+        self.rows()
+
+    def test_stop_none_ABA_2(self):
+        self.rows()
+
+    def test_stop_none_ABA_3(self):
+        self.rows()
+
+    def test_control_reconfirmed_BCB_1(self):
+        self.rows()
+
+    def test_control_reconfirmed_BCB_2(self):
+        self.rows()
+
+    def test_control_reconfirmed_BCB_3(self):
+        self.rows()
+
 
 class StandingOracleInventoryTests(unittest.TestCase):
     def test_every_arrival_order_runs_once_in_bounded_named_groups(self):
         assert_grouped_table(self, StandingArrivalOracleTests, CASES, limit=8)
         self.assertEqual(len(ORDERS), 24)
-        self.assertEqual(len(CASES), 672)
+        self.assertEqual(len(CASES), 768)

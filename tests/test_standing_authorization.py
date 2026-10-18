@@ -474,6 +474,90 @@ class StandingScopeDigestTests(StandingCase):
         self.assertEqual(self.receipts(), receipt)
 
 
+class StandingScopeHistoryTests(StandingCase):
+    MOMENT = StandingOrderingTests.MOMENT
+    at = StandingOrderingTests.at
+    relay_time = StandingOrderingTests.relay_time
+    assert_stale = StandingOrderingTests.assert_stale
+    change_scope = StandingScopeDigestTests.change_scope
+
+    def change_at(self, seconds, number):
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=seconds)):
+            self.change_scope(number)
+
+    def restore_at(self, seconds, count):
+        rows = self.case.stored()
+        rows[-1].pop("wait", None)
+        rows[-1].update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "restore the earlier scope"})
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=seconds)):
+            self.case.write(rows, criteria=[f"PoD#{i}" for i in range(1, count + 1)], revision_authority=DECISION)
+
+    def holder_bcb(self, *, revoked=False):
+        self.at(0)
+        if revoked:
+            self.at(1, "revoke")
+        self.change_at(2, 2)
+        # Save the digest with the simulated owner decision on B. The verifier
+        # returns this saved value after C and restoration, never a fresh echo.
+        confirmed = self.public_status()["standing_authorization"]["scope_digest"]
+        self.relay_time(3, "owner-on-B", scope=confirmed)
+        self.change_at(4, 3)
+        self.restore_at(5, 2)
+        self.assert_stale(self.at, 10, relayed=True, key="owner-on-B", widening=["deploy"])
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(record["not_before"], "2030-01-01T00:00:05Z")
+        self.assertEqual(record["scope_changed_for"], "Y1")
+        self.relay_time(6, "new-owner-on-B", scope=confirmed)
+        self.assertEqual(self.at(11, relayed=True, key="new-owner-on-B")["standing_authorization"]["state"], "active")
+
+    def test_r4_1_holder_bcb_refuses_grant_before_the_intermediate_change(self):
+        self.holder_bcb()
+
+    def test_r4_1_revoked_holder_bcb_keeps_each_scope_barrier(self):
+        self.holder_bcb(revoked=True)
+
+    def test_r4_1_stop_created_record_remembers_aba_without_any_activation(self):
+        self.at(0.5, "revoke")
+        confirmed = self.public_status()["standing_authorization"]["scope_digest"]
+        self.relay_time(1, "owner-on-A", scope=confirmed)
+        self.change_at(2, 2)
+        self.restore_at(4, 1)
+        self.assert_stale(self.at, 10, relayed=True, key="owner-on-A", widening=["deploy"])
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(record["decisions"], [])
+        self.assertEqual(record["not_before"], "2030-01-01T00:00:04Z")
+        self.assertEqual(self.at(11)["standing_authorization"]["state"], "active")
+
+    def test_r4_1_identical_observations_keep_the_latest_change_time(self):
+        self.at(0)
+        self.change_at(2, 2)
+        self.change_at(4, 3)
+        for seconds in (6, 8):
+            with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=seconds)):
+                self.case.write(self.case.stored(), criteria=["PoD#1", "PoD#2", "PoD#3"])
+            self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"],
+                             "2030-01-01T00:00:04Z")
+
+    def test_r4_1_missing_or_malformed_history_cannot_use_the_never_record_exception(self):
+        self.at(0.5, "revoke")
+        self.relay_time(1, "owner-on-A", scope=self.public_status()["standing_authorization"]["scope_digest"])
+        context = read(self.project, "objective")
+        for mutation in ("lost_record", "lost_digest", "invalid_digest"):
+            with self.subTest(mutation=mutation):
+                altered = deepcopy(context)
+                if mutation == "lost_record":
+                    altered.pop("standing_authorization")
+                elif mutation == "lost_digest":
+                    altered["standing_authorization"].pop("observed_scope_digest")
+                else:
+                    altered["standing_authorization"]["observed_scope_digest"] = "invalid"
+                _path(self.project, "objective").write_bytes(encoded(altered, compact=True))
+                receipts = self.receipts()
+                exc = self.refusal("state_unsupported", self.at, 10, relayed=True, key="owner-on-A")
+                self.assertIn("never-record", exc.detail["next_action"])
+                self.assertEqual(self.receipts(), receipts)
+
+
 class StandingRecordTests(StandingCase):
     def test_a3_record_without_its_required_barrier_refuses_without_derivation(self):
         self.activate()
@@ -1362,7 +1446,8 @@ class StandingSourceTests(TickCase):
         def verify(command, request):
             self.assertEqual(request["standing"]["scope_digest"], confirmed)
             return {**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
-                    "decided_at": decided, "single_use": "current-unobserved-scope"}
+                    "decided_at": decided, "single_use": "current-unobserved-scope",
+                    "standing": {**request["standing"], "scope_digest": confirmed}}
 
         with patch("pod.relay.verify", side_effect=verify), \
                 patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
@@ -1370,6 +1455,40 @@ class StandingSourceTests(TickCase):
                                                                                  "relay": {"reference": "current-unobserved-scope"}})
         self.assertEqual(result["standing_authorization"]["state"], "active")
         self.assertEqual(result["decision"]["binding"]["scope_digest"], confirmed)
+
+    def test_r4_1_own_live_read_preserves_an_earlier_observed_scope_barrier(self):
+        from pod.config import personal_path
+        import yaml
+        moment = StandingOrderingTests.MOMENT
+        self.bind()
+        with patch("pod.standing._clock", return_value=moment):
+            self.activate()
+        self.issue.body += "\nRequirement B."
+        with patch("pod.standing._clock", return_value=moment + timedelta(seconds=2)):
+            self.rebind()
+        self.issue.body += "\nRequirement C."
+        with patch("pod.pod_ticks.refresh"), patch("pod.standing._clock", return_value=moment + timedelta(seconds=4)):
+            self.rebind()
+        confirmed = self.summary()["scope_digest"]
+        path = personal_path(self.project)
+        config = yaml.safe_load(path.read_text()); config["authorization_verifier"] = ["/bin/false"]
+        path.write_text(yaml.safe_dump(config))
+
+        def output(command, request):
+            return json.dumps({**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
+                               "decided_at": (moment + timedelta(seconds=1)).isoformat(), "single_use": "before-observed-B",
+                               "standing": {**request["standing"], "scope_digest": confirmed}}).encode()
+
+        before = self.saved()
+        with patch("pod.relay._output", side_effect=output), \
+                patch("pod.standing._clock", return_value=moment + timedelta(seconds=10)), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            with self.assertRaises(PodError) as caught:
+                self.op("standing-authorization", action="activate", decision={**DECISION, "channel": "relayed",
+                        "relay": {"reference": "before-observed-B"}})
+        self.assertEqual(caught.exception.code, "standing_authorization_stale")
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], "2030-01-01T00:00:02Z")
 
     def test_f1_restored_scope_keeps_holder_suspended_until_fresh_confirmation(self):
         from pod.config import personal_path
@@ -1384,7 +1503,7 @@ class StandingSourceTests(TickCase):
         self.rebind()
         self.assertEqual(self.summary()["state"], "suspended")
         restored = read(self.project, "objective")["standing_authorization"]
-        self.assertEqual(restored["not_before"], changed["not_before"])
+        self.assertGreater(restored["not_before"], changed["not_before"])
         self.assertEqual(restored["scope_changed_for"], original["id"])
         self.assertEqual(self.summary()["scope_digest"], original["binding"]["scope_digest"])
         path = personal_path(self.project)
@@ -1438,6 +1557,166 @@ class StandingSourceTests(TickCase):
         self.assertEqual(public, observed)
         self.assertEqual(public["scope_digest"], expected)
         self.assertEqual(public["scope_digest_source"], "recorded")
+
+    def issue_scope_restoration(self, *, stop_created=False, revoked=False):
+        from pod.config import personal_path
+        import yaml
+        moment = StandingOrderingTests.MOMENT
+        self.bind()
+        self.prepare()
+        with patch("pod.standing._clock", return_value=moment):
+            self.op("standing-authorization", action="revoke" if stop_created else "activate", decision=DECISION)
+        if revoked:
+            with patch("pod.standing._clock", return_value=moment + timedelta(seconds=1)):
+                self.op("standing-authorization", action="revoke", decision=DECISION)
+        if not stop_created:
+            self.issue.body += "\nRequirement B."
+            with patch("pod.standing._clock", return_value=moment + timedelta(seconds=2)):
+                self.rebind()
+        confirmed = self.summary()["scope_digest"]
+        decided = (moment + timedelta(seconds=3)).isoformat()
+        reference = "owner-on-B"
+        body_b = self.issue.body
+        self.issue.body += "\nRequirement C."
+        with patch("pod.standing._clock", return_value=moment + timedelta(seconds=4)):
+            self.rebind()
+        self.issue.body = body_b
+        with patch("pod.standing._clock", return_value=moment + timedelta(seconds=5)):
+            self.rebind()
+        path = personal_path(self.project)
+        config = yaml.safe_load(path.read_text()); config["authorization_verifier"] = ["/bin/false"]
+        path.write_text(yaml.safe_dump(config))
+
+        def output(command, request):
+            return json.dumps({**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
+                               "decided_at": decided, "single_use": reference,
+                               "standing": {**request["standing"], "scope_digest": confirmed}}).encode()
+
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(self.summary()["scope_digest"], confirmed)
+        before = self.saved()
+        from pod.ledger import state_root
+        receipts = {p.name: p.read_bytes() for p in (state_root(self.project) / ".relay-authorizations").glob("*.json")}
+        with patch("pod.relay._output", side_effect=output), \
+                patch("pod.standing._clock", return_value=moment + timedelta(seconds=10)), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            with self.assertRaises(PodError) as caught:
+                self.op("standing-authorization", action="activate", decision={**DECISION, "channel": "relayed",
+                        "relay": {"reference": reference}, "widening": ["deploy"]})
+        self.assertEqual(caught.exception.code, "standing_authorization_stale")
+        self.assertTrue(caught.exception.detail["next_action"])
+        self.assertEqual(self.saved(), before)
+        self.assertEqual({p.name: p.read_bytes() for p in (state_root(self.project) / ".relay-authorizations").glob("*.json")}, receipts)
+        self.assertEqual(record["not_before"], "2030-01-01T00:00:05Z")
+        for kind in ("push", "deploy"):
+            result = self.op("governor", action=self.action(kind, authorization=None))
+            self.assertEqual(result["decision"], "DEFER")
+            self.assertIn("authorization_missing", [row["code"] for row in result["reasons"]])
+        self.assertEqual(self.summary()["state"], "none" if stop_created else "revoked" if revoked else "suspended")
+        decided = (moment + timedelta(seconds=6)).isoformat()
+        reference = "new-owner-on-B"
+        with patch("pod.relay._output", side_effect=output), \
+                patch("pod.standing._clock", return_value=moment + timedelta(seconds=11)), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            result = self.op("standing-authorization", action="activate", decision={**DECISION, "channel": "relayed",
+                            "relay": {"reference": reference}, "widening": ["deploy"]})
+        self.assertEqual(result["standing_authorization"]["state"], "active")
+
+    def test_r4_1_issue_body_bcb_refuses_the_saved_grant_without_writes_or_effects(self):
+        self.issue_scope_restoration()
+
+    def test_r4_1_revoked_issue_holder_remembers_every_body_change(self):
+        self.issue_scope_restoration(revoked=True)
+
+    def test_r4_1_stop_created_issue_record_remembers_aba_and_accepts_a_newer_decision(self):
+        self.issue_scope_restoration(stop_created=True)
+
+    def test_r4_1_repeated_issue_observations_do_not_move_the_barrier(self):
+        moment = StandingOrderingTests.MOMENT
+        self.bind()
+        with patch("pod.standing._clock", return_value=moment):
+            self.activate()
+        self.issue.body += "\nRequirement B."
+        with patch("pod.standing._clock", return_value=moment + timedelta(seconds=2)):
+            self.rebind()
+        for seconds in (4, 6):
+            with patch("pod.standing._clock", return_value=moment + timedelta(seconds=seconds)):
+                self.rebind()
+            self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"],
+                             "2030-01-01T00:00:02Z")
+
+    def test_r4_1_never_record_issue_aba_accepts_only_the_saved_restored_content(self):
+        from pod.config import personal_path
+        import yaml
+        moment = StandingOrderingTests.MOMENT
+        self.bind()
+        confirmed = self.summary()["scope_digest"]
+        body_a = self.issue.body
+        self.issue.body += "\nRequirement B."
+        self.rebind()
+        self.issue.body = body_a
+        self.rebind()
+        context = read(self.project, "objective")
+        self.assertNotIn("standing_authorization", context)
+        self.assertEqual(context.get("decision_channels", 1), 1)
+        path = personal_path(self.project)
+        config = yaml.safe_load(path.read_text()); config["authorization_verifier"] = ["/bin/false"]
+        path.write_text(yaml.safe_dump(config))
+
+        def output(command, request):
+            return json.dumps({**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
+                               "decided_at": (moment + timedelta(seconds=1)).isoformat(), "single_use": "first-owner-on-A",
+                               "standing": {**request["standing"], "scope_digest": confirmed}}).encode()
+
+        with patch("pod.relay._output", side_effect=output), \
+                patch("pod.standing._clock", return_value=moment + timedelta(seconds=10)), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            result = self.op("standing-authorization", action="activate", decision={**DECISION, "channel": "relayed",
+                            "relay": {"reference": "first-owner-on-A"}})
+        self.assertEqual(result["standing_authorization"]["state"], "active")
+        self.assertEqual(result["decision"]["binding"]["scope_digest"], confirmed)
+
+    def test_r4_2_show_releases_the_objective_lock_before_its_live_issue_read(self):
+        import threading
+        from pod.github import issue_recheck_live
+        from pod.ledger import _lock
+        self.bind()
+        path = _path(self.project, "objective")
+        revision = read(self.project, "objective")["revision"]
+        done, errors, completed_during_read, after_write = threading.Event(), [], [], []
+
+        def writer():
+            try:
+                with _lock(path):
+                    _write(path, _read(path))
+                after_write.append(self.saved())
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=writer)
+
+        def live_read(project, source):
+            thread.start()
+            completed_during_read.append(done.wait(1))
+            return issue_recheck_live(project, source)
+
+        try:
+            with patch("pod.github.issue_recheck_live", side_effect=live_read):
+                shown = self.op("standing-authorization", owner="any-reader", action="show")["standing_authorization"]
+        finally:
+            if thread.ident is not None:
+                thread.join(1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(completed_during_read, [True])
+        self.assertEqual(read(self.project, "objective")["revision"], revision + 1)
+        self.assertIsNone(shown["scope_digest"])
+        self.assertEqual(shown["scope_digest_reason"], "context_changed")
+        self.assertIn("retry", shown["scope_digest_next_action"])
+        self.assertEqual(self.saved(), after_write[0])
+        self.assertNotIn("standing_authorization", read(self.project, "objective"))
 
     def test_f1_unobserved_status_and_failed_explicit_reads_name_the_missing_digest(self):
         from pod.status import status
