@@ -33,13 +33,16 @@ ANSWER = {"question": "Q1", "text": "Use the existing endpoint", "relay": {"refe
 RESPONDER_VERIFIER = VERIFIER.replace(
     '"owner_source": "authenticated-owner:fixture"',
     '("responder_source" if request["action"] == "answer" else "owner_source"): '
-    '("authenticated-responder:fixture" if request["action"] == "answer" else "authenticated-owner:fixture")')
+    '("authenticated-responder:fixture" if request["action"] == "answer" else "authenticated-owner:fixture")').replace(
+    '"decided_at": "2026-09-21T00:00:00Z"',
+    '"decided_at": controls.get("standing_decided_at", "2026-09-21T00:00:00Z")')
 
 
 class StandingCase(RelayCase):
     def setUp(self):
         super().setUp()
         self.script.write_text(RESPONDER_VERIFIER)
+        self.verifier_times = {}
         for target in ("pod.orca.executable", "pod.github._run"):
             guard = patch(target, side_effect=AssertionError("standing test escaped its disposable ports"))
             guard.start(); self.addCleanup(guard.stop)
@@ -47,6 +50,13 @@ class StandingCase(RelayCase):
     def operation(self, operation="activate", *, objective="objective", **fields):
         if operation in ("activate", "revoke"):
             fields.setdefault("decision", dict(DECISION))
+            if fields["decision"].get("channel") == "relayed":
+                controls = json.loads(self.controls.read_text())
+                key = controls.get("changes", {}).get("single_use", "decision-one")
+                # Deterministic for an interrupted receipt, fresh for a new decision.
+                controls["standing_decided_at"] = self.verifier_times.setdefault(
+                    key, datetime.now(timezone.utc).isoformat())
+                self.controls.write_text(json.dumps(controls))
         return run("standing-authorization", {"project": str(self.project), "objective": objective,
                     "owner": "owner", "action": operation, **fields})
 
@@ -87,7 +97,122 @@ class StandingCase(RelayCase):
                           worker_rows_fn=lambda _: {"workers": [], "scope": {"run_id": "run"}, "complete": True})
 
 
+class StandingOrderingTests(StandingCase):
+    MOMENT = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+    def at(self, seconds, operation="activate", *, relayed=False, key="delayed", **fields):
+        decision = {**DECISION, **fields}
+        if relayed:
+            decision.update(channel="relayed", relay={"reference": key})
+        return standing.operate({"project": str(self.project), "objective": "objective", "owner": "owner",
+                                 "action": operation, "decision": decision}, now=self.MOMENT + timedelta(seconds=seconds))
+
+    def relay_time(self, seconds, key="delayed"):
+        self.control(changes={"single_use": key, "decided_at":
+                              (self.MOMENT + timedelta(seconds=seconds)).isoformat()})
+
+    def assert_stale(self, callback, *args, stopped=True, **kwargs):
+        receipts = self.receipts()
+        exc = self.refusal("standing_authorization_stale", callback, *args, **kwargs)
+        self.assertTrue(exc.detail["next_action"])
+        self.assertEqual(self.receipts(), receipts)
+        if stopped:
+            for kind in ("push", "deploy"):
+                held = self.case.op("governor", action=self.proposed(kind))
+                self.assertEqual(held["decision"], "DEFER")
+                self.assertIn("authorization_missing", [row["code"] for row in held["reasons"]])
+
+    def test_n1_delayed_activation_before_session_stop_cannot_restore_push_or_deploy(self):
+        self.at(0)
+        self.at(2, "revoke")
+        self.relay_time(1)
+        self.assert_stale(self.at, 3, relayed=True, widening=["deploy"])
+
+    def test_n1_interrupted_receipt_before_stop_cannot_complete_after_stop(self):
+        self.at(0)
+        self.relay_time(1)
+        with patch("pod.ledger._write", side_effect=OSError("interrupted replacement")):
+            with self.assertRaises(OSError):
+                self.at(1, relayed=True, widening=["deploy"])
+        self.assertEqual(len(self.receipts()), 1)
+        self.at(2, "revoke")
+        self.assert_stale(self.at, 3, relayed=True, widening=["deploy"])
+
+    def test_n1_activation_orders_by_verified_stop_time_instead_of_recording_time(self):
+        self.at(0)
+        self.relay_time(2, "stop")
+        self.at(10, "revoke", relayed=True, key="stop")
+        self.relay_time(2)
+        self.assert_stale(self.at, 11, relayed=True)
+        self.relay_time(3, "fresh")
+        accepted = self.at(12, relayed=True, key="fresh", widening=["deploy"])
+        self.assertEqual(accepted["standing_authorization"]["state"], "active")
+        self.assertEqual(self.case.op("governor", action=self.proposed("deploy"))["decision"], "ALLOW")
+
+    def test_n1_activation_before_newer_activation_is_stale(self):
+        self.at(2)
+        self.relay_time(1)
+        self.assert_stale(self.at, 3, relayed=True, stopped=False)
+
+    def test_n1_newer_relay_follows_activation_recorded_late(self):
+        self.relay_time(1, "first")
+        self.at(10, relayed=True, key="first")
+        self.relay_time(3, "newer")
+        result = self.at(11, relayed=True, key="newer")
+        self.assertEqual(result["standing_authorization"]["state"], "active")
+        self.assertEqual(result["decision"]["id"], "Y2")
+
+    def test_n1_old_revoke_refuses_after_session_activation_but_tie_keeps_stop(self):
+        self.at(2)
+        self.relay_time(1)
+        self.assert_stale(self.at, 3, "revoke", relayed=True, stopped=False)
+        self.relay_time(2, "tie")
+        result = self.at(3, "revoke", relayed=True, key="tie")
+        self.assertEqual(result["standing_authorization"]["state"], "revoked")
+
+    def test_n1_closure_and_reopen_times_survive_and_reject_older_activation(self):
+        self.at(0)
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=2)):
+            self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=4)):
+            self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
+        for seconds in (1, 2, 3, 4):
+            self.relay_time(seconds, f"old-{seconds}")
+            self.assert_stale(self.at, 5, relayed=True, key=f"old-{seconds}")
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(record["closed_at"], "2030-01-01T00:00:02Z")
+        self.assertEqual(record["reopened_at"], "2030-01-01T00:00:04Z")
+        self.relay_time(5, "fresh")
+        self.assertEqual(self.at(6, relayed=True, key="fresh")["standing_authorization"]["state"], "active")
+
+    def test_n1_first_relay_after_normal_closure_obeys_reopen_time(self):
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=2)):
+            closed = self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
+        self.assertNotIn("standing_authorization", closed["checkpoint"]["closure"]["report"])
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=4)):
+            self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
+        self.relay_time(3)
+        self.assert_stale(self.at, 5, relayed=True)
+        # Re-closing without any yolo decision still keeps the normal report shape.
+        closed = self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
+        self.assertNotIn("standing_authorization", closed["checkpoint"]["closure"]["report"])
+
+
 class StandingRecordTests(StandingCase):
+    def test_n3_noop_relay_revoke_reports_state_without_verifier(self):
+        decision = {**DECISION, "channel": "relayed", "relay": {"reference": "stop"}}
+        self.configure(None)
+        before = self.saved(), self.receipts()
+        self.assertEqual(self.operation("revoke", decision=decision), {"state": "none", "changed": False})
+        self.assertEqual((self.saved(), self.receipts()), before)
+        self.activate()
+        self.operation("revoke")
+        stopped = self.saved(), self.receipts()
+        with patch("pod.relay.verify", side_effect=AssertionError("no-op called verifier")):
+            self.assertEqual(self.operation("revoke", decision=decision), {"state": "revoked", "changed": False})
+        self.assertEqual((self.saved(), self.receipts()), stopped)
+        self.assertFalse(self.requests.exists())
+
     def test_encoded_row_caps_refuse_before_any_receipt_is_consumed(self):
         # A fresh objective makes the byte limit discriminate independently of counts.
         self.case.write([self.case.criterion()], objective="row-size", governance={"base_ref": "target"})
@@ -118,8 +243,8 @@ class StandingRecordTests(StandingCase):
         decision = {**DECISION, "channel": "relayed", "relay": {"reference": "stop-one"}}
         self.operation("revoke", decision=decision)
         receipts = self.receipts()
-        # Even the no-op revoke route must reject a key that already has its row.
-        self.refusal("relay_authorization_reused", self.operation, "revoke", decision=decision)
+        # A no-op needs no verification; reuse still refuses when an active mode needs stopping.
+        self.assertEqual(self.operation("revoke", decision=decision), {"state": "revoked", "changed": False})
         self.activate()
         self.refusal("relay_authorization_reused", self.operation, "revoke", decision=decision)
         self.assertEqual(self.receipts(), receipts)
@@ -149,7 +274,7 @@ class StandingRecordTests(StandingCase):
         receipts = self.receipts()
         result = self.operation("revoke", decision=decision)
         self.assertEqual((result["decision"]["id"], result["standing_authorization"]["state"]), ("Y2", "revoked"))
-        self.refusal("relay_authorization_reused", self.operation, "revoke", decision=decision)
+        self.assertEqual(self.operation("revoke", decision=decision), {"state": "revoked", "changed": False})
         self.assertEqual(self.receipts(), receipts)
 
     def test_reopen_keeps_yolo_ended_until_a_new_activation_after_reopen(self):
@@ -516,6 +641,18 @@ class StandingGovernorTests(StandingCase):
 
 
 class StandingApplicableConsentTests(StandingCase):
+    def test_n5_scope_suspension_and_authority_wait_share_one_checkpoint(self):
+        self.reserved()
+        added = {"id": "O2", "kind": "criterion", "provenance": "user_direct",
+                 "source": {"instruction": "Add PoD#2", "ref": "PoD#2"}, "check": "PoD#2 passes",
+                 "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        wait = {**self.case.sub("S1"), "wait": {"class": "authority", "referent": {
+            "kind": "authorization", "scope": "merge", "candidate": self.case.observed["commit"]}}}
+        result = self.case.write([*self.case.stored(), added, wait], criteria=["PoD#1", "PoD#2"],
+                                 revision_authority=DECISION)
+        self.assertEqual(result["standing_authorization"]["state"], "suspended")
+        self.assertEqual(result["checkpoint"]["obligations"][-1]["wait"], wait["wait"])
+
     def reserved(self):
         self.activate(expires_at="2099-01-01T00:00:00Z")
         self.case.op("governor", action=self.proposed())
@@ -583,6 +720,32 @@ class StandingApplicableConsentTests(StandingCase):
 
 
 class StandingResponderTests(StandingCase):
+    def test_n3_inactive_answer_with_prior_history_refuses_before_verifier(self):
+        self.activate()
+        self.question()
+        self.operation("answer", answer=ANSWER)
+        self.operation("revoke")
+        calls, receipts = self.requests.read_bytes(), self.receipts()
+        self.configure(None)
+        self.refusal("responder_answer_requires_yolo", self.operation, "answer", answer=ANSWER)
+        self.configure(self.command)
+        with patch("pod.relay.verify", side_effect=AssertionError("inactive answer called verifier")):
+            self.refusal("responder_answer_requires_yolo", self.operation, "answer", answer=ANSWER)
+        self.assertEqual(self.requests.read_bytes(), calls)
+        self.assertEqual(self.receipts(), receipts)
+
+    def test_n6_impossible_answer_refuses_before_verification(self):
+        self.activate()
+        self.question()
+        receipts = self.receipts()
+        for text in ("x" * 4096, "\x01" * 1000, "\U0001f600" * 1100):
+            with self.subTest(text_bytes=len(text.encode())):
+                self.refusal("invalid_standing_authorization", self.operation, "answer", answer={**ANSWER, "text": text})
+        self.assertFalse(self.requests.exists())
+        self.assertEqual(self.receipts(), receipts)
+        self.operation("answer", answer={**ANSWER, "text": "x" * 3500})
+        self.assertEqual(len(self.requests.read_text().splitlines()), 1)
+
     def test_encoded_answer_cap_refuses_before_any_receipt_is_consumed(self):
         self.case.write([self.case.criterion()], objective="answer-size", governance={"base_ref": "target"}, questions=["Q1"])
         self.operation(objective="answer-size")
@@ -604,6 +767,8 @@ class StandingResponderTests(StandingCase):
         self.refusal("relay_authorization_reused", self.operation, "answer", answer=ANSWER)
         self.assertEqual(self.receipts(), receipts)
         self.operation("revoke")
+        self.refusal("responder_answer_requires_yolo", self.operation, "answer", answer=ANSWER)
+        self.activate()
         self.refusal("relay_authorization_reused", self.operation, "answer", answer=ANSWER)
         self.assertEqual(self.receipts(), receipts)
 
@@ -751,7 +916,11 @@ class StandingVisibilityTests(StandingCase):
         self.assertEqual({key: projection["at_closure"][key] for key in ("mode", "decision", "active_until_closure")},
                          {"mode": "yolo", "decision": "Y1", "active_until_closure": True})
         self.assertEqual(projection["effects"], expected["effects"])
-        self.assertEqual(projection["responder_decisions"], expected["responder_decisions"])
+        closed_answer = projection["responder_decisions"]["items"][0]
+        self.assertEqual({key: closed_answer[key] for key in expected["responder_decisions"]["items"][0]},
+                         expected["responder_decisions"]["items"][0])
+        self.assertEqual(closed_answer["reference"], "standing_authorization/answers/0")
+        self.assertFalse(closed_answer["text_truncated"])
         self.assertEqual(self.public_status()["standing_authorization"], projection)
         self.assertEqual(self.requests.read_bytes(), requests)
         self.refusal("objective_closed", self.activate)
@@ -926,6 +1095,19 @@ class StandingCleanupTests(unittest.TestCase):
 
 
 class StandingGuidanceTests(unittest.TestCase):
+    def test_n4_delivery_projection_names_current_consent_and_historical_effects(self):
+        text = self.text("docs/spec/interface.md").split("### R139", 1)[1].split("## Acceptance", 1)[0]
+        self.assertIn("`delivery_authorization` is current applicable consent", text)
+        self.assertIn("effects completed under yolo are listed under `standing_authorization.effects`", text)
+
+    def test_n7_each_relay_widening_is_explicit_and_exactly_bound(self):
+        text = self.text("docs/spec/delivery.md")
+        for requirement, following in (("### R120", "### R136"), ("### R136", "### R137")):
+            section = text.split(requirement, 1)[1].split(following, 1)[0]
+            self.assertIn("A verified relayed widening may name any default exclusion", section)
+            self.assertIn("`deploy`, `paid_resources`, `secrets`, `unique_deletion` and `scope_growth`", section)
+            self.assertIn("each explicitly, under the same exact binding", section)
+
     def text(self, path):
         return " ".join((REPOSITORY / path).read_text().split())
 
@@ -985,14 +1167,14 @@ class StandingCapacityTests(StandingCase):
         verdict = {"schema": relay.SCHEMA, "reference": decision["relay"]["reference"], "action": "standing",
                    "objective": "objective", "candidate": None, "target": standing._target(fixture.project, context),
                    "pr": None, "standing": standing._request_fields(operation, parsed), "verified": True,
-                   "owner_source": "s" * 512, "single_use": key, "decided_at": "2026-09-21T00:00:00Z"}
+                   "owner_source": "s" * 512, "single_use": key, "decided_at": f"2030-01-01T00:00:{index:02d}Z"}
         row = {**parsed, "id": f"Y{index}", "operation": operation, "utc": "2030-01-01T00:00:00Z",
                "seq": context["checkpoint"]["seq"], "relay": {"reference": verdict["reference"], "owner_source": verdict["owner_source"]},
                "relay_verification": verdict}
         if operation == "activate":
             row.update(binding={"scope_digest": standing.scope_digest(context)}, exclusions=list(standing.STANDING_EXCLUSIONS))
         decision["instruction"] = cls.padding(standing.MAX_DECISION_BYTES - len(encoded(row, compact=True)) + 1)
-        fixture.control(changes={"single_use": key, "owner_source": verdict["owner_source"]})
+        fixture.control(changes={"single_use": key, "owner_source": verdict["owner_source"], "decided_at": verdict["decided_at"]})
         with patch("pod.standing._clock", return_value=cls.MOMENT):
             result = fixture.operation(operation, decision=decision)
         fixture.assertEqual(len(encoded(result["decision"], compact=True)), standing.MAX_DECISION_BYTES)
@@ -1067,6 +1249,39 @@ class StandingCapacityTests(StandingCase):
         result = self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
         self.assertEqual(result["checkpoint"]["closure"]["report"]["standing_authorization"]["state"], "ended")
         self.assertLess(_path(self.project, "objective").stat().st_size, CONTEXT_LIMIT)
+
+    def test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom(self):
+        from pod.history import CONTEXT_LIMIT
+        self.maximum_decision(self, "revoke")
+        # A completed production Governor row supplies the real effect shape.
+        journal = self.journal()
+        source = self.context_bytes
+        context = read(self.project, "objective")
+        _path(self.project, "objective").write_bytes(source)
+        self.case.op("governor-execute", action=self.proposed())
+        sample = deepcopy(self.journal()["actions"][-1])
+        _write(_path(self.project, "objective"), context)
+        journal["actions"] = [{**deepcopy(sample), "record_id": f"effect-{index:02d}"} for index in range(64)]
+        _write_journal(_record_path(self.project, "objective"), journal)
+        # 64 KB of current objective context is independent of the standing history.
+        questions = [{"id": f"Q{index}", "text": f"Question {index}: " + "q" * 1010} for index in range(64)]
+        self.case.write(self.case.stored(), questions=questions)
+        closed = self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])],
+                                 questions=questions, close=True)
+        report = closed["checkpoint"]["closure"]["report"]
+        self.assertEqual(report["standing_authorization"]["effects"]["total"], 64)
+        owners = [row for row in report["owner_decisions"] if row["kind"] == "standing_authorization"]
+        self.assertEqual(len(owners), 32)
+        self.assertTrue(all(set(row["decision"]) == {"id", "operation", "channel", "decided_at"} for row in owners))
+        answers = report["standing_authorization"]["responder_decisions"]["items"]
+        self.assertTrue(all(len(encoded(row["text"], compact=True)) <= 259 and row["text_truncated"] for row in answers))
+        self.assertGreater(CONTEXT_LIMIT - _path(self.project, "objective").stat().st_size, 100 * 1024)
+        # Full answer text and verdicts remain at the referenced record positions.
+        stored = read(self.project, "objective")
+        self.assertEqual(stored["standing_authorization"]["answers"], context["standing_authorization"]["answers"])
+        from pod.ledger import closed_snapshot_context
+        from pod.obligations import validate_closed_snapshot
+        validate_closed_snapshot(stored["checkpoint"], closed_snapshot_context(self.project, "objective", stored))
 
     def test_full_standing_history_keeps_admission_and_report_writes_available(self):
         self.case.write([self.case.criterion(), self.case.sub("S1")])

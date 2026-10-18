@@ -2119,18 +2119,26 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
     from .util import map_decisions
     decisions = ctx.get("owner_decisions", []) + map_decisions(state)
     if decisions and not legacy_report:
+        if state.get("closure"):
+            from .standing import decision_time
+            decisions = [{**row, "decision": {**{key: row["decision"][key] for key in ("id", "operation", "channel")},
+                                                 "decided_at": decision_time(row["decision"])}}
+                         if row["kind"] == "standing_authorization" else row for row in decisions]
         result["owner_decisions"] = decisions
     if not legacy_report:
         result["decision_channels"] = 1
-        if "standing_context" in ctx or standing_normal:
+        context = ctx.get("standing_context", {})
+        has_decisions = bool(context.get("standing_authorization", {}).get("decisions"))
+        if has_decisions or standing_normal:
             from .standing import projection as standing_projection
-            context = ctx.get("standing_context", {})
-            closure_utc = ((context.get("checkpoint") or {}).get("closure") or {}).get(
-                "report", {}).get("standing_authorization", {}).get("at_closure", {}).get("utc")
+            closure_utc = ((state.get("closure") or {}).get("report", {}).get(
+                "standing_authorization", {}).get("at_closure", {}).get("utc")
+                or ((context.get("checkpoint") or {}).get("closure") or {}).get(
+                    "report", {}).get("standing_authorization", {}).get("at_closure", {}).get("utc"))
             result["standing_authorization"] = standing_projection(
                 {**context, "checkpoint": {**(context.get("checkpoint") or {}), **state}}, ctx.get("standing_journal"),
-                closure_utc=closure_utc)
-            if "standing_context" in ctx:
+                closure_utc=closure_utc, compact_answers=bool(state.get("closure")))
+            if has_decisions:
                 result["decision_channels"] = 3
     if state.get("delivery") is not None:
         result["delivery"] = deepcopy(state["delivery"])

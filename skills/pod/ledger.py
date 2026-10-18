@@ -903,12 +903,12 @@ def _governor_pending(project: Path, objective: str) -> bool:
                for row in journal["actions"])
 
 
-def _authorization_granted(project: Path, objective: str):
+def _authorization_granted(project: Path, objective: str, *, context: dict | None = None):
     def granted(scope: str, candidate: str) -> bool:
         from .governor import _read_journal, _record_path, applicable_authorization
         try:
             journal = _read_journal(_record_path(project, objective))
-            context = _read(_path(project, objective))
+            current = context if context is not None else _read(_path(project, objective))
         except PodError:
             return False
         kinds = ("push", "pr_update") if scope == "publish" else (scope,)
@@ -920,7 +920,7 @@ def _authorization_granted(project: Path, objective: str):
             tree = bound.get("tree") if bound.get("commit") == row.get("commit") else None
             return applicable_authorization(unit, row["action"].get("authorization"),
                                             candidate=row.get("commit") or row["action"]["candidate"],
-                                            tree=tree, scope=scope, context=context)
+                                            tree=tree, scope=scope, context=current)
         # A row carried from a lost coordinator records the predecessor's consent, never this objective's (R118).
         return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
                    and not isinstance(row.get("carried_from"), dict)
@@ -1011,7 +1011,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "source_current": source_current,
             "policy_revision": effective(project)["revision"],
             "verification": verification if verification is not None else checkpoint_value.get("verification"),
-            "authorization_granted": _authorization_granted(project, objective),
+            "authorization_granted": _authorization_granted(project, objective, context=state),
             "governor_pending": _governor_pending(project, objective),
             "governor_delivery": objective_delivery_reporting(project, objective),
             "git_delta": lambda source, target: git_delta(project, source, target),
@@ -1328,6 +1328,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              verification=core.get("verification"))
         if "standing_authorization" in state:
             ctx["standing_context"] = {**state, "checkpoint": {**(state.get("checkpoint") or {}), **core}}
+            ctx["authorization_granted"] = _authorization_granted(project, objective, context=ctx["standing_context"])
         ctx["operation"] = "checkpoint"
         ctx["governance_refresh"] = refresh
         ctx["derived_adoption"] = derived_adoption
@@ -1360,6 +1361,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             ctx["closure_unrecorded"] = _closure_unrecorded(
                 project, objective, state, delivered=(prior_map or {}).get("delivery") is not None)
         map_state = accept_write(prior_map, proposed, ctx)
+        from .standing import checkpoint_times
+        checkpoint_times(state, prior_map, map_state)
         if verified_delivery is not None:
             map_state["delivery"] = verified_delivery
         _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,

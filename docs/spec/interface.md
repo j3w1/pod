@@ -295,16 +295,22 @@ report can name the mode and its effects. The closure projection also records `a
 its UTC observation time, mode, `ran_in_yolo`, the last activation id (or null) and
 `active_until_closure`, making explicit that the objective ran in yolo until closure
 when that was true. Later expiry preserves those closure fields. A closure of an
-objective that never held the record keeps its earlier shape and channel discriminator, so earlier readers still read
+objective with no standing decisions keeps its earlier report shape and channel discriminator, so earlier readers still read
 it, and readers show its mode as `normal`. The projection reads
 stored facts only. It never runs the verifier and attests nothing about the host's
 present decision. An unreadable Governor journal cannot turn a committed checkpoint
 into a refusal: its acknowledgement uses a journal-less standing projection, as the
 other ledger readers do. Each standing decision is also listed among the owner decisions of
 status and the closure report, as kind `standing_authorization` with its channel (R120).
-`internal cleanup-plan` adds the coverage R137 defines.
+`delivery_authorization` is current applicable consent; effects completed under yolo
+are listed under `standing_authorization.effects`, even after consent becomes MISSING.
+The closure owner-decision rows are compact references (id, operation, channel and
+decision time), without full verdicts. Its responder text uses at most 256 encoded
+content bytes plus truncation and full-record references; status outside closure
+keeps full text. `internal cleanup-plan` adds the coverage R137 defines.
 
-`pod internal standing-authorization` is the only writer of the record. The host
+`pod internal standing-authorization` is the only writer of decision and answer rows;
+checkpoints store the bounded closure/reopen time facts of R136. The host
 verifier of the relayed authorization contract gains two actions, `standing` and
 `answer`, for R136 and R138; `publish` and `merge` requests and verdicts stay
 byte-identical. No new personal or project config key exists.
@@ -662,7 +668,10 @@ A write returns `standing_authorization` (the projection), the stored `decision`
 `answer` row and the `context_revision`. A relayed `activate`, `revoke` or `answer`
 is written only after the verifier confirms it. A full record refuses
 `standing_authorization_full` (an activation at 31 or more decisions) or
-`responder_answers_full` (16 answers), without a write. R136/R138's complete encoded
+`responder_answers_full` (16 answers), without a write. Stale verified standing
+decisions refuse `standing_authorization_stale` before receipt consumption (R136).
+A no-op revoke skips verification; an inactive answer refuses
+`responder_answer_requires_yolo` before verification, regardless of prior answers. R136/R138's complete encoded
 row limits also apply and are exposed by `internal contract` as `stored_max_bytes`.
 
 `pod status --objective ID --json`, and a status selecting one objective by Run, add
@@ -688,4 +697,4 @@ not active (for example "yolo suspended: scope changed"). Unknown optional field
 ignorable. `internal cleanup-plan` adds `standing_authorization` with `mode`,
 `decision`, `covers` and `asks`, as R137 defines them.
 
-- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier.
+- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier. `delivery_authorization` names current applicable consent, while `standing_authorization.effects` retains completed yolo effects after a stop or replacement. The closure references standing decision rows without copying verdicts and bounds responder text to a 256-byte encoded prefix.

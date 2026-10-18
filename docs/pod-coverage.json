@@ -5622,7 +5622,11 @@
       "offline_test": [
         "tests.test_standing_authorization.StandingRecordTests.test_relay_activation_confirms_scope_operation_expiry_and_consumes_key",
         "tests.test_standing_authorization.StandingRecordTests.test_relay_activation_replay_after_session_revoke_cannot_restore_yolo",
-        "tests.test_standing_authorization.StandingRecordTests.test_interrupted_relay_activation_receipt_can_complete_exactly_one_row"
+        "tests.test_standing_authorization.StandingRecordTests.test_interrupted_relay_activation_receipt_can_complete_exactly_one_row",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_activation_orders_by_verified_stop_time_instead_of_recording_time",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_activation_before_newer_activation_is_stale",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_newer_relay_follows_activation_recorded_late",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_interrupted_receipt_before_stop_cannot_complete_after_stop"
       ],
       "status": "NOT_RUN"
     },
@@ -5661,7 +5665,9 @@
       "offline_test": [
         "tests.test_standing_authorization.StandingGovernorTests.test_explicit_deploy_widening_covers_all_needed_effect_scopes",
         "tests.test_standing_authorization.StandingRecordTests.test_verified_relay_deploy_widening_covers_exact_candidate_then_revoke_holds",
-        "tests.test_standing_authorization.StandingRecordTests.test_relay_deploy_widening_missing_or_mismatched_verifier_never_grants"
+        "tests.test_standing_authorization.StandingRecordTests.test_relay_deploy_widening_missing_or_mismatched_verifier_never_grants",
+        "tests.test_standing_authorization.StandingGuidanceTests.test_n7_each_relay_widening_is_explicit_and_exactly_bound",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_delayed_activation_before_session_stop_cannot_restore_push_or_deploy"
       ],
       "status": "NOT_RUN"
     },
@@ -5684,7 +5690,10 @@
         "tests.test_standing_authorization.StandingApplicableConsentTests.test_expired_standing_rows_are_missing_and_accept_authority_wait",
         "tests.test_standing_authorization.StandingApplicableConsentTests.test_replaced_or_narrowed_decision_cannot_reuse_earlier_standing_rows",
         "tests.test_standing_authorization.StandingGuidanceTests.test_delayed_caller_effect_requires_a_fresh_governor_or_show_check",
-        "tests.test_standing_authorization.StandingApplicableConsentTests.test_same_decision_must_still_cover_the_recorded_scopes"
+        "tests.test_standing_authorization.StandingApplicableConsentTests.test_same_decision_must_still_cover_the_recorded_scopes",
+        "tests.test_standing_authorization.StandingRecordTests.test_n3_noop_relay_revoke_reports_state_without_verifier",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_old_revoke_refuses_after_session_activation_but_tie_keeps_stop",
+        "tests.test_standing_authorization.StandingApplicableConsentTests.test_n5_scope_suspension_and_authority_wait_share_one_checkpoint"
       ],
       "status": "NOT_RUN"
     },
@@ -5700,7 +5709,9 @@
         "tests.test_standing_authorization.StandingSuccessionTests.test_successor_claim_between_admission_and_effect_preserves_pending_predecessor",
         "tests.test_standing_authorization.StandingRecordTests.test_reopen_keeps_yolo_ended_until_a_new_activation_after_reopen",
         "tests.test_standing_authorization.StandingVisibilityTests.test_closure_keeps_yolo_history_after_the_decisions_expiry_time",
-        "tests.test_standing_authorization.StandingVisibilityTests.test_closure_names_prior_yolo_even_when_revoked_before_closure"
+        "tests.test_standing_authorization.StandingVisibilityTests.test_closure_names_prior_yolo_even_when_revoked_before_closure",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_closure_and_reopen_times_survive_and_reject_older_activation",
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_first_relay_after_normal_closure_obeys_reopen_time"
       ],
       "status": "NOT_RUN"
     },
@@ -5765,7 +5776,10 @@
         "tests.test_standing_authorization.StandingCapacityTests.test_worst_case_record_leaves_headroom_for_checkpoint_and_closure_report",
         "tests.test_standing_authorization.StandingCapacityTests.test_full_standing_history_keeps_admission_and_report_writes_available",
         "tests.test_standing_authorization.StandingRecordTests.test_encoded_row_caps_refuse_before_any_receipt_is_consumed",
-        "tests.test_standing_authorization.StandingResponderTests.test_encoded_answer_cap_refuses_before_any_receipt_is_consumed"
+        "tests.test_standing_authorization.StandingResponderTests.test_encoded_answer_cap_refuses_before_any_receipt_is_consumed",
+        "tests.test_standing_authorization.StandingResponderTests.test_n3_inactive_answer_with_prior_history_refuses_before_verifier",
+        "tests.test_standing_authorization.StandingResponderTests.test_n6_impossible_answer_refuses_before_verification",
+        "tests.test_standing_authorization.StandingCapacityTests.test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom"
       ],
       "status": "NOT_RUN"
     },
@@ -5781,7 +5795,8 @@
         "tests.test_standing_authorization.StandingVisibilityTests.test_run_selected_status_includes_governor_owner_authorization_rows",
         "tests.test_standing_authorization.StandingGuidanceTests.test_standing_authorities_have_distinct_names_and_lifetimes",
         "tests.test_standing_authorization.StandingGuidanceTests.test_synthesized_consent_requires_a_prepared_target_in_spec",
-        "tests.test_standing_authorization.StandingGuidanceTests.test_run_selected_status_spec_names_governor_owner_decisions"
+        "tests.test_standing_authorization.StandingGuidanceTests.test_run_selected_status_spec_names_governor_owner_decisions",
+        "tests.test_standing_authorization.StandingGuidanceTests.test_n4_delivery_projection_names_current_consent_and_historical_effects"
       ],
       "status": "NOT_RUN"
     },
