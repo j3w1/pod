@@ -257,6 +257,8 @@ def _write(path: Path, value: dict, *, native: dict | None = None, protected=())
     # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
     # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
     refuse_continued(value, reserved=False)
+    from .standing import observe_scope
+    observe_scope(value)
     from .util import protect_decision_record
     protect_decision_record(value)
     value["revision"] += 1

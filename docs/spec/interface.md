@@ -290,13 +290,16 @@ projection defined under the standing-authorization status contract: the mode (`
 with its scope, exclusions, widening and source, or `normal`), each effect authorized
 under it and each clarification the host's responder decided (R136-R138). The
 acknowledgement of the checkpoint that records `delivery` carries the same projection,
-and so does the stored closure report of an objective that holds the record, so a final
+and so does the stored closure report of an objective with standing decisions, so a final
 report can name the mode and its effects. The closure projection also records `at_closure`:
 its UTC observation time, mode, `ran_in_yolo`, the last activation id (or null) and
 `active_until_closure`, making explicit that the objective ran in yolo until closure
 when that was true. Later expiry preserves those closure fields. A closure of an
-objective with no standing decisions keeps its earlier report shape and channel discriminator, so earlier readers still read
-it, and readers show its mode as `normal`. The projection reads
+objective without a standing record keeps its earlier report shape and channel discriminator
+through close, reopen and close, so genuine 0.18.0 still reads it; Governor DEFER text
+also stays unchanged. A stop is a yolo operation and creates the record even while off.
+A no-decision closure keeps the earlier report shape; its readers show `normal`,
+with a stable `at_closure` or none, never a new read time. The projection reads
 stored facts only. It never runs the verifier and attests nothing about the host's
 present decision. An unreadable Governor journal cannot turn a committed checkpoint
 into a refusal: its acknowledgement uses a journal-less standing projection, as the
@@ -310,7 +313,7 @@ content bytes plus truncation and full-record references; status outside closure
 keeps full text. `internal cleanup-plan` adds the coverage R137 defines.
 
 `pod internal standing-authorization` is the only writer of decision and answer rows;
-checkpoints store the bounded closure/reopen time facts of R136. The host
+checkpoints store the bounded lifecycle and material scope facts of R136. The host
 verifier of the relayed authorization contract gains two actions, `standing` and
 `answer`, for R136 and R138; `publish` and `merge` requests and verdicts stay
 byte-identical. No new personal or project config key exists.
@@ -660,7 +663,7 @@ recorded coordinator's terminal), `action` and the record the action needs:
 | `action` | Input | Result |
 | --- | --- | --- |
 | `activate` | `decision`: `provenance`, `instruction`, optional `channel` and `relay`, and optional `scope`, `widening` and `expires_at` (R136). | Writes the activation. |
-| `revoke` | `decision`: `provenance`, `instruction`, optional `channel` and `relay`. | Writes the revocation, or nothing when yolo was never on or is already revoked. |
+| `revoke` | `decision`: `provenance`, `instruction`, optional `channel` and `relay`. | Writes a revocation when on; while off, persists the stop barrier without a decision row or key consumption. |
 | `answer` | `answer`: `question`, `text` and `relay.reference` (R138). | Writes the responder answer. |
 | `show` | None. | Reads the projection below; writes nothing. |
 
@@ -669,9 +672,15 @@ A write returns `standing_authorization` (the projection), the stored `decision`
 is written only after the verifier confirms it. A full record refuses
 `standing_authorization_full` (an activation at 31 or more decisions) or
 `responder_answers_full` (16 answers), without a write. Stale verified standing
-decisions refuse `standing_authorization_stale` before receipt consumption (R136).
-A no-op revoke skips verification; an inactive answer refuses
-`responder_answer_requires_yolo` before verification, regardless of prior answers. R136/R138's complete encoded
+decisions refuse `standing_authorization_stale` before receipt consumption (R136),
+with reason `reopen_time_unavailable` when a reopen predates the first record and
+its time is missing. Future-dated activations refuse `standing_authorization_future`;
+future-dated verified stops use receipt time as their authority-reducing barrier,
+retaining the original verified time in a recorded row. A no-op relayed stop verifies
+its time, falling back to receipt time on failure, and returns `state` and `changed: false`.
+An inactive answer refuses `responder_answer_requires_yolo` before verification,
+regardless of prior answers. An unrecorded question refuses
+`decision_question_unrecorded` before answer preflight or target checks. R136/R138's complete encoded
 row limits also apply and are exposed by `internal contract` as `stored_max_bytes`.
 
 `pod status --objective ID --json`, and a status selecting one objective by Run, add
@@ -688,8 +697,8 @@ stores nothing and runs no verifier.
 | `decision` | `null`, or the latest activation: `id`, `scope`, `exclusions`, `widening`, `expires_at`, `since`, `channel` and, when relayed, `relay_reference` and `owner_source`. |
 | `effects` | `total`, `truncated` and `items`: the newest 64 journal rows authorized under yolo, each with `record_id`, `kind`, `scope`, `candidate`, `tree`, `target`, `pr`, `decision`, `outcome`, `at` and `standing`. |
 | `responder_decisions` | `total`, `truncated` and `items`: the newest 64 answers, each with `id`, `question`, `text`, `responder_source`, `at` and `under`. |
-| `history` | `total` and `items`: every decision's `id`, `operation`, `at` and `channel`. |
-| `at_closure` | Present for a closed objective holding the standing record: `utc`, `mode`, boolean `ran_in_yolo`, last activation `decision` id (or null), and boolean `active_until_closure`, captured at closure. |
+| `history` | `total` and `items`: every decision's `id`, `operation`, receipt/recording time `at`, ordering time `decided_at` and `channel`. For a future verified stop, `decided_at` is capped at receipt; the full record retains both original times. |
+| `at_closure` | Present when captured at closure: `utc`, `mode`, boolean `ran_in_yolo`, last activation `decision` id (or null), and boolean `active_until_closure`. For a no-decision objective it is stable or absent. |
 
 Text status prints one line, such as "Mode: yolo (publish, merge, release, install,
 cleanup; session since T)" or "Mode: normal", naming the state and reason when yolo is

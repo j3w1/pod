@@ -32,33 +32,82 @@ def _timestamp(now: datetime) -> str:
 
 def decision_time(row: dict) -> str:
     """Owner decision time, distinct from the time Pod recorded a relay."""
-    return row["relay_verification"]["decided_at"] if row["channel"] == "relayed" else row["utc"]
+    if row["channel"] == "session":
+        return row["utc"]
+    decided = _instant(row["relay_verification"]["decided_at"])
+    return _timestamp(min(decided, _instant(row["utc"]))) if row["operation"] == "revoke" else _timestamp(decided)
+
+
+def _instant(stamp: str) -> datetime:
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+
+def _barrier(record: dict) -> datetime | None:
+    # Earlier standing writers kept these facts separately. Read them faithfully;
+    # new events fold them into the same monotonic authority boundary.
+    times = [record[key] for key in ("not_before", "closed_at", "reopened_at") if key in record]
+    times += [decision_time(row) for row in record.get("decisions", [])]
+    return max(map(_instant, times), default=None)
+
+
+def _raise_barrier(record: dict, stamp: str) -> None:
+    record["not_before"] = _timestamp(max(_barrier(record) or _instant(stamp), _instant(stamp)))
+
+
+def observe_scope(context: dict, *, now: datetime | None = None) -> None:
+    """Remember the first material mismatch for the current activation, once."""
+    record = context.get("standing_authorization", {})
+    decisions = record.get("decisions", [])
+    latest = next((row for row in reversed(decisions) if row["operation"] == "activate"), None)
+    if (latest is not None and record.get("scope_changed_for") != latest["id"]
+            and latest["binding"]["scope_digest"] != scope_digest(context)):
+        record["scope_changed_for"] = latest["id"]
+        _raise_barrier(record, _timestamp(_clock(now)))
 
 
 def checkpoint_times(context: dict, previous: dict | None, checkpoint: dict) -> None:
     """Keep only the latest lifecycle times, atomically with the accepted checkpoint."""
     closed = checkpoint.get("closure")
     reopening = (previous or {}).get("closure") and not closed
+    record = context.get("standing_authorization")
+    if record is None:
+        return
     if reopening:
-        # Even an objective first put in yolo after a reopen needs this barrier.
-        record = context.setdefault("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": []})
         record["reopened_at"] = _timestamp(_clock(None))
-    elif closed and not (previous or {}).get("closure") and "standing_authorization" in context:
-        context["standing_authorization"]["closed_at"] = closed["report"].get(
+        _raise_barrier(record, record["reopened_at"])
+    elif closed and not (previous or {}).get("closure"):
+        record["closed_at"] = closed["report"].get(
             "standing_authorization", {}).get("at_closure", {}).get("utc") or _timestamp(_clock(None))
+        _raise_barrier(record, record["closed_at"])
 
 
-def _fresh(context: dict, verdict: dict, operation: str) -> None:
+def _fresh(context: dict, row: dict) -> None:
     record = context.get("standing_authorization", {})
-    times = [decision_time(row) for row in record.get("decisions", [])
-             if operation == "activate" or row["operation"] == "activate"]
-    if operation == "activate":
-        times += [record[key] for key in ("closed_at", "reopened_at") if key in record]
-    decided = datetime.fromisoformat(verdict["decided_at"].replace("Z", "+00:00"))
-    latest = max((datetime.fromisoformat(stamp.replace("Z", "+00:00")) for stamp in times), default=None)
-    if latest is not None and (decided <= latest if operation == "activate" else decided < latest):
+    decided = _instant(decision_time(row))
+    if row["operation"] == "activate":
+        if decided > _instant(row["utc"]):
+            raise PodError("standing_authorization_future", "Relayed activation decision time is later than Pod's receipt time",
+                           {"reason": "decision_time_future",
+                            "next_action": "obtain a corrected verified owner decision or activate in the coordinator's session"})
+        latest = _barrier(record)
+        # Genuine 0.18.0 reopen rows have no time. Do not invent one or make a
+        # never-yolo objective unreadable just to remember it.
+        reopens = (context.get("checkpoint") or {}).get("reopened", [])
+        unknown_reopen = ("reopened_at" not in record and bool(reopens)
+                          and not any(item["operation"] == "activate" and item["seq"] >= reopens[-1]["seq"]
+                                      for item in record.get("decisions", [])))
+        if unknown_reopen:
+            raise PodError("standing_authorization_stale", "Reopen time is unavailable: the objective reopened before it held a standing record",
+                           {"reason": "reopen_time_unavailable", "next_action": "activate in the coordinator's session"})
+        stale = latest is not None and decided <= latest
+    else:
+        latest = max((_instant(decision_time(item)) for item in record.get("decisions", [])
+                      if item["operation"] == "activate"), default=None)
+        stale = latest is not None and decided < latest
+    if stale:
         raise PodError("standing_authorization_stale", "Relayed standing decision predates the current authority boundary",
-                       {"next_action": "obtain a fresh owner decision after the latest standing decision, closure and reopen"})
+                       {"reason": "decision_time_stale",
+                        "next_action": "obtain a fresh owner decision after the latest standing decision, stop, lifecycle or scope change"})
 
 
 def scope_digest(context: dict) -> str:
@@ -78,6 +127,7 @@ def observe(context: dict, source: dict, body: str) -> None:
     normalized = re.sub(r"(?m)^([ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+)\[[xX]\](?=[ \t\r]|$)", r"\1[ ]", body)
     context["standing_authorization"]["observed"] = {
         "source": digest(source), "body_scope_sha256": hashlib.sha256(normalized.encode()).hexdigest()}
+    observe_scope(context)
 
 
 def suspension_reason(context: dict) -> str | None:
@@ -85,6 +135,8 @@ def suspension_reason(context: dict) -> str | None:
     if source is not None and context.get("standing_authorization", {}).get("observed", {}).get("source") != digest(source):
         return "scope_unobserved"
     decisions = context.get("standing_authorization", {}).get("decisions", [])
+    if decisions and context["standing_authorization"].get("scope_changed_for") == decisions[-1]["id"]:
+        return "scope_changed"
     if decisions and decisions[-1]["operation"] == "activate" and decisions[-1]["binding"]["scope_digest"] != scope_digest(context):
         return "scope_changed"
     return None
@@ -166,13 +218,13 @@ def validate_record(value: object) -> None:
     """Validate stored facts without treating them as a fresh authorization or answer."""
     from .relay import validate_verdict
     try:
-        record = exact(value, {"schema", "decisions", "answers", "observed", "closed_at", "reopened_at"},
+        record = exact(value, {"schema", "decisions", "answers", "observed", "closed_at", "reopened_at", "not_before", "scope_changed_for"},
                        {"schema", "decisions", "answers"}, name="standing record")
         if record["schema"] != SCHEMA or not isinstance(record["decisions"], list) or not isinstance(record["answers"], list):
             raise ValueError("record")
         if len(record["decisions"]) > MAX_DECISIONS or len(record["answers"]) > MAX_ANSWERS:
             raise ValueError("capacity")
-        for key in ("closed_at", "reopened_at"):
+        for key in ("closed_at", "reopened_at", "not_before"):
             if key in record:
                 normalize_timestamp(record[key], field=key, code="state_unsupported")
         if "observed" in record:
@@ -212,6 +264,8 @@ def validate_record(value: object) -> None:
                     raise ValueError("verdict")
             elif "relay_verification" in row:
                 raise ValueError("session verdict")
+        if "scope_changed_for" in record and record["scope_changed_for"] not in activations:
+            raise ValueError("scope change")
         for index, raw in enumerate(record["answers"], 1):
             _row_fit(raw, answer=True)
             row = exact(raw, {"id", "question", "text", "decided_by", "responder_source", "relay", "relay_verification", "utc", "under"},
@@ -243,7 +297,7 @@ def _target(project: Path, context: dict) -> dict:
     return {"repository": repository, "remote": parts[0], "base": parts[1]}
 
 
-def _verify(project: Path, objective: str, context: dict, reference: str, action: str, binding: dict) -> dict:
+def _verify(project: Path, objective: str, context: dict, reference: str, action: str, binding: dict, *, recording: bool = True) -> dict:
     from . import relay
     from .config import effective
     command = effective(project)["preferences"].get("authorization_verifier")
@@ -252,14 +306,16 @@ def _verify(project: Path, objective: str, context: dict, reference: str, action
     request = {"schema": relay.SCHEMA, "reference": reference, "action": action, "objective": objective,
                "candidate": None, "target": _target(project, context), "pr": None, action: binding}
     verdict = relay.verify(command, request)
+    if not recording:
+        # A no-op stop needs the verified time, even if its key already has a
+        # row. Re-delivery must not replace an older stop's time with receipt.
+        return verdict
     record = context.get("standing_authorization", {})
     if any(row.get("relay_verification", {}).get("single_use") == verdict["single_use"]
            for row in [*record.get("decisions", []), *record.get("answers", [])]):
         raise relay.refusal("relay_authorization_reused")
     # An identical receipt without its row is an interrupted write, which may finish once.
     relay.check_use(project, verdict)
-    if action == "standing":
-        _fresh(context, verdict, binding["operation"])
     return verdict
 
 
@@ -321,11 +377,31 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
         current = state(context, now=moment)
         record = context.get("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": []})
         if action == "revoke" and current not in ("active", "suspended", "expired"):
+            before = encoded(record, compact=True)
+            stamp = _timestamp(moment)
+            if decision["channel"] == "relayed":
+                try:
+                    verdict = _verify(project, objective, context, decision["relay"]["reference"],
+                                      "standing", _request_fields(action, decision), recording=False)
+                    stamp = decision_time({"channel": "relayed", "operation": "revoke", "relay_verification": verdict, "utc": stamp})
+                except PodError:
+                    # Nothing is running to revoke. A verifier failure must not
+                    # lose the stop or let a delayed activation restore consent.
+                    pass
+            _raise_barrier(record, stamp)
+            if "standing_authorization" not in context or encoded(record, compact=True) != before:
+                context["standing_authorization"] = record
+                _write(path, context)
             return {"state": current, "changed": False}
         if action == "answer" and current != "active":
             raise PodError("responder_answer_requires_yolo", "Responder answers require active yolo",
                            {"next_action": "ask the owner as before; the responder's pick may be recorded in the question's choices as a recommendation"})
         if action == "answer":
+            questions = (context.get("checkpoint") or {}).get("questions", [])
+            if not isinstance(questions, list) or not any(question == answer["question"] or isinstance(question, dict)
+                    and answer["question"] in (question.get("id"), question.get("reference")) for question in questions):
+                raise PodError("decision_question_unrecorded", "Responder answer must name a currently recorded question",
+                               {"next_action": "record the question first"})
             _answer_preflight(project, objective, context, answer, utc=_timestamp(moment), index=len(record["answers"]) + 1)
         verdict = None
         if decision is not None and decision["channel"] == "relayed":
@@ -335,11 +411,6 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                               {key: answer[key] for key in ("question", "text")})
         context["standing_authorization"] = record
         if action == "answer":
-            questions = (context.get("checkpoint") or {}).get("questions", [])
-            if not isinstance(questions, list) or not any(question == answer["question"] or isinstance(question, dict)
-                    and answer["question"] in (question.get("id"), question.get("reference")) for question in questions):
-                raise PodError("decision_question_unrecorded", "Responder answer must name a currently recorded question",
-                               {"next_action": "record the question first"})
             if verdict is None:
                 verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
                                   {key: answer[key] for key in ("question", "text")})
@@ -367,7 +438,11 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                            exclusions=[item for item in STANDING_EXCLUSIONS if item not in row["widening"]])
             if decision["channel"] == "relayed":
                 row.update(relay={"reference": verdict["reference"], "owner_source": verdict["owner_source"]}, relay_verification=verdict)
+                _fresh(context, row)
             _row_fit(row)
+            _raise_barrier(record, decision_time(row))
+            if action == "activate":
+                record.pop("scope_changed_for", None)
             record["decisions"].append(row)
         # Validate fit before consuming an otherwise valid receipt. The context writer is atomic.
         validate_record(record)
@@ -431,9 +506,9 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
                                                            "at": row["utc"], "decided_at": decision_time(row)} for row in decisions]}}
     checkpoint = context.get("checkpoint") or {}
     closure = checkpoint.get("closure")
-    if closure and record:
+    if closure and (decisions or record.get("closed_at")):
         stored = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {})
-        stamp = normalize_timestamp(stored.get("utc") or closure_utc or _timestamp(_clock(now)),
+        stamp = normalize_timestamp(stored.get("utc") or record.get("closed_at") or closure_utc or _timestamp(_clock(now)),
                                     field="Standing closure time", code="state_unsupported")
         before = {**context, "checkpoint": {**checkpoint, "closure": None}}
         active = state(before, now=datetime.fromisoformat(stamp.replace("Z", "+00:00"))) == "active"

@@ -5626,7 +5626,8 @@
         "tests.test_standing_authorization.StandingOrderingTests.test_n1_activation_orders_by_verified_stop_time_instead_of_recording_time",
         "tests.test_standing_authorization.StandingOrderingTests.test_n1_activation_before_newer_activation_is_stale",
         "tests.test_standing_authorization.StandingOrderingTests.test_n1_newer_relay_follows_activation_recorded_late",
-        "tests.test_standing_authorization.StandingOrderingTests.test_n1_interrupted_receipt_before_stop_cannot_complete_after_stop"
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_interrupted_receipt_before_stop_cannot_complete_after_stop",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e5_future_activation_refuses_and_future_stop_uses_receipt_barrier"
       ],
       "status": "NOT_RUN"
     },
@@ -5691,9 +5692,70 @@
         "tests.test_standing_authorization.StandingApplicableConsentTests.test_replaced_or_narrowed_decision_cannot_reuse_earlier_standing_rows",
         "tests.test_standing_authorization.StandingGuidanceTests.test_delayed_caller_effect_requires_a_fresh_governor_or_show_check",
         "tests.test_standing_authorization.StandingApplicableConsentTests.test_same_decision_must_still_cover_the_recorded_scopes",
-        "tests.test_standing_authorization.StandingRecordTests.test_n3_noop_relay_revoke_reports_state_without_verifier",
+        "tests.test_standing_authorization.StandingRecordTests.test_n3_noop_relay_revoke_reports_state_when_verifier_is_unavailable",
         "tests.test_standing_authorization.StandingOrderingTests.test_n1_old_revoke_refuses_after_session_activation_but_tie_keeps_stop",
-        "tests.test_standing_authorization.StandingApplicableConsentTests.test_n5_scope_suspension_and_authority_wait_share_one_checkpoint"
+        "tests.test_standing_authorization.StandingApplicableConsentTests.test_n5_scope_suspension_and_authority_wait_share_one_checkpoint",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e1_stop_while_off_blocks_older_activation_and_interrupted_receipt",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e1_verified_noop_stop_uses_decision_time_without_consuming_key",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_four_relays_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_four_relays_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_four_relays_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_while_none_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_while_none_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_while_none_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_between_arrivals_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_between_arrivals_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_between_arrivals_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_while_ended_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_while_ended_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_while_ended_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_before_arrivals_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_before_arrivals_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_before_arrivals_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_between_arrivals_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_between_arrivals_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_between_arrivals_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_lifecycle_before_arrivals_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_lifecycle_before_arrivals_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_lifecycle_before_arrivals_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_lifecycle_between_arrivals_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_lifecycle_between_arrivals_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_lifecycle_between_arrivals_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_scope_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_scope_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_scope_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_lifecycle_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_lifecycle_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_lifecycle_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_session_activation_between_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_session_activation_between_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_session_activation_between_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_tie_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_tie_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_stop_tie_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_tie_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_tie_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_tie_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_reopen_tie_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_reopen_tie_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_reopen_tie_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_verdicts_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_verdicts_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_verdicts_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_after_stop_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_after_stop_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_after_stop_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_stop_session_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_stop_session_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_future_stop_session_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_activation_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_activation_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_activation_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_revocation_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_revocation_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_duplicate_revocation_3",
+        "tests.test_standing_ordering.StandingOracleInventoryTests.test_every_arrival_order_runs_once_in_bounded_named_groups",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e1_failed_noop_verifier_uses_receipt_and_blocks_older_activation"
       ],
       "status": "NOT_RUN"
     },
@@ -5711,7 +5773,10 @@
         "tests.test_standing_authorization.StandingVisibilityTests.test_closure_keeps_yolo_history_after_the_decisions_expiry_time",
         "tests.test_standing_authorization.StandingVisibilityTests.test_closure_names_prior_yolo_even_when_revoked_before_closure",
         "tests.test_standing_authorization.StandingOrderingTests.test_n1_closure_and_reopen_times_survive_and_reject_older_activation",
-        "tests.test_standing_authorization.StandingOrderingTests.test_n1_first_relay_after_normal_closure_obeys_reopen_time"
+        "tests.test_standing_authorization.StandingOrderingTests.test_n1_first_relay_after_normal_closure_obeys_reopen_time",
+        "tests.test_standing_authorization.StandingCompatibilityTests.test_e3_never_yolo_close_reopen_close_keeps_0180_readability_and_defer_text",
+        "tests.test_standing_authorization.StandingVisibilityTests.test_e4_no_decision_closure_status_has_stable_or_absent_at_closure",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e3_session_activation_after_legacy_reopen_allows_a_newer_relay"
       ],
       "status": "NOT_RUN"
     },
@@ -5727,7 +5792,20 @@
         "tests.test_standing_authorization.StandingSourceTests.test_checkbox_reconciliation_and_metadata_only_edits_keep_active",
         "tests.test_standing_authorization.StandingSourceTests.test_reconciled_requirement_text_suspends_and_owner_reconfirms",
         "tests.test_standing_authorization.StandingSourceTests.test_amendment_change_suspends",
-        "tests.test_standing_authorization.StandingSourceTests.test_unobserved_rebind_fails_closed_until_matching_observation"
+        "tests.test_standing_authorization.StandingSourceTests.test_unobserved_rebind_fails_closed_until_matching_observation",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e2_first_material_criteria_observation_blocks_older_relay_without_ratcheting",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_before_arrivals_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_before_arrivals_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_before_arrivals_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_between_arrivals_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_between_arrivals_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_between_arrivals_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_scope_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_scope_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_newer_after_scope_3",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_tie_1",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_tie_2",
+        "tests.test_standing_ordering.StandingArrivalOracleTests.test_scope_tie_3"
       ],
       "status": "NOT_RUN"
     },
@@ -5758,7 +5836,9 @@
         "tests.test_standing_authorization.StandingRecordTests.test_relay_revoke_replay_cannot_end_a_new_session_activation",
         "tests.test_standing_authorization.StandingResponderTests.test_answer_replay_records_nothing_and_preserves_receipts",
         "tests.test_standing_authorization.StandingResponderTests.test_interrupted_relay_answer_receipt_can_complete_exactly_one_row",
-        "tests.test_standing_authorization.StandingCapacityTests.test_recorded_keys_refuse_replay_before_full_history_checks"
+        "tests.test_standing_authorization.StandingCapacityTests.test_recorded_keys_refuse_replay_before_full_history_checks",
+        "tests.test_standing_authorization.StandingResponderTests.test_e6_unrecorded_question_precedes_preflight_and_target_checks",
+        "tests.test_standing_authorization.StandingOrderingTests.test_e5_future_activation_refuses_and_future_stop_uses_receipt_barrier"
       ],
       "status": "NOT_RUN"
     },
@@ -5779,7 +5859,9 @@
         "tests.test_standing_authorization.StandingResponderTests.test_encoded_answer_cap_refuses_before_any_receipt_is_consumed",
         "tests.test_standing_authorization.StandingResponderTests.test_n3_inactive_answer_with_prior_history_refuses_before_verifier",
         "tests.test_standing_authorization.StandingResponderTests.test_n6_impossible_answer_refuses_before_verification",
-        "tests.test_standing_authorization.StandingCapacityTests.test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom"
+        "tests.test_standing_authorization.StandingCapacityTests.test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom",
+        "tests.test_standing_authorization.StandingCapacityTests.test_e7_capacity_warning_names_bounded_standing_section",
+        "tests.test_standing_authorization.StandingResponderTests.test_e6_unrecorded_question_precedes_preflight_and_target_checks"
       ],
       "status": "NOT_RUN"
     },
@@ -5796,7 +5878,8 @@
         "tests.test_standing_authorization.StandingGuidanceTests.test_standing_authorities_have_distinct_names_and_lifetimes",
         "tests.test_standing_authorization.StandingGuidanceTests.test_synthesized_consent_requires_a_prepared_target_in_spec",
         "tests.test_standing_authorization.StandingGuidanceTests.test_run_selected_status_spec_names_governor_owner_decisions",
-        "tests.test_standing_authorization.StandingGuidanceTests.test_n4_delivery_projection_names_current_consent_and_historical_effects"
+        "tests.test_standing_authorization.StandingGuidanceTests.test_n4_delivery_projection_names_current_consent_and_historical_effects",
+        "tests.test_standing_authorization.StandingVisibilityTests.test_e4_no_decision_closure_status_has_stable_or_absent_at_closure"
       ],
       "status": "NOT_RUN"
     },
@@ -5812,7 +5895,8 @@
         "tests.test_standing_authorization.StandingCompatibilityTests.test_normal_closure_keeps_genuine_0180_shape_and_readers_add_normal_mode",
         "tests.test_standing_authorization.StandingCompatibilityTests.test_ordinary_payload_vocabulary_does_not_select_new_discriminator",
         "tests.test_standing_authorization.StandingRecordTests.test_checkpoint_with_unreadable_governor_journal_acknowledges_committed_write",
-        "tests.test_standing_authorization.StandingRecordTests.test_active_standing_checkpoint_with_unreadable_journal_keeps_mode_and_acknowledgement"
+        "tests.test_standing_authorization.StandingRecordTests.test_active_standing_checkpoint_with_unreadable_journal_keeps_mode_and_acknowledgement",
+        "tests.test_standing_authorization.StandingCompatibilityTests.test_e3_never_yolo_close_reopen_close_keeps_0180_readability_and_defer_text"
       ],
       "status": "NOT_RUN"
     }

@@ -540,7 +540,9 @@ def _moved(record):
 
 
 def _settlement_action(sections):
-    return ("Consume or triage reports, record implementation dispositions, or settle governed "
+    standing = any(row["section"] == "standing_authorization" for row in sections[:3])
+    return (("The standing_authorization section is bounded and needs no maintenance. " if standing else "")
+            + "Consume or triage reports, record implementation dispositions, or settle governed "
             "effects through their supported paths; largest sections: "
             + ", ".join(row["section"] for row in sections[:3]))
 
@@ -563,6 +565,8 @@ def capacity(path, state):
         result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; internal "
                                  "record-compaction permits owner-scoped maintenance now." if useful else
                                  _settlement_action(result["largest_sections"]))
+        if useful and any(row["section"] == "standing_authorization" for row in result["largest_sections"][:3]):
+            result["next_action"] += " The standing_authorization section is bounded and needs no maintenance."
     else:
         result["next_action"] = f"Continue through the existing objective operations; settled history compacts once the record reaches {COMPACT_AT} bytes."
     return result

@@ -121,6 +121,7 @@ class StandingOrderingTests(StandingCase):
                 held = self.case.op("governor", action=self.proposed(kind))
                 self.assertEqual(held["decision"], "DEFER")
                 self.assertIn("authorization_missing", [row["code"] for row in held["reasons"]])
+        return exc
 
     def test_n1_delayed_activation_before_session_stop_cannot_restore_push_or_deploy(self):
         self.at(0)
@@ -191,26 +192,109 @@ class StandingOrderingTests(StandingCase):
         self.assertNotIn("standing_authorization", closed["checkpoint"]["closure"]["report"])
         with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=4)):
             self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
+        self.assertNotIn("standing_authorization", read(self.project, "objective"))
         self.relay_time(3)
         self.assert_stale(self.at, 5, relayed=True)
-        # Re-closing without any yolo decision still keeps the normal report shape.
+        # No prior reopen time exists, so even a newer first relay fails safe.
+        self.relay_time(6, "newer-first")
+        exc = self.assert_stale(self.at, 7, relayed=True, key="newer-first")
+        self.assertIn("coordinator's session", exc.detail["next_action"])
+        self.assertEqual(exc.detail["reason"], "reopen_time_unavailable")
         closed = self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
         self.assertNotIn("standing_authorization", closed["checkpoint"]["closure"]["report"])
 
+    def test_e3_session_activation_after_legacy_reopen_allows_a_newer_relay(self):
+        self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
+        self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
+        self.at(2)
+        self.relay_time(3, "post-session")
+        self.assertEqual(self.at(4, relayed=True, key="post-session")["standing_authorization"]["state"], "active")
+
+    def test_e1_stop_while_off_blocks_older_activation_and_interrupted_receipt(self):
+        self.relay_time(1, "interrupted-off")
+        with patch("pod.ledger._write", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.at(1, relayed=True, key="interrupted-off", widening=["deploy"])
+        self.assertEqual(len(self.receipts()), 1)
+        self.assertEqual(self.at(2, "revoke"), {"state": "none", "changed": False})
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(record["decisions"], [])
+        self.assertEqual(record["not_before"], "2030-01-01T00:00:02Z")
+        self.assert_stale(self.at, 3, relayed=True, key="interrupted-off", widening=["deploy"])
+
+    def test_e1_verified_noop_stop_uses_decision_time_without_consuming_key(self):
+        self.relay_time(2, "off-stop")
+        self.assertEqual(self.at(10, "revoke", relayed=True, key="off-stop"), {"state": "none", "changed": False})
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(record["not_before"], "2030-01-01T00:00:02Z")
+        self.assertEqual(record["decisions"], [])
+        self.assertEqual(self.receipts(), {})
+        self.relay_time(1, "older-off")
+        self.assert_stale(self.at, 11, relayed=True, key="older-off")
+        self.relay_time(3, "newer-off")
+        self.assertEqual(self.at(12, relayed=True, key="newer-off")["standing_authorization"]["state"], "active")
+
+    def test_e1_failed_noop_verifier_uses_receipt_and_blocks_older_activation(self):
+        self.control(mode="fail")
+        self.assertEqual(self.at(2, "revoke", relayed=True, key="unavailable-stop"), {"state": "none", "changed": False})
+        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], "2030-01-01T00:00:02Z")
+        self.assertEqual(self.receipts(), {})
+        self.relay_time(1, "before-unavailable-stop")
+        self.assert_stale(self.at, 3, relayed=True, key="before-unavailable-stop")
+
+    def test_e5_future_activation_refuses_and_future_stop_uses_receipt_barrier(self):
+        self.at(0)
+        self.at(1, "revoke")
+        self.relay_time(3600, "future-on")
+        receipts = self.receipts()
+        self.refusal("standing_authorization_future", self.at, 2, relayed=True, key="future-on", widening=["deploy"])
+        self.assertEqual(self.receipts(), receipts)
+        self.assertEqual(self.operation("show")["standing_authorization"]["state"], "revoked")
+        self.relay_time(3, "fresh-on")
+        self.assertEqual(self.at(3, relayed=True, key="fresh-on")["standing_authorization"]["state"], "active")
+        self.relay_time(3600, "future-off")
+        row = self.at(4, "revoke", relayed=True, key="future-off")["decision"]
+        self.assertEqual(row["relay_verification"]["decided_at"], "2030-01-01T01:00:00Z")
+        self.assertEqual(standing.decision_time(row), "2030-01-01T00:00:04Z")
+        self.assertEqual(self.at(5)["standing_authorization"]["state"], "active")
+
+    def test_e2_first_material_criteria_observation_blocks_older_relay_without_ratcheting(self):
+        self.at(0)
+        added = {"id": "O2", "kind": "criterion", "provenance": "user_direct",
+                 "source": {"instruction": "Add PoD#2", "ref": "PoD#2"}, "check": "PoD#2 passes",
+                 "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=2)):
+            self.case.write([*self.case.stored(), added], criteria=["PoD#1", "PoD#2"], revision_authority=DECISION)
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(record["not_before"], "2030-01-01T00:00:02Z")
+        self.assertEqual(record["scope_changed_for"], "Y1")
+        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=4)):
+            self.case.write(self.case.stored(), criteria=["PoD#1", "PoD#2"])
+        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], record["not_before"])
+        self.relay_time(2, "scope-tie")
+        self.assert_stale(self.at, 5, relayed=True, key="scope-tie", widening=["deploy"])
+        self.relay_time(3, "after-scope")
+        self.assertEqual(self.at(6, relayed=True, key="after-scope")["standing_authorization"]["state"], "active")
+
 
 class StandingRecordTests(StandingCase):
-    def test_n3_noop_relay_revoke_reports_state_without_verifier(self):
+    def test_n3_noop_relay_revoke_reports_state_when_verifier_is_unavailable(self):
         decision = {**DECISION, "channel": "relayed", "relay": {"reference": "stop"}}
         self.configure(None)
-        before = self.saved(), self.receipts()
+        receipts = self.receipts()
         self.assertEqual(self.operation("revoke", decision=decision), {"state": "none", "changed": False})
-        self.assertEqual((self.saved(), self.receipts()), before)
+        record = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(record["decisions"], [])
+        self.assertIn("not_before", record)
+        self.assertEqual(self.receipts(), receipts)
         self.activate()
         self.operation("revoke")
-        stopped = self.saved(), self.receipts()
-        with patch("pod.relay.verify", side_effect=AssertionError("no-op called verifier")):
+        barrier = read(self.project, "objective")["standing_authorization"]["not_before"]
+        with patch("pod.standing._verify", side_effect=PodError("relay_verifier_failed", "unavailable")) as verify:
             self.assertEqual(self.operation("revoke", decision=decision), {"state": "revoked", "changed": False})
-        self.assertEqual((self.saved(), self.receipts()), stopped)
+        verify.assert_called_once()
+        self.assertGreater(read(self.project, "objective")["standing_authorization"]["not_before"], barrier)
+        self.assertEqual(self.receipts(), receipts)
         self.assertFalse(self.requests.exists())
 
     def test_encoded_row_caps_refuse_before_any_receipt_is_consumed(self):
@@ -243,7 +327,7 @@ class StandingRecordTests(StandingCase):
         decision = {**DECISION, "channel": "relayed", "relay": {"reference": "stop-one"}}
         self.operation("revoke", decision=decision)
         receipts = self.receipts()
-        # A no-op needs no verification; reuse still refuses when an active mode needs stopping.
+        # No-op verification observes the original time; active key reuse still refuses.
         self.assertEqual(self.operation("revoke", decision=decision), {"state": "revoked", "changed": False})
         self.activate()
         self.refusal("relay_authorization_reused", self.operation, "revoke", decision=decision)
@@ -401,15 +485,16 @@ class StandingRecordTests(StandingCase):
         self.assertFalse(self.requests.exists())
 
     def test_revoke_is_immediate_and_revoke_when_off_is_a_noop(self):
-        before = self.saved()
         self.assertEqual(self.operation("revoke"), {"state": "none", "changed": False})
-        self.assertEqual(before, self.saved())
+        self.assertEqual(read(self.project, "objective")["standing_authorization"]["decisions"], [])
         self.activate()
         revoked = self.operation("revoke", decision={**DECISION, "instruction": "stop yolo"})
         self.assertEqual(revoked["standing_authorization"]["state"], "revoked")
-        before = self.saved()
+        before = read(self.project, "objective")["standing_authorization"]
         self.assertEqual(self.operation("revoke"), {"state": "revoked", "changed": False})
-        self.assertEqual(before, self.saved())
+        after = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(before["decisions"], after["decisions"])
+        self.assertGreater(after["not_before"], before["not_before"])
         held = self.case.op("governor", action=self.proposed())
         self.assertEqual(held["decision"], "DEFER")
         self.assertIn("authorization_missing", [row["code"] for row in held["reasons"]])
@@ -720,6 +805,15 @@ class StandingApplicableConsentTests(StandingCase):
 
 
 class StandingResponderTests(StandingCase):
+    def test_e6_unrecorded_question_precedes_preflight_and_target_checks(self):
+        self.activate()
+        for text in ("answer", "x" * 4096):
+            with self.subTest(text_length=len(text)), patch("pod.standing._target", side_effect=AssertionError("target checked")), \
+                    patch("pod.relay.verify", side_effect=AssertionError("verifier called")):
+                receipts = self.receipts()
+                self.refusal("decision_question_unrecorded", self.operation, "answer", answer={**ANSWER, "text": text})
+                self.assertEqual(self.receipts(), receipts)
+
     def test_n3_inactive_answer_with_prior_history_refuses_before_verifier(self):
         self.activate()
         self.question()
@@ -869,6 +963,18 @@ class StandingRefusalTests(StandingCase):
 
 
 class StandingVisibilityTests(StandingCase):
+    def test_e4_no_decision_closure_status_has_stable_or_absent_at_closure(self):
+        self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
+        self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
+        self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
+        before = self.saved()
+        stamps = []
+        for hour in (1, 2):
+            with patch("pod.standing._clock", return_value=datetime(2030, 1, 1, hour, tzinfo=timezone.utc)):
+                stamps.append(self.public_status()["report"]["standing_authorization"].get("at_closure"))
+        self.assertEqual(stamps[0], stamps[1])
+        self.assertEqual(self.saved(), before)
+
     def test_run_selected_status_includes_governor_owner_authorization_rows(self):
         self.case.op("governor", action=self.proposed(authorization=self.case.consent("publish")))
         objective, selected = self.public_status(), self.public_status(by_run=True)
@@ -1029,9 +1135,11 @@ class StandingSourceTests(TickCase):
 
     def test_reconciled_requirement_text_suspends_and_owner_reconfirms(self):
         self.bind(); self.activate()
+        activated = read(self.project, "objective")["standing_authorization"]["not_before"]
         self.issue.body += "\nA new requirement."
         self.rebind()
         self.assertEqual((self.summary()["state"], self.summary()["reason"]), ("suspended", "scope_changed"))
+        self.assertGreater(read(self.project, "objective")["standing_authorization"]["not_before"], activated)
         self.assertEqual(self.activate()["standing_authorization"]["state"], "active")
 
     def test_amendment_change_suspends(self):
@@ -1039,10 +1147,12 @@ class StandingSourceTests(TickCase):
         self.issue.amendments[99] = "Original decision"
         amendments = [self.locator + "#issuecomment-99"]
         self.bind(amendments=amendments); self.activate()
+        activated = read(self.project, "objective")["standing_authorization"]["not_before"]
         self.issue.amendments[99] = "Changed decision"
         source = issue_intake(self.project, self.locator, port=self.issue, amendments=amendments)["source"]
         self.write(objective_source=source)
         self.assertEqual(self.summary()["state"], "suspended")
+        self.assertGreater(read(self.project, "objective")["standing_authorization"]["not_before"], activated)
 
     def test_unobserved_rebind_fails_closed_until_matching_observation(self):
         self.bind(); self.activate()
@@ -1175,7 +1285,7 @@ class StandingCapacityTests(StandingCase):
             row.update(binding={"scope_digest": standing.scope_digest(context)}, exclusions=list(standing.STANDING_EXCLUSIONS))
         decision["instruction"] = cls.padding(standing.MAX_DECISION_BYTES - len(encoded(row, compact=True)) + 1)
         fixture.control(changes={"single_use": key, "owner_source": verdict["owner_source"], "decided_at": verdict["decided_at"]})
-        with patch("pod.standing._clock", return_value=cls.MOMENT):
+        with patch("pod.standing._clock", return_value=cls.MOMENT + timedelta(seconds=index)):
             result = fixture.operation(operation, decision=decision)
         fixture.assertEqual(len(encoded(result["decision"], compact=True)), standing.MAX_DECISION_BYTES)
         return result
@@ -1249,6 +1359,17 @@ class StandingCapacityTests(StandingCase):
         result = self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
         self.assertEqual(result["checkpoint"]["closure"]["report"]["standing_authorization"]["state"], "ended")
         self.assertLess(_path(self.project, "objective").stat().st_size, CONTEXT_LIMIT)
+
+    def test_e7_capacity_warning_names_bounded_standing_section(self):
+        from pod.history import capacity
+        self.maximum_decision(self, "revoke")
+        path = _path(self.project, "objective")
+        before = self.saved()
+        result = capacity(path, read(self.project, "objective"))
+        self.assertTrue(result["warning"])
+        self.assertEqual(result["largest_sections"][0]["section"], "standing_authorization")
+        self.assertIn("standing_authorization section is bounded and needs no maintenance", result["next_action"])
+        self.assertEqual(self.saved(), before)
 
     def test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom(self):
         from pod.history import CONTEXT_LIMIT
@@ -1418,6 +1539,28 @@ print(json.dumps(report_projection(state["checkpoint"], closed_snapshot_context(
         self.assertEqual(self.public_status()["report"]["standing_authorization"]["state"], "none")
         self.assertEqual(closed["standing_authorization"]["mode"], "normal")
         self.assertEqual(self.saved(), before)
+
+    def test_e3_never_yolo_close_reopen_close_keeps_0180_readability_and_defer_text(self):
+        before_reason = self.case.op("governor", action=self.proposed())["reasons"]
+        for event in ("close", "reopen", "close"):
+            if event == "close":
+                self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
+            else:
+                self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
+                self.assertEqual(self.case.op("governor", action=self.proposed())["reasons"], before_reason)
+            context = read(self.project, "objective")
+            self.assertNotIn("standing_authorization", context)
+            self.assertEqual(context["decision_channels"], 1)
+            before = self.saved()
+            self.assertEqual(self.earlier('''import json, sys
+from pathlib import Path
+from pod import __version__
+from pod.ledger import _read
+assert __version__ == "0.18.0"
+state = _read(Path(sys.argv[1]))
+print(json.dumps({"read": "ok", "standing": "standing_authorization" in state}))
+''', _path(self.project, "objective")), {"read": "ok", "standing": False})
+            self.assertEqual(self.saved(), before)
 
     def test_genuine_0180_refuses_standing_context_and_journal_preserving_bytes(self):
         self.activate()
