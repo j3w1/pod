@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import signal
 import subprocess
@@ -32,8 +33,10 @@ NEXT = {
 
 def refusal(code: str, *, fields: list[str] | None = None) -> PodError:
     # Verifier output, stderr, arguments and exception text never become diagnostics.
-    return PodError(code, f"Relayed authorization refused: {code}. Next: {NEXT[code]}",
-                    {"next_action": NEXT[code], **({"fields": fields} if fields else {})})
+    next_action = ("obtain a fresh owner decision bound to the current standing_authorization.scope_digest; "
+                   "the host must save that digest with the decision" if fields == ["standing.scope_digest"] else NEXT[code])
+    return PodError(code, f"Relayed authorization refused: {code}. Next: {next_action}",
+                    {"next_action": next_action, **({"fields": fields} if fields else {})})
 
 
 def _output(command: list[str], request: dict) -> bytes:
@@ -117,12 +120,15 @@ def validate_verdict(value: object) -> dict:
                 raise ValueError("candidate/pr")
             if action == "standing":
                 from .contracts import STANDING_EXCLUSIONS, STANDING_SCOPES
-                standing = exact(verdict["standing"], {"operation", "scope", "widening", "expires_at"},
+                standing = exact(verdict["standing"], {"operation", "scope", "widening", "expires_at", "scope_digest"},
                                  {"operation", "scope", "widening", "expires_at"}, name="relay standing")
                 if standing["operation"] == "revoke":
-                    if any(standing[key] is not None for key in ("scope", "widening", "expires_at")):
+                    if "scope_digest" in standing or any(standing[key] is not None for key in ("scope", "widening", "expires_at")):
                         raise ValueError("revoke")
                 elif standing["operation"] == "activate":
+                    if "scope_digest" in standing:
+                        if not isinstance(standing["scope_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", standing["scope_digest"]):
+                            raise ValueError("scope digest")
                     from .standing import _names
                     _names(standing["scope"], STANDING_SCOPES, nonempty=True)
                     _names(standing["widening"], STANDING_EXCLUSIONS)
@@ -162,6 +168,14 @@ def verify(command: list[str] | None, request: dict) -> dict:
         value = json.loads(_output(command, request).decode("utf-8"), object_pairs_hook=_unique)
     except (ValueError, UnicodeError, RecursionError):
         raise refusal("relay_verifier_malformed") from None
+    if (request["action"] == "standing" and request["standing"]["operation"] == "activate"
+            and isinstance(value, dict) and value.get("verified") is True
+            and (not isinstance(value.get("standing"), dict)
+                 or value["standing"].get("scope_digest") != request["standing"]["scope_digest"])):
+        raise refusal("relay_verifier_mismatch", fields=["standing.scope_digest"])
+    if (request["action"] == "standing" and isinstance(value, dict) and value.get("verified") is True
+            and isinstance(value.get("standing"), dict) and value["standing"].get("operation") != request["standing"]["operation"]):
+        raise refusal("relay_verifier_mismatch", fields=["standing"])
     verdict = validate_verdict(value)
     if not verdict["verified"]:
         raise refusal("relay_verifier_denied")
@@ -177,14 +191,16 @@ def verify(command: list[str] | None, request: dict) -> dict:
     return verdict
 
 
-def check_use(project: Path, verdict: dict, *, consume: bool = False) -> None:
+def check_use(project: Path, verdict: dict, *, consume: bool = False, refuse: bool = False) -> None:
     """One non-evicting receipt per key across all objectives, independent of journal retention."""
     from .ledger import _lock, state_root
     path = state_root(project) / ".relay-authorizations" / (digest(verdict["single_use"]) + ".json")
     receipt = {"schema": "pod-relay-use/v1", "authorization": digest(verdict)}
     with _lock(path):
         if path.exists() or path.is_symlink():
-            if bounded_json(path, limit=1024) != receipt:
+            if bounded_json(path, limit=1024) != receipt or refuse:
                 raise refusal("relay_authorization_reused")
+        elif refuse:
+            atomic_json(path, {**receipt, "refused": "standing_authorization_future"}, limit=1024)
         elif consume:
             atomic_json(path, receipt, limit=1024)

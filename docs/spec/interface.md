@@ -299,8 +299,21 @@ objective without a standing record keeps its earlier report shape and channel d
 through close, reopen and close, so genuine 0.18.0 still reads it; Governor DEFER text
 also stays unchanged. A stop is a yolo operation and creates the record even while off.
 A no-decision closure keeps the earlier report shape; its readers show `normal`,
-with a stable `at_closure` or none, never a new read time. The projection reads
-stored facts only. It never runs the verifier and attests nothing about the host's
+with a stable `at_closure` or none, never a new read time. Public status and
+standing `show` expose the current `scope_digest`, also without a standing record.
+A host must save this digest with the exact owner decision it confirms. Public
+status remains offline (R48, R133): a direct objective uses its recorded criteria;
+an issue objective needs a matching recorded source observation. Otherwise the
+digest is `null`, with `scope_digest_reason` `no_record` or `scope_unobserved`,
+never an inferred hash. The explicit `pod internal standing-authorization` action
+`show` may use the existing read-only live issue recheck to compute the normalized
+digest without any write or coordinator write authority. `scope_digest_source`
+says `live_issue` when it did, `recorded` for a matching stored observation, or
+`criteria` for a direct objective. If the live check fails or needs reconciliation,
+the digest is `null` with the precise refusal reason; reconcile and read again.
+The host obtains the decision-time digest from show, or status when present,
+and saves it with the owner's decision. Once a matching observation exists,
+status and show agree without fetching. Other projection fields use stored facts. It never runs the verifier and attests nothing about the host's
 present decision. An unreadable Governor journal cannot turn a committed checkpoint
 into a refusal: its acknowledgement uses a journal-less standing projection, as the
 other ledger readers do. Each standing decision is also listed among the owner decisions of
@@ -313,7 +326,7 @@ content bytes plus truncation and full-record references; status outside closure
 keeps full text. `internal cleanup-plan` adds the coverage R137 defines.
 
 `pod internal standing-authorization` is the only writer of decision and answer rows;
-checkpoints store the bounded lifecycle and material scope facts of R136. The host
+checkpoints store the bounded lifecycle and source observation facts of R136. The host
 verifier of the relayed authorization contract gains two actions, `standing` and
 `answer`, for R136 and R138; `publish` and `merge` requests and verdicts stay
 byte-identical. No new personal or project config key exists.
@@ -605,13 +618,20 @@ expected field equal confirms it.
 
 | Action | Extra request field | Verdict source field |
 | --- | --- | --- |
-| `standing` | `standing`: `operation` (`activate` or `revoke`), `scope` (list or `null`), `widening` (list or `null`) and `expires_at` (timestamp or `null`), exactly as the decision submits them. | `owner_source`, stored in `relay.owner_source`. |
+| `standing` | `standing`: `operation` (`activate` or `revoke`), `scope` (list or `null`), `widening` (list or `null`) and `expires_at` (timestamp or `null`), exactly as the decision submits them; `activate` also carries Pod's current material `scope_digest` after its own live issue read. `revoke` carries no digest. | `owner_source`, stored in `relay.owner_source`. |
 | `answer` | `answer`: `question` (the recorded question id or reference) and `text` (the answer). | `responder_source`, stored in the answer row; there is no `owner_source`. |
 
 A caller-supplied `relay_verification`, and a caller-supplied `standing` object on a
 Governor authorization (R137), are refused. A mismatch in the objective, operation,
 scope, widening, expiry, question or answer text refuses `relay_verifier_mismatch`
-before any write.
+before any write. For activation, the trusted verifier must compare
+`standing.scope_digest` against the digest saved with that exact owner decision;
+blindly echoing the current request digest is not verification. A missing, unknown
+or different decision-time digest refuses `relay_verifier_mismatch` naming
+`standing.scope_digest`, before any key use or write; obtain a fresh owner decision
+bound to the current public digest. Only an otherwise authentic, fully verified,
+exact-bound future activation records a permanent refused-key marker in the
+existing receipt store (R136), leaving context and journal unchanged.
 
 ### Recorded-question status contract
 
@@ -658,14 +678,14 @@ them or proof that unrecorded questions do not exist.
 
 `pod internal standing-authorization --input FILE` (record name "standing
 authorization" in `internal contract`) takes `project`, `objective`, `owner` (the
-recorded coordinator's terminal), `action` and the record the action needs:
+recorded coordinator's terminal for writes; any nonempty reader id for show), `action` and the record the action needs:
 
 | `action` | Input | Result |
 | --- | --- | --- |
 | `activate` | `decision`: `provenance`, `instruction`, optional `channel` and `relay`, and optional `scope`, `widening` and `expires_at` (R136). | Writes the activation. |
 | `revoke` | `decision`: `provenance`, `instruction`, optional `channel` and `relay`. | Writes a revocation when on; while off, persists the stop barrier without a decision row or key consumption. |
 | `answer` | `answer`: `question`, `text` and `relay.reference` (R138). | Writes the responder answer. |
-| `show` | None. | Reads the projection below; writes nothing. |
+| `show` | None. | Reads the projection below; may explicitly recheck an unobserved issue source for its digest, without write authority or writes. |
 
 A write returns `standing_authorization` (the projection), the stored `decision` or
 `answer` row and the `context_revision`. A relayed `activate`, `revoke` or `answer`
@@ -674,10 +694,15 @@ is written only after the verifier confirms it. A full record refuses
 `responder_answers_full` (16 answers), without a write. Stale verified standing
 decisions refuse `standing_authorization_stale` before receipt consumption (R136),
 with reason `reopen_time_unavailable` when a reopen predates the first record and
-its time is missing. Future-dated activations refuse `standing_authorization_future`;
-future-dated verified stops use receipt time as their authority-reducing barrier,
+its time is missing. Authentic, exactly bound future-dated activations refuse
+`standing_authorization_future` and permanently mark only their key refused in the
+existing receipt store, without changing context or journal; that key never works
+later. Existing receipts are never overwritten, and untrusted inputs write no
+receipt. Future-dated verified stops use receipt time as their authority-reducing barrier,
 retaining the original verified time in a recorded row. A no-op relayed stop verifies
 its time, falling back to receipt time on failure, and returns `state` and `changed: false`.
+A stop whose verification fails while on preserves that refusal and the current
+state, raising only the receipt-time barrier with no decision row or key use.
 An inactive answer refuses `responder_answer_requires_yolo` before verification,
 regardless of prior answers. An unrecorded question refuses
 `decision_question_unrecorded` before answer preflight or target checks. R136/R138's complete encoded
@@ -694,6 +719,9 @@ stores nothing and runs no verifier.
 | `mode` | `yolo` only when `state` is `active`; otherwise `normal`. |
 | `state` | `none`, `active`, `suspended`, `revoked`, `expired` or `ended` (R136). |
 | `reason` | For `suspended`, `scope_changed` or `scope_unobserved`; otherwise `null`. |
+| `scope_digest` | Current material scope digest when computable; `null` otherwise. Public status uses recorded facts only; explicit standing show may read an unobserved issue. |
+| `scope_digest_reason` | `null` with a digest; otherwise `no_record`, `scope_unobserved`, or the explicit read's source/reconciliation refusal reason. |
+| `scope_digest_source` | `criteria`, `recorded`, or `live_issue`; `null` when the digest is unavailable. |
 | `decision` | `null`, or the latest activation: `id`, `scope`, `exclusions`, `widening`, `expires_at`, `since`, `channel` and, when relayed, `relay_reference` and `owner_source`. |
 | `effects` | `total`, `truncated` and `items`: the newest 64 journal rows authorized under yolo, each with `record_id`, `kind`, `scope`, `candidate`, `tree`, `target`, `pr`, `decision`, `outcome`, `at` and `standing`. |
 | `responder_decisions` | `total`, `truncated` and `items`: the newest 64 answers, each with `id`, `question`, `text`, `responder_source`, `at` and `under`. |
@@ -706,4 +734,4 @@ not active (for example "yolo suspended: scope changed"). Unknown optional field
 ignorable. `internal cleanup-plan` adds `standing_authorization` with `mode`,
 `decision`, `covers` and `asks`, as R137 defines them.
 
-- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier. `delivery_authorization` names current applicable consent, while `standing_authorization.effects` retains completed yolo effects after a stop or replacement. The closure references standing decision rows without copying verdicts and bounds responder text to a 256-byte encoded prefix.
+- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier. Public status stays offline: it exposes the current material scope_digest from recorded facts, or null with no_record/scope_unobserved when unavailable. Standing show can explicitly read an unobserved issue source, reports scope_digest_source live_issue, and returns null with a precise reason if unavailable or unreconciled, without writing context or receipts or requiring coordinator write authority. Status and show agree once the observation exists. The host saves this digest with the exact owner decision, rather than echoing a later request. `delivery_authorization` names current applicable consent, while `standing_authorization.effects` retains completed yolo effects after a stop or replacement. The closure references standing decision rows without copying verdicts and bounds responder text to a 256-byte encoded prefix.

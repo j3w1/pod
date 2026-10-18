@@ -43,13 +43,7 @@ def _instant(stamp: str) -> datetime:
 
 
 def _barrier(record: dict) -> datetime | None:
-    # Earlier standing writers kept these facts separately. Read them faithfully;
-    # new events fold them into the same monotonic authority boundary.
-    if "not_before" in record:
-        return _instant(record["not_before"])
-    times = [record[key] for key in ("closed_at", "reopened_at") if key in record]
-    times += [decision_time(row) for row in record.get("decisions", [])]
-    return max(map(_instant, times), default=None)
+    return _instant(record["not_before"]) if "not_before" in record else None
 
 
 def _raise_barrier(record: dict, stamp: str) -> None:
@@ -57,10 +51,9 @@ def _raise_barrier(record: dict, stamp: str) -> None:
 
 
 def observe_scope(context: dict, *, now: datetime | None = None) -> None:
-    """Remember the first material mismatch for the current activation, once."""
+    """Keep suspension sticky if a changed scope later returns to its old digest."""
     record = context.get("standing_authorization", {})
-    decisions = record.get("decisions", [])
-    latest = next((row for row in reversed(decisions) if row["operation"] == "activate"), None)
+    latest = next((row for row in reversed(record.get("decisions", [])) if row["operation"] == "activate"), None)
     if (latest is not None and record.get("scope_changed_for") != latest["id"]
             and latest["binding"]["scope_digest"] != scope_digest(context)):
         record["scope_changed_for"] = latest["id"]
@@ -87,6 +80,9 @@ def _fresh(context: dict, row: dict) -> None:
     record = context.get("standing_authorization", {})
     decided = _instant(decision_time(row))
     if row["operation"] == "activate":
+        if row["relay_verification"]["standing"].get("scope_digest") != scope_digest(context):
+            from .relay import refusal
+            raise refusal("relay_verifier_mismatch", fields=["standing.scope_digest"])
         if decided > _instant(row["utc"]):
             raise PodError("standing_authorization_future", "Relayed activation decision time is later than Pod's receipt time",
                            {"reason": "decision_time_future",
@@ -109,7 +105,7 @@ def _fresh(context: dict, row: dict) -> None:
     if stale:
         raise PodError("standing_authorization_stale", "Relayed standing decision predates the current authority boundary",
                        {"reason": "decision_time_stale",
-                        "next_action": "obtain a fresh owner decision after the latest standing decision, stop, lifecycle or scope change"})
+                        "next_action": "obtain a fresh owner decision after the latest standing decision, stop or lifecycle change"})
 
 
 def scope_digest(context: dict) -> str:
@@ -122,14 +118,15 @@ def scope_digest(context: dict) -> str:
     return digest(binding)
 
 
-def observe(context: dict, source: dict, body: str) -> None:
+def observe(context: dict, source: dict, body: str, *, scope_change: bool = True) -> None:
     """Record a bound body already read by Pod; checkbox marks carry no scope."""
     if "standing_authorization" not in context or hashlib.sha256(body.encode()).hexdigest() != source["body_sha256"]:
         return
     normalized = re.sub(r"(?m)^([ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+)\[[xX]\](?=[ \t\r]|$)", r"\1[ ]", body)
     context["standing_authorization"]["observed"] = {
         "source": digest(source), "body_scope_sha256": hashlib.sha256(normalized.encode()).hexdigest()}
-    observe_scope(context)
+    if scope_change:
+        observe_scope(context)
 
 
 def suspension_reason(context: dict) -> str | None:
@@ -203,8 +200,9 @@ def _answer(value: object) -> dict:
     return row
 
 
-def _request_fields(operation: str, decision: dict) -> dict:
-    return {"operation": operation, **{key: decision.get(key) for key in ("scope", "widening", "expires_at")}}
+def _request_fields(operation: str, decision: dict, *, scope_digest: str | None = None) -> dict:
+    return {"operation": operation, **{key: decision.get(key) for key in ("scope", "widening", "expires_at")},
+            **({"scope_digest": scope_digest} if operation == "activate" else {})}
 
 
 def _row_fit(row: dict, *, answer: bool = False) -> None:
@@ -221,7 +219,7 @@ def validate_record(value: object) -> None:
     from .relay import validate_verdict
     try:
         record = exact(value, {"schema", "decisions", "answers", "observed", "closed_at", "reopened_at", "not_before", "scope_changed_for"},
-                       {"schema", "decisions", "answers"}, name="standing record")
+                       {"schema", "decisions", "answers", "not_before"}, name="standing record")
         if record["schema"] != SCHEMA or not isinstance(record["decisions"], list) or not isinstance(record["answers"], list):
             raise ValueError("record")
         if len(record["decisions"]) > MAX_DECISIONS or len(record["answers"]) > MAX_ANSWERS:
@@ -261,7 +259,8 @@ def validate_record(value: object) -> None:
             if row["channel"] == "relayed":
                 verdict = validate_verdict(row.get("relay_verification"))
                 if (not verdict["verified"] or verdict["action"] != "standing"
-                        or verdict["standing"] != _request_fields(row["operation"], decision)
+                        or verdict["standing"] != _request_fields(row["operation"], decision,
+                                                                scope_digest=row.get("binding", {}).get("scope_digest"))
                         or row["relay"] != {"reference": verdict["reference"], "owner_source": verdict["owner_source"]}):
                     raise ValueError("verdict")
             elif "relay_verification" in row:
@@ -369,7 +368,7 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
         except PodError:
             journal = None
         if action == "show":
-            return {"standing_authorization": projection(context, journal, now=moment)}
+            return {"standing_authorization": projection(context, journal, now=moment, project=project)}
         if context["owner"] != owner:
             from .handoff import refuse_nonowner
             refuse_nonowner(project, objective, context, owner, code="coordinator_conflict")
@@ -410,14 +409,32 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                                {"next_action": "record the question first"})
             _answer_preflight(project, objective, context, answer, utc=_timestamp(moment), index=len(record["answers"]) + 1)
         verdict = None
+        context["standing_authorization"] = record
+        if action == "activate" and (context.get("checkpoint") or {}).get("objective_source") is not None:
+            from .github import issue_recheck_live
+            source = context["checkpoint"]["objective_source"]
+            checked, live = issue_recheck_live(project, source)
+            if checked["status"] != "current":
+                raise PodError("issue_reconciliation_required", "Execution Spec changed or closed; reconcile before activating yolo",
+                               {"reason": checked.get("reason")})
+            # A new exact-bound decision can confirm this freshly read scope.
+            # Do not manufacture a later time barrier before checking its digest;
+            # previously recorded suspension and stop/lifecycle barriers remain.
+            observe(context, source, live["body"], scope_change=False)
         if decision is not None and decision["channel"] == "relayed":
-            verdict = _verify(project, objective, context, decision["relay"]["reference"], "standing", _request_fields(action, decision))
-            _fresh(context, {"channel": "relayed", "operation": action, "utc": _timestamp(moment),
-                             "relay_verification": verdict})
+            try:
+                verdict = _verify(project, objective, context, decision["relay"]["reference"], "standing",
+                                  _request_fields(action, decision, scope_digest=scope_digest(context)))
+            except PodError as exc:
+                if action == "revoke" and exc.code.startswith("relay_verifier_"):
+                    # Preserve the refusal and live state, but never lose a
+                    # received stop when the verifier cannot establish its time.
+                    _raise_barrier(record, _timestamp(moment))
+                    _write(path, context)
+                raise
         elif action == "answer" and record["answers"]:
             verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
                               {key: answer[key] for key in ("question", "text")})
-        context["standing_authorization"] = record
         if action == "answer":
             if verdict is None:
                 verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
@@ -429,16 +446,6 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             _row_fit(row, answer=True)
             record["answers"].append(row)
         else:
-            if action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1:
-                raise PodError("standing_authorization_full", "Standing owner-decision history is full")
-            if action == "activate" and (context.get("checkpoint") or {}).get("objective_source") is not None:
-                from .github import issue_recheck_live
-                source = context["checkpoint"]["objective_source"]
-                checked, live = issue_recheck_live(project, source)
-                if checked["status"] != "current":
-                    raise PodError("issue_reconciliation_required", "Execution Spec changed or closed; reconcile before activating yolo",
-                                   {"reason": checked.get("reason")})
-                observe(context, source, live["body"])
             if decision["channel"] == "session":
                 moment = _clock(now)
             row = {**decision, "id": f"Y{len(record['decisions']) + 1}", "operation": action,
@@ -448,10 +455,19 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                            exclusions=[item for item in STANDING_EXCLUSIONS if item not in row["widening"]])
             if decision["channel"] == "relayed":
                 row.update(relay={"reference": verdict["reference"], "owner_source": verdict["owner_source"]}, relay_verification=verdict)
-                # A live issue read above may be the first material observation.
-                # Apply the same predicate against that newly observed barrier.
-                _fresh(context, row)
             _row_fit(row)
+            if decision["channel"] == "relayed":
+                # This predicate uses the scope after the activation's live
+                # observation, including for a previously unobserved rebind.
+                try:
+                    _fresh(context, row)
+                except PodError as exc:
+                    if exc.code == "standing_authorization_future":
+                        from .relay import check_use
+                        check_use(project, verdict, refuse=True)
+                    raise
+            if action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1:
+                raise PodError("standing_authorization_full", "Standing owner-decision history is full")
             _raise_barrier(record, decision_time(row))
             if action == "activate":
                 record.pop("scope_changed_for", None)
@@ -471,8 +487,30 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                 "answer" if action == "answer" else "decision": row, "context_revision": context["revision"]}
 
 
+def scope_projection(context: dict, *, project: Path | None = None) -> dict:
+    """Project a bindable digest without adding observation facts to the record."""
+    source = (context.get("checkpoint") or {}).get("objective_source")
+    if source is None:
+        return {"scope_digest": scope_digest(context), "scope_digest_reason": None, "scope_digest_source": "criteria"}
+    if context.get("standing_authorization", {}).get("observed", {}).get("source") == digest(source):
+        return {"scope_digest": scope_digest(context), "scope_digest_reason": None, "scope_digest_source": "recorded"}
+    reason = "no_record" if "standing_authorization" not in context else "scope_unobserved"
+    if project is not None:
+        from .github import issue_recheck_live
+        try:
+            checked, live = issue_recheck_live(project, source)
+            if checked["status"] == "current":
+                temporary = {**context, "standing_authorization": {}}
+                observe(temporary, source, live["body"])
+                return {"scope_digest": scope_digest(temporary), "scope_digest_reason": None, "scope_digest_source": "live_issue"}
+            reason = checked.get("reason") or "issue_reconciliation_required"
+        except PodError as exc:
+            reason = exc.code
+    return {"scope_digest": None, "scope_digest_reason": reason, "scope_digest_source": None}
+
+
 def projection(context: dict, journal: dict | None = None, *, now: datetime | None = None,
-               closure_utc: str | None = None, compact_answers: bool = False) -> dict:
+               closure_utc: str | None = None, compact_answers: bool = False, project: Path | None = None) -> dict:
     record = context.get("standing_authorization", {})
     decisions = record.get("decisions", [])
     compact_answers = compact_answers or bool((context.get("checkpoint") or {}).get("closure"))
@@ -510,6 +548,7 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
                        reference=f"standing_authorization/answers/{index}")
     current = state(context, now=now)
     result = {"schema": STATUS_SCHEMA, "mode": "yolo" if current == "active" else "normal", "state": current,
+            **scope_projection(context, project=project),
             "reason": suspension_reason(context) if current == "suspended" else None,
             "decision": decision,
             "effects": {"total": len(effects), "truncated": len(effects) > 64, "items": effects[-64:]},

@@ -1,6 +1,6 @@
 """A429-A441: standing consent at production boundaries, with disposable ports only."""
 
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from io import StringIO
@@ -35,7 +35,9 @@ RESPONDER_VERIFIER = VERIFIER.replace(
     '("responder_source" if request["action"] == "answer" else "owner_source"): '
     '("authenticated-responder:fixture" if request["action"] == "answer" else "authenticated-owner:fixture")').replace(
     '"decided_at": "2026-09-21T00:00:00Z"',
-    '"decided_at": controls.get("standing_decided_at", "2026-09-21T00:00:00Z")')
+    '"decided_at": controls.get("standing_decided_at", "2026-09-21T00:00:00Z")').replace(
+    '    verdict.pop(key)',
+    '    target = verdict\n    parts = key.split(".")\n    for part in parts[:-1]:\n        target = target[part]\n    target.pop(parts[-1], None)')
 
 
 class StandingCase(RelayCase):
@@ -107,9 +109,10 @@ class StandingOrderingTests(StandingCase):
         return standing.operate({"project": str(self.project), "objective": "objective", "owner": "owner",
                                  "action": operation, "decision": decision}, now=self.MOMENT + timedelta(seconds=seconds))
 
-    def relay_time(self, seconds, key="delayed"):
+    def relay_time(self, seconds, key="delayed", *, scope=None):
         self.control(changes={"single_use": key, "decided_at":
-                              (self.MOMENT + timedelta(seconds=seconds)).isoformat()})
+                              (self.MOMENT + timedelta(seconds=seconds)).isoformat(),
+                              **({"standing.scope_digest": scope} if scope is not None else {})})
 
     def assert_stale(self, callback, *args, stopped=True, **kwargs):
         receipts = self.receipts()
@@ -268,7 +271,7 @@ class StandingOrderingTests(StandingCase):
         self.relay_time(3600, "future-on")
         receipts = self.receipts()
         self.refusal("standing_authorization_future", self.at, 2, relayed=True, key="future-on", widening=["deploy"])
-        self.assertEqual(self.receipts(), receipts)
+        self.assertEqual(len(self.receipts()), len(receipts) + 1)
         self.assertEqual(self.operation("show")["standing_authorization"]["state"], "revoked")
         self.relay_time(3, "fresh-on")
         self.assertEqual(self.at(3, relayed=True, key="fresh-on")["standing_authorization"]["state"], "active")
@@ -278,8 +281,9 @@ class StandingOrderingTests(StandingCase):
         self.assertEqual(standing.decision_time(row), "2030-01-01T00:00:04Z")
         self.assertEqual(self.at(5)["standing_authorization"]["state"], "active")
 
-    def test_e2_first_material_criteria_observation_blocks_older_relay_without_ratcheting(self):
+    def test_e2_scope_digest_and_sticky_barrier_cover_distinct_changes(self):
         self.at(0)
+        original = standing.scope_digest(read(self.project, "objective"))
         added = {"id": "O2", "kind": "criterion", "provenance": "user_direct",
                  "source": {"instruction": "Add PoD#2", "ref": "PoD#2"}, "check": "PoD#2 passes",
                  "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
@@ -288,16 +292,201 @@ class StandingOrderingTests(StandingCase):
         record = read(self.project, "objective")["standing_authorization"]
         self.assertEqual(record["not_before"], "2030-01-01T00:00:02Z")
         self.assertEqual(record["scope_changed_for"], "Y1")
-        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=4)):
-            self.case.write(self.case.stored(), criteria=["PoD#1", "PoD#2"])
-        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], record["not_before"])
-        self.relay_time(2, "scope-tie")
-        self.assert_stale(self.at, 5, relayed=True, key="scope-tie", widening=["deploy"])
+        self.relay_time(1, "before-scope", scope=original)
+        exc = self.refusal("relay_verifier_mismatch", self.at, 5, relayed=True, key="before-scope", widening=["deploy"])
+        self.assertEqual(exc.detail["fields"], ["standing.scope_digest"])
         self.relay_time(3, "after-scope")
         self.assertEqual(self.at(6, relayed=True, key="after-scope")["standing_authorization"]["state"], "active")
 
+    def test_a1_noop_session_stop_uses_time_after_waiting_for_lock(self):
+        from pod.ledger import _lock
+        clock = [self.MOMENT]
+
+        @contextmanager
+        def waited(path):
+            with _lock(path):
+                # Deterministically model acquisition after an earlier writer.
+                clock[0] = self.MOMENT + timedelta(seconds=2)
+                yield
+
+        with patch("pod.ledger._lock", side_effect=waited), \
+                patch("pod.standing._clock", side_effect=lambda now: now if now is not None else clock[0]):
+            result = standing.operate({"project": str(self.project), "objective": "objective", "owner": "owner",
+                                       "action": "revoke", "decision": DECISION})
+        self.assertEqual(result, {"state": "none", "changed": False})
+        self.assertEqual(read(self.project, "objective")["standing_authorization"]["not_before"], "2030-01-01T00:00:02Z")
+        self.relay_time(1, "during-lock-wait")
+        self.assert_stale(self.at, 3, relayed=True, key="during-lock-wait")
+
+    def test_a2_unverifiable_stop_while_on_sets_receipt_barrier_without_revoking(self):
+        self.at(0)
+        before, journal = read(self.project, "objective"), self.saved()[1]
+        receipts = self.receipts()
+        self.control(mode="fail")
+        with self.assertRaises(PodError) as caught:
+            self.at(6, "revoke", relayed=True, key="unverifiable-stop")
+        self.assertEqual(caught.exception.code, "relay_verifier_failed")
+        after = read(self.project, "objective")
+        self.assertEqual(after["standing_authorization"]["decisions"], before["standing_authorization"]["decisions"])
+        self.assertEqual(after["standing_authorization"]["not_before"], "2030-01-01T00:00:06Z")
+        self.assertEqual(standing.state(after, now=self.MOMENT), "active")
+        self.assertEqual(self.saved()[1], journal)
+        self.assertEqual(self.receipts(), receipts)
+        self.relay_time(5, "before-failed-stop")
+        self.assert_stale(self.at, 10, relayed=True, key="before-failed-stop", widening=["deploy"], stopped=False)
+        self.assertEqual(self.case.op("governor", action=self.proposed("deploy"))["decision"], "DEFER")
+        self.relay_time(7, "after-failed-stop")
+        self.assertEqual(self.at(11, relayed=True, key="after-failed-stop")["standing_authorization"]["state"], "active")
+
+    def test_f2_future_activation_key_stays_refused_after_stop_and_clock_catches_up(self):
+        self.relay_time(3600, "future-old")
+        self.refusal("standing_authorization_future", self.at, 10, relayed=True, key="future-old", widening=["deploy"])
+        receipt = self.receipts()
+        self.assertEqual(len(receipt), 1)
+        self.assertEqual(json.loads(next(iter(receipt.values())))["refused"], "standing_authorization_future")
+        self.assertNotIn("standing_authorization", read(self.project, "objective"))
+        self.at(20, "revoke")
+        self.refusal("relay_authorization_reused", self.at, 3700, relayed=True, key="future-old", widening=["deploy"])
+        self.assertEqual(self.receipts(), receipt)
+        for kind in ("push", "deploy"):
+            self.assertEqual(self.case.op("governor", action=self.proposed(kind))["decision"], "DEFER")
+        self.relay_time(3701, "new-owner-grant")
+        self.assertEqual(self.at(3702, relayed=True, key="new-owner-grant")["standing_authorization"]["state"], "active")
+
+
+class StandingScopeDigestTests(StandingCase):
+    MOMENT = StandingOrderingTests.MOMENT
+    at = StandingOrderingTests.at
+    relay_time = StandingOrderingTests.relay_time
+
+    def change_scope(self, number):
+        added = {"id": f"O{number}", "kind": "criterion", "provenance": "user_direct",
+                 "source": {"instruction": f"Add PoD#{number}", "ref": f"PoD#{number}"},
+                 "check": f"PoD#{number} passes", "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        self.case.write([*self.case.stored(), added], criteria=[f"PoD#{i}" for i in range(1, number + 1)],
+                        revision_authority=DECISION)
+
+    def old_digest_refuses(self, *, on=False, stopped=False, twice=False):
+        if on:
+            self.at(0)
+        if twice:
+            self.change_scope(2)
+        digest_seen = self.public_status()["standing_authorization"]["scope_digest"]
+        if stopped:
+            self.at(2.5 if twice else 0.5, "revoke")
+        self.change_scope(3 if twice else 2)
+        current = self.public_status()["standing_authorization"]["scope_digest"]
+        self.assertNotEqual(current, digest_seen)
+        self.relay_time(3 if twice else 1, "old-owner-decision", scope=digest_seen)
+        receipts = self.receipts()
+        with patch("pod.relay.check_use", side_effect=AssertionError("scope mismatch reached key use")):
+            exc = self.refusal("relay_verifier_mismatch", self.at, 10, relayed=True, key="old-owner-decision", widening=["deploy"])
+        self.assertEqual(exc.detail["fields"], ["standing.scope_digest"])
+        self.assertIn("fresh owner decision", exc.detail["next_action"])
+        self.assertEqual(self.receipts(), receipts)
+        for kind in ("push", "deploy"):
+            self.assertEqual(self.case.op("governor", action=self.proposed(kind))["decision"], "DEFER")
+        if not on and not stopped:
+            context = read(self.project, "objective")
+            self.assertNotIn("standing_authorization", context)
+            self.assertEqual(context.get("decision_channels", 1), 1)
+        self.relay_time(11, "current-owner-decision", scope=current)
+        accepted = self.at(12, relayed=True, key="current-owner-decision", widening=["deploy"])
+        self.assertEqual(accepted["decision"]["binding"]["scope_digest"], current)
+        self.assertEqual(self.case.op("governor", action=self.proposed("deploy"))["decision"], "ALLOW")
+
+    def test_f1_s1a_scope_before_any_activation_refuses_old_digest(self):
+        self.old_digest_refuses()
+
+    def test_f1_s1b_stop_while_none_then_scope_refuses_old_digest(self):
+        self.old_digest_refuses(stopped=True)
+
+    def test_f1_s2a_second_scope_change_refuses_digest_from_between_changes(self):
+        self.old_digest_refuses(on=True, twice=True)
+
+    def test_f1_s2c_second_change_after_stop_refuses_digest_from_between_changes(self):
+        self.old_digest_refuses(on=True, stopped=True, twice=True)
+
+    def test_f1_missing_or_unknown_digest_refuses_before_key_use(self):
+        for controls in ({"omit": ["standing.scope_digest"]}, {"omit": ["standing"]},
+                         {"changes": {"standing.scope_digest": "0" * 64}},
+                         {"changes": {"standing.scope_digest": None}}):
+            with self.subTest(controls=controls):
+                self.control(**controls)
+                with patch("pod.relay.check_use", side_effect=AssertionError("invalid binding used a key")):
+                    exc = self.refusal("relay_verifier_mismatch", self.activate,
+                                       channel="relayed", relay={"reference": "unknown-scope"})
+                self.assertEqual(exc.detail["fields"], ["standing.scope_digest"])
+                self.assertIn("fresh owner decision", exc.detail["next_action"])
+                self.assertEqual(self.receipts(), {})
+
+    def test_f2_inauthentic_future_verdicts_never_poison_a_key(self):
+        changes = ({"verified": False}, {"objective": "other"}, {"standing.scope_digest": "0" * 64},
+                   {"decided_at": "not-a-time"})
+        for change in changes:
+            with self.subTest(change=change):
+                self.control(changes={"single_use": "future-untrusted", "decided_at": "2099-01-01T00:00:00Z", **change})
+                before = self.saved()
+                with self.assertRaises(PodError):
+                    self.activate(channel="relayed", relay={"reference": "future-untrusted"})
+                self.assertEqual(self.saved(), before)
+                self.assertEqual(self.receipts(), {})
+
+    def test_f2_same_key_concurrent_future_refusals_leave_one_durable_marker(self):
+        from concurrent.futures import ThreadPoolExecutor
+        request = {"project": str(self.project), "objective": "objective", "owner": "owner", "action": "activate",
+                   "decision": {**DECISION, "channel": "relayed", "relay": {"reference": "future-concurrent"}}}
+
+        def verify(command, value):
+            return {**deepcopy(value), "verified": True, "owner_source": "authenticated-owner:fixture",
+                    "decided_at": (self.MOMENT + timedelta(seconds=3600)).isoformat(), "single_use": "future-concurrent"}
+
+        def attempt(_):
+            try:
+                standing.operate(request, now=self.MOMENT + timedelta(seconds=10))
+            except PodError as exc:
+                return exc.code
+            self.fail("future activation was accepted")
+
+        before = self.saved()
+        with patch("pod.relay.verify", side_effect=verify), ThreadPoolExecutor(max_workers=2) as pool:
+            codes = list(pool.map(attempt, range(2)))
+        self.assertCountEqual(codes, ["standing_authorization_future", "relay_authorization_reused"])
+        self.assertEqual(self.saved(), before)
+        receipt = self.receipts()
+        self.assertEqual(len(receipt), 1)
+        # The durable marker survives losing the first refusal's response.
+        with patch("pod.relay.verify", side_effect=verify):
+            self.refusal("relay_authorization_reused", standing.operate, request,
+                         now=self.MOMENT + timedelta(seconds=3700))
+        self.assertEqual(self.receipts(), receipt)
+
+    def test_f2_refusal_does_not_overwrite_an_interrupted_or_accepted_receipt(self):
+        self.relay_time(1, "accepted-key")
+        with patch("pod.ledger._write", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.at(1, relayed=True, key="accepted-key")
+        receipt = self.receipts()
+        self.refusal("relay_authorization_reused", self.at, 0, relayed=True, key="accepted-key")
+        self.assertEqual(self.receipts(), receipt)
+        self.at(2, relayed=True, key="accepted-key")
+        self.refusal("relay_authorization_reused", self.at, 0, relayed=True, key="accepted-key")
+        self.assertEqual(self.receipts(), receipt)
+
 
 class StandingRecordTests(StandingCase):
+    def test_a3_record_without_its_required_barrier_refuses_without_derivation(self):
+        self.activate()
+        context = read(self.project, "objective")
+        context["standing_authorization"].pop("not_before")
+        path = _path(self.project, "objective")
+        path.write_bytes(encoded(context, compact=True))
+        before = self.saved()
+        with self.assertRaises(PodError) as caught:
+            _read(path)
+        self.assertEqual(caught.exception.code, "state_unsupported")
+        self.assertEqual(self.saved(), before)
+
     def test_n3_noop_relay_revoke_reports_state_when_verifier_is_unavailable(self):
         decision = {**DECISION, "channel": "relayed", "relay": {"reference": "stop"}}
         self.configure(None)
@@ -485,7 +674,8 @@ class StandingRecordTests(StandingCase):
         self.assertEqual(sent, {"schema": relay.SCHEMA, "reference": "standing-one", "action": "standing",
             "objective": "objective", "candidate": None, "pr": None,
             "target": {"repository": "acme/widgets", "remote": "origin", "base": "target"},
-            "standing": {"operation": "activate", "scope": list(standing.DEFAULT_SCOPE), "widening": [], "expires_at": "2099-01-01T00:00:00Z"}})
+            "standing": {"operation": "activate", "scope": list(standing.DEFAULT_SCOPE), "widening": [], "expires_at": "2099-01-01T00:00:00Z",
+                         "scope_digest": row["binding"]["scope_digest"]}})
         self.assertEqual(row["relay"]["owner_source"], "authenticated-owner:fixture")
         self.assertEqual(row["relay_verification"]["standing"], sent["standing"])
         self.assertTrue(row["relay_verification"]["verified"])
@@ -1117,6 +1307,157 @@ class StandingSourceTests(TickCase):
     def summary(self):
         return self.op("standing-authorization", action="show")["standing_authorization"]
 
+    def test_a1_p453_relay_uses_scope_after_its_own_live_observation(self):
+        from pod.config import personal_path
+        import yaml
+        path = personal_path(self.project)
+        config = yaml.safe_load(path.read_text())
+        config["authorization_verifier"] = ["/bin/false"]
+        path.write_text(yaml.safe_dump(config))
+        self.bind(); self.activate()
+        original = read(self.project, "objective")["standing_authorization"]["decisions"][-1]
+        self.issue.body += "\nA new requirement."
+        with patch("pod.pod_ticks.refresh"):
+            self.rebind()
+        context = read(self.project, "objective")
+        source = context["checkpoint"]["objective_source"]
+        binding = {"criteria": context["checkpoint"]["criteria"],
+                   **{key: source[key] for key in ("repository", "number", "locator", "amendments")},
+                   "body_scope_sha256": hashlib.sha256(self.issue.body.encode()).hexdigest()}
+        expected = digest(binding)
+        decided = (datetime.fromisoformat(original["utc"].replace("Z", "+00:00")) + timedelta(microseconds=1)).isoformat()
+
+        def verify(command, request):
+            self.assertEqual(request["standing"]["scope_digest"], expected)
+            # Inject the saved old decision, independently of the request. The
+            # ordinary verifier-process tests exercise the same mismatch there.
+            return {**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
+                    "decided_at": decided, "single_use": "before-body-edit",
+                    "standing": {**request["standing"], "scope_digest": original["binding"]["scope_digest"]}}
+
+        before = self.saved()
+        with patch("pod.relay.verify", side_effect=verify), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            with self.assertRaises(PodError) as caught:
+                self.op("standing-authorization", action="activate", decision={**DECISION, "channel": "relayed",
+                                                                              "relay": {"reference": "before-body-edit"}})
+        self.assertEqual(caught.exception.code, "relay_verifier_mismatch")
+        self.assertEqual(caught.exception.detail["fields"], ["standing.scope_digest"])
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.summary()["state"], "suspended")
+
+    def test_f1_current_digest_after_unobserved_rebind_is_accepted_by_own_live_read(self):
+        from pod.config import personal_path
+        import yaml
+        self.bind(); self.activate()
+        self.issue.body += "\nA new requirement."
+        with patch("pod.pod_ticks.refresh"):
+            self.rebind()
+        confirmed = self.summary()["scope_digest"]
+        path = personal_path(self.project)
+        config = yaml.safe_load(path.read_text()); config["authorization_verifier"] = ["/bin/false"]
+        path.write_text(yaml.safe_dump(config))
+        decided = datetime.now(timezone.utc).isoformat()
+
+        def verify(command, request):
+            self.assertEqual(request["standing"]["scope_digest"], confirmed)
+            return {**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
+                    "decided_at": decided, "single_use": "current-unobserved-scope"}
+
+        with patch("pod.relay.verify", side_effect=verify), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            result = self.op("standing-authorization", action="activate", decision={**DECISION, "channel": "relayed",
+                                                                                 "relay": {"reference": "current-unobserved-scope"}})
+        self.assertEqual(result["standing_authorization"]["state"], "active")
+        self.assertEqual(result["decision"]["binding"]["scope_digest"], confirmed)
+
+    def test_f1_restored_scope_keeps_holder_suspended_until_fresh_confirmation(self):
+        from pod.config import personal_path
+        import yaml
+        self.bind(); self.activate()
+        original_body = self.issue.body
+        original = read(self.project, "objective")["standing_authorization"]["decisions"][-1]
+        self.issue.body += "\nA new requirement."
+        self.rebind()
+        changed = read(self.project, "objective")["standing_authorization"]
+        self.issue.body = original_body
+        self.rebind()
+        self.assertEqual(self.summary()["state"], "suspended")
+        restored = read(self.project, "objective")["standing_authorization"]
+        self.assertEqual(restored["not_before"], changed["not_before"])
+        self.assertEqual(restored["scope_changed_for"], original["id"])
+        self.assertEqual(self.summary()["scope_digest"], original["binding"]["scope_digest"])
+        path = personal_path(self.project)
+        config = yaml.safe_load(path.read_text()); config["authorization_verifier"] = ["/bin/false"]
+        path.write_text(yaml.safe_dump(config))
+        decided = original["utc"]
+
+        def verify(command, request):
+            return {**deepcopy(request), "verified": True, "owner_source": "authenticated-owner:fixture",
+                    "decided_at": decided, "single_use": "restored-scope-decision"}
+
+        request = {**DECISION, "channel": "relayed", "relay": {"reference": "restored-scope-decision"}}
+        before = self.saved()
+        with patch("pod.relay.verify", side_effect=verify), \
+                patch("pod.standing._target", return_value={"repository": "acme/example", "remote": "origin", "base": "target"}):
+            with self.assertRaises(PodError) as caught:
+                self.op("standing-authorization", action="activate", decision=request)
+            self.assertEqual(caught.exception.code, "standing_authorization_stale")
+            self.assertEqual(self.saved(), before)
+            decided = datetime.now(timezone.utc).isoformat()
+            self.assertEqual(self.op("standing-authorization", action="activate", decision=request)["standing_authorization"]["state"], "active")
+        self.issue.body += "\nAnother material change."
+        self.rebind(); self.issue.body = original_body; self.rebind()
+        self.assertEqual(self.summary()["state"], "suspended")
+        self.assertEqual(self.activate()["standing_authorization"]["state"], "active")
+
+    def test_f1_never_yolo_issue_status_exposes_normalized_digest_without_writes(self):
+        from pod.status import status
+        self.bind("- [x] **PoD#1\n- [X] Extra check")
+        before = self.saved()
+        context = read(self.project, "objective")
+        source = context["checkpoint"]["objective_source"]
+        expected = digest({"criteria": context["checkpoint"]["criteria"],
+                           **{key: source[key] for key in ("repository", "number", "locator", "amendments")},
+                           "body_scope_sha256": hashlib.sha256(self.issue.body.replace("[x]", "[ ]").replace("[X]", "[ ]").encode()).hexdigest()})
+        with patch("pod.github.GhPort", side_effect=AssertionError("public status fetched the issue")):
+            public = status(self.project, None, objective="objective")["standing_authorization"]
+        self.assertIsNone(public["scope_digest"])
+        self.assertEqual(public["scope_digest_reason"], "no_record")
+        # An arbitrary reader may explicitly request this read without acquiring
+        # coordinator write authority, and it never records the observation.
+        explicit = self.op("standing-authorization", owner="read-only-observer", action="show")["standing_authorization"]
+        self.assertEqual(explicit["scope_digest"], expected)
+        self.assertEqual(explicit["scope_digest_source"], "live_issue")
+        self.assertEqual(self.saved(), before)
+        self.assertNotIn("standing_authorization", read(self.project, "objective"))
+        self.assertEqual(self.activate()["decision"]["binding"]["scope_digest"], expected)
+        with patch("pod.github.GhPort", side_effect=AssertionError("a stored digest fetched the issue")):
+            observed = self.summary()
+            public = status(self.project, None, objective="objective")["standing_authorization"]
+        self.assertEqual(public, observed)
+        self.assertEqual(public["scope_digest"], expected)
+        self.assertEqual(public["scope_digest_source"], "recorded")
+
+    def test_f1_unobserved_status_and_failed_explicit_reads_name_the_missing_digest(self):
+        from pod.status import status
+        self.bind(); self.activate()
+        self.issue.body += "\nA new requirement."
+        with patch("pod.pod_ticks.refresh"):
+            self.rebind()
+        before = self.saved()
+        with patch("pod.github.GhPort", side_effect=AssertionError("public status fetched the issue")):
+            public = status(self.project, None, objective="objective")["standing_authorization"]
+        self.assertIsNone(public["scope_digest"])
+        self.assertEqual(public["scope_digest_reason"], "scope_unobserved")
+        self.issue.unreadable = True
+        self.assertEqual(self.summary()["scope_digest_reason"], "issue_access_unavailable")
+        self.issue.body += "\nUnreconciled edit."
+        blocked = self.summary()
+        self.assertIsNone(blocked["scope_digest"])
+        self.assertTrue(blocked["scope_digest_reason"])
+        self.assertEqual(self.saved(), before)
+
     def test_activation_reads_current_issue_and_refuses_unreconciled_body(self):
         self.bind()
         self.assertNotIn("standing_authorization", read(self.project, "objective"))
@@ -1296,7 +1637,7 @@ class StandingCapacityTests(StandingCase):
         parsed = standing._decision(decision, operation, cls.MOMENT)
         verdict = {"schema": relay.SCHEMA, "reference": decision["relay"]["reference"], "action": "standing",
                    "objective": "objective", "candidate": None, "target": standing._target(fixture.project, context),
-                   "pr": None, "standing": standing._request_fields(operation, parsed), "verified": True,
+                   "pr": None, "standing": standing._request_fields(operation, parsed, scope_digest=standing.scope_digest(context)), "verified": True,
                    "owner_source": "s" * 512, "single_use": key, "decided_at": f"2030-01-01T00:00:{index:02d}Z"}
         row = {**parsed, "id": f"Y{index}", "operation": operation, "utc": "2030-01-01T00:00:00Z",
                "seq": context["checkpoint"]["seq"], "relay": {"reference": verdict["reference"], "owner_source": verdict["owner_source"]},
@@ -1399,7 +1740,10 @@ class StandingCapacityTests(StandingCase):
                            "decision": {**DECISION, "channel": "relayed", "relay": {"reference": code}}}
                 receipts = self.receipts()
                 self.refusal(code, standing.operate, request, now=self.MOMENT + timedelta(seconds=60))
-                self.assertEqual(self.receipts(), receipts)
+                if code == "standing_authorization_future":
+                    self.assertEqual(len(self.receipts()), len(receipts) + 1)
+                else:
+                    self.assertEqual(self.receipts(), receipts)
 
     def test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom(self):
         from pod.history import CONTEXT_LIMIT
