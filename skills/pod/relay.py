@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import signal
 import subprocess
@@ -32,8 +33,10 @@ NEXT = {
 
 def refusal(code: str, *, fields: list[str] | None = None) -> PodError:
     # Verifier output, stderr, arguments and exception text never become diagnostics.
-    return PodError(code, f"Relayed authorization refused: {code}. Next: {NEXT[code]}",
-                    {"next_action": NEXT[code], **({"fields": fields} if fields else {})})
+    next_action = ("obtain a fresh owner decision bound to the current standing_authorization.scope_digest; "
+                   "the host must save that digest with the decision" if fields == ["standing.scope_digest"] else NEXT[code])
+    return PodError(code, f"Relayed authorization refused: {code}. Next: {next_action}",
+                    {"next_action": next_action, **({"fields": fields} if fields else {})})
 
 
 def _output(command: list[str], request: dict) -> bytes:
@@ -100,18 +103,49 @@ def _unique(pairs):
 def validate_verdict(value: object) -> dict:
     """Validate stored evidence too, without invoking the host on read-only paths."""
     try:
-        verdict = exact(value, VERDICT_FIELDS, VERDICT_FIELDS, name="relay verdict")
+        action = value.get("action") if isinstance(value, dict) else None
+        extra = {action} if action in ("standing", "answer") else set()
+        verdict_fields = (VERDICT_FIELDS - {"owner_source"} | {"responder_source"}
+                          if action == "answer" else VERDICT_FIELDS) | extra
+        verdict = exact(value, verdict_fields, verdict_fields, name="relay verdict")
         if verdict["schema"] != SCHEMA or type(verdict["verified"]) is not bool:
             raise ValueError("verdict")
-        if verdict["action"] not in ("publish", "merge"):
+        if verdict["action"] not in ("publish", "merge", "standing", "answer"):
             raise ValueError("action")
-        for key, limit in (("reference", 512), ("objective", 256), ("owner_source", 512), ("single_use", 512)):
+        source = "responder_source" if action == "answer" else "owner_source"
+        for key, limit in (("reference", 512), ("objective", 256), (source, 512), ("single_use", 512)):
             bounded_text(verdict[key], name=key, limit=limit).encode("utf-8")
-        candidate = exact(verdict["candidate"], {"commit", "tree"}, {"commit", "tree"}, name="relay candidate")
-        from .gitio import OBJECT_ID
-        if (any(not isinstance(v, str) or not OBJECT_ID.fullmatch(v) for v in candidate.values())
-                or len(candidate["commit"]) != len(candidate["tree"])):
-            raise ValueError("candidate")
+        if action in ("standing", "answer"):
+            if verdict["candidate"] is not None or verdict["pr"] is not None:
+                raise ValueError("candidate/pr")
+            if action == "standing":
+                from .contracts import STANDING_EXCLUSIONS, STANDING_SCOPES
+                standing = exact(verdict["standing"], {"operation", "scope", "widening", "expires_at", "scope_digest"},
+                                 {"operation", "scope", "widening", "expires_at"}, name="relay standing")
+                if standing["operation"] == "revoke":
+                    if "scope_digest" in standing or any(standing[key] is not None for key in ("scope", "widening", "expires_at")):
+                        raise ValueError("revoke")
+                elif standing["operation"] == "activate":
+                    if "scope_digest" in standing:
+                        if not isinstance(standing["scope_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", standing["scope_digest"]):
+                            raise ValueError("scope digest")
+                    from .standing import _names
+                    _names(standing["scope"], STANDING_SCOPES, nonempty=True)
+                    _names(standing["widening"], STANDING_EXCLUSIONS)
+                    if standing["expires_at"] is not None:
+                        normalize_timestamp(standing["expires_at"], field="standing expiry", code="relay_verifier_malformed")
+                else:
+                    raise ValueError("operation")
+            else:
+                answer = exact(verdict["answer"], {"question", "text"}, {"question", "text"}, name="relay answer")
+                for key, limit in (("question", 512), ("text", 4096)):
+                    bounded_text(answer[key], name=key, limit=limit).encode("utf-8")
+        else:
+            candidate = exact(verdict["candidate"], {"commit", "tree"}, {"commit", "tree"}, name="relay candidate")
+            from .gitio import OBJECT_ID
+            if (any(not isinstance(v, str) or not OBJECT_ID.fullmatch(v) for v in candidate.values())
+                    or len(candidate["commit"]) != len(candidate["tree"])):
+                raise ValueError("candidate")
         target = exact(verdict["target"], {"repository", "remote", "base"}, {"repository", "remote", "base"},
                        name="relay target")
         for field in target:
@@ -134,23 +168,39 @@ def verify(command: list[str] | None, request: dict) -> dict:
         value = json.loads(_output(command, request).decode("utf-8"), object_pairs_hook=_unique)
     except (ValueError, UnicodeError, RecursionError):
         raise refusal("relay_verifier_malformed") from None
+    if (request["action"] == "standing" and request["standing"]["operation"] == "activate"
+            and isinstance(value, dict) and value.get("verified") is True
+            and (not isinstance(value.get("standing"), dict)
+                 or value["standing"].get("scope_digest") != request["standing"]["scope_digest"])):
+        raise refusal("relay_verifier_mismatch", fields=["standing.scope_digest"])
+    if (request["action"] == "standing" and isinstance(value, dict) and value.get("verified") is True
+            and isinstance(value.get("standing"), dict) and value["standing"].get("operation") != request["standing"]["operation"]):
+        raise refusal("relay_verifier_mismatch", fields=["standing"])
     verdict = validate_verdict(value)
     if not verdict["verified"]:
         raise refusal("relay_verifier_denied")
-    mismatches = sorted(key for key in BINDING_FIELDS if verdict[key] != request[key])
+    binding_fields = BINDING_FIELDS | ({request["action"]} if request["action"] in ("standing", "answer") else set())
+    mismatches = sorted(key for key in binding_fields if verdict.get(key) != request[key])
+    if request["action"] in ("standing", "answer") and "target" in mismatches:
+        mismatches.remove("target")
+        mismatches.extend("target." + key for key in request["target"]
+                          if verdict["target"][key] != request["target"][key])
+        mismatches.sort()
     if mismatches:
         raise refusal("relay_verifier_mismatch", fields=mismatches)
     return verdict
 
 
-def check_use(project: Path, verdict: dict, *, consume: bool = False) -> None:
+def check_use(project: Path, verdict: dict, *, consume: bool = False, refuse: bool = False) -> None:
     """One non-evicting receipt per key across all objectives, independent of journal retention."""
     from .ledger import _lock, state_root
     path = state_root(project) / ".relay-authorizations" / (digest(verdict["single_use"]) + ".json")
     receipt = {"schema": "pod-relay-use/v1", "authorization": digest(verdict)}
     with _lock(path):
         if path.exists() or path.is_symlink():
-            if bounded_json(path, limit=1024) != receipt:
+            if bounded_json(path, limit=1024) != receipt or refuse:
                 raise refusal("relay_authorization_reused")
+        elif refuse:
+            atomic_json(path, {**receipt, "refused": "standing_authorization_future"}, limit=1024)
         elif consume:
             atomic_json(path, receipt, limit=1024)

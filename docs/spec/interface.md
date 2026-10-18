@@ -16,9 +16,9 @@ Maintain one canonical inline skill router with relevant-on-demand references an
 
 ### R48 — Read-only status and doctor report preferences
 
-Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175), [A230](#a230), [A406](#a406), [A426](#a426), [A427](#a427), [A428](#a428)
+Type: B · Scenarios: [A34](#a34), [A40](#a40), [A49](models/preferences.md#a49), [A71](#a71), [A133](#a133), [A175](#a175), [A230](#a230), [A406](#a406), [A426](#a426), [A427](#a427), [A428](#a428), [A440](#a440)
 
-Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status adds current exact release, terminal, ownership, retained reason and Dispatch stage facts, labels placement warnings start-time and renders every blocked result without a traceback. An unknown objective names its id, repository context and state root searched. R133 adds the last observed PoD ticks, authorship, criteria and due/blocked states from the ledger; R135 adds the recorded-question projection. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
+Read-only status and doctor report preferences including their status and any route-setup action, the Preferred and Pinned routes, the actual config path, a route-state summary, current native work, constraints, decisions, mismatches, installed bundle identity drift, blockers and next actions; doctor also reports the offline observation cache state. These reads never fetch. Run-selected status includes Governor authorization rows in `owner_decisions`, using the same inventory as objective-selected status. `pod status --objective ID` selects one objective, optionally constrained by `--run`; ambiguous shared Runs return `selection_required` with choices rather than selecting one. Status adds current exact release, terminal, ownership, retained reason and Dispatch stage facts, labels placement warnings start-time and renders every blocked result without a traceback. An unknown objective names its id, repository context and state root searched. R133 adds the last observed PoD ticks, authorship, criteria and due/blocked states from the ledger; R135 adds the recorded-question projection; R139 adds the standing-authorization projection. Status also reports local route failure observations/deadlines and derives active/settled assignments, observed retained terminals, gates, progress and next action without process telemetry or side effects.
 
 ### R49 — The one-shot installer places both agent
 
@@ -226,7 +226,7 @@ An own tick with an empty mapping makes an untick due; an unticked empty mapping
 
 Type: B,H · Scenarios: [A386](#a386), [A387](#a387), [A388](#a388), [A389](#a389), [A390](#a390), [A391](#a391), [A392](#a392), [A393](#a393), [A394](#a394), [A395](#a395), [A396](#a396), [A397](#a397), [A414](#a414), [A415](#a415), [A416](#a416), [A417](#a417), [A418](#a418)
 
-The dedicated `pod internal pod-tick` request takes project, objective, owner and integer pod (0–999999999). The recorded coordinator's Run authority and an open objective are required; closed objectives, objectives under historical retirement and continued objectives refuse with objective_closed, objective_retired or objective_continued before any issue read/write. A direct objective is not applicable. There is no Governor tick kind, Orca mutation, publish authorization or per-objective consent. OD-5 is standing authority for this bounded body edit alone.
+The dedicated `pod internal pod-tick` request takes project, objective, owner and integer pod (0-999999999). The recorded coordinator's Run authority and an open objective are required; closed objectives, objectives under historical retirement and continued objectives refuse with objective_closed, objective_retired or objective_continued before any issue read/write. A direct objective is not applicable. There is no Governor tick kind, Orca mutation, publish authorization or per-objective consent. OD-5 is standing authority for this bounded body edit alone, separate from both the yolo record and the worker-tab standing close authorization.
 
 R10's ordered table governs each request: A checks objective and repository; B immediately runs issue_recheck_live with the binding (the intended digest while recovering), refusing body/amendment drift, role changes, unreadable sources and CLOSED; C checks the line is unique; D decides from current records/proof and that body; E classifies the result and readback. CLOSED is tested explicitly and refuses issue_reconciliation_required with reason closed_issue_requires_intent_reconciliation even when the ordinary recheck reports body drift first. No allow_closed or reopen is used. A later outside reopen permits ticking only once the ordinary recheck passes.
 
@@ -280,6 +280,62 @@ questions. Missing row facts and bounded truncation are partial and name their
 gaps. The projection is read-only and adds no question store, native scrape,
 private-service dependency, decision permission or lifecycle authority. Every prior
 status field and human rendering keeps its behavior.
+
+### R139 — Show the objective's yolo mode and extend the relay verifier to it
+
+Type: B · Scenarios: [A432](delivery.md#a432), [A440](#a440)
+
+Public status for a selected objective adds `standing_authorization`, the versioned
+projection defined under the standing-authorization status contract: the mode (`yolo`
+with its scope, exclusions, widening and source, or `normal`), each effect authorized
+under it and each clarification the host's responder decided (R136-R138). The
+acknowledgement of the checkpoint that records `delivery` carries the same projection,
+and so does the stored closure report of an objective with standing decisions, so a final
+report can name the mode and its effects. The closure projection also records `at_closure`:
+its UTC observation time, mode, `ran_in_yolo`, the last activation id (or null) and
+`active_until_closure`, making explicit that the objective ran in yolo until closure
+when that was true. Later expiry preserves those closure fields. A closure of an
+objective without a standing record keeps its earlier report shape and channel discriminator
+through close, reopen and close, so genuine 0.18.0 still reads it; Governor DEFER text
+also stays unchanged. A stop is a yolo operation and creates the record even while off.
+A no-decision closure keeps the earlier report shape; its readers show `normal`,
+with a stable `at_closure` or none, never a new read time. Public status and
+standing `show` expose the current `scope_digest`, also without a standing record.
+A host must save this digest with the exact owner decision it confirms. Public
+status remains offline (R48, R133): a direct objective uses its recorded criteria;
+an issue objective needs a matching recorded source observation. Otherwise the
+digest is `null`, with `scope_digest_reason` `no_record` or `scope_unobserved`,
+never an inferred hash. The explicit `pod internal standing-authorization` action
+`show` may use the existing read-only live issue recheck to compute the normalized
+digest without any write or coordinator write authority. It takes a short context
+and journal snapshot under the objective lock, releases the lock for the bounded
+live issue read and digest calculation, then rechecks the context under the lock.
+A writer can proceed during the remote read. If the context changed, show returns
+the newer offline mode projection with a null digest, reason `context_changed`
+and `scope_digest_next_action` to retry and save the digest with the actual owner
+decision; it never returns the stale digest or writes context or receipts. `scope_digest_source`
+says `live_issue` when it did, `recorded` for a matching stored observation, or
+`criteria` for a direct objective. If the live check fails or needs reconciliation,
+the digest is `null` with the precise refusal reason; reconcile and read again.
+The host obtains the decision-time digest from show, or status when present,
+and saves it with the owner's decision. Once a matching observation exists,
+status and show agree without fetching. Other projection fields use stored facts. It never runs the verifier and attests nothing about the host's
+present decision. An unreadable Governor journal cannot turn a committed checkpoint
+into a refusal: its acknowledgement uses a journal-less standing projection, as the
+other ledger readers do. Each standing decision is also listed among the owner decisions of
+status and the closure report, as kind `standing_authorization` with its channel (R120).
+`delivery_authorization` is current applicable consent; effects completed under yolo
+are listed under `standing_authorization.effects`, even after consent becomes MISSING.
+The closure owner-decision rows are compact references (id, operation, channel and
+decision time), without full verdicts. Its responder text uses at most 256 encoded
+content bytes plus truncation and full-record references; status outside closure
+keeps full text. `internal cleanup-plan` adds the coverage R137 defines.
+
+`pod internal standing-authorization` is the only writer of decision and answer rows;
+checkpoints store the bounded lifecycle and source observation facts of R136. The host
+verifier of the relayed authorization contract gains two actions, `standing` and
+`answer`, for R136 and R138; `publish` and `merge` requests and verdicts stay
+byte-identical. No new personal or project config key exists.
 
 ## Acceptance scenarios
 
@@ -466,7 +522,10 @@ may add a minimal owned PATH block when needed. There is no package, tag or rele
 ### Relayed authorization verifier
 
 R120 permits verified relayed `publish` or `merge` consent through the existing
-Governor operations. No verifier is installed or configured by default. The host
+Governor operations. The same verifier also confirms a relayed standing-authorization
+activation or revocation and a responder answer, through the two further actions
+described after the refusal table (R136, R138). No verifier is installed or configured
+by default. The host
 may set `authorization_verifier` in its one personal `pod/v2` config to an argv
 list of 1-16 nonempty strings, each at most 4096 characters without NUL; the first
 is an absolute executable path. Project config cannot set it. Pod uses that argv
@@ -547,6 +606,38 @@ protection; a host must preserve it. Status/closure report recorded confirmation
 without running the verifier and do not attest its current availability or verdict.
 New verified rows and contexts containing them carry `decision_channels: 2` so
 genuine 0.17.0 readers refuse them; old records and other relays retain their formats.
+A context holding a standing-authorization record, and a journal holding a row
+authorized by it, carry `decision_channels: 3` so genuine 0.18.0 readers refuse them.
+
+#### Standing and answer requests
+
+The `standing` and `answer` actions use the same command, five-second bound, output
+limits, refusal codes and next actions, and `.relay-authorizations/` single-use
+receipts as above; only the standing-authorization operation sends them. A request has
+`schema`, `reference` (the `relay.reference`), `action`, `objective` and `target` as in
+the first table, `candidate: null`, `pr: null` and the one extra field below. `target`
+comes from the objective's governance base remote, with the repository from that
+remote's single URL; a missing, ambiguous or non-GitHub identity refuses
+`relay_verifier_mismatch` naming `target.repository`. A verdict repeats the request and
+adds `verified`, `decided_at` and `single_use`; only `verified: true` with every
+expected field equal confirms it.
+
+| Action | Extra request field | Verdict source field |
+| --- | --- | --- |
+| `standing` | `standing`: `operation` (`activate` or `revoke`), `scope` (list or `null`), `widening` (list or `null`) and `expires_at` (timestamp or `null`), exactly as the decision submits them; `activate` also carries Pod's current material `scope_digest` after its own live issue read. `revoke` carries no digest. | `owner_source`, stored in `relay.owner_source`. |
+| `answer` | `answer`: `question` (the recorded question id or reference) and `text` (the answer). | `responder_source`, stored in the answer row; there is no `owner_source`. |
+
+A caller-supplied `relay_verification`, and a caller-supplied `standing` object on a
+Governor authorization (R137), are refused. A mismatch in the objective, operation,
+scope, widening, expiry, question or answer text refuses `relay_verifier_mismatch`
+before any write. For activation, the trusted verifier must compare
+`standing.scope_digest` against the digest saved with that exact owner decision;
+blindly echoing the current request digest is not verification. A missing, unknown
+or different decision-time digest refuses `relay_verifier_mismatch` naming
+`standing.scope_digest`, before any key use or write; obtain a fresh owner decision
+bound to the current public digest. Only an otherwise authentic, fully verified,
+exact-bound future activation records a permanent refused-key marker in the
+existing receipt store (R136), leaving context and journal unchanged.
 
 ### Recorded-question status contract
 
@@ -588,3 +679,66 @@ them or proof that unrecorded questions do not exist.
 - <a id="a426"></a>**A426** — Public status projects populated questions and explicit empty lists with recorded ids/references, text, choices and resolution facts, checkpoint seq/revision and complete status. A changed question keeps its recorded id and exposes the new text/resolution and checkpoint sequence without writing on read.
 - <a id="a427"></a>**A427** — Existing string questions and partial/unsupported row forms remain readable with explicit missing facts and partial status; no id or resolution is invented. Missing questions and unsupported containers report unavailable with unknown total, rather than complete emptiness.
 - <a id="a428"></a>**A428** — A failed record read reports unavailable with its code. Missing sequence/revision, oversized facts, count and byte limits report explicit partial gaps/truncation. The projection preserves every prior status field and rendering, introduces no effect and does not change stored records or question authority.
+
+### Standing-authorization status contract
+
+`pod internal standing-authorization --input FILE` (record name "standing
+authorization" in `internal contract`) takes `project`, `objective`, `owner` (the
+recorded coordinator's terminal for writes; any nonempty reader id for show), `action` and the record the action needs:
+
+| `action` | Input | Result |
+| --- | --- | --- |
+| `activate` | `decision`: `provenance`, `instruction`, optional `channel` and `relay`, and optional `scope`, `widening` and `expires_at` (R136). | Writes the activation. |
+| `revoke` | `decision`: `provenance`, `instruction`, optional `channel` and `relay`. | Writes a revocation when on; while off, persists the stop barrier without a decision row or key consumption. |
+| `answer` | `answer`: `question`, `text` and `relay.reference` (R138). | Writes the responder answer. |
+| `show` | None. | Reads the projection below; may explicitly recheck an unobserved issue source for its digest, without write authority or writes. |
+
+A write returns `standing_authorization` (the projection), the stored `decision` or
+`answer` row and the `context_revision`. A relayed `activate`, `revoke` or `answer`
+is written only after the verifier confirms it. A full record refuses
+`standing_authorization_full` (an activation at 31 or more decisions) or
+`responder_answers_full` (16 answers), without a write. Stale verified standing
+decisions refuse `standing_authorization_stale` before receipt consumption (R136),
+with reason `reopen_time_unavailable` when a reopen predates the first record and
+its time is missing. Authentic, exactly bound future-dated activations refuse
+`standing_authorization_future` and permanently mark only their key refused in the
+existing receipt store, without changing context or journal; that key never works
+later. Existing receipts are never overwritten, and untrusted inputs write no
+receipt. Future-dated verified stops use receipt time as their authority-reducing barrier,
+retaining the original verified time in a recorded row. A no-op relayed stop verifies
+its time, falling back to receipt time on failure, and returns `state` and `changed: false`.
+A stop whose verification fails while on preserves that refusal and the current
+state, raising only the receipt-time barrier with no decision row or key use.
+An inactive answer refuses `responder_answer_requires_yolo` before verification,
+regardless of prior answers. An unrecorded question refuses
+`decision_question_unrecorded` before answer preflight or target checks. R136/R138's complete encoded
+row limits also apply and are exposed by `internal contract` as `stored_max_bytes`.
+
+`pod status --objective ID --json`, and a status selecting one objective by Run, add
+`standing_authorization` for every such objective, with this schema. An objective
+that never recorded one reads `state: none` and `mode: normal`; the projection
+stores nothing and runs no verifier.
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | `pod-standing-authorization-status/v1`. |
+| `mode` | `yolo` only when `state` is `active`; otherwise `normal`. |
+| `state` | `none`, `active`, `suspended`, `revoked`, `expired` or `ended` (R136). |
+| `reason` | For `suspended`, `scope_changed` or `scope_unobserved`; otherwise `null`. |
+| `scope_digest` | Current material scope digest when computable; `null` otherwise. Public status uses recorded facts only; explicit standing show may read an unobserved issue. |
+| `scope_digest_reason` | `null` with a digest; otherwise `no_record`, `scope_unobserved`, the explicit read's source/reconciliation refusal reason, or `context_changed` when show's snapshot changed during the read. |
+| `scope_digest_next_action` | Present only when show detects `context_changed`: retry show and save its digest with the actual owner decision. |
+| `scope_digest_source` | `criteria`, `recorded`, or `live_issue`; `null` when the digest is unavailable. |
+| `decision` | `null`, or the latest activation: `id`, `scope`, `exclusions`, `widening`, `expires_at`, `since`, `channel` and, when relayed, `relay_reference` and `owner_source`. |
+| `effects` | `total`, `truncated` and `items`: the newest 64 journal rows authorized under yolo, each with `record_id`, `kind`, `scope`, `candidate`, `tree`, `target`, `pr`, `decision`, `outcome`, `at` and `standing`. |
+| `responder_decisions` | `total`, `truncated` and `items`: the newest 64 answers, each with `id`, `question`, `text`, `responder_source`, `at` and `under`. |
+| `history` | `total` and `items`: every decision's `id`, `operation`, receipt/recording time `at`, ordering time `decided_at` and `channel`. For a future verified stop, `decided_at` is capped at receipt; the full record retains both original times. |
+| `at_closure` | Present when captured at closure: `utc`, `mode`, boolean `ran_in_yolo`, last activation `decision` id (or null), and boolean `active_until_closure`. For a no-decision objective it is stable or absent. |
+
+Text status prints one line, such as "Mode: yolo (publish, merge, release, install,
+cleanup; session since T)" or "Mode: normal", naming the state and reason when yolo is
+not active (for example "yolo suspended: scope changed"). Unknown optional fields remain
+ignorable. `internal cleanup-plan` adds `standing_authorization` with `mode`,
+`decision`, `covers` and `asks`, as R137 defines them.
+
+- <a id="a440"></a>**A440** - Status JSON and text, a Run-selected status, the closure report and the delivery acknowledgement show the mode, scope, exclusions, widening and source, every effect authorized under yolo and every responder decision. Effect lists keep the newest 64 and say when they are truncated; answer storage is bounded at 16. The closure adds its observed `at_closure` mode, active decision and `active_until_closure` flag, preserving that history after expiry. Run-selected owner decisions include Governor authorization rows. None of these reads runs the verifier. Public status stays offline: it exposes the current material scope_digest from recorded facts, or null with no_record/scope_unobserved when unavailable. Standing show can explicitly read an unobserved issue source, reports scope_digest_source live_issue, and returns null with a precise reason if unavailable or unreconciled, without writing context or receipts or requiring coordinator write authority. Show releases the objective lock before its bounded live read and digest calculation; a concurrent normal writer completes during that read. If the snapshot changed, show returns a null digest with context_changed and a retry next action, preserving the writer's context and all receipts. Status and show agree once the observation exists. The host saves this digest with the exact owner decision, rather than echoing a later request. `delivery_authorization` names current applicable consent, while `standing_authorization.effects` retains completed yolo effects after a stop or replacement. The closure references standing decision rows without copying verdicts and bounds responder text to a 256-byte encoded prefix.

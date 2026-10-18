@@ -192,11 +192,14 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "pod_ticks"}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    if "standing_authorization" in state:
+        from .standing import validate_record
+        validate_record(state["standing_authorization"])
     if "pod_ticks" in state:
         from .pod_ticks import validate
         validate(state["pod_ticks"])
-    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2)):
+    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2, 3)):
         raise PodError("state_unsupported", "Decision channel representation is unsupported")
     from .succession import validate_link
     for name in _SUCCESSION_FIELDS & set(state):
@@ -254,6 +257,8 @@ def _write(path: Path, value: dict, *, native: dict | None = None, protected=())
     # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
     # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
     refuse_continued(value, reserved=False)
+    from .standing import observe_scope
+    observe_scope(value)
     from .util import protect_decision_record
     protect_decision_record(value)
     value["revision"] += 1
@@ -900,11 +905,12 @@ def _governor_pending(project: Path, objective: str) -> bool:
                for row in journal["actions"])
 
 
-def _authorization_granted(project: Path, objective: str):
+def _authorization_granted(project: Path, objective: str, *, context: dict | None = None):
     def granted(scope: str, candidate: str) -> bool:
         from .governor import _read_journal, _record_path, applicable_authorization
         try:
             journal = _read_journal(_record_path(project, objective))
+            current = context if context is not None else _read(_path(project, objective))
         except PodError:
             return False
         kinds = ("push", "pr_update") if scope == "publish" else (scope,)
@@ -916,7 +922,7 @@ def _authorization_granted(project: Path, objective: str):
             tree = bound.get("tree") if bound.get("commit") == row.get("commit") else None
             return applicable_authorization(unit, row["action"].get("authorization"),
                                             candidate=row.get("commit") or row["action"]["candidate"],
-                                            tree=tree, scope=scope)
+                                            tree=tree, scope=scope, context=current)
         # A row carried from a lost coordinator records the predecessor's consent, never this objective's (R118).
         return any(row["decision"] == "ALLOW" and row["action"]["kind"] in kinds
                    and not isinstance(row.get("carried_from"), dict)
@@ -975,14 +981,18 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
     from .util import context_decisions
     from .governor import _read_journal, _record_path
     try:
-        decisions = context_decisions(state, _read_journal(_record_path(project, objective)))
+        journal = _read_journal(_record_path(project, objective))
+        decisions = context_decisions(state, journal)
     except PodError:
+        journal = None
         decisions = context_decisions(state)
     from .worker_tabs import rows as tab_rows
     placements = {row["admission_id"]: row["placement"] for row in (native or {}).get("assignments", [])
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
+            "standing_journal": journal,
+            **({"standing_context": state} if "standing_authorization" in state else {}),
             "worker_tabs": tab_rows(state, placements, outstanding=outstanding),
             # Tab intent is shown by status/acknowledgements, never added to the
             # immutable closure report. It can outlive objective closure.
@@ -1003,7 +1013,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "source_current": source_current,
             "policy_revision": effective(project)["revision"],
             "verification": verification if verification is not None else checkpoint_value.get("verification"),
-            "authorization_granted": _authorization_granted(project, objective),
+            "authorization_granted": _authorization_granted(project, objective, context=state),
             "governor_pending": _governor_pending(project, objective),
             "governor_delivery": objective_delivery_reporting(project, objective),
             "git_delta": lambda source, target: git_delta(project, source, target),
@@ -1036,7 +1046,8 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
             "settlement_failure": failure,
             "status": status_projection(map_state, ctx),
             "label": label_qualification(map_state, ctx, candidate if candidate is not None else ctx["candidate"])}
-    view["report"] = report_projection(map_state, ctx) if map_state is not None else None
+    # Read-side reports include normal mode while older stored closures retain their exact shape.
+    view["report"] = report_projection(map_state, ctx, standing_normal=True) if map_state is not None else None
     view["placements"] = {row["admission_id"]: row["placement"]
                           for row in (native or {}).get("assignments", [])
                           if isinstance(row, dict) and isinstance(row.get("admission_id"), str)
@@ -1317,6 +1328,9 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
                              verification=core.get("verification"))
+        if "standing_authorization" in state:
+            ctx["standing_context"] = {**state, "checkpoint": {**(state.get("checkpoint") or {}), **core}}
+            ctx["authorization_granted"] = _authorization_granted(project, objective, context=ctx["standing_context"])
         ctx["operation"] = "checkpoint"
         ctx["governance_refresh"] = refresh
         ctx["derived_adoption"] = derived_adoption
@@ -1349,6 +1363,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             ctx["closure_unrecorded"] = _closure_unrecorded(
                 project, objective, state, delivered=(prior_map or {}).get("delivery") is not None)
         map_state = accept_write(prior_map, proposed, ctx)
+        from .standing import checkpoint_times
+        checkpoint_times(state, prior_map, map_state)
         if verified_delivery is not None:
             map_state["delivery"] = verified_delivery
         _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,
@@ -1449,7 +1465,14 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if introducing or rebound:
             result["pod_tick_intake"] = tick_intake(state, map_state)
         if map_state:
-            result["report"] = report_projection(state["checkpoint"], ctx)
+            result["report"] = report_projection(state["checkpoint"], ctx, standing_normal=True)
+        from .standing import projection as standing_projection
+        from .governor import _read_journal, _record_path
+        try:
+            journal = _read_journal(_record_path(project, objective))
+        except PodError:
+            journal = None
+        result["standing_authorization"] = standing_projection(state, journal)
         return result
 
 
@@ -1941,7 +1964,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                     "written": _report_written_ids(map_state, admission_id),
                     "map": {"seq": map_state["seq"], "revision": map_state["revision"],
                             "quiescence": map_state["quiescence"]},
-                    "report": report_projection(map_state, ctx), **tab_output()}
+                    "report": report_projection(map_state, ctx, standing_normal=True), **tab_output()}
         ingestion = {"status": "not_applicable"}
         if row["role"] == "implement":
             if prior_report is not None:
@@ -1966,7 +1989,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 return {"ingestion": _stored_ingestion(row), "settled": True,
                         "written": _report_written_ids(map_state, admission_id),
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
-                        "report": report_projection(map_state, ctx), **tab_output()}
+                        "report": report_projection(map_state, ctx, standing_normal=True), **tab_output()}
             if value.get("close") is True and not map_state.get("closure"):
                 from .succession import refuse_incomplete
                 refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's new closure (R118).
@@ -1996,7 +2019,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
                         "quiescence": new_map["quiescence"]},
-                "report": report_projection(state["checkpoint"], ctx), **tab_output()}
+                "report": report_projection(state["checkpoint"], ctx, standing_normal=True), **tab_output()}
 
 
 def state_inventory(project: Path) -> dict:

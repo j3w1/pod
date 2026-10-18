@@ -377,6 +377,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     checkpoint = state.get("checkpoint") if state else None
     if state is not None:
         result["recorded_questions"] = recorded_questions(checkpoint)
+        from .standing import projection as standing_projection
+        result["standing_authorization"] = standing_projection(state)
     recorded = checkpoint_identity(checkpoint) if checkpoint else None
     drift = bool(checkpoint and not identity_matches(recorded, running))
     admissions = list(state["admissions"].values()) if state else []
@@ -465,9 +467,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         from .util import context_decisions, map_decisions, derived_governance_summary
         from .governor import _read_journal, _record_path
         try:
-            journal = _read_journal(_record_path(project, objective)) if objective else None
+            journal = _read_journal(record_root / "governor.json") if record_root is not None else None
         except PodError:
             journal = None
+        from .standing import projection as standing_projection
+        result["standing_authorization"] = standing_projection(state, journal)
         decisions = context_decisions(state, journal) + map_decisions(checkpoint or {})
         if decisions:
             result["owner_decisions"] = decisions
@@ -578,6 +582,9 @@ def render(result: dict) -> None:
             print(f"Record capacity: {capacity['physical_bytes']}/{capacity['limit_bytes']} bytes. "
                   + clean(capacity["next_action"]))
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
+        if "standing_authorization" in result:
+            from .standing import mode_line
+            print(clean(mode_line(result["standing_authorization"])))
         for choice in result.get("choices", []):
             print(f"  Choose {choice['objective']} | {choice['worktree'] or 'unbound'} | "
                   f"seq {choice['seq']} | {choice['state']}")

@@ -387,6 +387,10 @@
   "tests.test_sources.FetchTests": {
    "lane": "serial",
    "reason": "asserts 1.5-2.5 s fetch deadlines against a local server"
+  },
+  "tests.test_standing_authorization.StandingSourceTests.test_r4_2_show_releases_the_objective_lock_before_its_live_issue_read": {
+   "lane": "serial",
+   "reason": "bounds synchronization with a concurrent objective writer"
   }
  },
  "schema": "suite-lanes/v1",
