@@ -121,7 +121,7 @@ _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "r
                      "native_binding", "recovery", "error", "failures", "created_at", "updated_at",
                      "serves", "role", "boundary", "map_revision", "candidate", "result",
                      "changed_paths", "boundary_exceeded", "disposition", "report", "binding",
-                     "admitted_seq"}
+                     "admitted_seq", "display"}
 
 
 def _consumed_report(row: dict, runtimes: set[str]) -> dict | None:
@@ -155,7 +155,7 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
-    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq"}, name="admission")
+    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq", "display"}, name="admission")
     if value["admission_id"] != key:
         raise PodError("state_unsupported", "Admission identity or schema is unsupported")
     if "admitted_seq" in value and (type(value["admitted_seq"]) is not int or value["admitted_seq"] < 1):
@@ -183,6 +183,9 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
         raise PodError("state_unsupported", "Bound admission lacks exact native identity")
     if value["native_binding"] is not None and not binding_valid(value["native_binding"]):
         raise PodError("state_unsupported", "Admission native identity is malformed")
+    if "display" in value:
+        from .display import validate_facts
+        validate_facts(value["display"])
     _consumed_report(value, runtimes or set())
 
 
@@ -238,6 +241,9 @@ def _validate_context(value: object) -> dict:
         validate_delivery_record(checkpoint_value["delivery"])
     if isinstance(checkpoint_value, dict) and "continuity" in checkpoint_value:
         _validate_continuity(checkpoint_value["continuity"])
+    if isinstance(checkpoint_value, dict) and "display" in checkpoint_value:
+        from .display import validate_record
+        validate_record(checkpoint_value["display"], state["admissions"])
     return state
 
 
@@ -1175,7 +1181,7 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
              if key not in MAP_STORED - MAP_INPUT and key != "continuity"}
     if previous:
         carried = ("criteria", "plan_revision", "candidate", "assignments", "questions",
-                   "verification_gaps", "next_safe_action", "worktree", "objective_source", "verification")
+                   "verification_gaps", "next_safe_action", "worktree", "objective_source", "verification", "display")
         value = {**{key: previous[key] for key in carried if key in previous}, **value}
         value.setdefault("native_refs", [])
         value.setdefault("policy_revision", effective(project)["revision"])
@@ -1207,6 +1213,9 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
         worktree_binding(value["worktree"])
     if "verification" in value:
         value = {**value, "verification": validate_verification(value["verification"])}
+    if "display" in value:
+        from .display import validate_record
+        validate_record(value["display"])
     proposed = {key: value[key] for key in MAP_INPUT if key in value}
     core = {key: item for key, item in value.items() if key not in MAP_INPUT}
     dispositions = proposed.pop("dispositions", [])
@@ -1389,6 +1398,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         previous = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
         try:
             core, proposed, dispositions = _checkpoint_input(project, objective, owner, value, native, previous)
+            if "display" in core:
+                from .display import validate_record
+                validate_record(core["display"], state["admissions"])
         except PodError as exc:
             _map_refusal_context(exc, state)
             raise
@@ -1657,6 +1669,8 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
            "error": None, "failures": [], "created_at": stamp, "updated_at": stamp,
            **shape, "map_revision": body["map_revision"], "result": result,
            "boundary_exceeded": [], "admitted_seq": new_map["seq"]}
+    from .display import admission_facts
+    row["display"] = admission_facts(state, body, worktree_path)
     return row, new_map
 
 
@@ -1826,10 +1840,14 @@ def _update_admission_locked(project: Path, objective: str, *, state: dict, owne
     if expected_runtime is not None and authority["runtime"] != expected_runtime:
         raise PodError("native_authority_unverified", "Update evidence was read at another runtime")
     row = state["admissions"][admission_id]
+    from copy import deepcopy
+    display_before = ("display" in row, deepcopy(row.get("display")))
     admitted = ("admitted_seq" in row, row.get("admitted_seq"))
     update(row)
     if admitted != ("admitted_seq" in row, row.get("admitted_seq")):
         raise PodError("admission_conflict", "The admission's reservation sequence is immutable")
+    if display_before != ("display" in row, row.get("display")):
+        raise PodError("admission_conflict", "The admission display facts are immutable")
     row["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write(_path(project, objective), state)
     return row

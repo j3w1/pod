@@ -153,9 +153,12 @@ class TitleTests(TabCase):
         result = self.start("worker", frozen)
         acknowledged = self.ack("admission", {}, result)
         handle = result["admission"]["native_binding"]["terminalHandle"]
-        self.assertEqual(acknowledged["title"], frozen["title"])
+        role_title = {"implement": "Implementer", "investigate": "Investigator", "review": "Reviewer"}[role]
+        from pod.display import job
+        expected_tab = role_title + " · " + job(fields, role_title.lower())
+        self.assertEqual(acknowledged["title"], expected_tab)
         self.assertEqual(acknowledged["rename_command"],
-            ["orca", "terminal", "rename", "--terminal", handle, "--title", expected, "--json"] if handle else None)
+            ["orca", "terminal", "rename", "--terminal", handle, "--title", expected_tab, "--json"] if handle else None)
         return frozen, result["admission"]
 
     def test_implementer_omits_identifier_path_credential_status_and_route_shapes(self):
@@ -187,7 +190,7 @@ class TitleTests(TabCase):
         self.report(admission, frozen, map={"obligations": self.waiting_rows()})
         fresh = self.packet(["S"], role="investigate", resolves="new question", stop_condition="answer", purpose="Trace tokenizer")
         result = self.start("follow-up", fresh, reuse_of=admission["admission_id"])
-        self.assertEqual(result["title"], "Investigator: Trace tokenizer")
+        self.assertEqual(result["title"], "Investigator · Trace tokenizer (continued)")
         self.assertEqual(result["rename_command"][4], admission["native_binding"]["terminalHandle"])
         self.assertNotEqual(result["title"], frozen["title"])
         self.tab_cases[admission["native_binding"]["dispatchId"]] = "reused_later"
@@ -209,7 +212,7 @@ class TitleTests(TabCase):
         self.port.receipt = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST,
                              "error": {"code": "task_not_startable", "message": "refused"}}
         result = self.start("worker", self.packet(["S"], purpose="Repair parser"))
-        self.assertEqual(result["title"], "Implementer: Repair parser")
+        self.assertEqual(result["title"], "Implementer · Repair parser")
         self.assertIsNone(result["rename_command"])
         self.assertEqual(result["rename_reason"], "worker not started")
 
@@ -224,7 +227,7 @@ class TitleTests(TabCase):
         self.port.receipt = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST,
                              "error": {"code": "runtime_error", "message": "uncertain"}}
         result = self.start("worker", self.packet(["S"], purpose="Repair parser"))
-        self.assertEqual(result["title"], "Implementer: Repair parser")
+        self.assertEqual(result["title"], "Implementer · Repair parser")
         self.assertIsNone(result["rename_command"])
         self.assertEqual(result["rename_reason"], "worker start is not verified")
 
@@ -478,7 +481,7 @@ class ClosureTests(TabCase):
         raw = self.report(admission, frozen, map={"obligations": self.waiting_rows()})
         row = raw["worker_tab"]
         self.assertEqual(row["row"], "retained_owned"); self.assertFalse(row["owner_kept"])
-        self.assertEqual(row["reason"], "owner_request"); self.assertNotIn("retained_title", row)
+        self.assertEqual(row["reason"], "owner_request"); self.assertEqual(row["retained_title"]["title"], "Investigator · Investigation")
         self.assertEqual(self.status()["worker_tabs"][0]["row"], "retained_owned")
         before = self.saved()
         for report_route in (False, True):
@@ -715,7 +718,7 @@ class OwnerKeepTests(TabCase):
                 else:
                     self.assertEqual(row["command"], ["orca", *self.release_argv])
                     if report_route:
-                        self.assertEqual(ack["worker_tab"]["retained_title"]["title"], frozen["title"] + " (retained: owner request)")
+                        self.assertEqual(ack["worker_tab"]["retained_title"]["title"], "Investigator · Investigation")
                 status_row = self.status()["worker_tabs"][0]
                 self.assertTrue(status_row["owner_kept"])
                 self.assertEqual(row["command"], status_row["command"])
@@ -810,7 +813,7 @@ class RetentionTests(TabCase):
                 result = self.report(implementer, frozen, result_commit=integrated)
                 row = result["worker_tab"]
                 self.assertEqual(row["retention_reason"], reason)
-                self.assertEqual(row["retained_title"]["title"], f"Implementer: Repair parser (retained: {reason})")
+                self.assertEqual(row["retained_title"]["title"], "Implementer · Repair parser")
                 status_row = next(row for row in self.status()["worker_tabs"]
                                   if row["admission"] == implementer["admission_id"])
                 self.assertEqual(status_row["retention_reason"], reason)
@@ -854,7 +857,7 @@ class RetentionTests(TabCase):
         raw = self.report(admission, frozen, map={"obligations": rows}, triage=[{
             "finding": "defect", "severity": "major", "triage": "required_correction",
             "summary": "parser defect", "correction": "K"}])
-        self.assertEqual(raw["worker_tab"]["retained_title"]["title"], "Reviewer: Check parser (retained: corrections)")
+        self.assertEqual(raw["worker_tab"]["retained_title"]["title"], "Reviewer · Check parser")
         self.assertEqual(self.status()["worker_tabs"][0]["retention_reason"], "corrections")
         before = self.saved()
         for report_route in (False, True):
@@ -866,7 +869,7 @@ class RetentionTests(TabCase):
         rows = self.stored(); rows[2].update(state="satisfied", evidence=[self.proof("K")])
         rows[1]["wait"] = {"class": "sequenced", "referent": "O1"}; self.write(rows)
         raw = self.report(admission, frozen)
-        self.assertEqual(raw["worker_tab"]["retained_title"]["title"], "Reviewer: Check parser (retained: delta review)")
+        self.assertEqual(raw["worker_tab"]["retained_title"]["title"], "Reviewer · Check parser")
         self.tab_case = "not_materialized"
         self.review("delta-review", delta_from=admission["admission_id"])
         self.tab_cases[admission["native_binding"]["dispatchId"]] = "retained"
