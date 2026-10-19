@@ -560,14 +560,10 @@ def _op_admission(request: dict) -> dict:
                          frozen_packet=request["packet"],
                          worktree=request.get("worktree", "current"),
                          reuse_of=request.get("reuse_of"), accompanying=request.get("map"))
-    from .worker_tabs import title, rename
+    from .display import admission_output
     row = result["admission"]
-    naming = rename(title(request["packet"].get("body", request["packet"])),
-                    (row.get("native_binding") or {}).get("terminalHandle"),
-                    started=row["state"] == "bound")
-    if row["state"] in ("reserved", "unresolved"):
-        naming["rename_reason"] = "worker start is not verified"
-    return {**result, **naming}
+    current = read(Path(request["project"]), request["objective"])
+    return {**result, **admission_output(current, row)}
 
 
 def _op_runtime_continuity(request: dict) -> dict:
@@ -639,8 +635,26 @@ def _op_contract(request: dict) -> dict:
     return {"records": {key: describe(key) for key in sorted(names)}}
 
 
+def _op_display(request: dict) -> dict:
+    exact(request, {"project", "objective"}, {"project", "objective"}, name="request")
+    from .ledger import read
+    from .orca import read_command
+    from .display import projection
+    state = read(Path(request["project"]), request["objective"])
+    if state is None:
+        raise PodError("map_unavailable", "This objective has no recorded display facts")
+    reads = []
+    for argv in (["terminal", "list", "--json"], ["worktree", "list", "--json"], ["--version"]):
+        try:
+            reads.append(read_command(argv))
+        except PodError:
+            reads.append(None)
+    return projection(state, *reads)
+
+
 _OPERATIONS = {
     'contract': _op_contract,
+    'display': _op_display,
     'brief': _op_brief,
     'packet': _op_packet,
     'report': _op_report,
@@ -733,7 +747,7 @@ def run(operation: str, request: dict) -> dict:
 
 
 _CHECKPOINT_ACK_FIELDS = ("schema", "criteria", "candidate", "plan_revision", "policy_revision",
-                          "objective_source", "worktree", "verification", "pod_version",
+                          "objective_source", "worktree", "verification", "display", "pod_version",
                           "bundle_digest", "native_refs", "next_safe_action", "delivery")
 
 
