@@ -6508,7 +6508,16 @@
       "offline_test": [
         "tests.test_cleanup_plan.CleanupScaleTests.test_large_inventory_plan_expect_apply_only_objective_resources",
         "tests.test_cleanup_plan.CleanupScaleTests.test_shared_branch_beyond_the_old_inventory_bound_remains_protected",
-        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_still_has_a_resource_bound"
+        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_still_has_a_resource_bound",
+        "tests.test_github.StreamingRepositoryTests.test_canonical_and_linked_identity_keep_the_common_dir_key_and_full_shape",
+        "tests.test_github.StreamingRepositoryTests.test_detached_identity_preserves_its_path_with_no_branch",
+        "tests.test_github.StreamingRepositoryTests.test_bare_backed_worktree_uses_the_bare_common_dir_and_first_inventory_entry",
+        "tests.test_github.StreamingRepositoryTests.test_separate_git_dir_keeps_gits_main_entry_and_refuses_an_unlisted_checkout",
+        "tests.test_github.StreamingRepositoryTests.test_complete_nul_inventory_survives_chunk_boundaries_and_detached_and_bare_rows",
+        "tests.test_github.StreamingRepositoryTests.test_truncated_empty_missing_and_duplicate_inventory_fields_refuse",
+        "tests.test_github.StreamingRepositoryTests.test_discovery_and_cleanup_refuse_failed_empty_or_incomplete_native_inventory",
+        "tests.test_github.StreamingRepositoryTests.test_discovery_refuses_a_complete_inventory_that_omits_the_current_worktree",
+        "tests.test_github.StreamingRepositoryTests.test_other_discovery_reads_keep_their_output_bound_and_allowlist"
       ],
       "status": "NOT_RUN"
     },
@@ -6533,7 +6542,11 @@
         "tests.test_cleanup_plan.CleanupWorkerTests.test_projection_release_without_a_terminal_resource_is_supported",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_incomplete_resource_and_wrong_worker_terminal_never_prove_release",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selector_shape_and_unknown_identity_are_refused_without_writes",
-        "tests.test_cleanup_plan.CleanupWorkerTests.test_incomplete_connected_or_foreign_terminal_readbacks_hold_release"
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_incomplete_connected_or_foreign_terminal_readbacks_hold_release",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_final_reused_round_can_remove_the_reported_released_placement",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_reuse_history_active_unknown_or_foreign_ownership_holds_and_changes_expect",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_reuse_requires_a_complete_exact_chain_or_positive_independent_historical_release",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_contradictory_projection_ownership_and_unknown_integration_stay_held"
       ],
       "status": "NOT_RUN"
     }

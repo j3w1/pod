@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 
 from .errors import PodError
-from .gitio import OBJECT_ID, is_ancestor, read as git_read, resolve_commit
+from .gitio import OBJECT_ID, is_ancestor, read as git_read, resolve_commit, worktree_inventory, worktree_rows
 from .governor import _read_journal, _record_path
 from .ledger import read
 from .orca import read_command
@@ -18,40 +17,6 @@ from .util import bounded_text, digest, exact
 MAX_RESOURCES = 96
 MAX_GIT_OUTPUT = 2_000_000
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
-
-
-def worktree_rows(stream):
-    """Read NUL-delimited porcelain incrementally, including paths containing newlines."""
-    pending, current = "", {}
-    while chunk := stream.read(65536):
-        fields = (pending + chunk).split("\0")
-        pending = fields.pop()
-        for field in fields:
-            if field:
-                key, _, value = field.partition(" ")
-                current[key] = value
-            elif current:
-                yield current
-                current = {}
-    if pending or current:
-        raise PodError("git_contract", "Git worktree inventory is incomplete")
-
-
-@contextmanager
-def worktree_inventory(root: Path):
-    """Spool the whole read to disk, independent of repository worktree count and bytes."""
-    try:
-        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="") as inventory:
-            result = subprocess.run(["git", "--no-optional-locks", "-C", str(root),
-                                     "worktree", "list", "--porcelain", "-z"],
-                                    stdout=inventory, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                                    timeout=30, check=False)
-            if result.returncode:
-                raise PodError("repository_identity_unavailable", "Git worktree inventory cannot be read")
-            inventory.seek(0)
-            yield inventory
-    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
-        raise PodError("git_unavailable", "Git worktree inventory cannot be read") from exc
 
 
 def _git(project: Path, argv: list[str]) -> str | None:
@@ -106,7 +71,8 @@ def _selected_worker(state: dict, worker: object) -> tuple[dict | None, str | No
     return matches[0], reason
 
 
-def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None) -> tuple[dict, list[str]]:
+def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None, *,
+                  check_reuse: bool = True, expected_owner: str | None = None) -> tuple[dict, list[str]]:
     """Fresh exact Dispatch release evidence; a missing terminal alone proves no release."""
     binding = admission.get("native_binding") or {}
     report = admission.get("report")
@@ -118,9 +84,11 @@ def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None) 
         reasons.append("worker report has not been recorded for this Dispatch")
     if reuse_reason is not None:
         reasons.append("reused next round: " + reuse_reason)
-    for other in state["admissions"].values():
-        if other.get("reuse_of") == admission["admission_id"]:
-            reasons.append("reused next round by admission " + other["admission_id"])
+    if check_reuse:
+        for other in state["admissions"].values():
+            if other.get("reuse_of") == admission["admission_id"]:
+                reasons.append("reused next round by admission " + other["admission_id"])
+    expected_owner = expected_owner or binding.get("dispatchId")
     try:
         from .operations import _assignment_evidence
         shown = port.show_worker(binding.get("dispatchId"))
@@ -156,11 +124,14 @@ def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None) 
         if placement.get("native_role") in ("coordinator", "setup"):
             reasons.append("native resource belongs to a coordinator or setup worker")
         if (resource is not None and (not isinstance(resource, dict)
-                or resource.get("ownerDispatchId") != binding.get("dispatchId")
+                or resource.get("ownerDispatchId") != expected_owner
                 or resource.get("worktreeId") != binding.get("worktreeId")
                 or resource.get("terminalHandle") != binding.get("terminalHandle"))
-                or owner not in (None, binding.get("dispatchId"))):
+                or owner not in (None, expected_owner)
+                or release.get("ownerDispatchId") not in (None, expected_owner)):
             reasons.append("worker resource is reused or belongs to another native binding")
+        if expected_owner != binding.get("dispatchId") and not isinstance(resource, dict):
+            reasons.append("historical worker resource transfer has not been proved")
         # Older supported worker-show replies omit terminalResource after release. Their exact-bound
         # projection.resource must positively say released twice, with exited liveness and the exact
         # worker terminal; an absent resource, ownership field or terminal never supplies that proof.
@@ -176,6 +147,50 @@ def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None) 
     except (PodError, AttributeError, KeyError, TypeError):
         reasons.append("worker native settlement or release is unavailable")
     return facts, reasons
+
+
+def _reuse_predecessors(state: dict, selected: dict) -> set[str]:
+    """Only a recorded same-runtime, same-placement and same-terminal reuse chain."""
+    current, seen = selected, set()
+    binding = selected.get("native_binding") or {}
+    placement = (selected.get("recovery") or {}).get("placement_binding")
+    for _ in range(len(state["admissions"])):
+        previous = current.get("reuse_of")
+        if previous is None:
+            return seen
+        prior = state["admissions"].get(previous)
+        other_binding = (prior or {}).get("native_binding") or {}
+        if (previous in seen or previous == selected["admission_id"] or prior is None
+                or prior.get("runtime") != selected.get("runtime")
+                or (prior.get("recovery") or {}).get("placement_binding") != placement
+                or not binding.get("terminalHandle")
+                or any(other_binding.get(key) != binding.get(key) for key in ("worktreeId", "terminalHandle"))):
+            return set()
+        seen.add(previous)
+        current = prior
+    return set()
+
+
+def _placement_history(state: dict, selected: dict, paths: set[str], port, *,
+                       selected_released: bool) -> tuple[list[dict], list[str]]:
+    """Historical placement use is safe only with fresh release or exact transfer proof."""
+    predecessors = _reuse_predecessors(state, selected) if selected_released else set()
+    history, holds = [], []
+    for admission in state["admissions"].values():
+        placement = (admission.get("recovery") or {}).get("placement_binding") or {}
+        if admission is selected or placement.get("path") not in paths:
+            continue
+        facts, reasons = _worker_facts(admission, state, port, None, check_reuse=False)
+        proof = "released"
+        if reasons and admission["admission_id"] in predecessors:
+            facts, reasons = _worker_facts(admission, state, port, None, check_reuse=False,
+                                           expected_owner=selected["native_binding"]["dispatchId"])
+            proof = "transferred_to_selected"
+        history.append({**facts, "proof": proof if not reasons else "unverified", "holds": sorted(set(reasons))})
+        if reasons:
+            holds.append("worktree is also bound to admission " + admission["admission_id"])
+            holds.extend("other admission " + admission["admission_id"] + ": " + reason for reason in reasons)
+    return history, holds
 
 
 def _disposable(path: str) -> bool:
@@ -418,14 +433,16 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     if selected is not None:
         if len(paths) != 1:
             raise PodError("cleanup_worker_unavailable", "Worker has no exact recorded placement binding")
-        if isinstance(bound, dict) and bound.get("path") in paths:
+        if not expected_branches.get(next(iter(paths))):
+            worker_holds.append("worker placement branch identity is unavailable")
+        if not isinstance(bound, dict) or not isinstance(bound.get("path"), str):
+            worker_holds.append("objective integration worktree binding is unavailable")
+        elif bound["path"] in paths:
             worker_holds.append("selected worker uses the objective integration worktree")
-        for admission in state["admissions"].values():
-            if admission is selected:
-                continue
-            placement = (admission.get("recovery") or {}).get("placement_binding") or {}
-            if placement.get("path") in paths:
-                worker_holds.append("worktree is also bound to admission " + admission["admission_id"])
+        history, history_holds = _placement_history(state, selected, paths, port,
+                                                    selected_released=not worker_holds)
+        worker_facts["placement_history"] = history
+        worker_holds.extend(history_holds)
     if len(paths) > MAX_RESOURCES:
         raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     selected_branches = {"refs/heads/" + branch for branches in expected_branches.values() for branch in branches}

@@ -2,13 +2,65 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Callable
 
 
 OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+
+
+def worktree_rows(stream):
+    """Read NUL-delimited porcelain incrementally, including paths containing newlines."""
+    from .errors import PodError
+    pending, current, seen = "", {}, False
+    while chunk := stream.read(65536):
+        fields = (pending + chunk).split("\0")
+        pending = fields.pop()
+        for field in fields:
+            if field:
+                key, _, value = field.partition(" ")
+                if key in current or not current and key != "worktree":
+                    raise PodError("git_contract", "Git worktree inventory record is malformed")
+                current[key] = value
+            elif current:
+                if (not Path(current.get("worktree", "")).is_absolute()
+                        or ("bare" in current and (current["bare"] or
+                            any(key in current for key in ("HEAD", "branch", "detached"))))
+                        or ("bare" not in current and (
+                            not OBJECT_ID.fullmatch(current.get("HEAD", ""))
+                            or ("branch" in current) == ("detached" in current)
+                            or "branch" in current and not current["branch"].startswith("refs/heads/")
+                            or current.get("detached", "")))):
+                    raise PodError("git_contract", "Git worktree inventory record is incomplete")
+                seen = True
+                yield current
+                current = {}
+    if pending or current or not seen:
+        raise PodError("git_contract", "Git worktree inventory is incomplete")
+
+
+@contextmanager
+def worktree_inventory(root: Path, *, executable: str = "git"):
+    """Spool the whole read to disk, independent of repository worktree count and bytes."""
+    from .errors import PodError
+    try:
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="") as inventory:
+            result = subprocess.run([executable, "--no-optional-locks", "-C", str(root),
+                                     "worktree", "list", "--porcelain", "-z"],
+                                    stdout=inventory, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                    timeout=30, check=False)
+            if result.returncode:
+                raise PodError("repository_identity_unavailable", "Git worktree inventory cannot be read")
+            inventory.seek(0)
+            yield inventory
+    except UnicodeError as exc:
+        raise PodError("git_contract", "Git worktree inventory is not valid UTF-8") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PodError("git_unavailable", "Git worktree inventory cannot be read") from exc
 
 
 def read(root: Path, argv: list[str], *, binary: bool = False,

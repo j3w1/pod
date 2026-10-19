@@ -414,7 +414,13 @@ class CleanupScaleTests(unittest.TestCase):
         self.assertIsNone(branch["delete_argv"])
 
     def test_one_plan_still_has_a_resource_bound(self):
-        with patch("pod.cleanup.MAX_RESOURCES", 2), self.assertRaises(PodError) as refused:
+        # Integration plus 47 placements: 48 worktrees, 48 local branches and one published remote.
+        # These are actual fixture worktrees, without altering the production bound of 96.
+        state = read(self.case.project, "objective")
+        for index, path in enumerate(self.unrelated[:47]):
+            state["admissions"][f"scope-{index}"] = {"recovery": {"placement_binding": {
+                "path": str(path), "branch": f"unrelated-{index:03}"}}}
+        with patch("pod.cleanup.read", return_value=state), self.assertRaises(PodError) as refused:
             self.case.observed()
         self.assertEqual(refused.exception.code, "cleanup_unavailable")
         self.assertEqual(str(refused.exception), "Objective cleanup resource bound is exceeded")
@@ -440,6 +446,7 @@ class CleanupWorkerTests(KernelCase):
         self.port.workers = deepcopy(self.native_workers)
         self.port.show_worker = self.shown
         self.resource_case, self.retained_reason = "released", None
+        self.resource_owners = {}
         self.terminals, self.orca_reads = [], []
         self.context_path.write_bytes(self.context_bytes)
         self.journal_path.write_bytes(self.journal_bytes)
@@ -510,6 +517,7 @@ class CleanupWorkerTests(KernelCase):
             result["terminalResource"] = {
                 "worktreeId": binding["worktreeId"], "terminalHandle": binding["terminalHandle"],
                 "ownerDispatchId": dispatch, "ownershipState": "released", "releaseState": "released"}
+            result["terminalResource"]["ownerDispatchId"] = getattr(self, "resource_owners", {}).get(dispatch, dispatch)
         if case in ("unreleased", "retained", "reused", "foreign", "user_owned", "live"):
             result["terminalResource"].update(ownershipState="owned", releaseState="not_requested")
             result["projection"]["resource"] = {"state": "owned", "releaseState": "not_requested"}
@@ -723,6 +731,89 @@ class CleanupWorkerTests(KernelCase):
             shown["result"]["terminal"] = {**terminal, **fields}
             with self.subTest(fields=fields), patch.object(self.port, "show_worker", return_value=shown):
                 self.assert_held("terminal readback is connected, incomplete or belongs to another binding")
+
+    def test_contradictory_projection_ownership_and_unknown_integration_stay_held(self):
+        shown = self.shown(self.dispatch)
+        shown["result"]["projection"]["resource"]["ownerDispatchId"] = "foreign-dispatch"
+        with patch.object(self.port, "show_worker", return_value=shown):
+            self.assert_held("reused or belongs to another native binding")
+        state = read(self.project, "objective")
+        state["checkpoint"]["worktree"] = None
+        with patch("pod.cleanup.read", return_value=state):
+            self.assert_held("integration worktree binding is unavailable")
+        state = read(self.project, "objective")
+        state["admissions"][self.admission["admission_id"]]["recovery"]["placement_binding"]["branch"] = None
+        with patch("pod.cleanup.read", return_value=state):
+            self.assert_held("worker placement branch identity is unavailable")
+
+    def final_reused_round(self):
+        """Record both rounds through admission/report entry points; native reuse keeps one resource."""
+        with repository_reads():
+            self.write(self.stored(), worktree=self.main_binding, dispositions=[{
+                "admission": self.admission["admission_id"], "discarded": True,
+                "reason": "the unchanged first-round result is set aside before the next frozen assignment"}])
+            self.resource_case = "unreleased"
+            placement = self.admission["recovery"]["placement_binding"]
+            frozen = self.packet(["S"], worktree=self.main_binding, placement=placement,
+                                  boundary={"paths": ["src"]})
+            final = guarded_start(self.project, "objective", owner="owner", run="run", task="task-next",
+                                  plan_revision="plan", frozen_packet=frozen, worktree="path:" + str(self.child),
+                                  reuse_of=self.admission["admission_id"], port=self.port)["admission"]
+            self.resource_owners[self.dispatch] = final["native_binding"]["dispatchId"]
+            self.settle(final)
+            rows = self.stored()
+            child = next(row for row in rows if row["id"] == "S")
+            child.pop("executor")
+            child.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+            self.report(final, frozen, result_commit=self.base, map={"obligations": rows})
+        return final
+
+    def test_final_reused_round_can_remove_the_reported_released_placement(self):
+        reason = "immediate next round on the correction's frozen candidate"
+        self.assert_held("reused next round: " + reason, self.observed(worker={
+            "admission": self.admission["admission_id"], "reuse_reason": reason}))
+        final = self.final_reused_round()
+        selector = {"admission": final["admission_id"]}
+        self.assert_held("worker resource is not natively released", self.observed(worker=selector))
+        self.resource_case = "released"
+        first = self.observed(worker=selector)
+        self.assertEqual(first["worker"]["placement_history"][0]["proof"], "transferred_to_selected")
+        self.assert_held("reused next round: " + reason, self.observed(worker={
+            "admission": self.admission["admission_id"], "reuse_reason": reason}))
+        again = self.observed(worker=selector, expect=first["expect"])
+        FixtureCleanupPort(self.project, [self.child]).apply(again)
+        self.assertFalse(self.child.exists())
+        self.assertEqual(git(self.project, "ls-remote", "origin", "refs/heads/worker"), "")
+        self.assertIsNone(read(self.project, "objective")["checkpoint"].get("closure"))
+
+    def test_reuse_history_active_unknown_or_foreign_ownership_holds_and_changes_expect(self):
+        final = self.final_reused_round()
+        self.resource_case = "released"
+        selector = {"dispatch": final["native_binding"]["dispatchId"]}
+        first = self.observed(worker=selector)
+        self.port.workers[self.dispatch]["outcome"] = "in_progress"
+        self.assert_held("other admission", self.observed(worker=selector))
+        with self.assertRaises(PodError) as changed:
+            self.observed(worker=selector, expect=first["expect"])
+        self.assertEqual(changed.exception.code, "cleanup_changed")
+        self.port.workers[self.dispatch]["outcome"] = "succeeded"
+        self.resource_owners[self.dispatch] = "foreign-dispatch"
+        self.assert_held("other admission", self.observed(worker=selector))
+
+    def test_reuse_requires_a_complete_exact_chain_or_positive_independent_historical_release(self):
+        final = self.final_reused_round()
+        self.resource_case = "released"
+        selector = {"admission": final["admission_id"]}
+        state = read(self.project, "objective")
+        state["admissions"][final["admission_id"]]["reuse_of"] = None
+        with patch("pod.cleanup.read", return_value=state):
+            self.assert_held("other admission", self.observed(worker=selector))
+        # Without chain proof, only the old Dispatch's own positive released identity can clear it.
+        self.resource_owners[self.dispatch] = self.dispatch
+        with patch("pod.cleanup.read", return_value=state):
+            result = self.observed(worker=selector)
+        self.assertEqual(result["worker"]["placement_history"][0]["proof"], "released")
+        self.assertIsNotNone(self.resource(result, "worktree")["delete_argv"])
 
     def test_selector_shape_and_unknown_identity_are_refused_without_writes(self):
         before = (objective_root(self.project, "objective") / "context.json").read_bytes()

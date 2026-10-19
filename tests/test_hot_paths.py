@@ -30,6 +30,13 @@ class RepositoryReadsTests(unittest.TestCase):
         reads = patch("pod.github._local_git", wraps=github._local_git)
         self.reads = reads.start()
         self.addCleanup(reads.stop)
+        inventories = patch("pod.github.worktree_inventory", wraps=github.worktree_inventory)
+        self.inventories = inventories.start()
+        self.addCleanup(inventories.stop)
+
+    @property
+    def native_read_count(self):
+        return self.reads.call_count + self.inventories.call_count
 
     def test_one_scope_reads_each_repository_once_and_returns_independent_copies(self):
         with github.repository_reads():
@@ -37,11 +44,11 @@ class RepositoryReadsTests(unittest.TestCase):
             first["linked_worktrees"].append("changed by a caller")
             for _ in range(4):
                 again = github.repository_context(self.project)
-        self.assertEqual(self.reads.call_count, 3)
+        self.assertEqual(self.native_read_count, 3)
         self.assertNotIn("changed by a caller", again["linked_worktrees"])
         github.repository_context(self.project)
         github.repository_context(self.project)
-        self.assertEqual(self.reads.call_count, 9)  # Outside a scope every call reads Git.
+        self.assertEqual(self.native_read_count, 9)  # Outside a scope every call reads Git.
 
     def test_nested_scopes_share_reads_until_an_effect_forgets_them(self):
         with github.repository_reads():
@@ -53,7 +60,7 @@ class RepositoryReadsTests(unittest.TestCase):
             github.forget_repository_reads()
             after = github.repository_context(self.project)
         self.assertEqual(len(after["linked_worktrees"]), len(before["linked_worktrees"]) + 1)
-        self.assertEqual(self.reads.call_count, 6)
+        self.assertEqual(self.native_read_count, 6)
 
     def test_a_failed_read_is_never_kept(self):
         real, calls = github._local_git, []
@@ -68,7 +75,7 @@ class RepositoryReadsTests(unittest.TestCase):
             with self.assertRaises(PodError):
                 github.repository_context(self.project)
             self.assertEqual(github.repository_context(self.project)["worktree"], str(self.project.resolve()))
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls) + self.inventories.call_count, 4)
 
     def test_the_binding_check_before_an_effect_reads_git_fresh(self):
         with github.repository_reads():
@@ -83,7 +90,7 @@ class RepositoryReadsTests(unittest.TestCase):
             # The call's later reads agree with what the check saw.
             self.assertEqual(github.repository_context(self.project)["branch"], "elsewhere")
             operations._check_worktree_binding(self.project, None)
-        self.assertEqual(self.reads.call_count, 9)  # The first read and each binding check; no binding, no read.
+        self.assertEqual(self.native_read_count, 9)  # The first read and each binding check; no binding, no read.
 
     def test_issue_target_checks_read_the_remote_fresh(self):
         subprocess.run(["git", "-C", str(self.project), "remote", "add", "origin",
@@ -128,7 +135,7 @@ class RepositoryReadsTests(unittest.TestCase):
             github.repository_context(self.project)
             cli._edit(path)
             github.repository_context(self.project)
-        self.assertEqual(self.reads.call_count, 6)
+        self.assertEqual(self.native_read_count, 6)
 
     def test_native_and_remote_effects_forget_reads_but_remote_reads_do_not(self):
         with github.repository_reads():
@@ -141,7 +148,7 @@ class RepositoryReadsTests(unittest.TestCase):
             github.repository_context(self.project)
             github._run(["true"], cwd=self.project, timeout=5, mutation=True)
             github.repository_context(self.project)
-        self.assertEqual(self.reads.call_count, 9)  # First read, after the Orca effect, after the mutation.
+        self.assertEqual(self.native_read_count, 9)  # First read, after the Orca effect, after the mutation.
 
     def test_each_helper_call_and_command_is_one_scope_and_the_workspace_holds_none(self):
         scoped = []
@@ -155,7 +162,7 @@ class RepositoryReadsTests(unittest.TestCase):
         with patch.dict(internal._OPERATIONS, {"probe": probe}):
             internal.run("probe", {})
             internal.run("probe", {})
-        self.assertEqual((self.reads.call_count, scoped), (6, [True, True]))
+        self.assertEqual((self.native_read_count, scoped), (6, [True, True]))
 
         def execute(args, project):
             probe({})
@@ -163,7 +170,7 @@ class RepositoryReadsTests(unittest.TestCase):
 
         with patch("pod.cli.execute", side_effect=execute), redirect_stdout(StringIO()):
             cli.main(["doctor", "--json"])
-        self.assertEqual(self.reads.call_count, 9)
+        self.assertEqual(self.native_read_count, 9)
         terminal = SimpleNamespace(isatty=lambda: True)
         workspace = []
         with patch.object(cli, "sys", SimpleNamespace(stdin=terminal, stdout=terminal, stderr=sys.stderr)), \

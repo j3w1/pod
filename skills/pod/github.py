@@ -19,7 +19,7 @@ import shutil
 import subprocess
 
 from .errors import PodError
-from .gitio import OBJECT_ID as _GIT_ID
+from .gitio import OBJECT_ID as _GIT_ID, worktree_inventory, worktree_rows
 
 MAX_OUTPUT = 2_000_000
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
@@ -301,19 +301,14 @@ def _read_repository_context(root: Path) -> tuple[dict, bool]:
         raise PodError("git_contract", "Git repository identity is incomplete")
     worktree = Path(lines[0]).resolve()
     common = Path(lines[1]).resolve()
-    blocks = _local_git(worktree, ["worktree", "list", "--porcelain"]).strip().split("\n\n")
     worktrees: list[dict] = []
-    for block in blocks:
-        fields: dict[str, str | bool] = {}
-        for line in block.splitlines():
-            key, _, value = line.partition(" ")
-            fields[key] = value if value else True
-        candidate = fields.get("worktree")
-        if isinstance(candidate, str):
-            worktrees.append({"path": str(Path(candidate).resolve()),
-                              "branch": (str(fields.get("branch", "")).removeprefix("refs/heads/")
-                                         or None),
-                              "detached": bool(fields.get("detached"))})
+    with worktree_inventory(worktree, executable=str(git_executable())) as inventory:
+        for fields in worktree_rows(inventory):
+            candidate = fields.get("worktree")
+            if isinstance(candidate, str):
+                worktrees.append({"path": str(Path(candidate).resolve()),
+                                  "branch": (fields.get("branch", "").removeprefix("refs/heads/") or None),
+                                  "detached": "detached" in fields})
     if not worktrees or not any(row["path"] == str(worktree) for row in worktrees):
         raise PodError("git_contract", "Current worktree is absent from Git's worktree inventory")
     complete = True

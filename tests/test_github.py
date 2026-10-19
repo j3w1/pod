@@ -1,6 +1,8 @@
 """The GitHub port: exact argv shapes, and what each response is read as."""
 
 import json
+import hashlib
+from io import StringIO
 import os
 from pathlib import Path
 import subprocess
@@ -9,6 +11,7 @@ from unittest.mock import patch
 
 from pod.config import effective, personal_path
 from pod.errors import PodError
+from pod.gitio import worktree_inventory, worktree_rows
 from pod.github import (AMENDMENT_JQ, GhPort, ISSUE_FIELDS, PR_FIELDS, RUN_FIELDS,
                         MUTATION_TIMEOUT_S, flip_pod_checkbox, gh_allowed, git_allowed,
                         issue_intake, issue_recheck, issue_recheck_live, pod_lines,
@@ -730,3 +733,126 @@ class RepositoryAndIssueTests(unittest.TestCase):
             repository_context(main)
             self.assertEqual(dirty.read_text(), "preserve")
             self.assertTrue(collision.is_dir())
+
+
+class StreamingRepositoryTests(unittest.TestCase):
+    """Real layout fixtures once per process; failed Git ports never substitute identity facts."""
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = fixture()
+        cls.root = cls.temp.__enter__()
+        cls.addClassCleanup(cls.temp.__exit__, None, None, None)
+        ordinary = cls.root / "ordinary"
+        ordinary.mkdir()
+        cls.main, cls.linked = repository(ordinary)
+        cls.detached = ordinary / "detached"
+        git(cls.main, "worktree", "add", "-q", "--detach", str(cls.detached))
+        cls.alias = cls.root / "main-alias"
+        cls.alias.symlink_to(cls.main, target_is_directory=True)
+        cls.bare = cls.root / "bare.git"
+        subprocess.run(["git", "clone", "--bare", "-q", str(cls.main), str(cls.bare)], check=True)
+        git(cls.bare, "remote", "set-url", "origin", "https://github.com/acme/widgets.git")
+        cls.bare_linked = cls.root / "bare-worker"
+        git(cls.bare, "worktree", "add", "-qb", "bare-worker", str(cls.bare_linked), "main")
+        cls.separate = cls.root / "separate-main"
+        cls.metadata = cls.root / "metadata store.git"
+        subprocess.run(["git", "init", "-q", "-b", "main", "--separate-git-dir", str(cls.metadata),
+                        str(cls.separate)], check=True)
+        git(cls.separate, "config", "user.name", "Fixture")
+        git(cls.separate, "config", "user.email", "fixture@example.invalid")
+        (cls.separate / "README.md").write_text("fixture\n")
+        git(cls.separate, "add", "README.md")
+        git(cls.separate, "commit", "-qm", "base")
+        git(cls.separate, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+        cls.separate_linked = cls.root / "separate-worker"
+        git(cls.separate, "worktree", "add", "-qb", "separate-worker", str(cls.separate_linked))
+        cls.porcelain = git(cls.main, "worktree", "list", "--porcelain", "-z")
+
+    def assert_context(self, path, main, common, branch, others):
+        self.assertEqual(repository_context(path), {
+            "repository": "acme/widgets", "repo_key": hashlib.sha256(str(common.resolve()).encode()).hexdigest(),
+            "worktree": str(path.resolve()), "main_worktree": str(main.resolve()), "branch": branch,
+            "dirty": None, "linked_worktrees": [str(main.resolve()), *sorted(map(str, others))]})
+
+    def test_canonical_and_linked_identity_keep_the_common_dir_key_and_full_shape(self):
+        others = [self.detached, self.linked]
+        self.assert_context(self.main, self.main, self.main / ".git", "main", others)
+        self.assert_context(self.linked, self.main, self.main / ".git", "orca/issue-7", others)
+        self.assertEqual(repository_context(self.alias), repository_context(self.main))
+
+    def test_detached_identity_preserves_its_path_with_no_branch(self):
+        self.assert_context(self.detached, self.main, self.main / ".git", None, [self.detached, self.linked])
+
+    def test_bare_backed_worktree_uses_the_bare_common_dir_and_first_inventory_entry(self):
+        self.assert_context(self.bare_linked, self.bare, self.bare, "bare-worker", [self.bare_linked])
+
+    def test_separate_git_dir_keeps_gits_main_entry_and_refuses_an_unlisted_checkout(self):
+        self.assertTrue((self.separate / ".git").is_file())
+        # Git lists the separate metadata directory as its first entry. Preserve that native fact;
+        # neither its parent nor the unlisted main checkout is an invented inventory member.
+        self.assert_context(self.separate_linked, self.metadata, self.metadata, "separate-worker",
+                            [self.separate_linked])
+        with self.assertRaises(PodError) as refused:
+            repository_context(self.separate)
+        self.assertEqual(refused.exception.code, "git_contract")
+
+    def test_complete_nul_inventory_survives_chunk_boundaries_and_detached_and_bare_rows(self):
+        class SmallReads(StringIO):
+            def read(self, size):
+                return super().read(min(size, 7))
+        rows = list(worktree_rows(SmallReads(self.porcelain)))
+        self.assertEqual([row["worktree"] for row in rows],
+                         [str(self.main), *sorted(map(str, [self.detached, self.linked]))])
+        self.assertIn("detached", next(row for row in rows if row["worktree"] == str(self.detached)))
+        with worktree_inventory(self.bare_linked) as inventory:
+            self.assertEqual(next(worktree_rows(inventory)), {"worktree": str(self.bare), "bare": ""})
+
+    def test_truncated_empty_missing_and_duplicate_inventory_fields_refuse(self):
+        head = "a" * 40
+        for value in ("", self.porcelain[:-1], self.porcelain.rstrip("\0"),
+                      "worktree /fixture\0HEAD " + head + "\0\0",
+                      "worktree /fixture\0branch refs/heads/worker\0\0",
+                      "worktree /fixture\0worktree /other\0\0",
+                      "branch refs/heads/worker\0worktree /fixture\0\0",
+                      "worktree relative\0HEAD " + head + "\0detached\0\0"):
+            with self.subTest(value=value[:80]), self.assertRaises(PodError) as refused:
+                list(worktree_rows(StringIO(value)))
+            self.assertEqual(refused.exception.code, "git_contract")
+
+    def failing_inventory(self, value, *, returncode=0):
+        native_run = subprocess.run
+        def execute(argv, **kwargs):
+            if argv[-4:] == ["worktree", "list", "--porcelain", "-z"]:
+                kwargs["stdout"].write(value)
+                kwargs["stdout"].flush()
+                return completed(returncode=returncode)
+            return native_run(argv, **kwargs)
+        return patch("pod.gitio.subprocess.run", side_effect=execute)
+
+    def test_discovery_and_cleanup_refuse_failed_empty_or_incomplete_native_inventory(self):
+        from pod.cleanup import _worktrees
+        for value, returncode in (("", 1), ("", 0), (self.porcelain[:-1], 0)):
+            with self.subTest(returncode=returncode, length=len(value)), self.failing_inventory(
+                    value, returncode=returncode):
+                with self.assertRaises(PodError):
+                    repository_context(self.main)
+                with self.assertRaises(PodError) as refused:
+                    _worktrees(self.main, {str(self.linked)}, {"refs/heads/orca/issue-7"})
+                self.assertEqual(refused.exception.code, "cleanup_unavailable")
+
+    def test_discovery_refuses_a_complete_inventory_that_omits_the_current_worktree(self):
+        without_main = self.porcelain.split("\0\0", 1)[1]
+        with self.failing_inventory(without_main), self.assertRaises(PodError) as refused:
+            repository_context(self.main)
+        self.assertEqual(refused.exception.code, "git_contract")
+        self.assertIn("absent", str(refused.exception))
+
+    def test_other_discovery_reads_keep_their_output_bound_and_allowlist(self):
+        from pod.github import MAX_OUTPUT, _local_git
+        with patch("pod.github.subprocess.run", return_value=completed("x" * (MAX_OUTPUT + 1))), \
+                self.assertRaises(PodError) as refused:
+            _local_git(self.main, ["remote", "get-url", "origin"])
+        self.assertEqual(refused.exception.code, "git_contract")
+        with self.assertRaises(PodError) as refused:
+            _local_git(self.main, ["status", "--porcelain"])
+        self.assertEqual(refused.exception.code, "unsupported_git_operation")
