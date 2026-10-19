@@ -378,10 +378,11 @@ def _phase(root: Path, raw: dict) -> str:
     return "closed" if present(root) and listed(raw) == "open" else listed(raw)
 
 
-def _settled_record(project: Path, row: dict) -> bool:
+def _settled_record(project: Path, row: dict, *, frozen: frozenset[str] = frozenset()) -> bool:
     """Whether a recovery coordinator's own record is finished: closed, closed by evidence, ended by the owner's
-    historical retirement, or continued along a chain that ended closed (R110). A record on a schema Pod does not
-    know proves nothing finished, whatever its raw fields say."""
+    historical retirement, or continued along a chain that ended closed (R110). A certified frozen predecessor in
+    this proof's complete chain has also ended authority; its native work is still checked. A record on a schema
+    Pod does not know proves nothing finished, whatever its raw fields say."""
     from .succession import chain_state
     if present(row["root"]):
         return True
@@ -390,7 +391,8 @@ def _settled_record(project: Path, row: dict) -> bool:
     phase = _phase(row["root"], row["raw"])
     if phase in ("closed", "retired"):
         return True
-    return phase == "continued" and chain_state(project, row["raw"])["state"] == "successor_closed"
+    return phase == "continued" and (row["objective"] in frozen
+                                     or chain_state(project, row["raw"])["state"] == "successor_closed")
 
 
 def prove(project: Path, objective: str, *, port=None, remote=None, now: datetime | None = None,
@@ -473,13 +475,17 @@ def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc
     owner = _coordinator(doc, proof)
     if owner is False:
         return
-    runs, dispatches = _runs(project, doc, owner, proof, records)
-    proof.facts.update(runs=runs, dispatches_settled=_work(doc, dispatches, proof, port=port))
     state = raw if kind == "current" else None
     members = _members(project, objective, raw, kind, doc, proof, records)
     if members is None:
         return  # An unreadable or over-bound membership cannot prove a partial delivery.
-    proof.facts["predecessor_runs"] = _predecessor_work(project, members, proof, records, port=port)
+    # Only a whole, classified chain can exempt its frozen predecessors from each other's holder check. Every
+    # predecessor's native work is still proved below; a distinct open recovery remains outside this exemption.
+    frozen = frozenset(row["objective"] for row in members if row["relation"] == "predecessor"
+                       and proof.facts["chain_complete"])
+    runs, dispatches = _runs(project, doc, owner, proof, records, frozen=frozen)
+    proof.facts.update(runs=runs, dispatches_settled=_work(doc, dispatches, proof, port=port))
+    proof.facts["predecessor_runs"] = _predecessor_work(project, members, proof, records, port=port, frozen=frozen)
     _source(members, doc, state, proof, remote)
     _delivery(project, members, proof, remote)
     _preserved(project, root, doc, state, proof, remote, now=now, readback=readback)
@@ -543,7 +549,7 @@ def _coordinator(doc: dict, proof: _Proof):
 
 
 def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *,
-          whose: str | None = None) -> tuple[list[dict], dict | None]:
+          whose: str | None = None, frozen: frozenset[str] = frozenset()) -> tuple[list[dict], dict | None]:
     """Each recorded Run of one record: who holds it now (R146 rebinding) and its complete worker list (R112).
 
     `whose` names a continued predecessor, whose conditions then say so; the objective's own conditions name no
@@ -576,13 +582,14 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *
         elif holder is not None and (holder != owner or whose is not None) \
                 and not _gone(terminal_identity(holder)):
             # A live (or unproven) holder: its own records referencing this Run must all be finished.
-            # A claim ended the original owner's authority over this predecessor only. It does not settle any
-            # other objective that terminal records on the Run, even when the holder handle did not change.
+            # Completed claims ended authority over every certified frozen predecessor in this chain. Other
+            # objectives that terminal records on the Run must still be finished, even if its handle did not change.
             claimed_owner = holder == owner and whose is not None
             found, unreadable = records()
             mine = [row for row in found if row["raw"].get("owner") == holder and run in _record_runs(row["raw"])
                     and not (claimed_owner and row["objective"] == whose)]
-            if (not mine and not claimed_owner) or unreadable or not all(_settled_record(project, row) for row in mine):
+            if ((not mine and not claimed_owner) or unreadable
+                    or not all(_settled_record(project, row, frozen=frozen) for row in mine)):
                 held.append(run)
             elif mine:
                 runs[-1].update(rebound="rebound_settled",
@@ -626,21 +633,24 @@ def _work(doc: dict, dispatches: dict | None, proof: _Proof, *, port, whose: str
     return settled
 
 
-def _member_work(project: Path, row: dict, proof: _Proof, records, *, port) -> dict:
+def _member_work(project: Path, row: dict, proof: _Proof, records, *, port,
+                frozen: frozenset[str] = frozenset()) -> dict:
     """One continued predecessor's own Runs and native work, read now with the objective's own checks (R110's
     holder rule with R146's rebinding, generation recorded and never blocking, complete worker lists, settled
     Dispatches, start requests): what its closure entry records. The claim ended its coordinator's authority over
-    this predecessor only; any other open objective that owner holds on the Run still blocks closure."""
-    runs, dispatches = _runs(project, row["doc"], row["doc"]["owner"], proof, records, whose=row["objective"])
+    each certified predecessor; any distinct open recovery that owner holds on the Run still blocks closure."""
+    runs, dispatches = _runs(project, row["doc"], row["doc"]["owner"], proof, records,
+                            whose=row["objective"], frozen=frozen)
     return {"objective": row["objective"], "runs": runs,
             "dispatches_settled": _work(row["doc"], dispatches, proof, port=port, whose=row["objective"])}
 
 
-def _predecessor_work(project: Path, members: list[dict] | None, proof: _Proof, records, *, port) -> list[dict]:
+def _predecessor_work(project: Path, members: list[dict] | None, proof: _Proof, records, *, port,
+                     frozen: frozenset[str] = frozenset()) -> list[dict]:
     """Every record whose closure entry the tail's closure writes is proved fresh, not only the tail (R146): each
     continued predecessor's Runs and work, nearest first. A predecessor Run held by a live coordinator of an open
     objective holds the whole chain (`run_held`)."""
-    return [_member_work(project, row, proof, records, port=port) for row in members or []
+    return [_member_work(project, row, proof, records, port=port, frozen=frozen) for row in members or []
             if row["relation"] == "predecessor"]
 
 
@@ -665,24 +675,15 @@ def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _P
     objective = proof.facts["objective"]
     issues = _chain_issues(objective, doc, members)
     if not issues:
-        from .ledger import map_of
-        from .governance import validate_delivery_record
-        map_state = map_of(state) if state is not None else None
-        criteria = [ob for ob in (map_state or {}).get("obligations") or [] if ob.get("kind") == "criterion"]
-        delivery = (map_state or {}).get("delivery")
-        try:
-            delivered = delivery is not None and bool(validate_delivery_record(delivery))
-        except PodError:
-            delivered = False
-        proved = (bool(criteria) and all(ob.get("state") in ("satisfied", "withdrawn") for ob in criteria)
-                  and any(ob.get("state") == "satisfied" for ob in criteria) and delivered)
+        proved, bound_by = _direct_source(objective, state, members)
         proof.facts["source"] = {"locator": None, "repository": None, "number": None,
                                  "proof": "recorded_criteria" if proved else None, "state": None,
-                                 "state_reason": None, "pod_lines": None, "body_sha256": None, "bound_by": objective}
+                                 "state_reason": None, "pod_lines": None, "body_sha256": None, "bound_by": bound_by}
         proof.facts["sources"] = []
         if not proved:
             proof.add("not_proved", "source_unproved", "A direct objective needs every criterion satisfied or "
-                      "withdrawn, at least one satisfied, and a verified delivery record.")
+                      "withdrawn, at least one satisfied, and a verified delivery record of its own or its "
+                      "completed claimed chain; each claim-only successor needs its own criteria satisfied.")
         return
     proof.facts["sources"] = []
     for issue, bound_by in issues:
@@ -710,6 +711,30 @@ def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _P
                       f"ticked and is {row['state'].lower()}" + (f" ({row.get('state_reason')})"
                                                                   if row.get("state_reason") else "") + ".")
     proof.facts["source"] = dict(proof.facts["sources"][0])
+
+
+def _direct_source(objective: str, state: dict | None, members: list[dict] | None) -> tuple[bool, str]:
+    """A direct source is a current record's satisfied criteria and R93 delivery. A claim-only successor with
+    satisfied criteria can use its completed predecessor's source, walking only the certified succession chain;
+    recovery peers supply no direct source. Delivery PRs are still proved separately over every member."""
+    from .ledger import map_of
+    from .governance import validate_delivery_record
+    rows = [(objective, state)] + [(row["objective"], row["raw"] if row["kind"] == "current" else None)
+                                  for row in members or [] if row["relation"] == "predecessor"]
+    for name, current in rows:
+        mapped = map_of(current) if current is not None else None
+        criteria = [ob for ob in (mapped or {}).get("obligations") or [] if ob.get("kind") == "criterion"]
+        if (not criteria or not all(ob.get("state") in ("satisfied", "withdrawn") for ob in criteria)
+                or not any(ob.get("state") == "satisfied" for ob in criteria)):
+            return False, name
+        delivery = (mapped or {}).get("delivery")
+        if delivery is not None:
+            try:
+                validate_delivery_record(delivery)
+            except PodError:
+                return False, name
+            return True, name
+    return False, objective
 
 
 def _lineage(project: Path, raw: dict) -> tuple[list[dict], tuple[str, str, str] | None]:

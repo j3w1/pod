@@ -763,6 +763,181 @@ class PreservedResultsTests(ClosureCase):
 class ChainTests(ClosureCase):
     """R146: chains and Run-sharing recovery objectives close together, each with its own entry."""
 
+    def direct_delivery(self):
+        """An all-direct source, verified through publication, merge outcome and the R93 checkpoint boundary."""
+        self.move()
+        super(ClosureCase, self).prepare()
+        self.op("governor-execute", action=self.action(kind="pr_update", effects=[]))
+        self.ci(self.candidate, "success")
+        for row in _read_journal(_record_path(self.project, "objective"))["actions"]:
+            if row.get("derived_from"):
+                self.assertEqual(self.op("governor-reconcile", record_id=row["record_id"])["status"], "PASS")
+        self.authorization = {**self.authorization, "scope": ["merge"], "target": "origin/target"}
+        decided = self.op("governor", action=self.action(kind="merge", target="origin/target"))
+        self.assertEqual(decided["decision"], "ALLOW", decided)
+        git(self.project, "checkout", "-q", "target")
+        git(self.project, "merge", "--no-ff", "-qm", "fixture merge", "main")
+        result = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/target", result)
+        self.remote.pulls[7] = {**MERGED, "merge_commit": result}
+        self.op("governor-outcome", record_id=decided["record_id"], outcome="PASS", provider={"merge_commit": result})
+        rows = self.stored()
+        rows[0].pop("executor", None)
+        rows[0].update(state="satisfied", evidence=[self.proof(rows[0]["id"])])
+        self.op("checkpoint", value=self.core(obligations=rows, delivery={"record": decided["record_id"]}))
+        self.lose()
+        control = prove(self.project, "objective")
+        self.assertEqual((control["status"], control["facts"]["source"]["proof"]),
+                         ("proved", "recorded_criteria"), control)
+
+    def direct_chain(self):
+        self.direct_delivery()
+        self.claimed_direct()
+        self.run_holders["run-s"] = "next"
+        self.terminals["next"] = "stale"
+
+    def test_a_direct_claim_only_successor_closes_on_its_predecessors_verified_delivery(self):
+        """F12: no issue binding or new delivery is needed by a satisfied claim-only successor."""
+        self.direct_chain()
+        for name in ("objective", "successor"):
+            self.assertIsNone(read(self.project, name)["checkpoint"].get("objective_source"))
+        self.assertIsNone(read(self.project, "successor")["checkpoint"].get("delivery"))
+        before = self.everything()
+        verdict = prove(self.project, "successor")
+        self.assertEqual(verdict["status"], "proved", verdict)
+        self.assertEqual((verdict["facts"]["source"]["proof"], verdict["facts"]["source"]["bound_by"],
+                          verdict["facts"]["sources"], [row["pr"] for row in verdict["facts"]["delivery"]]),
+                         ("recorded_criteria", "objective", [], [7]))
+        self.assertEqual(self.everything(), before)
+        result = self.sweep()[1]
+        self.assertEqual((self.swept(result)["outcome"], self.swept(result, "successor")["outcome"]),
+                         ("closed", "closed"))
+        self.assertEqual(self.closure()["source"], self.closure("successor")["source"])
+        self.assertEqual({name: data for name, data in self.everything().items() if name in before}, before)
+        self.assertEqual(_questions(result), [])
+        after = self.everything()
+        self.assertEqual(close_by_evidence(self.project, "successor", caller="sweep")["status"], "replayed")
+        self.assertEqual(self.everything(), after)
+
+    def direct_chain_refuses(self, code):
+        before = self.everything()
+        for verdict in (prove(self.project, "successor"),
+                        close_by_evidence(self.project, "successor", caller="sweep")):
+            self.assertEqual((verdict["status"], [row["code"] for row in verdict["conditions"]]),
+                             ("not_proved", [code]), verdict)
+            self.assertEqual(_questions(verdict), [])
+        self.assertEqual(self.everything(), before)
+
+    def test_an_all_direct_chain_requires_its_predecessors_criteria_and_delivery(self):
+        self.direct_chain()
+        path = objective_root(self.project, "objective") / "context.json"
+        original = path.read_bytes()
+        # Synthetic missing evidence controls, restored byte-for-byte; no frozen history is repaired by Pod.
+        for field in ("criteria", "delivery"):
+            with self.subTest(field=field):
+                def damage(raw):
+                    if field == "criteria":
+                        raw["checkpoint"]["obligations"][0].update(state="active", executor="coordinator")
+                    else:
+                        raw["checkpoint"].pop("delivery")
+                self.rewrite(damage=damage)
+                self.direct_chain_refuses("source_unproved")
+                path.write_bytes(original)
+        self.assertEqual(prove(self.project, "successor")["status"], "proved")
+
+    def test_an_all_direct_chain_requires_satisfied_successor_criteria_and_merged_prs(self):
+        self.direct_chain()
+        path = objective_root(self.project, "successor") / "context.json"
+        original = path.read_bytes()
+        self.rewrite("successor", damage=lambda raw: raw["checkpoint"]["obligations"][0].update(
+            state="active", executor="coordinator"))
+        self.direct_chain_refuses("source_unproved")
+        path.write_bytes(original)
+        merged = self.remote.pulls[7]
+        self.remote.pulls[7] = {"state": "OPEN"}
+        self.direct_chain_refuses("pr_not_merged")
+        self.remote.pulls[7] = merged
+        self.assertEqual(prove(self.project, "successor")["status"], "proved")
+        # Standalone direct objectives still need their own verified delivery, even with satisfied criteria.
+        self.other("standalone", "independent", run_id="standalone-run", source=False)
+        os.environ["ORCA_TERMINAL_HANDLE"] = "independent"
+        run("checkpoint", {"project": str(self.project), "objective": "standalone", "owner": "independent",
+                           "value": self.core(obligations=[self.criterion("satisfied", evidence=[self.proof("O1")])])})
+        self.run_holders["standalone-run"] = "independent"
+        self.terminals["independent"] = "stale"
+        before = self.everything()
+        standalone = close_by_evidence(self.project, "standalone", caller="sweep")
+        self.assertEqual(standalone["status"], "not_proved", standalone)
+        self.assertIn("source_unproved", [row["code"] for row in standalone["conditions"]])
+        self.assertEqual(self.everything(), before)
+
+    def repeated_owner_chain(self):
+        """F13: supported claims freeze two predecessors of one returning terminal on its original Run."""
+        self.shipped(unknown_start=False)
+        self.claimed_direct()
+        self.run_holders["run-s"] = "next"
+        self.terminals["next"] = "stale"
+        for name, owner, run_id, prior in (("middle", "owner", "run", "successor"),
+                                           ("tail", "third", "run-tail", "middle")):
+            self.other(name, owner, run_id=run_id)
+            self.run_holders[run_id] = owner
+            os.environ["ORCA_TERMINAL_HANDLE"] = owner
+            request = {"project": str(self.project), "objective": name, "owner": owner, "predecessor": prior}
+            facts = run("succession", request)["facts"]
+            result = run("succession", {**request, "decision": {
+                "provenance": "user_direct", "instruction": "Continue the delivered chain", **facts}})
+            self.assertEqual(result["status"], "claimed", result)
+            self.terminals[owner] = "stale"
+        self.assertEqual(prove(self.project, "tail")["status"], "proved")
+        self.terminals["owner"] = "live"
+        before = self.everything()
+        verdict = prove(self.project, "tail")
+        self.assertEqual(verdict["status"], "proved", verdict)
+        self.assertEqual(self.everything(), before)
+
+    def returning_owner_closes(self, *, retry):
+        from pod import evidence_closure
+        self.repeated_owner_chain()
+        if retry:
+            create = evidence_closure._create
+
+            def stop(root, content):
+                if content["relation"] == "predecessor":
+                    raise OSError("interrupted before the predecessor entries")
+                return create(root, content)
+            with patch("pod.evidence_closure._create", side_effect=stop):
+                with self.assertRaises(OSError):
+                    close_by_evidence(self.project, "tail", caller="sweep")
+        # A distinct open recovery still holds all entries, on the first closure and on interrupted retry.
+        self.other("same-owner-recovery", "owner", run_id="run", source=False)
+        before = self.everything()
+        held = close_by_evidence(self.project, "tail", caller="sweep")
+        self.assertEqual((held["status"], {row["code"] for row in held["conditions"]}),
+                         ("not_proved", {"run_held"}), held)
+        self.assertEqual(self.everything(), before)
+        self.rewrite("same-owner-recovery", closure=lambda raw: raw["checkpoint"].update(closure={
+            "seq": raw["checkpoint"]["seq"], "revision": raw["checkpoint"]["revision"], "report": {}}))
+        before = self.everything()
+        self.native_calls.clear()
+        result = close_by_evidence(self.project, "tail", caller="sweep")
+        self.assertEqual((result["status"], result["predecessors"]),
+                         ("chain_completed" if retry else "closed", ["middle", "successor", "objective"]))
+        self.assertIn(["terminal", "show", "--terminal", "owner", "--json"], self.native_calls)
+        for name in ("objective", "middle"):
+            self.assertEqual((self.closure(name)["runs"][0]["holder"], self.closure(name)["runs"][0]["generation"]),
+                             ("owner", 1))
+        self.assertEqual({name: data for name, data in self.everything().items() if name in before}, before)
+        after = self.everything()
+        self.assertEqual(close_by_evidence(self.project, "tail", caller="sweep")["status"], "replayed")
+        self.assertEqual(self.everything(), after)
+        self.assertEqual(_questions(result), [])
+
+    def test_a_returning_owner_does_not_hold_its_frozen_predecessors_open(self):
+        self.returning_owner_closes(retry=False)
+
+    def test_a_retry_settles_frozen_predecessors_of_the_same_returning_owner(self):
+        self.returning_owner_closes(retry=True)
+
     def test_a_claimed_predecessor_and_its_claim_only_successor_close_together(self):
         self.shipped(unknown_start=False)
         self.successor_bound()

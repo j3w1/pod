@@ -6371,7 +6371,8 @@
         "tests.test_evidence_closure.LostCoordinatorTests.test_a_run_held_by_a_live_open_recovery",
         "tests.test_evidence_closure.UndeliveredTests.test_a_run_reply_that_omits_its_coordinator_reads_unverified",
         "tests.test_evidence_closure.ChainTests.test_a_live_recovery_on_a_predecessors_run_holds_its_chain_and_a_settled_one_closes_it",
-        "tests.test_evidence_closure.ChainTests.test_an_original_owners_open_recovery_holds_the_predecessors_closure"
+        "tests.test_evidence_closure.ChainTests.test_an_original_owners_open_recovery_holds_the_predecessors_closure",
+        "tests.test_evidence_closure.ChainTests.test_a_returning_owner_does_not_hold_its_frozen_predecessors_open"
       ],
       "status": "NOT_RUN"
     },
@@ -6387,7 +6388,11 @@
         "tests.test_evidence_closure.DeliveryClosesTests.test_a_live_claim_only_successor_closes_on_its_chains_source",
         "tests.test_evidence_closure.ChainTests.test_a_recovery_of_a_predecessors_run_holds_a_bound_successors_chain_until_it_merges",
         "tests.test_evidence_closure.ChainTests.test_a_recovery_of_a_predecessors_run_holds_a_claim_only_successors_chain_until_it_merges",
-        "tests.test_evidence_closure.ChainTests.test_a_recovery_member_with_malformed_work_facts_holds_the_whole_chain"
+        "tests.test_evidence_closure.ChainTests.test_a_recovery_member_with_malformed_work_facts_holds_the_whole_chain",
+        "tests.test_evidence_closure.ChainTests.test_a_direct_claim_only_successor_closes_on_its_predecessors_verified_delivery",
+        "tests.test_evidence_closure.ChainTests.test_an_all_direct_chain_requires_its_predecessors_criteria_and_delivery",
+        "tests.test_evidence_closure.ChainTests.test_an_all_direct_chain_requires_satisfied_successor_criteria_and_merged_prs",
+        "tests.test_evidence_closure.ChainTests.test_a_returning_owner_does_not_hold_its_frozen_predecessors_open"
       ],
       "status": "NOT_RUN"
     },
@@ -6477,7 +6482,8 @@
         "tests.test_evidence_closure.ChainTests.test_a_sweep_after_an_interrupted_chain_closure_reports_the_entry_it_wrote_as_closed",
         "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together",
         "tests.test_evidence_closure.ChainTests.test_a_retry_proves_an_owed_predecessor_entry_fresh_before_it_writes_it",
-        "tests.test_evidence_closure.ChainTests.test_an_original_owners_open_recovery_holds_an_interrupted_closure_retry"
+        "tests.test_evidence_closure.ChainTests.test_an_original_owners_open_recovery_holds_an_interrupted_closure_retry",
+        "tests.test_evidence_closure.ChainTests.test_a_retry_settles_frozen_predecessors_of_the_same_returning_owner"
       ],
       "status": "NOT_RUN"
     }
