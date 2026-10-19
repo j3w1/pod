@@ -1330,7 +1330,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                 unchanged = require_governance_current(project, current_map, checkpoint=True)
             except PodError as exc:
                 # A closing write after its verified delivery keeps the trusted baseline instead of asking for a
-                # snapshot decision; a delivery named in the closing write itself never counts (R143).
+                # snapshot decision; a delivery named in the closing write itself never counts (R147).
                 closing = (proposed.get("close") is True and not prior_map.get("closure")
                            and verified_delivery is None)
                 if exc.code != "governance_changed" or not closing:
@@ -1540,7 +1540,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             # Named in the closing write's own answer, as its closure records them (C11).
             result["closure_preserved"] = [dict(row) for row in ctx["closure_preserved"]]
         if (ctx or {}).get("governance_kept"):
-            # What the closing write did not adopt, said in its own answer (R143).
+            # What the closing write did not adopt, said in its own answer (R147).
             result["governance_adoption"] = dict(ctx["governance_kept"])
         from .standing import projection as standing_projection
         from .governor import _read_journal, _record_path

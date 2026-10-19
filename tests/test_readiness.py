@@ -196,7 +196,7 @@ class LostCoordinatorTests(ReadinessCase):
         before = self.snapshot()
         peer = self.read_as("next")
         readiness = peer["readiness"]
-        # R141: undelivered work of a lost coordinator is a task for the project lead, never an owner question.
+        # R145: undelivered work of a lost coordinator is a task for the project lead, never an owner question.
         self.assertEqual((readiness["state"], readiness["acts_next"], readiness["coordinator_needed"]),
                          ("coordinator_lost", "lead", True))
         self.assertEqual((readiness["coordinator"]["liveness"], readiness["coordinator"]["code"]),
@@ -418,7 +418,7 @@ class CompatibilityTests(ReadinessCase):
             results.append((json.loads(json.dumps(result)), output.getvalue()))
         (expected, expected_text), (observed, observed_text) = results
         self.assertTrue(set(NEW_FIELDS) & set(observed) and not set(NEW_FIELDS) & set(expected))
-        # `changed`: earlier fields a later requirement deliberately revised (R141's lead task); compared elsewhere.
+        # `changed`: earlier fields a later requirement deliberately revised (R145's lead task); compared elsewhere.
         self.assertEqual({key: value for key, value in observed.items()
                           if key not in NEW_FIELDS + DECISION_FIELDS + tuple(changed)},
                          {key: value for key, value in expected.items() if key not in changed})
@@ -446,7 +446,7 @@ class CompatibilityTests(ReadinessCase):
 
     def test_a_lost_coordinator_and_its_handoff_fields(self):
         self.predecessor()
-        # R141 (PES R2): a lost coordinator's undelivered work is a task for the project lead, never a question
+        # R145 (PES R2): a lost coordinator's undelivered work is a task for the project lead, never a question
         # for the owner, so status's own next action changed; the owner_handoff block keeps every R105 fact.
         observed = self.compare("next", changed=("next_safe_action", "next_action"))
         self.assertEqual((observed["readiness"]["state"], observed["owner_handoff"]["status"]),

@@ -96,7 +96,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
                    delivered: bool = False) -> dict:
     """Every recorded objective of one repository, or of one worktree of it.
 
-    `delivered` adds each open objective's read-only delivery proof (R144), which reads Orca and GitHub; the plain
+    `delivered` adds each open objective's read-only delivery proof (R148), which reads Orca and GitHub; the plain
     list stays record-only."""
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, record_name, state_root
@@ -160,7 +160,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
         closure = closure_block(Path(entry.path))
         phase = _phase(raw)
         if closure is not None and phase == "open":
-            phase = "closed"  # Closed by evidence, whatever the record's schema (R141, R142).
+            phase = "closed"  # Closed by evidence, whatever the record's schema (R145, R146).
         row = {"objective": name, "record": entry.name, "phase": phase, "schema": _schema(raw),
                **facts}
         from .succession import links

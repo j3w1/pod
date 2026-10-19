@@ -241,7 +241,7 @@ def chain_state(project: Path, state: dict) -> dict:
             return {"state": "unknown", "objective": name, "reason": "successor chain exceeds eight objectives"}
     closed = bool(((current.get("checkpoint") or {}).get("closure")))
     if not closed and name is not None:
-        # A successor closed by evidence is a closed chain end (R142).
+        # A successor closed by evidence is a closed chain end (R146).
         from .evidence_closure import present
         from .ledger import objective_root
         closed = present(objective_root(project, name))
@@ -651,7 +651,7 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
     """Detect without a decision; claim with an exact one. Locks are taken in path order.
 
     Detection of a delivered predecessor names the evidence closure as its next action; that read-only proof runs
-    after the locks are released, as it reads Orca and GitHub (R143)."""
+    after the locks are released, as it reads Orca and GitHub (R147)."""
     result = _succession(project, objective, owner=owner, predecessor=predecessor, decision=decision, port=port)
     return _delivered_route(project, predecessor, result, port=port) if decision is None else result
 
@@ -690,7 +690,7 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
                            {"next_action": "checkpoint the successor objective, then rerun internal succession"})
         require_authority(project, objective, owner=owner, state=state, native_port=port, claim=predecessor)
         from .evidence_closure import refuse_closed
-        refuse_closed(other.parent)  # The predecessor's record accepts no claim once closed by evidence (R141).
+        refuse_closed(other.parent)  # The predecessor's record accepts no claim once closed by evidence (R145).
         try:
             prior = _read(other)
         except PodError as exc:
@@ -805,7 +805,7 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
 
 def _delivered_route(project: Path, predecessor: str, verdict: dict, *, port) -> dict:
     """A claim stays available with its own decision, but a delivered predecessor needs none: its next action points
-    to the evidence closure instead of asking the owner (R143)."""
+    to the evidence closure instead of asking the owner (R147)."""
     if verdict["status"] != "claim_available":
         return verdict
     from .evidence_closure import SWEEP_ACTION, prove

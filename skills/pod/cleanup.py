@@ -240,7 +240,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     """Observe only resources named by this objective; return guarded argv, never execute it.
 
     An older record closed by evidence is read through the evidence path's documented fields before the validating
-    reader (R94, R142); what it does not document reads as unknown, so its resources stay protected. An older record
+    reader (R94, R146); what it does not document reads as unknown, so its resources stay protected. An older record
     without that closure keeps the ordinary reader's refusal."""
     from .evidence_closure import closed_older_state
     from .operations import OrcaPort
@@ -442,7 +442,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     from .standing import cleanup_projection
     from .evidence_closure import present
     from .ledger import objective_root
-    # An objective closed by evidence reads as closed, like one its coordinator closed (R141).
+    # An objective closed by evidence reads as closed, like one its coordinator closed (R145).
     basis = ("evidence" if present(objective_root(project, objective))
              else "coordinator" if checkpoint.get("closure") else None)
     notes = ["Read-only plan; owner consent precedes commands.",

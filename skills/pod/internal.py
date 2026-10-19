@@ -685,7 +685,7 @@ _FINALIZATION_REFUSALS = {"objective_closed", "pod_ticks_due", "outcome_evidence
 def _finalization_refusal(operation: str, exc: PodError) -> bool:
     """A refusal on the path to finishing names what remains, in recording order (R2)."""
     if isinstance(exc.detail, dict) and exc.detail.get("basis") == "evidence":
-        return False  # Closed by evidence: nothing remains to record, and the refusal says so (R141).
+        return False  # Closed by evidence: nothing remains to record, and the refusal says so (R145).
     detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else None
     return (operation in _FINALIZATION_OPERATIONS
             and (exc.code in _FINALIZATION_REFUSALS or detail == "closure_unfinished"

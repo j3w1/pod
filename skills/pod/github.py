@@ -38,7 +38,7 @@ PR_FIELDS = "number,url,headRefOid,state,isDraft"
 PR_READ_FIELDS = "number,url,headRefOid,state,mergeCommit,mergedAt"
 PR_LIST_LIMIT = 10
 ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
-# What a delivery proof reads (R141): an issue's closing reason, and one pull request by its number.
+# What a delivery proof reads (R145): an issue's closing reason, and one pull request by its number.
 ISSUE_STATE_FIELDS = "number,url,state,stateReason,body"
 PR_VIEW_FIELDS = "number,url,state,mergedAt,mergeCommit"
 PR_COMMITS_FIELDS = "number,headRefOid,commits"
@@ -637,7 +637,7 @@ class GhPort:
         return rows
 
     def issue_state(self, *, repository: str, number: int) -> dict:
-        """One issue's state, closing reason and body, read only: what a delivery proof checks (R141)."""
+        """One issue's state, closing reason and body, read only: what a delivery proof checks (R145)."""
         rows = self._gh_json(["issue", "view", str(number), "--repo", repository, "--json", ISSUE_STATE_FIELDS])
         try:
             returned = parse_issue_locator(str(rows.get("url", ""))) if isinstance(rows, dict) else None
@@ -652,7 +652,7 @@ class GhPort:
                 "body": rows["body"]}
 
     def pr_view(self, *, repository: str, number: int) -> dict:
-        """One pull request by its number, read only: whether a delivery pull request merged (R141)."""
+        """One pull request by its number, read only: whether a delivery pull request merged (R145)."""
         row = self._gh_json(["pr", "view", str(number), "--repo", repository, "--json", PR_VIEW_FIELDS])
         if (not isinstance(row, dict) or row.get("number") != number
                 or row.get("state") not in ("OPEN", "CLOSED", "MERGED")):

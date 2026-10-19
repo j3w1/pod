@@ -573,7 +573,7 @@ def unchanged_governance(project: Path, map_state: dict) -> tuple[dict, dict] | 
 
 
 def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
-    """The closing checkpoint's narrow exemption (R143): after a verified delivery (R93) the target has since moved
+    """The closing checkpoint's narrow exemption (R147): after a verified delivery (R93) the target has since moved
     past, closure keeps the trusted baseline and adopts nothing, so it needs no governance refresh or owner snapshot
     decision. Returns what it kept, which the closing write reports; None when the exemption does not apply."""
     governance = map_state.get("governance") or {}

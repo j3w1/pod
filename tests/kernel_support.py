@@ -114,7 +114,7 @@ class GovernorFakePort:
         self.lost = set(lost)
         self.rejected = set(rejected)
         self.delay = delay
-        # Issues by (repository, number) and pull requests by number, as a delivery proof reads them (R141).
+        # Issues by (repository, number) and pull requests by number, as a delivery proof reads them (R145).
         self.issues = {}
         self.pulls = {}
         self.unreadable = set()  # "issue" or "pr": that read answers remote_read_failed.

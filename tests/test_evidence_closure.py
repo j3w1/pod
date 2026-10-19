@@ -1,4 +1,4 @@
-"""R140-R144: delivered objectives always close, by evidence when the coordinator is gone; no owner decision."""
+"""R144-R148: delivered objectives always close, by evidence when the coordinator is gone; no owner decision."""
 from contextlib import redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -336,7 +336,7 @@ class ClosureCase(RetirementCase):
 
 
 class DeliveryClosesTests(unittest.TestCase):
-    """PoD#1 (R140): a delivered objective names its own coordinator until closure, and closing needs no owner."""
+    """PoD#1 (R144): a delivered objective names its own coordinator until closure, and closing needs no owner."""
 
     def setUp(self):
         reads = repository_reads()
@@ -565,7 +565,7 @@ LOSSES = {
 
 
 class LostCoordinatorTests(GroupedTable):
-    """PoD#2 (R141, R142): a lost coordinator's delivered objective closes by evidence, with no decision."""
+    """PoD#2 (R145, R146): a lost coordinator's delivered objective closes by evidence, with no decision."""
     GROUPS = {"test_a_closed_tab": ["tab_closed"], "test_an_exited_coordinator": ["exited"],
               "test_a_signaled_coordinator": ["signaled"], "test_a_restart_with_a_stale_handle": ["restart_stale"],
               "test_a_restart_with_a_gone_handle": ["restart_gone"],
@@ -626,7 +626,7 @@ class LostCoordinatorTests(GroupedTable):
 
 
 class UndeliveredTests(ClosureCase):
-    """R141: undelivered or live work is never closed; it stays open as a task for the project lead."""
+    """R145: undelivered or live work is never closed; it stays open as a task for the project lead."""
 
     def stays_open(self, condition, *, status="not_proved", lost=True):
         before = self.everything()
@@ -651,7 +651,7 @@ class UndeliveredTests(ClosureCase):
             self.assertTrue(state["summary"].startswith("Coordinator lost; delivery not proved ("), state["summary"])
             self.assertIn("a task for the project lead", state["summary"])
             self.assertEqual(_questions({key: value for key, value in shown.items() if key != "owner_handoff"}), [])
-            # The lead's task, never an owner question: status's own next action never asks the owner (R141,
+            # The lead's task, never an owner question: status's own next action never asks the owner (R145,
             # PES R2); the owner_handoff block keeps its R105 facts as an optional route.
             for action in (shown["next_safe_action"], shown["next_action"]):
                 self.assertNotIn("Ask the Owner", action)
@@ -720,7 +720,7 @@ class UndeliveredTests(ClosureCase):
 
 
 class PreservedResultsTests(ClosureCase):
-    """R141: pending results are read back where the provider answers; the rest stay UNKNOWN, never stamped."""
+    """R145: pending results are read back where the provider answers; the rest stay UNKNOWN, never stamped."""
 
     def test_pending_rows_are_read_back_and_the_rest_preserved_without_writing(self):
         self.shipped()
@@ -761,7 +761,7 @@ class PreservedResultsTests(ClosureCase):
 
 
 class ChainTests(ClosureCase):
-    """R142: chains and Run-sharing recovery objectives close together, each with its own entry."""
+    """R146: chains and Run-sharing recovery objectives close together, each with its own entry."""
 
     def test_a_claimed_predecessor_and_its_claim_only_successor_close_together(self):
         self.shipped(unknown_start=False)
@@ -956,7 +956,7 @@ class ChainTests(ClosureCase):
 
 
 class SweepTests(ClosureCase):
-    """R144: one idempotent sweep closes every provably delivered open objective, touching nothing else."""
+    """R148: one idempotent sweep closes every provably delivered open objective, touching nothing else."""
 
     def second_repository(self):
         """A second repository with one delivered objective of its own."""
@@ -1217,7 +1217,7 @@ class SweepTests(ClosureCase):
 
 
 class RetirementProofTests(ClosureCase):
-    """R143: delivered history needs no owner decision; a decision stays optional and works as before."""
+    """R147: delivered history needs no owner decision; a decision stays optional and works as before."""
 
     def test_detection_names_a_delivered_objective_outside_the_owner_question(self):
         self.shipped()

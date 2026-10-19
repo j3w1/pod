@@ -310,7 +310,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             from .evidence_closure import status_fields, tail_closed
             name = ((state or {}).get("checkpoint") or {}).get("objective")
             if record_root is not None and isinstance(name, str) and tail_closed(record_root):
-                # Closed by evidence: read from its closure record, never written or converted (R141, R142).
+                # Closed by evidence: read from its closure record, never written or converted (R145, R146).
                 result.update(run=run, **status_fields(project, name, record_root))
                 return result
             superseded = superseded_for_run(run) if context_root is None else []
@@ -571,7 +571,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         recovery = (result.get("readiness") or {}).get("recovery") or {}
         if recovery.get("route") == "evidence_closure":
             # A delivered objective of a lost coordinator closes by evidence; nothing here asks the owner, and an
-            # owner handoff stays optional (R141, R143).
+            # owner handoff stays optional (R145, R147).
             from .evidence_closure import SWEEP_ACTION
             action = SWEEP_ACTION[0].upper() + SWEEP_ACTION[1:]
             if isinstance(result.get("owner_handoff"), dict):
@@ -580,7 +580,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                            "next_action": action + "; a handoff stays optional and moves authority only."}
             result.update(next_safe_action=action, next_action=action)
         elif (result.get("readiness") or {}).get("state") == "coordinator_lost":
-            # Lost and not proved delivered: a task for the project lead, never a question for the owner (R141).
+            # Lost and not proved delivered: a task for the project lead, never a question for the owner (R145).
             # The owner_handoff block keeps its R105 facts unchanged: handoff and successor claim stay optional
             # recovery routes the lead may take, each with its own recorded decision.
             evidence = next((row for row in recovery.get("routes") or [] if row.get("route") == "evidence_closure"),

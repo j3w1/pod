@@ -918,7 +918,7 @@ _RECORD_REFUSALS = ("objective_unknown", "objective_continued", "objective_conti
 
 def _proof_requested(value: object) -> list[str]:
     """The objectives a delivery proof closes: each named once, with an optional release list that evidence closure
-    does not need, since a closed objective's recorded worktrees are all freed (R143)."""
+    does not need, since a closed objective's recorded worktrees are all freed (R147)."""
     if not isinstance(value, list) or not 0 < len(value) <= MAX_OBJECTIVES:
         raise PodError("invalid_request", f"objectives is a list of 1 to {MAX_OBJECTIVES} entries")
     names = []
@@ -936,7 +936,7 @@ def _proof_requested(value: object) -> list[str]:
 
 
 def _close_proved(project: Path, objectives: object, *, port=None) -> dict:
-    """`proof: delivery` in place of a decision (R143): each proved objective closes by evidence, each other is
+    """`proof: delivery` in place of a decision (R147): each proved objective closes by evidence, each other is
     refused with its conditions, a task for the project lead. Nothing asks the owner."""
     from .evidence_closure import LEAD_ACTION, close_by_evidence
     from .github import repository_context
@@ -957,7 +957,7 @@ def _close_proved(project: Path, objectives: object, *, port=None) -> dict:
             row.update(condition=verdict["conditions"][0]["code"] if verdict.get("conditions") else verdict["status"],
                        party="lead", next_action=LEAD_ACTION)
         else:
-            # `predecessors` names each predecessor entry this call wrote (R142); a replay writes none.
+            # `predecessors` names each predecessor entry this call wrote (R146); a replay writes none.
             row.update(closure=verdict.get("closure"), predecessors=verdict.get("predecessors", []),
                        next_action=f"Read it with pod status --objective {name}; it is closed by evidence.")
         results.append(row)
@@ -967,7 +967,7 @@ def _close_proved(project: Path, objectives: object, *, port=None) -> dict:
 
 
 def _delivered(project: Path, verdict: dict, *, port) -> dict:
-    """Detection's delivered objective leaves the owner question: delivery proved closes it by evidence (R143). Its
+    """Detection's delivered objective leaves the owner question: delivery proved closes it by evidence (R147). Its
     retirement facts stay complete, so an optional owner decision still binds them exactly as before."""
     from .evidence_closure import prove
     proof = prove(project, verdict["objective"], port=port, readback=False)
@@ -984,7 +984,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
     """Detect without a decision; retire with an exact one. Each objective succeeds or refuses alone.
 
     Detection names a delivered objective `delivered`, outside the owner question; `proof: delivery` closes each
-    proved objective by evidence instead of retiring it (R143). An owner decision keeps working exactly as before.
+    proved objective by evidence instead of retiring it (R147). An owner decision keeps working exactly as before.
     """
     from .github import repository_context
     from .ledger import _lock, _path, _read, _write_retirement, record_name
@@ -1029,7 +1029,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                   host=_Host(project))
                 if (decision is None and verdict["status"] in ("eligible", "refused")
                         and verdict["condition"] not in _RECORD_REFUSALS):
-                    # A delivered objective closes by evidence instead, outside the owner question (R143). The
+                    # A delivered objective closes by evidence instead, outside the owner question (R147). The
                     # record checks above still precede every native read.
                     verdict = _delivered(project, verdict, port=port)
             verdict["record"] = record_name(project, context, name)

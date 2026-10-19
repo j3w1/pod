@@ -1,4 +1,4 @@
-"""Closure by evidence: delivered objectives always close, whatever happened to their coordinator (R140-R144).
+"""Closure by evidence: delivered objectives always close, whatever happened to their coordinator (R144-R148).
 
 One read-only delivery proof, one immutable end-of-life record written beside the objective's record (never inside
 it), and one sweep that applies it to every open objective of a repository. The proof reuses R110's loss proof and
@@ -115,7 +115,7 @@ def tail_closed(root: Path) -> bool:
 
 
 def refuse_closed(root: Path) -> None:
-    """Every write of an objective closed by evidence refuses, its own coordinator's included (R141, C4)."""
+    """Every write of an objective closed by evidence refuses, its own coordinator's included (R145, C4)."""
     presence = _presence(root)
     if presence == "absent":
         return
@@ -533,7 +533,7 @@ def _coordinator(doc: dict, proof: _Proof):
 
 
 def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records) -> dict | None:
-    """Each recorded Run: who holds it now (R142 rebinding) and its complete worker list (R112)."""
+    """Each recorded Run: who holds it now (R146 rebinding) and its complete worker list (R112)."""
     from .orca import run_show, terminal_identity, worker_rows
     from .retirement import fleet_dispatches
     runs, dispatches, unread = [], {}, False
@@ -606,7 +606,7 @@ def _work(doc: dict, dispatches: dict | None, proof: _Proof, *, port) -> None:
 
 def _chain_issues(objective: str, doc: dict, members: list[dict] | None) -> list[tuple[dict, str]]:
     """Every distinct issue source the delivery chain binds, with the member that binds it: the objective's own
-    first, then each predecessor's along the chain (R142). Recovery members bind the objective's own issue."""
+    first, then each predecessor's along the chain (R146). Recovery members bind the objective's own issue."""
     rows = [(doc["issue"], objective)] + [(row["doc"]["issue"], row["objective"]) for row in members or []
                                           if row["relation"] != "objective"]
     found, seen = [], set()
@@ -618,8 +618,8 @@ def _chain_issues(objective: str, doc: dict, members: list[dict] | None) -> list
 
 
 def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _Proof, remote: _Remote) -> None:
-    """PoDs all ticked, or the issue closed as completed, for every issue source the delivery chain binds (R141,
-    R142); a claim-only successor without its own binding is proved by its chain's. A standalone objective with no
+    """PoDs all ticked, or the issue closed as completed, for every issue source the delivery chain binds (R145,
+    R146); a claim-only successor without its own binding is proved by its chain's. A standalone objective with no
     issue source anywhere in its chain is proved by its own recorded criteria and verified delivery record."""
     objective = proof.facts["objective"]
     issues = _chain_issues(objective, doc, members)
@@ -675,7 +675,7 @@ def _lineage(project: Path, raw: dict) -> tuple[list[dict], tuple[str, str, str]
     """A chain tail's continued predecessors, nearest first, and why the walk could not reach the chain's head.
 
     Each step follows a completed claim (`continues` without a pending state) whose predecessor names this record
-    back as its successor, at most eight steps (R142). Every predecessor is classified before it is used: a record
+    back as its successor, at most eight steps (R146). Every predecessor is classified before it is used: a record
     on a schema Pod does not know, or one that does not validate under its own, ends the walk. Returns the rows read
     (`objective`, `root`, `raw`, `kind`, `doc`) and None when the walk reached a record that continues nothing, or
     `(status, code, message)` naming what kept the chain from being read whole: a bound crossed, a loop, a link the
@@ -731,7 +731,7 @@ def _lineage(project: Path, raw: dict) -> tuple[list[dict], tuple[str, str, str]
 
 def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, proof: _Proof,
              records) -> list[dict] | None:
-    """The delivery chain: the objective, its continued predecessors (R142's walk, at most eight) and this
+    """The delivery chain: the objective, its continued predecessors (R146's walk, at most eight) and this
     repository's records that share a recorded Run with it and bind the same source issue. Every member is
     classified before it is used; a chain Pod cannot read whole adds the condition that names why."""
     from .ledger import objective_root
@@ -796,7 +796,7 @@ def _journal_prs(root: Path) -> list[int] | None:
 
 
 def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: _Remote) -> None:
-    """Every delivery pull request any member records, each merged as GitHub reads it now (R141)."""
+    """Every delivery pull request any member records, each merged as GitHub reads it now (R145)."""
     proof.facts["delivery"] = []
     if members is None:
         return
@@ -955,7 +955,7 @@ def closure_preservation(project: Path, objective: str, state: dict, journal: di
             if not scan:
                 scan["found"], scan["unreadable"] = _scan(project)
             return scan["found"], scan["unreadable"]
-        # The same source and pull-request proof as R141's, over the same chain (C2.6, C2.7).
+        # The same source and pull-request proof as R145's, over the same chain (C2.6, C2.7).
         members = _members(project, objective, state, "current", doc, proof, records)
         _source(members, doc, state, proof, remote)
         _delivery(project, members, proof, remote)
@@ -1049,7 +1049,7 @@ def _create(root: Path, content: dict) -> bool:
 
 def _predecessor_content(project: Path, row: dict, tail: dict, *, caller: str, at: str) -> dict:
     """A continued predecessor's own entry, naming the tail closure; its record stays frozen as R110 left it. The
-    row was classified by R142's walk, so its record class is the one that walk read, never assumed."""
+    row was classified by R146's walk, so its record class is the one that walk read, never assumed."""
     raw = row["raw"]
     try:
         _, data = _read_record(row["root"])
@@ -1129,7 +1129,7 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
 
 def _complete_chain(project: Path, chain: list[dict], tail: dict, *, caller: str) -> list[str]:
     """Write each missing entry of a predecessor the tail closure names; never one it does not name, and never one
-    for a record R142's walk did not classify as supported."""
+    for a record R146's walk did not classify as supported."""
     named = {row.get("objective") for row in (tail["chain"] if isinstance(tail["chain"], list) else [])
              if isinstance(row, dict) and row.get("relation") == "predecessor"}
     written = []
@@ -1233,9 +1233,9 @@ def status_fields(project: Path, objective: str, root: Path) -> dict:
 
 
 def closed_older_state(project: Path, objective: str) -> dict | None:
-    """The cleanup plan's read of an older record closed by evidence (R94, R142), before the validating reader.
+    """The cleanup plan's read of an older record closed by evidence (R94, R146), before the validating reader.
 
-    Only R142's documented fields are read, through this module's bounded raw read; the record is never validated
+    Only R146's documented fields are read, through this module's bounded raw read; the record is never validated
     as current, converted or written. Fields the plan uses that older records do not document (the governance
     target, a verified delivery, recovery placements, terminal bindings) read as absent, so every resource whose
     safety depends on them stays protected. A continuation link of any shape is kept, so a successor's locations
@@ -1292,7 +1292,7 @@ def render(result: dict) -> None:
     print(f"Blocker: {result['blocker']}; next: {result['next_safe_action']}")
 
 
-# --------------------------------------------------------------------------- sweep (R144)
+# --------------------------------------------------------------------------- sweep (R148)
 
 
 def _outcome(objective: str, verdict: dict) -> dict:

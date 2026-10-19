@@ -350,7 +350,7 @@ def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: st
     # successor, whatever writer left that claim (R118).
     refuse_continued(state, claim=claim, reserved=reserved)
     from .evidence_closure import refuse_objective
-    refuse_objective(project, objective)  # Closed by evidence: no coordinator, owner or not, writes it (R141).
+    refuse_objective(project, objective)  # Closed by evidence: no coordinator, owner or not, writes it (R145).
     if reserved:
         refuse_incomplete(project, objective, state, claim=claim)
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)

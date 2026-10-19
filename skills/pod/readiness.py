@@ -95,7 +95,7 @@ def base(state: dict, journal: dict, *, outstanding: set[str]) -> dict:
             block["external"] = gates
     elif delivered:
         block["state"] = "finalizing"
-        # Delivered with only closure left: the coordinator records it now, whoever a recorded wait names (R140).
+        # Delivered with only closure left: the coordinator records it now, whoever a recorded wait names (R144).
     elif waiting:
         block.update(state="waiting", acts_next=waiting[0]["party"] or "unknown")
     elif outstanding and not any(ob["state"] == "active" and ob.get("executor") == "coordinator"
@@ -187,7 +187,7 @@ def _handoff_route(state: dict, facts: dict) -> dict:
 
 
 def _evidence_route(project: Path | None, objective: str, port) -> dict:
-    """Closure by evidence (R141): first and needing no owner decision. Its proof reads Orca and GitHub."""
+    """Closure by evidence (R145): first and needing no owner decision. Its proof reads Orca and GitHub."""
     route = {"route": "evidence_closure"}
     if project is None:
         return {**route, "status": "unverified", "condition": "record_elsewhere",
@@ -369,7 +369,7 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
                          recovery={"route": next((row["route"] for row in routes if row["status"] == "available"),
                                                  None), "routes": routes})
             if routes[0]["status"] == "available":
-                # Delivered: the optional claim's next action points to the evidence closure, not the owner (R143).
+                # Delivered: the optional claim's next action points to the evidence closure, not the owner (R147).
                 from .evidence_closure import SWEEP_ACTION
                 out["successor_claim"] = {**claim, "next_action": SWEEP_ACTION[0].upper() + SWEEP_ACTION[1:]
                                           + "; a claim stays optional and moves authority only."}
