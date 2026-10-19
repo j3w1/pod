@@ -563,6 +563,13 @@ class UndeliveredTests(ClosureCase):
             self.assertTrue(state["summary"].startswith("Coordinator lost; delivery not proved ("), state["summary"])
             self.assertIn("a task for the project lead", state["summary"])
             self.assertEqual(_questions({key: value for key, value in shown.items() if key != "owner_handoff"}), [])
+            # The lead's task, never an owner question: status's own next action never asks the owner (R141,
+            # PES R2); the owner_handoff block keeps its R105 facts as an optional route.
+            for action in (shown["next_safe_action"], shown["next_action"]):
+                self.assertNotIn("Ask the Owner", action)
+            self.assertTrue(shown["next_safe_action"].startswith("Coordinator lost; delivery not proved ("),
+                            shown["next_safe_action"])
+            self.assertIn("a task for the project lead", shown["next_safe_action"])
             self.assertEqual(self.everything(), before)
         return verdict
 

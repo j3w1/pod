@@ -579,6 +579,18 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                               if key != "question"},
                                            "next_action": action + "; a handoff stays optional and moves authority only."}
             result.update(next_safe_action=action, next_action=action)
+        elif (result.get("readiness") or {}).get("state") == "coordinator_lost":
+            # Lost and not proved delivered: a task for the project lead, never a question for the owner (R141).
+            # The owner_handoff block keeps its R105 facts unchanged: handoff and successor claim stay optional
+            # recovery routes the lead may take, each with its own recorded decision.
+            evidence = next((row for row in recovery.get("routes") or [] if row.get("route") == "evidence_closure"),
+                            None)
+            code = (evidence or {}).get("condition") or "unverified"
+            action = (f"Coordinator lost; delivery not proved ({code}): a task for the project lead. Resolve the "
+                      "named conditions, then pod sweep closes it by evidence; continuing the work through a successor "
+                      "claim or an owner handoff stays optional, each with its own recorded decision; never run "
+                      "orca orchestration run-use by hand.")
+            result.update(next_safe_action=action, next_action=action)
     if state is not None and record_root is not None:
         from .history import capacity
         try:

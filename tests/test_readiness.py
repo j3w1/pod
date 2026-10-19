@@ -398,7 +398,7 @@ class ProjectionTests(unittest.TestCase):
 class CompatibilityTests(ReadinessCase):
     """Every prior field keeps its exact value; readiness and R120 inventories are additive."""
 
-    def compare(self, caller, objective="objective"):
+    def compare(self, caller, objective="objective", changed=()):
         if caller is None:
             os.environ.pop("ORCA_TERMINAL_HANDLE", None)
         else:
@@ -418,7 +418,17 @@ class CompatibilityTests(ReadinessCase):
             results.append((json.loads(json.dumps(result)), output.getvalue()))
         (expected, expected_text), (observed, observed_text) = results
         self.assertTrue(set(NEW_FIELDS) & set(observed) and not set(NEW_FIELDS) & set(expected))
-        self.assertEqual({key: value for key, value in observed.items() if key not in NEW_FIELDS + DECISION_FIELDS}, expected)
+        # `changed`: earlier fields a later requirement deliberately revised (R141's lead task); compared elsewhere.
+        self.assertEqual({key: value for key, value in observed.items()
+                          if key not in NEW_FIELDS + DECISION_FIELDS + tuple(changed)},
+                         {key: value for key, value in expected.items() if key not in changed})
+        if changed:
+            # The revised next action shows in the text's Blocker and Next action lines only.
+            revised = ("Blocker: ", "Next action: ")
+            expected_text = "".join(line for line in expected_text.splitlines(keepends=True)
+                                    if not line.startswith(revised))
+            observed_text = "".join(line for line in observed_text.splitlines(keepends=True)
+                                    if not line.startswith(revised))
         lines = observed_text.splitlines(keepends=True)
         self.assertEqual(lines[0].rstrip("\n"), observed["readiness"]["summary"])
         added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ", "PoD#", "Mode: ")
@@ -436,10 +446,18 @@ class CompatibilityTests(ReadinessCase):
 
     def test_a_lost_coordinator_and_its_handoff_fields(self):
         self.predecessor()
-        observed = self.compare("next")
+        # R141 (PES R2): a lost coordinator's undelivered work is a task for the project lead, never a question
+        # for the owner, so status's own next action changed; the owner_handoff block keeps every R105 fact.
+        observed = self.compare("next", changed=("next_safe_action", "next_action"))
         self.assertEqual((observed["readiness"]["state"], observed["owner_handoff"]["status"]),
                          ("coordinator_lost", "handoff_available"))
-        self.assertEqual(self.compare(None)["owner_handoff"]["condition"], "caller_not_live")
+        for action in (observed["next_safe_action"], observed["next_action"]):
+            self.assertTrue(action.startswith("Coordinator lost; delivery not proved ("), action)
+            self.assertNotIn("Ask the Owner", action)
+            self.assertIn("run-use by hand", action)
+        self.assertIn("Ask the Owner", observed["owner_handoff"]["next_action"], "the optional route keeps its facts")
+        self.assertEqual(self.compare(None, changed=("next_safe_action", "next_action"))["owner_handoff"]["condition"],
+                         "caller_not_live")
 
     def test_a_closed_objective(self):
         self.prepare()
