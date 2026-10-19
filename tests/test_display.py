@@ -82,6 +82,8 @@ class DisplayNameTests(unittest.TestCase):
         self.assertEqual(display.job({"purpose": "parser-repair source retirement"}, "implementer", "Parser repair"),
                          "Source retirement")
         self.assertEqual(display.job({"purpose": "follow up cleanup docs"}, "implementer", "Follow-up cleanup"), "Docs")
+        # A task word hyphen-joined to another word is a different word; compounds are never cut apart.
+        self.assertEqual(display.job({"purpose": "viewer-only tests"}, "implementer", "Viewer"), "Viewer-only tests")
         rng = random.Random(8383)
         alphabet = "abcdefghijklmnopqrstuvwxyz"
         for _ in range(256):

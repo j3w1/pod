@@ -33,9 +33,9 @@ repository, and never sets its status, comment or parent.
 **The checkpoint's `display` record.** At intake record `task`: the task in plain
 words, such as `Copilot retirement`, up to 48 characters. Use ASCII letters only,
 with inner hyphens or apostrophes; ordinary words such as Status or Model are
-fine. Digits, paths, underscores, ids and a run of seven or more of the letters
-a to f (which reads as a hash) refuse `invalid_display_name`, which names the
-refused tokens. List in `continued` the admission ids of workers
+fine. Digits, paths, underscores, ids and a word part made only of seven or more
+of the letters a to f (it reads as a hash) refuse `invalid_display_name`, which
+names the refused tokens. List in `continued` the admission ids of workers
 you resumed after a relaunch, and `coordinator` when this tab resumed the objective.
 The record stays until a checkpoint supplies a new one, which replaces it whole,
 so restate every field you keep.

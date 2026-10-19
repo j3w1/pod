@@ -56,7 +56,7 @@ Copilot retirement (#172)
       Follow-up reviewer · round 2
 ```
 
-- **Task worktree.** It keeps the name you or your host gave it. If it has none, Pod names it after the task and its issue.
+- **Task worktree.** It keeps the name you or your host gave it. If it has none and it is not the main checkout, Pod names it after the task and its issue.
 - **Coordinator tab.** Your conversation's tab is `Coordinator`, or `Coordinator · <task>` when it runs elsewhere, such as on a main checkout.
 - **Worker worktrees.** A worker that gets its own new, unnamed worktree has it named by its job, linked to the task worktree and the issue, and marked in progress, in review or completed. A worktree your host already named keeps its name and metadata.
 - **Worker tabs.** Tabs carry only a role: Implementer, Investigator, Reviewer, Follow-up reviewer (which reviews only the changes since the previous round) or Fixer. A round number appears once there is more than one review round, and `(continued)` marks resumed work. A worker sharing the task worktree adds its job, such as `Implementer · Source retirement`. Pod names worker tabs only through Orca's metadata and never types into them, so a finished worker can still be released or reused.
