@@ -16,6 +16,7 @@ This installs the Pod skill for Codex and Claude Code, a user-local `pod` comman
 
 - [How it works](#how-it-works)
 - [The basic workflow](#the-basic-workflow)
+- [How Pod looks in Orca](#how-pod-looks-in-orca)
 - [Plan, direct work, and continuation](#plan-direct-work-and-continuation)
 - [Models and the terminal view](#models-and-the-terminal-view)
 - [Delivery and cleanup](#delivery-and-cleanup)
@@ -40,6 +41,27 @@ Pod reads an issue completely before using it as scope. It checks that the issue
 5. Review the local checks, independent review, hosted CI, and project acceptance as separate evidence. Pod reports remaining gates and uncertain native work instead of assuming success.
 
 For persistent issue-backed work, the [Issue intake reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/issue-intake.md) explains issue intake; the canonical [SEAL](https://github.com/j3w1/pod/blob/main/skills/pod/references/seal-template.md), [PES](https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md) and [EEL](https://github.com/j3w1/pod/blob/main/skills/pod/references/eel-template.md) authoring templates explain their separate roles and section responsibilities. The PES authoring template includes numbered Proof of Done items. Parent requirements are traceable sources, with their selected requirements and Limits reconciled; they do not replace the child repository target. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
+
+## How Pod looks in Orca
+
+Pod names what it creates, so Orca shows each objective as a readable tree. Orca supplies the live status after the dash; Pod supplies the names:
+
+```
+Copilot retirement (#172)
+  Coordinator - <live status>
+  1 child
+    Source retirement
+      Implementer - <live status>
+      Reviewer · round 1
+      Follow-up reviewer · round 2
+```
+
+- **Task worktree.** It keeps the name you or your host gave it. If it has none, Pod names it after the task and its issue.
+- **Coordinator tab.** Your conversation's tab is `Coordinator`, or `Coordinator · <task>` when it runs elsewhere, such as on a main checkout.
+- **Worker worktrees.** A worker that gets its own worktree has it named by its job, linked to the task worktree and the issue, and marked in progress, in review or completed.
+- **Worker tabs.** Tabs carry only a role: Implementer, Investigator, Reviewer, Follow-up reviewer (which reviews only the changes since the previous round) or Fixer. A round number appears once there is more than one review round, and `(continued)` marks resumed work. A worker sharing the task worktree adds its job, such as `Implementer · Source retirement`.
+
+Names never include ids, branches or prompt text, and Pod never renames something your host named. The coordinator runs the Orca commands Pod supplies, then `pod internal display` compares them with what Orca reports. Desktop rows show these titles from the first Orca release containing stablyai/orca#30037 (after 1.4.229). On an older Orca a row can still show the agent's own title, and Pod reports that as an Orca limitation rather than success.
 
 ## Plan, direct work, and continuation
 
