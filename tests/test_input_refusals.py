@@ -48,6 +48,7 @@ REQUIRED = {
     "admission": (*OWNED, "run", "task", "plan_revision", "packet"),
     "cleanup-plan": ("project", "objective"),
     "map": ("project", "objective"),
+    "display": ("project", "objective"),
     "runtime-continuity": (*OWNED, "decision"),
     "owner-handoff": (*OWNED, "decision"),
     "succession": (*OWNED, "predecessor"),

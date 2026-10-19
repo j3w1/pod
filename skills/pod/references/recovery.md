@@ -1,6 +1,6 @@
 # Recovery
 
-On resume read native state first, retaining uncertainty and next safe action. Continue accepted work within scope/authority; restore relevant lost guidance.
+On resume read native state first, retaining uncertainty and next safe action. Continue accepted work within scope/authority; restore relevant lost guidance. After a relaunch or model switch, repeat the display readback from the worker-tab guidance and follow its next action, so tab and worktree names are re-applied.
 
 `preference_changed`/`preference_revision_stale`: on preference races, rechoose at most twice, then report the conflict. Submitted starts retain their route; recover that exact request. No added retry counter.
 

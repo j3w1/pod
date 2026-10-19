@@ -157,7 +157,14 @@ def packet(value: Any) -> dict:
     _packet_route(p["route"])
     if len(str(p)) > TABLE["packet"]["max_repr_length"]:
         raise PodError("invalid_packet", "Packet is too large")
-    return {"packet_id": digest(p), "body": p, "title": title(p)}
+    from .display import packet_title
+    from .ledger import read
+    try:
+        state = read(Path(p["worktree"]["path"]), p["objective"]) if p.get("worktree") else None
+    except PodError:
+        state = None
+    return {"packet_id": digest(p), "body": p, "title": title(p),
+            "task_display_name": packet_title(state, p)}
 
 
 @input_record("worktree_binding")

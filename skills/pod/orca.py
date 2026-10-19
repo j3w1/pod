@@ -298,8 +298,11 @@ def worktree_identity(selector: str) -> dict:
     normalized_branch = branch.removeprefix("refs/heads/") if isinstance(branch, str) else None
     if normalized_branch is not None and (not normalized_branch or len(normalized_branch) > 256):
         raise PodError("worktree_resolution_ambiguous", "Orca worktree branch is malformed")
+    # Naming facts come from the same read; they decide only whether Pod may name the worktree.
     return {"runtime": response["runtime"], "path": str(Path(path).resolve()),
-            "branch": normalized_branch}
+            "branch": normalized_branch,
+            "display_name_mode": row.get("displayNameMode") if isinstance(row.get("displayNameMode"), str) else None,
+            "main": row.get("isMainWorktree") if isinstance(row.get("isMainWorktree"), bool) else None}
 
 
 def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[int, ...] = (0,)) -> dict:

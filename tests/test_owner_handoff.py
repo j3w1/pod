@@ -1398,10 +1398,13 @@ class CompatibilityTests(HandoffCase):
             subprocess.run(["git", "-C", str(root), "archive", BASELINE, "skills/pod", "VERSION"], stdout=stream, check=True)
         old = self.root / "old"; old.mkdir()
         with tarfile.open(archive) as bundle: bundle.extractall(old, filter="data")
-        # Synthetic control: retain the older nested-handoff refusal after removing
-        # only the new top-level discriminator from a separate copy.
+        # Synthetic control: reach the older nested-handoff refusal after removing
+        # the top-level discriminator and optional display facts from a separate copy.
+        # The genuine current record above retains both and must still be refused.
         control = deepcopy(self.state())
         control.pop("decision_channels")
+        for admission in control["admissions"].values():
+            admission.pop("display", None)
         control_path = self.root / "synthetic-markerless-handoff.json"
         control_path.write_text(json.dumps(control))
         control_before = control_path.read_bytes()

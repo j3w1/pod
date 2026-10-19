@@ -6116,6 +6116,152 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A442",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+        "tests.test_display.DisplayOwnershipTests.test_host_named_and_main_worker_placements_are_host_owned",
+        "tests.test_display.DisplayAckTests.test_host_named_production_placement_gets_no_worktree_command"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A443",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayNameTests.test_purpose_only_filter_task_phrase_and_fallback",
+        "tests.test_display.DisplayNameTests.test_generated_tokens_never_reach_names_and_hyphen_forms_are_filtered"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A444",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayStatusTests.test_implementer_reviewer_fixer_investigator_statuses",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A445",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+        "tests.test_display.DisplayAckTests.test_report_ack_marks_the_worktree_when_the_tab_is_gone",
+        "tests.test_display.DisplayFailedReadTests.test_failed_worker_read_marks_no_worktree"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A446",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayTitleTests.test_rounds_recompute_and_failed_starts_do_not_consume",
+        "tests.test_display.DisplayTitleTests.test_round_ordinals_recompute_after_a_deferred_earlier_review"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A447",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayTitleTests.test_coordinator_inside_outside_and_successor",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A448",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_packet_fallback_is_plain_role_and_earlier_rows_keep_bytes",
+        "tests.test_worker_tabs.TitleTests.test_reviewer_and_finer_role"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A449",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A450",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayOwnershipTests.test_automatic_task_name_issue_and_host_names_win",
+        "tests.test_display.DisplayOwnershipTests.test_pods_own_task_gap_fill_reads_back_as_pod",
+        "tests.test_display.DisplayOwnershipTests.test_host_named_and_main_worker_placements_are_host_owned",
+        "tests.test_display.DisplayOwnershipTests.test_main_task_worktree_is_never_gap_filled"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A451",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayOpTests.test_differs_returns_exact_commands_and_host_has_none",
+        "tests.test_display.DisplayOpTests.test_absent_worker_worktree_is_not_drift_and_rename_offered_only_on_difference"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A452",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_checkpoint_display_validation_persistence_and_whole_replacement",
+        "tests.test_display.DisplayAckTests.test_display_task_accepts_ordinary_words_and_names_refused_tokens"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A453",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayOpTests.test_read_only_matches_new_backend_and_old_limitation",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A454",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_shared_worktree_metadata_only_and_coordinator_host_rename",
+        "tests.test_display.DisplayAckTests.test_claude_worker_admission_sends_no_input",
+        "tests.test_display.DisplayAckTests.test_naming_sends_no_worker_input_and_keeps_release_decisions",
+        "tests.test_display.DisplayAckTests.test_naming_keeps_terminal_reuse",
+        "tests.test_display.DisplayOpTests.test_absent_worker_worktree_is_not_drift_and_rename_offered_only_on_difference"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A455",
+      "required_evidence": [
+        "live_native"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A456",
       "required_evidence": [
         "unit"
