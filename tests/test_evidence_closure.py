@@ -1535,10 +1535,13 @@ class SweepTests(ClosureCase):
         self.assertEqual(detected["objectives"][0]["condition"], "objective_closed")
         self.assertNotIn("question", detected)
         # A directory Pod cannot inspect never reads as closed, and its writes still refuse, by their own code.
+        # The journal is read before access is removed, so only the write's own backstop is exercised (on Python
+        # 3.13, Path.exists raises PermissionError in a directory that cannot be searched).
+        journal = _read_journal(root / "governor.json")
         mode = root.stat().st_mode & 0o777
         root.chmod(0)
         try:
-            self.refused(calls["journal backstop"], code="unsafe_state")
+            self.refused(lambda: _write_journal(root / "governor.json", journal), code="unsafe_state")
         finally:
             root.chmod(mode)
         # CE's cleanup reads it as closed, like an objective its coordinator closed (R94); its remote branch read
