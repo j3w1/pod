@@ -55,7 +55,7 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - EEL authoring/revision: [template](references/eel-template.md).
 - Map/worktree/packets or delegation: [planning](references/planning.md).
 - First admission/supervision: [Orca](references/orca-boundary.md).
-- Accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
+- Starting, claiming, continuing or resuming an objective, admitting a worker, accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
 - Any route choice: [models](references/models.md).
 - Failure/resume/reload: [recovery](references/recovery.md).
 - Proof/review/REUSE: [verification](references/verification.md).
