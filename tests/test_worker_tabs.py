@@ -550,15 +550,20 @@ class ClosureTests(TabCase):
         self.closing(tuple((case, False) for case in ("user_owned", "external", "not_materialized", "disconnected")),
                      report_route=False)
 
-    def test_closing_routes_accept_a_gone_terminal_record_and_hold_an_unconfirmed_one(self):
-        # A475: neither closing route is held by a worker whose terminal record Orca reports gone.
-        for report_route in (False, True):
-            cases = [("missing_released", False), ("missing_user_owned", False), ("missing_unconfirmed", True)]
-            if not report_route:
-                # A closing report refuses a differing worker terminal earlier (report_attempt_unverified).
-                cases += [("missing_other_worker", True), ("missing_no_worker", True), ("missing_bare_other", True),
-                          ("missing_bare_none", True), ("missing_null_other", True)]
-            self.closing(tuple(cases), report_route=report_route)
+    # A475: neither closing route is held by a worker whose terminal record Orca reports gone. The table is split
+    # into named groups to stay under the fast-lane limit.
+    GONE_RECORD_CASES = (("missing_released", False), ("missing_user_owned", False), ("missing_unconfirmed", True))
+
+    def test_closing_checkpoint_accepts_a_gone_terminal_record_and_holds_an_unconfirmed_one(self):
+        self.closing(self.GONE_RECORD_CASES, report_route=False)
+
+    def test_closing_checkpoint_holds_a_gone_terminal_record_without_the_workers_own_identity(self):
+        # A closing report refuses a differing worker terminal earlier (report_attempt_unverified).
+        self.closing((("missing_other_worker", True), ("missing_no_worker", True), ("missing_bare_other", True),
+                      ("missing_bare_none", True), ("missing_null_other", True)), report_route=False)
+
+    def test_closing_report_accepts_a_gone_terminal_record_and_holds_an_unconfirmed_one(self):
+        self.closing(self.GONE_RECORD_CASES, report_route=True)
 
     def test_checkpoint_ignores_reused_and_unrelated_terminals(self):
         self.closing(tuple((case, False) for case in ("reused_later", "coordinator", "setup", "other_objective")),
