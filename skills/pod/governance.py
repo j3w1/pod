@@ -161,8 +161,11 @@ def historical_merge_parent(row: dict, journal: dict, map_state: dict) -> dict |
             return None
     except (KeyError, TypeError, ValueError):
         return None
+    # Settling replaces the row's outcome and finish time; the marker keeps a recorded UNKNOWN as it stood.
+    prior = (None if row["outcome"] == "pending"
+             else {"outcome": row["outcome"], "finished_at": row["receipt"].get("finished_at")})
     return {"commit": delivery["result"], "basis": "verified_delivery", "delivery_record": delivery["record"],
-            "admitted_base": governance["base"], "observed_at_admission": False}
+            "admitted_base": governance["base"], "observed_at_admission": False, "prior": prior}
 
 
 def _merge_parent(row: dict, target: dict, governance: dict) -> str:
@@ -178,8 +181,14 @@ def _merge_parent(row: dict, target: dict, governance: dict) -> str:
     if "parent_basis" not in row:
         return governance["base"]
     basis = row["parent_basis"]
+    prior = basis.get("prior") if isinstance(basis, dict) else None
     if (not isinstance(basis, dict) or set(basis) != {"commit", "basis", "delivery_record", "admitted_base",
-                                                    "observed_at_admission"}
+                                                    "observed_at_admission", "prior"}
+            or prior is not None and (not isinstance(prior, dict) or set(prior) != {"outcome", "finished_at"}
+                                      or prior["outcome"] != "UNKNOWN"
+                                      or prior["finished_at"] is not None
+                                      and (not isinstance(prior["finished_at"], str)
+                                           or not 1 <= len(prior["finished_at"]) <= 64))
             or basis["basis"] != "verified_delivery" or basis["observed_at_admission"] is not False
             or basis["admitted_base"] != governance["base"]
             or not isinstance(basis["delivery_record"], str) or not 1 <= len(basis["delivery_record"]) <= 128
@@ -272,10 +281,18 @@ def verify_merge_result(project: Path, row: dict, unit: dict | None, governance:
         method = None
     if method is None:
         if "commit" in admitted:
-            raise _delivery_refusal("result_not_exact", "The result does not use the target commit bound at admission",
-                                    "the target moved after admission; a new snapshot decision cannot settle this row; "
-                                    "preserve the merge evidence and inspect the exact admitted parent and candidate",
-                                    result=result)
+            raise _delivery_refusal("result_not_exact", "The result is not an exact merge, squash or fast-forward "
+                                    "of the target commit bound at admission",
+                                    "the target may have moved after admission or the merge rewrote commits; a new "
+                                    "snapshot decision cannot settle this row; preserve the merge evidence and keep "
+                                    "the row UNKNOWN with it", result=result)
+        if row.get("governance_binding") is not None or isinstance(row.get("carried_from"), dict):
+            # The admitted base is immutable, so a snapshot decision cannot change what this row is checked against.
+            raise _delivery_refusal("result_not_exact", "The result is not an exact merge, squash or fast-forward "
+                                    "of the admitted base",
+                                    "a new snapshot decision cannot change this row's admitted base; preserve the "
+                                    "merge evidence and keep the row UNKNOWN with it; only R93's recovery at "
+                                    "governor-outcome PASS, when its conditions hold, settles it", result=result)
         raise _delivery_refusal("result_not_exact", "The result is not an exact merge, squash or fast-forward",
                                 "obtain a direct user decision for the exact new target snapshot", result=result)
     tree = _delivery_object(project, ["rev-parse", "--verify", "--quiet", result + "^{tree}"],
@@ -676,7 +693,9 @@ def merge_admission_target(project: Path, map_state: dict | None, target: dict |
         return target
     if target["ref"] != governance["base_ref"]:
         raise _delivery_refusal("target_identity", "The prepared merge target differs from bound governance",
-                                "obtain a direct user decision for the intended target", target=target["ref"])
+                                "prepare the unit again on the bound governance target with governor-prepare; a "
+                                "different target first needs a direct user decision to retarget governance",
+                                target=target["ref"])
     from .obligations import refuse
     current = _resolve_commit(project, target["ref"])
     if current is None:

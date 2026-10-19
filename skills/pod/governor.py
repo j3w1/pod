@@ -1591,7 +1591,7 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
                                    "readback", "record the outcome without a provider receipt", record_id)
         return "readback"
     if cls == "merge":
-        return _check_merge_outcome(project, state, journal, row, outcome, provider=provider)
+        return _check_merge_outcome(project, state, journal, row, outcome, provider=provider, detail=detail)
     if provider is not None:
         raise _outcome_refusal("receipt_from_readback", "A reservation's provider receipt comes from Pod's own "
                                "readback", "record the outcome without a provider receipt", record_id)
@@ -1604,7 +1604,7 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
 
 
 def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
-                         provider: dict | None) -> None:
+                         provider: dict | None, detail: str | None = None) -> None:
     from .governance import historical_merge_parent, target_contains_result, verify_merge_result
     from .ledger import map_of
     record_id = row["record_id"]
@@ -1618,28 +1618,34 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
         if not merged.get("merge_commit"):
             raise _outcome_refusal("merge_commit_missing", "A merge PASS keeps the provider merge_commit",
                                    _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
+        checked = {**row, "receipt": {**row["receipt"], "provider": merged}}
         try:
-            checked = {**row, "receipt": {**row["receipt"], "provider": merged}}
-            try:
-                verify_merge_result(project, checked, unit, map_state["governance"])
-            except PodError as exc:
-                # Earlier rows first keep their original base check. Only this PASS boundary may recover
-                # the known multi-delivery mismatch, and only after all R93 checks pass for that parent.
-                if not isinstance(exc.detail, dict) or exc.detail.get("detail") != "result_not_exact":
-                    raise
-                basis = historical_merge_parent(row, journal, map_state)
-                # Recovery adds a parent basis without replacing earlier provider evidence.
-                if basis is None or any(merged.get(key) != value
-                                        for key, value in (row["receipt"].get("provider") or {}).items()):
-                    raise
-                verify_merge_result(project, {**checked, "parent_basis": basis}, unit, map_state["governance"])
-                row["parent_basis"] = basis
+            verify_merge_result(project, checked, unit, map_state["governance"])
+            return None
         except PodError as exc:
-            detail = exc.detail if isinstance(exc.detail, dict) else {}
-            raise _outcome_refusal("merge_unverified", "The merge result fails R93's Git checks ("
-                                   + str(detail.get("detail")) + ")", _fetch_first(row) + "; then "
-                                   + str(detail.get("next_action") or "record the outcome again"), record_id) from exc
-        return None
+            failure = exc
+        # Earlier rows first keep their original base check. Only this PASS boundary may recover the known
+        # multi-delivery mismatch, and only after all R93 checks pass for that parent.
+        basis = (historical_merge_parent(row, journal, map_state)
+                 if isinstance(failure.detail, dict) and failure.detail.get("detail") == "result_not_exact" else None)
+        if basis is not None:
+            recorded = row["receipt"]
+            if (any(merged.get(key) != value for key, value in (recorded.get("provider") or {}).items())
+                    or detail is not None and recorded.get("detail") not in (None, detail)):
+                raise _outcome_refusal("receipt_recorded", "Recovery keeps this row's recorded provider evidence and "
+                                       "detail", "record PASS again without provider fields or detail that replace "
+                                       "recorded ones; the earlier refusal and uncertainty stay recorded", record_id)
+            try:
+                verify_merge_result(project, {**checked, "parent_basis": basis}, unit, map_state["governance"])
+            except PodError as exc:
+                failure = exc
+            else:
+                row["parent_basis"] = basis
+                return None
+        reason = failure.detail if isinstance(failure.detail, dict) else {}
+        raise _outcome_refusal("merge_unverified", "The merge result fails R93's Git checks ("
+                               + str(reason.get("detail")) + ")", _fetch_first(row) + "; then "
+                               + str(reason.get("next_action") or "record the outcome again"), record_id) from failure
     if provider is not None and provider.get("merge_commit"):
         raise _outcome_refusal("merge_commit_conflict", f"A merge {outcome} names no merge_commit",
                                "record PASS for a merge that landed", record_id)

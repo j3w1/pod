@@ -6577,7 +6577,8 @@
         "tests.test_merge_parent_binding.MergeParentTests.test_own_landed_merge_without_delivery_does_not_become_currency",
         "tests.test_merge_parent_binding.MergeParentTests.test_unavailable_target_admission_refuses_without_any_write",
         "tests.test_merge_parent_binding.MergeParentTests.test_unrelated_prepared_target_at_equal_commit_refuses_without_any_write",
-        "tests.test_merge_parent_binding.MergeParentTests.test_target_moved_during_admission_is_rechecked_before_writes"
+        "tests.test_merge_parent_binding.MergeParentTests.test_target_moved_during_admission_is_rechecked_before_writes",
+        "tests.test_merge_parent_binding.RelayedMergeAdmissionTests.test_a_target_moving_during_admission_consumes_no_relayed_consent"
       ],
       "status": "NOT_RUN"
     },
@@ -6625,7 +6626,9 @@
         "tests.test_merge_parent_binding.MergeParentTests.test_historical_absent_or_self_referential_delivery_cannot_recover",
         "tests.test_merge_parent_binding.MergeParentTests.test_historical_recovery_keeps_authorization_and_result_tree_checks",
         "tests.test_merge_parent_binding.MergeParentTests.test_historical_carried_row_never_uses_successor_delivery_recovery",
-        "tests.test_merge_parent_binding.MergeParentTests.test_historical_recovery_never_overwrites_recorded_provider_evidence"
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_recovery_never_overwrites_recorded_provider_evidence",
+        "tests.test_merge_parent_binding.MergeParentTests.test_row_without_admitted_binding_keeps_the_snapshot_next_action",
+        "tests.test_merge_parent_binding.MergeParentTests.test_a_malformed_recorded_prior_is_refused"
       ],
       "status": "NOT_RUN"
     },

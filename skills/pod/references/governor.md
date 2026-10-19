@@ -23,9 +23,10 @@ delivered policy. A second merge can therefore use that result as its parent whi
 retaining the earlier policy base. Merge parents must be exactly the admitted
 commit and candidate; a squash has only the admitted commit as parent, and a
 fast-forward equals the candidate with the admitted commit as ancestor. Fetch
-first and call the Governor at the merge boundary. If the target moves after
-admission, preserve the evidence and follow the refusal: a later snapshot decision
-cannot settle that row. Never call a landed merge FAILED or CANCELED.
+first and call the Governor at the merge boundary. If the result does not use
+the admitted commit (the target moved after admission or the merge rewrote
+commits), a later snapshot decision cannot settle that row: keep it UNKNOWN with
+the merge evidence. Never call a landed merge FAILED or CANCELED.
 
 The second merge creates no second map delivery record or new currency exception.
 Before later work, target movement beyond the recorded delivery needs a plain
@@ -45,11 +46,14 @@ row's admission, its base and target match this row's admitted policy base and
 target, the row is not carried, and all candidate, tree, authorization and readback
 checks pass. The acknowledgement returns a kernel-owned `parent_basis` marked
 `basis: verified_delivery` and `observed_at_admission: false`, with the commit,
-delivery record and admitted base. This preserves that the parent was not observed
-at admission; admitted bindings and earlier evidence stay recorded. Do not submit
-that marker or edit a journal to obtain recovery. Other earlier cases keep
-their precise refusal and uncertainty; a new snapshot does not rewrite the old
-decision. Carried rows settle through their existing provider-readback path using
+delivery record, admitted base and `prior` (an earlier UNKNOWN outcome and its
+time, or null). This preserves that the parent was not observed at admission;
+admitted bindings, provider evidence and detail stay recorded, and a PASS that would
+replace them refuses `receipt_recorded`. Do not submit that marker or edit a journal
+to obtain recovery. Other earlier cases keep their precise refusal: a row with an
+admitted governance binding stays UNKNOWN with its evidence, because a new snapshot
+decision cannot change its admitted base; only a row without that binding is still
+settled by an exact snapshot decision. Carried rows settle through their existing provider-readback path using
 their copied target binding and gain no earlier-delivery inference.
 
 ## Yolo mode

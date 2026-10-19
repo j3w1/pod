@@ -11,8 +11,9 @@ from pod.errors import PodError
 from pod.governance import verify_merge_result
 from pod.governor import _empty_journal, _read_journal, _record_path, _write_journal, carry_into
 from pod.internal import acknowledge, run as internal_run
-from pod.ledger import objective_root, read
+from pod.ledger import objective_root, read, state_root
 from tests.kernel_support import KernelCase, GovernorFakePort, action, authorization, git
+from tests import test_relayed_authorization as relayed
 
 
 class MergeParentTests(KernelCase):
@@ -219,6 +220,7 @@ class MergeParentTests(KernelCase):
         self.request["target"] = self.request["authorization"]["target"] = "origin/other"
         refused = self.refuses_unchanged("governor", action=self.request)
         self.assertEqual((refused.code, refused.detail["detail"]), ("delivery_unverified", "target_identity"))
+        self.assertIn("governor-prepare", refused.detail["next_action"])
 
     def test_target_moved_during_admission_is_rechecked_before_writes(self):
         self.prepare("first")
@@ -239,8 +241,9 @@ class MergeParentTests(KernelCase):
         moved = self.move_target(self.delivered)
         result = self.result_on(moved)
         refused = self.pass_refuses(second, result, "result_not_exact")
-        self.assertIn("target moved after admission", refused.detail["next_action"])
+        self.assertIn("may have moved after admission or the merge rewrote commits", refused.detail["next_action"])
         self.assertIn("snapshot decision cannot settle this row", refused.detail["next_action"])
+        self.assertIn("keep the row UNKNOWN", refused.detail["next_action"])
         for outcome in ("FAILED", "CANCELED"):
             refused = self.refuses_unchanged("governor-outcome", record_id=second, outcome=outcome,
                                               detail="the merge landed")
@@ -319,9 +322,13 @@ class MergeParentTests(KernelCase):
                                 "provider": {"merge_commit": result}}}, journal["units"]["second"],
                                 checkpoint["governance"])
         self.assertEqual(caught.exception.detail["detail"], "result_not_exact")
+        refused = self.refuses_unchanged("governor-outcome", record_id=second, outcome="PASS",
+                                          provider={"merge_commit": result}, detail="recovered")
+        self.assertEqual(refused.detail["detail"], "receipt_recorded")
         ack = self.outcome(second, result)
         basis = {"commit": self.delivered, "basis": "verified_delivery", "delivery_record": self.first,
-                 "admitted_base": self.base, "observed_at_admission": False}
+                 "admitted_base": self.base, "observed_at_admission": False,
+                 "prior": {"outcome": "UNKNOWN", "finished_at": before["receipt"]["finished_at"]}}
         after = self.row(second)
         self.assertEqual((ack["parent_basis"], after["parent_basis"]), (basis, basis))
         for key in set(before) - {"outcome", "receipt"}:
@@ -339,7 +346,9 @@ class MergeParentTests(KernelCase):
 
     def test_historical_squash_recovers_from_the_same_bounded_parent(self):
         second, result = self.earlier("squash")
-        self.assertEqual(self.outcome(second, result)["parent_basis"]["commit"], self.delivered)
+        basis = self.outcome(second, result)["parent_basis"]
+        # A pending row had no recorded uncertainty, so its marker records none.
+        self.assertEqual((basis["commit"], basis["prior"]), (self.delivered, None))
 
     def test_historical_fast_forward_keeps_original_base_check_first(self):
         second, result = self.earlier("fast-forward")
@@ -350,7 +359,10 @@ class MergeParentTests(KernelCase):
         second, _ = self.earlier()
         moved = self.move_target(self.delivered)
         result = self.result_on(moved)
-        self.pass_refuses(second, result, "result_not_exact")
+        refused = self.pass_refuses(second, result, "result_not_exact")
+        self.assertIn("cannot change this row's admitted base", refused.detail["next_action"])
+        self.assertIn("keep the row UNKNOWN", refused.detail["next_action"])
+        self.assertNotIn("obtain a direct user decision", refused.detail["next_action"])
         for outcome in ("FAILED", "CANCELED"):
             refused = self.refuses_unchanged("governor-outcome", record_id=second, outcome=outcome,
                                               detail="a merge that landed")
@@ -419,7 +431,7 @@ class MergeParentTests(KernelCase):
                 provider={"merge_commit": result, "observation": "before recovery"})
         refused = self.refuses_unchanged("governor-outcome", record_id=second, outcome="PASS",
                                           provider={"merge_commit": result, "observation": "replacement"})
-        self.assertIn("result_not_exact", str(refused))
+        self.assertEqual(refused.detail["detail"], "receipt_recorded")
         self.assertNotIn("parent_basis", self.row(second))
 
     def carried_copy(self, record, result):
@@ -459,3 +471,46 @@ class MergeParentTests(KernelCase):
                 refused = self.refuses_unchanged("governor-outcome", record_id=second, outcome="PASS",
                     provider={"merge_commit": result}, **{field: {"commit": self.delivered}})
                 self.assertEqual(refused.code, "invalid_request")
+
+    def test_row_without_admitted_binding_keeps_the_snapshot_next_action(self):
+        """A 0.13.3-shaped row is checked against the map's base, which an owner refresh does change."""
+        second, _ = self.earlier()
+        self.synthetic_journal(lambda journal: journal["actions"][-1].pop("governance_binding"))
+        result = self.result_on(self.move_target(self.delivered))
+        refused = self.pass_refuses(second, result, "result_not_exact")
+        self.assertIn("obtain a direct user decision for the exact new target snapshot", refused.detail["next_action"])
+
+    def test_a_malformed_recorded_prior_is_refused(self):
+        second, result = self.earlier()
+        self.outcome(second, result)
+        journal = _read_journal(_record_path(self.project, "objective"))
+        governance = read(self.project, "objective")["checkpoint"]["governance"]
+        row = self.row(second)
+        for prior in ({"outcome": "PASS", "finished_at": None}, {"outcome": "UNKNOWN"}, "UNKNOWN"):
+            with self.subTest(prior=prior), self.assertRaises(PodError) as caught:
+                verify_merge_result(self.project, {**row, "parent_basis": {**row["parent_basis"], "prior": prior}},
+                                    journal["units"]["second"], governance)
+            self.assertEqual(caught.exception.code, "state_unsupported")
+
+
+class RelayedMergeAdmissionTests(relayed.RelayCase):
+    def test_a_target_moving_during_admission_consumes_no_relayed_consent(self):
+        from pod.governor import _evaluate
+        base = read(self.project, "objective")["checkpoint"]["governance"]["base"]
+        moved = git(self.project, "commit-tree", base + "^{tree}", "-p", base, "-m", "moved")
+        uses = state_root(self.project) / ".relay-authorizations"
+        receipts = lambda: sorted(path.name for path in uses.glob("*.json")) if uses.exists() else []
+        before = receipts()
+
+        def move_after_evaluation(*args, **kwargs):
+            result = _evaluate(*args, **kwargs)
+            git(self.project, "update-ref", "refs/remotes/origin/target", moved)
+            return result
+
+        with patch("pod.governor._evaluate", side_effect=move_after_evaluation):
+            self.refuse("governance_changed", operation="governor", request=self.request("merge"))
+        self.assertEqual(receipts(), before)
+        git(self.project, "update-ref", "refs/remotes/origin/target", base)
+        self.assertEqual(self.case.op("governor", action=self.request("merge"))["decision"], "ALLOW")
+        self.assertEqual(self.journal()["actions"][-1]["target_binding"]["commit"], base)
+        self.assertEqual(len(receipts()), len(before) + 1)

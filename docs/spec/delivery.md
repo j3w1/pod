@@ -43,7 +43,8 @@ merge admission writes any journal or consumes relayed consent, its prepared tar
 must be the governance `base_ref` and its currently resolved commit must pass the
 same currency predicate as other governed work: the policy base, or this objective's
 verified delivery result for exactly that base and target. Otherwise refuse without
-a journal or context write. Record that exact observed commit as
+a journal or context write; an unrelated prepared target names preparing the unit again
+on the governance target. Record that exact observed commit as
 `target_binding.commit`; retain the policy base in `governance_binding.base` and in
 any delivery record. A second delivery may therefore merge from the first verified
 result without adopting its policy. It creates no second delivery record or further
@@ -54,8 +55,10 @@ against that commit: merge parents are exactly `[commit, candidate]`, squash par
 exactly `[commit]`, or a fast-forward result equals the candidate with that commit
 an ancestor. Every candidate, tree, authorization, target and provider readback check
 still applies. A carried row uses its copied target binding under the same rule.
-Wrong parents refuse `result_not_exact`, explaining that the target moved after
-admission and a new snapshot decision cannot settle that row. FAILED and CANCELED
+Other parents refuse `result_not_exact`: the result is not an exact merge, squash or
+fast-forward of the admitted commit (the target may have moved after admission or the
+merge rewrote commits), a new snapshot decision cannot settle the row, and the next
+action keeps it UNKNOWN with its merge evidence. FAILED and CANCELED
 still refuse when the target contains the landed result; neither an arbitrary
 descendant nor a new snapshot rewrites an admitted merge.
 
@@ -67,12 +70,18 @@ different ALLOW merge PASS row in this journal, that row's zoned receipt
 this row's admitted policy base, its target ref equals this row's target ref, and
 every other R93 check passes. No other path infers a recovered parent. Recovery
 adds a kernel-owned row `parent_basis` with `commit`, `basis: verified_delivery`,
-`delivery_record`, `admitted_base` and `observed_at_admission: false`, returned in the
-outcome acknowledgement. The marker is separate from `target_binding` and cannot
-be caller-supplied. Never rewrite the admitted bindings, decision, authorization or
-existing provider evidence; keep any earlier uncertainty evidence. Subsequent
-checks use the recorded recovery basis. Ineligible earlier rows keep their
-refusal and unchanged state.
+`delivery_record`, `admitted_base`, `observed_at_admission: false` and `prior`, returned
+in the outcome acknowledgement. `prior` is null for a pending row; for an UNKNOWN row
+it keeps that outcome and its recorded `finished_at`, which settlement replaces. The
+marker is separate from `target_binding` and cannot be caller-supplied. Never rewrite
+the admitted bindings, decision, authorization or existing provider evidence or
+detail: a recovery whose provider fields or detail would replace recorded ones refuses
+`receipt_recorded` without a write. Subsequent checks use the recorded recovery basis.
+Ineligible earlier rows keep their refusal and unchanged state. When the row has an
+admitted governance binding or is carried, its base is immutable, so the refusal says
+a new snapshot decision cannot change it and keeps the row UNKNOWN with its evidence;
+only a row without either binding keeps the snapshot-decision next action, because an
+owner refresh changes the base it is checked against.
 
 ### R94 — Objective cleanup plan and consent
 
@@ -142,10 +151,10 @@ When the objective is delivered under the existing delivered test and R117 has o
 - <a id="a168"></a>**A168** — A missing/other-objective record, wrong scope/candidate/tree, wrong remote or target alias even with equal SHA, a merge naming another target than its prepared unit, rebase result, readback mismatch or second different record refuses `delivery_unverified` or `delivery_recorded` without a write.
 - <a id="a169"></a>**A169** — When the target moves after a verified delivery result, including when the same record is restated or first recorded late, a non-closing checkpoint's currency refuses `governance_changed` and names a direct user decision for the new exact snapshot; candidate-authored policy is not adopted.
 - <a id="a478"></a>**A478** — Through real Governor and outcome operations on synthetic baseline A, first delivered result B, candidate C on B and result M with parents B and C, the second merge settles PASS after first delivery by merge, squash or fast-forward. Its policy binding and the one delivery record keep A; its target binding commits to B. Second squash and fast-forward results use that same admitted operational parent.
-- <a id="a479"></a>**A479** — A stale or unavailable target, this objective's landed merge without a verified delivery record, a prepared target ref unrelated to governance even at an equal commit, and a target moving during admission each refuse before any journal/context write or relayed-consent consumption.
-- <a id="a480"></a>**A480** — An admitted target commit must be a full object id; a present invalid value never falls back to recovery. A result on a later parent refuses without a write and explains that a snapshot decision cannot settle the row; FAILED and CANCELED still refuse for the landed result. Changed candidate, authorized or Git tree, and authorization still refuse. A carried copy settles only from its provider readback using its copied admitted parent.
-- <a id="a481"></a>**A481** — A synthetic 0.21.1-shaped row first fails its original policy-base check, then settles PASS only through the eligible map-delivery recovery at governor-outcome. It records and acknowledges its `parent_basis`, marked as not observed at admission, retaining its admitted bindings, decision, authorization and earlier uncertainty evidence; replay is byte-identical. A squash of the same shape recovers the same way; a fast-forward of that shape already passes its base check and needs no marker. A delivery settled exactly at admission qualifies. Caller-supplied parent markers or target bindings refuse without a write.
-- <a id="a482"></a>**A482** — Recovery refuses without a write for a wrong parent, delivery settled after admission or without a zoned settlement time, missing or self-referential delivery, a different base or target, a delivery record not naming another ALLOW merge PASS in this journal, changed authorization or result tree, and a carried row even with matching successor delivery. No failed check persists a proposed marker; FAILED and CANCELED still refuse for a landed merge.
+- <a id="a479"></a>**A479** — A stale or unavailable target, this objective's landed merge without a verified delivery record, a prepared target ref unrelated to governance even at an equal commit, and a target moving during admission each refuse before any journal/context write or relayed-consent consumption; a relayed merge consent refused this way is still unused, and the unrelated target names preparing the unit again.
+- <a id="a480"></a>**A480** — An admitted target commit must be a full object id; a present invalid value never falls back to recovery. A result on a later parent refuses without a write, says the target may have moved or the merge rewrote commits, that a snapshot decision cannot settle the row and that it stays UNKNOWN with its evidence; FAILED and CANCELED still refuse for the landed result. Changed candidate, authorized or Git tree, and authorization still refuse. A carried copy settles only from its provider readback using its copied admitted parent.
+- <a id="a481"></a>**A481** — A synthetic 0.21.1-shaped row first fails its original policy-base check, then settles PASS only through the eligible map-delivery recovery at governor-outcome. It records and acknowledges its `parent_basis`, marked as not observed at admission, with `prior` keeping a recorded UNKNOWN outcome and finish time, and retains its admitted bindings, decision, authorization, provider evidence and detail; a replacing detail or provider field refuses `receipt_recorded` without a write, and replay is byte-identical. A squash of the same shape from a pending row recovers the same way with a null `prior`; a fast-forward of that shape already passes its base check and needs no marker. A delivery settled exactly at admission qualifies. Caller-supplied parent markers or target bindings refuse without a write.
+- <a id="a482"></a>**A482** — Recovery refuses without a write for a wrong parent, delivery settled after admission or without a zoned settlement time, missing or self-referential delivery, a different base or target, a delivery record not naming another ALLOW merge PASS in this journal, changed authorization or result tree, and a carried row even with matching successor delivery. No failed check persists a proposed marker; FAILED and CANCELED still refuse for a landed merge. Such a row with an admitted governance binding is told a snapshot decision cannot change its base and stays UNKNOWN with its evidence, while a row without that binding keeps the snapshot-decision next action; a malformed recorded `prior` refuses as unsupported state.
 - <a id="a170"></a>**A170** — Worker release remains an explicit coordinator Orca step, separate from read-only cleanup planning. A read-only cleanup plan classifies this objective's clean integrated resources, merged remote head, unique data and protected/shared/active/unknown-terminal resources without changing refs, files, journals or Orca state.
 - <a id="a171"></a>**A171** — After exact-scope consent, unique work is retained, or a bundle is verified by `git bundle verify`, `list-heads` and restoration before guarded removal; a separately confirmed discard is the only unarchived unique-work deletion path.
 - <a id="a172"></a>**A172** — Changed ref or plan digest refuses `cleanup_changed`; deletion uses the plan's no-force Orca worktree command, exact-tip `git update-ref -d` or remote `--force-with-lease`, and protects the default and target branches, main checkout, shared branches and terminals that are not currently owned by a settled objective Dispatch.
