@@ -782,6 +782,7 @@ class ChainTests(ClosureCase):
         self.assertEqual(tail["delivery"][0]["recorded_by"], "objective")
         self.assertEqual((entry["relation"], entry["tail"]), ("predecessor", {"objective": "successor",
                                                                             "at": tail["at"]}))
+        self.assertEqual((entry["record"]["class"], tail["record"]["class"]), ("current", "current"))
         self.assertEqual((self.files(), self.files("successor")), (frozen, own))  # The R110 freeze holds.
         listed = self.listed()
         self.assertEqual((listed["objective"]["phase"], listed["objective"]["succession_state"],
