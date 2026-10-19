@@ -6120,7 +6120,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_codex_and_own_worktree_first_then_later",
+      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
       "status": "NOT_RUN"
     },
     {
@@ -6144,7 +6144,7 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_codex_and_own_worktree_first_then_later",
+      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
       "status": "NOT_RUN"
     },
     {
@@ -6219,7 +6219,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayAckTests.test_shared_worktree_claude_guard_and_recorded_continuation",
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_shared_worktree_metadata_only_and_coordinator_host_rename",
+        "tests.test_display.DisplayAckTests.test_claude_worker_admission_sends_no_input",
+        "tests.test_display.DisplayAckTests.test_naming_sends_no_worker_input_and_keeps_release_and_reuse"
+      ],
       "status": "NOT_RUN"
     },
     {

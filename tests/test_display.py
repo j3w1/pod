@@ -30,6 +30,15 @@ def admit(state, role="implement", purpose="Source changes", path="/project/work
     return row
 
 
+def sends_input(value):
+    """True when any output would type into a terminal: a terminal send argv or a provider command text."""
+    if isinstance(value, list):
+        return value[:3] == ["orca", "terminal", "send"] or any(sends_input(item) for item in value)
+    if isinstance(value, dict):
+        return any(sends_input(item) for item in value.values())
+    return isinstance(value, str) and value.startswith("/rename")
+
+
 class DisplayNameTests(unittest.TestCase):
     def test_purpose_only_filter_task_phrase_and_fallback(self):
         body = {"purpose": "Parser repair source retirement /private/x branch/topic deadbeef a1b2c3d4", "responsibility": "Forbidden prose"}
@@ -252,6 +261,13 @@ class DisplayOpTests(TabCase):
         coordinator = output["rows"][1]
         self.assertEqual(coordinator["command"], ["orca", "terminal", "rename", "--terminal", "owner", "--title", "Coordinator", "--json"])
         self.assertIsNone(coordinator["session_rename"])
+        self.terminals["result"]["terminals"][0]["agentIdentity"] = "claude"
+        output = self.run_display(); coordinator = output["rows"][1]
+        self.assertEqual(coordinator["session_rename"]["sender"], "host")
+        self.assertEqual(coordinator["session_rename"]["command"],
+                         ["orca", "terminal", "send", "--terminal", "owner", "--text", "/rename Coordinator", "--enter", "--json"])
+        self.assertIn({"session_rename": coordinator["session_rename"],
+                       "guard": "the host sends it once, only after the exact terminal is tui-idle"}, output["next_action"])
         self.worktrees["result"]["worktrees"][0].update(displayNameMode="fixed", displayName="Host name")
         self.assertIsNone(self.run_display()["rows"][0]["command"])
 
@@ -283,7 +299,10 @@ class DisplayOpTests(TabCase):
         terms["result"]["terminals"][1]["title"] = "Auto prompt"
         output = display.projection(state, terms, trees, {"version": "1.4.230"})
         self.assertEqual(output["rows"][3]["verdict"], "differs")
-        self.assertEqual(output["next_action"][1]["session_rename"]["text"], "/rename Implementer")
+        self.assertIsNone(output["rows"][3]["session_rename"])
+        self.assertEqual(output["rows"][3]["session_reason"], display.WORKER_REASON)
+        self.assertFalse(sends_input([row for row in output["rows"] if row["layer"].startswith("worker")]))
+        self.assertFalse(any("session_rename" in action for action in output["next_action"]))
         terms["result"]["terminals"][1]["connected"] = False
         self.assertEqual(len(display.projection(state, terms, trees, {"version": "1.4.230"})["rows"]), 3)
 
@@ -313,7 +332,7 @@ class DisplayAckTests(TabCase):
         self.assertEqual(self.ack("checkpoint", {}, raw)["checkpoint"]["display"], replacement)
         self.assertEqual(internal.run("contract", {"record": "display"})["records"]["display"]["fields"]["task"]["max_length"], 48)
 
-    def test_admission_title_rename_codex_and_own_worktree_first_then_later(self):
+    def test_admission_title_rename_worker_reason_and_own_worktree_first_then_later(self):
         objective = self.binding()
         self.intake(self.sub("S"), worktree=objective,
                     display={"task": "Parser repair", "continued": [], "host_tab": False})
@@ -327,7 +346,7 @@ class DisplayAckTests(TabCase):
         self.assertEqual(result["title"], "Investigator")
         self.assertEqual(result["rename_command"], display.rename("Investigator", handle))
         self.assertIsNone(result["session_rename"])
-        self.assertEqual(result["session_reason"], display.CODEX_REASON)
+        self.assertEqual(result["session_reason"], display.WORKER_REASON)
         self.assertEqual(result["worktree_command"], ["orca", "worktree", "set", "--worktree", "path:" + child["path"],
             "--display-name", "Source analysis", "--parent-worktree", "path:" + str(self.project),
             "--workspace-status", "in-progress", "--comment", "Investigator working", "--json"])
@@ -346,34 +365,88 @@ class DisplayAckTests(TabCase):
         status_tab = self.status()["worker_tabs"][0]
         self.assertEqual(status_tab["worktree_status"], "in-progress")
 
-    def test_shared_worktree_claude_guard_and_recorded_continuation(self):
+    def test_shared_worktree_metadata_only_and_coordinator_host_rename(self):
         self.intake(self.sub("S"), worktree=self.binding())
         frozen = self.packet(["S"], role="investigate", purpose="Source analysis", resolves="question", stop_condition="answer", worktree=self.binding())
         result = self.start("first", frozen)
         admission = result["admission"]; handle = admission["native_binding"]["terminalHandle"]
         self.assertIsNone(result["worktree_command"])
-        rename = display.session_rename(result["title"], handle, "claude")["session_rename"]
-        self.assertEqual(rename["text"], "/rename Investigator · Source analysis")
-        self.assertEqual(rename["wait"], ["orca", "terminal", "wait", "--terminal", handle,
-                                           "--for", "tui-idle", "--timeout-ms", "60000", "--json"])
-        self.assertEqual(rename["command"], ["orca", "terminal", "send", "--terminal", handle,
-                                              "--text", rename["text"], "--enter", "--json"])
+        self.assertEqual(result["title"], "Investigator · Source analysis")
+        for agent in ("claude", "codex", None):
+            self.assertEqual(display.session_rename(result["title"], handle, agent),
+                             {"session_rename": None, "session_reason": display.WORKER_REASON})
+        host = display.session_rename("Coordinator", "owner", "claude", coordinator=True)
+        self.assertEqual(host["session_rename"]["sender"], "host")
+        self.assertEqual(host["session_rename"]["wait"], ["orca", "terminal", "wait", "--terminal", "owner",
+                                                          "--for", "tui-idle", "--timeout-ms", "60000", "--json"])
+        self.assertEqual(host["session_rename"]["command"], ["orca", "terminal", "send", "--terminal", "owner",
+                                                             "--text", "/rename Coordinator", "--enter", "--json"])
+        self.assertEqual(host["session_reason"], display.HOST_SENDER)
+        self.assertIsNone(display.session_rename("Coordinator", "owner", "codex", coordinator=True)["session_rename"])
+        self.assertIsNone(display.session_rename("Coordinator", None, "claude", coordinator=True)["session_rename"])
         self.write(self.stored(), display={"task": "Parser repair", "continued": [admission["admission_id"]], "host_tab": False})
         state = read(self.project, "objective")
         self.assertTrue(display.worker_title(state, state["admissions"][admission["admission_id"]]).endswith(" (continued)"))
-        self.assertIsNone(display.session_rename("Coordinator", "owner", "claude", coordinator=True)["session_rename"])
-        self.assertIsNone(display.session_rename("Investigator", None, "claude")["session_rename"])
 
-    def test_claude_admission_returns_guarded_session_rename(self):
+    def test_claude_worker_admission_sends_no_input(self):
         self.intake(self.sub("S"))
         frozen = self.packet(["S"], role="investigate", purpose="Source analysis", resolves="question", stop_condition="answer")
         from pod.records import packet
         body = deepcopy(frozen["body"])
         body["route"].update(agent="claude", model="claude-sonnet-5-5", effort="high")
         result = self.start("claude", packet(body))
-        handle = result["admission"]["native_binding"]["terminalHandle"]
-        self.assertEqual(result["session_rename"], display.session_rename(result["title"], handle, "claude")["session_rename"])
-        self.assertIsNone(result["session_reason"])
+        self.assertIsNone(result["session_rename"])
+        self.assertEqual(result["session_reason"], display.WORKER_REASON)
+        self.assertFalse(sends_input(result))
+
+    def test_naming_sends_no_worker_input_and_keeps_release_and_reuse(self):
+        # Orca marks a tab that receives input user-owned; worker naming stays metadata only.
+        objective = self.binding()
+        self.intake(self.sub("S"), worktree=objective,
+                    display={"task": "Parser repair", "continued": [], "host_tab": False})
+        child = {**objective, "path": str(self.root / "child")}
+        self.port.placement = {**child, "runtime": "runtime"}
+        from pod.records import packet
+
+        def claude(frozen):
+            body = deepcopy(frozen["body"])
+            body["route"].update(agent="claude", model="claude-sonnet-5-5", effort="high")
+            return packet(body)
+
+        frozen = claude(self.packet(["S"], role="investigate", resolves="one question", stop_condition="one answer",
+                                    purpose="Source analysis", worktree=objective, placement=child))
+        started = self.start("first", frozen, worktree="path:" + child["path"])
+        admission = started["admission"]; key = admission["admission_id"]
+        self.assertFalse(sends_input(started))
+        self.settle(admission)
+        snapshot = self.saved()
+        from pod.ledger import _path, _read, _write
+        lifecycle = ("row", "state", "command", "ownership", "release_state", "blocks_closure",
+                     "retention_reason", "owner_kept", "native_next_action", "wording")
+        for case, row_kind in (("owned", "owned"), ("retained", "retained_owned"), ("user_owned", "user_owned")):
+            with self.subTest(case=case):
+                self.restore(snapshot); self.tab_case = case
+                raw = self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+                acked = self.ack("report", {"admission_id": key}, raw)["worker_tab"]
+                self.assertEqual(acked["row"], row_kind)
+                self.assertFalse(sends_input(acked))
+                named = self.status()["worker_tabs"][0]
+                self.assertEqual(named["worktree_status"], "completed")
+                path = _path(self.project, "objective"); plain = _read(path)
+                plain["admissions"][key].pop("display"); _write(path, plain)
+                unnamed = self.status()["worker_tabs"][0]
+                self.assertEqual({field: named.get(field) for field in lifecycle},
+                                 {field: unnamed.get(field) for field in lifecycle})
+                self.assertIsNone(unnamed.get("worktree_command"))
+        self.restore(snapshot); self.tab_case = "owned"
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        fresh = claude(self.packet(["S"], role="investigate", resolves="next question", stop_condition="answer",
+                                   purpose="Other analysis", worktree=objective, placement=child))
+        reused = self.start("follow-up", fresh, worktree="path:" + child["path"], reuse_of=key)
+        self.assertEqual(reused["admission"]["state"], "bound")
+        self.assertEqual(reused["rename_command"][4], admission["native_binding"]["terminalHandle"])
+        self.assertTrue(reused["title"].endswith(" (continued)"))
+        self.assertFalse(sends_input(reused))
 
     def test_admission_display_facts_are_validated_and_immutable(self):
         self.intake(self.sub("S"))

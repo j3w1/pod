@@ -83,21 +83,26 @@ record the task words in the checkpoint's `display` record.
 - When a report acknowledgement or a worker_tabs row carries `worktree_command`,
   run it with that row's release or close step so the finished worker's worktree
   is marked.
-- For a Claude tab, `session_rename` sets the agent's own session title. Send its
+- Never type into a worker tab, not even `/rename`: Orca marks a tab that
+  receives terminal input user-owned, which stops its release or reuse. Worker
+  names are metadata only (the tab rename, the Task display name and the worktree
+  command); `session_rename` is null for every worker tab and `session_reason`
+  says why.
+- Only a Claude coordinator tab gets a session rename, from the display readback's
+  coordinator row, marked `sender` `host`. The host or another terminal sends its
   `/rename` text once, only after `terminal wait --for tui-idle` succeeds for that
   exact terminal: never mid-turn and never into another objective's tab. Never
-  type into your own coordinator tab yourself; the host or another terminal sends
-  your `/rename` at your idle prompt. A Codex tab has no such step:
-  `session_reason` explains that its row relies on Orca's custom tab title. This
-  is the only provider-prompt input Pod describes for names; missing live proof
-  stays NOT_RUN.
+  type into your own coordinator tab yourself. A Codex coordinator has no such
+  step: `session_reason` explains that its row relies on Orca's custom tab title.
+  This is the only provider-prompt input Pod describes for names; missing live
+  proof stays NOT_RUN.
 
 **Read the names back.** Run `pod internal display` after intake, a successor
 claim, a continuation or resume, each admission and each recorded report, and
 after a relaunch or model switch. It reads Orca and writes nothing. Each row names
 its layer, its owner (`pod` or `host`), the expected and observed names and a
-verdict. Run every `command` it gives and the idle-prompt session renames in
-`next_action`. A host row never has a command. For `unreadable`, repeat the named
+verdict. Run every `command` it gives, and pass the coordinator's idle-prompt
+session rename in `next_action` to your host. A host row never has a command. For `unreadable`, repeat the named
 read.
 
 **Say only what the readback proves.** `backend_matches` proves Orca's backend

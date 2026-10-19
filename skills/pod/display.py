@@ -17,6 +17,11 @@ NOUNS = {"implementer": "Implementation", "fixer": "Correction", "investigator":
 LIVE_STATES = ("reserved", "unresolved", "bound", "closed")
 CODEX_REASON = ("Codex thread naming is interactive; the row relies on Orca's custom tab title "
                 "(stablyai/orca#30037)")
+WORKER_REASON = ("Pod sends no input to a worker tab: Orca marks a tab that receives input user-owned, which stops "
+                 "its release or reuse; the row relies on the Task display name and Orca's custom tab title "
+                 "(stablyai/orca#30037)")
+HOST_SENDER = ("the host or another terminal sends it at the coordinator's idle prompt; "
+               "the coordinator never types into its own tab")
 LIMITATION = ("Orca shows CLI titles in the desktop row only from the release containing stablyai/orca#30037; "
               "until then a row can show the agent's own title (stablyai/orca#29975)")
 _OMIT = frozenset("""status progress outcome pending running working ready completed complete done
@@ -201,17 +206,18 @@ def rename(value: str, handle: str | None) -> list[str] | None:
 
 
 def session_rename(value: str, handle: str | None, agent: str | None, *, coordinator=False) -> dict:
-    if coordinator:
-        return {"session_rename": None, "session_reason": "the host or another terminal renames the coordinator at its idle prompt"}
+    """Only a Claude coordinator tab gets a provider rename, sent by its host; worker tabs get none."""
+    if not coordinator:
+        return {"session_rename": None, "session_reason": WORKER_REASON}
     if not handle:
-        return {"session_rename": None, "session_reason": "start has no terminal handle"}
+        return {"session_rename": None, "session_reason": "the coordinator tab is not readable"}
     if agent != "claude":
         return {"session_rename": None, "session_reason": CODEX_REASON}
     text = "/rename " + value
-    return {"session_rename": {"text": text,
+    return {"session_rename": {"text": text, "sender": "host",
             "wait": ["orca", "terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", "60000", "--json"],
             "command": ["orca", "terminal", "send", "--terminal", handle, "--text", text, "--enter", "--json"]},
-            "session_reason": None}
+            "session_reason": HOST_SENDER}
 
 
 def issue(state: dict) -> tuple[int | None, str | None]:
@@ -401,7 +407,9 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         and coordinator.get("connected") is True and isinstance(coordinator.get("worktreePath"), str) else None,
         rename(title, state.get("owner")) if title else None, repeat_terminal,
         reason="record display.task" if not title else None,
-        session=session_rename(title, state.get("owner"), None, coordinator=True))
+        session=session_rename(title, state.get("owner") if coordinator else None,
+                               (coordinator or {}).get("agentIdentity"), coordinator=True) if title else
+        {"session_rename": None, "session_reason": "record display.task"})
 
     named = {}
     for row in ordered(state):
@@ -442,10 +450,12 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
     for row in rows:
         if row["command"]:
             actions.append({"command": row["command"]})
-            if row.get("session_rename"):
-                actions.append({"session_rename": row["session_rename"], "guard": "only after the exact terminal is tui-idle"})
         elif row["verdict"] == "unreadable":
             actions.append({"command": row["read_command"], "reason": row["reason"]})
+        # Only the coordinator row can carry a provider rename; its host sends it at an idle prompt.
+        if row.get("session_rename") and row["layer"] == "coordinator_tab" and row["owner"] == "pod":
+            actions.append({"session_rename": row["session_rename"],
+                            "guard": "the host sends it once, only after the exact terminal is tui-idle"})
     if parsed is None:
         actions.append({"command": ["orca", "--version"]})
     return {"rows": rows, "orca": {"version": version, "limitation": limitation},
