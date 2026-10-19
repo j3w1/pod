@@ -104,6 +104,15 @@ class TabCase(ProductionCase):
                     worker["agentTerminalHandle"] = "term-other"
                 elif case.endswith("_none"):
                     worker.pop("agentTerminalHandle")
+        if case == "reused_absent":
+            # Orca's exact worker-show for an earlier Dispatch after a later Dispatch reused its terminal and that
+            # terminal's record is gone: no terminal, no raw resource and an absent projected resource (R125).
+            result["terminal"] = None
+            result["terminalResource"] = None
+            result["observation"] = {"status": "missing", "exactWorker": False}
+            projection.update(resource={"state": "absent", "reason": "not_materialized"},
+                              liveness={"verdict": "unverifiable", "reason": "missing_status"},
+                              nextAction={"kind": "none", "argv": []})
         return value
 
     def packet(self, serves, **fields):
@@ -230,6 +239,23 @@ class TitleTests(TabCase):
         self.assertEqual(len(tabs), 1)
         self.assertEqual(tabs[0]["dispatch"], result["admission"]["native_binding"]["dispatchId"])
         self.assertFalse(tabs[0]["owner_kept"])
+
+    def test_a_reused_terminal_stays_the_later_dispatchs_after_orca_drops_the_earlier_resource(self):
+        # R125: Pod's own bound reuse admission proves the reuse once Orca no longer names the resource's owner.
+        frozen, admission = self.title_admission("investigate", "Investigator: writer")
+        self.settle(admission)
+        self.keep(admission)
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        fresh = self.packet(["S"], role="investigate", resolves="new question", stop_condition="answer", purpose="Trace tokenizer")
+        later = self.start("follow-up", fresh, reuse_of=admission["admission_id"])["admission"]
+        self.settle(later)
+        self.report(later, fresh, map={"obligations": self.waiting_rows()})
+        self.tab_cases[admission["native_binding"]["dispatchId"]] = "reused_absent"
+        self.tab_cases[later["native_binding"]["dispatchId"]] = "missing_released"
+        self.assertEqual(self.status()["worker_tabs"], [])
+        raw = self.write(self.finished_rows(), close=True)
+        self.assertEqual(self.ack("checkpoint", {}, raw)["worker_tabs"], [])
+        self.assertIsNotNone(read(self.project, "objective")["checkpoint"]["closure"])
 
     def test_adapter_refuses_terminal_rename(self):
         with self.assertRaises(PodError) as caught:
@@ -449,6 +475,10 @@ class TableTests(TabCase):
                     ("missing_user_owned", "disconnected", False, False),
                     ("missing_owned", "unreadable", True, True),
                     ("missing_unconfirmed", "unreadable", True, True)))
+
+    def test_an_absent_resource_without_a_recorded_reuse_stays_unreadable(self):
+        # R125: without Pod's own bound reuse admission, an absent resource proves no later owner.
+        self.table((("reused_absent", "unreadable", True, True),))
 
     def test_a_gone_record_stays_unreadable_while_the_worker_names_another_or_no_terminal(self):
         # Review F1: the admitted terminal is not proved gone when the worker no longer names it.

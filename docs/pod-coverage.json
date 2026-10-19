@@ -6552,6 +6552,17 @@
         "tests.test_evidence_closure.SweepTests.test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A478",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TitleTests.test_a_reused_terminal_stays_the_later_dispatchs_after_orca_drops_the_earlier_resource",
+        "tests.test_worker_tabs.TableTests.test_an_absent_resource_without_a_recorded_reuse_stays_unreadable"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }
