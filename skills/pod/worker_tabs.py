@@ -98,8 +98,10 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
 
     def finish(kind, wording="", **fields):
         result = {**row, "row": kind, "wording": wording, **fields}
-        # Marking the worker's worktree does not depend on whether its tab is still listed.
-        result.update(worktree_command(state, admission))
+        # Marking the worker's worktree does not depend on whether its tab is still listed,
+        # but a failed worker read proves nothing about the worker, so it marks nothing.
+        if not failure:
+            result.update(worktree_command(state, admission))
         return result
 
     # These exclusions precede even unreadable facts and an owner's keep.

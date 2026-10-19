@@ -23,17 +23,18 @@ Copilot retirement (#172)            task worktree
 **Who names what.** Pod always names the worker worktrees it places, the worker
 tabs and the coordinator tab. Host names win: a task worktree that Orca reports
 named, a coordinator tab the host titled and every other Orca object stay as the
-host left them, and Pod never renames, re-links or re-statuses them. When the host
-titled your coordinator tab, record `host_tab: true` in the checkpoint's `display`
-record. Pod fills one gap: while Orca reports the task worktree unnamed, Pod names
-it `<task> (#N)` with its issue link, or `<task> (<repo>#N)` without a link when
-the issue lives in another repository, and never sets its status, comment or
-parent.
+host left them, and Pod never renames, re-links or re-statuses them. When the
+host titled your coordinator tab, record `host_tab: true` in the checkpoint's
+`display` record. Pod fills one gap: while Orca reports the task worktree
+unnamed and it is not a main checkout, Pod names it `<task> (#N)` with its issue
+link, or `<task> (<repo>#N)` without a link when the issue lives in another
+repository, and never sets its status, comment or parent.
 
 **The checkpoint's `display` record.** At intake record `task`: the task in plain
-words, such as `Copilot retirement`, up to 48 characters. Use letters only, with
-inner hyphens or apostrophes; ordinary words such as Status or Model are fine.
-Digits, paths, underscores and ids refuse `invalid_display_name`, which names the
+words, such as `Copilot retirement`, up to 48 characters. Use ASCII letters only,
+with inner hyphens or apostrophes; ordinary words such as Status or Model are
+fine. Digits, paths, underscores, ids and a run of seven or more of the letters
+a to f (which reads as a hash) refuse `invalid_display_name`, which names the
 refused tokens. List in `continued` the admission ids of workers
 you resumed after a relaunch, and `coordinator` when this tab resumed the objective.
 The record stays until a checkpoint supplies a new one, which replaces it whole,

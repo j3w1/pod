@@ -319,6 +319,14 @@ class OrcaAdapterTests(unittest.TestCase):
              'git':{'path':'/fixture/repo','branch':'refs/heads/orca/task','isBare':False}}
         with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'worktree':row}}):
             self.assertEqual(worktree_identity('current')['branch'],'orca/task')
+            self.assertEqual((worktree_identity('current')['display_name_mode'],worktree_identity('current')['main']),(None,None))
+        named={**row,'displayNameMode':'automatic','isMainWorktree':False}
+        with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'worktree':named}}):
+            identity=worktree_identity('current')
+        self.assertEqual((identity['display_name_mode'],identity['main']),('automatic',False))
+        with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'worktree':{**named,'displayNameMode':7,'isMainWorktree':'yes'}}}):
+            identity=worktree_identity('current')
+        self.assertEqual((identity['display_name_mode'],identity['main']),(None,None))
         with patch('pod.orca.read_command',return_value={'runtime':'r','result':{'worktree':{
                 **row,'git':{**row['git'],'path':'/fixture/other'}}}}):
             with self.assertRaises(PodError): worktree_identity('current')

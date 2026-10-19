@@ -81,6 +81,7 @@ class DisplayNameTests(unittest.TestCase):
         self.assertEqual(display.job({"purpose": "Fix-deadbeefcafe parser cleanup"}, "implementer"), "Parser cleanup")
         self.assertEqual(display.job({"purpose": "parser-repair source retirement"}, "implementer", "Parser repair"),
                          "Source retirement")
+        self.assertEqual(display.job({"purpose": "follow up cleanup docs"}, "implementer", "Follow-up cleanup"), "Docs")
         rng = random.Random(8383)
         alphabet = "abcdefghijklmnopqrstuvwxyz"
         for _ in range(256):
@@ -216,6 +217,18 @@ def inventories(state):
     return {"result": {"terminals": [terminal]}}, {"result": {"worktrees": [task]}}
 
 
+class DisplayFailedReadTests(unittest.TestCase):
+    def test_failed_worker_read_marks_no_worktree(self):
+        from pod.worker_tabs import project
+        state = state_fixture(); row = admit(state)
+        failed = project(state, row, {}, settled=True, failure="orca_read_failed")
+        self.assertEqual(failed["row"], "unreadable")
+        self.assertNotIn("worktree_command", failed)
+        gone = project(state, row, {}, settled=True)
+        self.assertEqual(gone["row"], "not_materialized")
+        self.assertEqual(gone["worktree_status"], "in-progress")
+
+
 class DisplayOwnershipTests(unittest.TestCase):
     def test_automatic_task_name_issue_and_host_names_win(self):
         state = state_fixture(); terms, trees = inventories(state)
@@ -260,6 +273,12 @@ class DisplayOwnershipTests(unittest.TestCase):
         first = admit(state, path="/project/worker")
         later = admit(state, "review", path="/project/worker", naming={"mode": "fixed", "main": False})
         self.assertEqual(later["display"]["worktree_name"], first["display"]["worktree_name"])
+
+    def test_main_task_worktree_is_never_gap_filled(self):
+        state = state_fixture(); terms, trees = inventories(state)
+        trees["result"]["worktrees"][0].update(displayNameMode="automatic", displayName="main", isMainWorktree=True)
+        row = display.projection(state, terms, trees, {"version": "1.4.230"})["rows"][0]
+        self.assertEqual((row["owner"], row["verdict"], row["command"]), ("host", "host", None))
 
     def test_pods_own_task_gap_fill_reads_back_as_pod(self):
         state = state_fixture(); terms, trees = inventories(state)

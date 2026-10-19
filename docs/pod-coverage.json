@@ -6153,7 +6153,8 @@
       ],
       "offline_test": [
         "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
-        "tests.test_display.DisplayAckTests.test_report_ack_marks_the_worktree_when_the_tab_is_gone"
+        "tests.test_display.DisplayAckTests.test_report_ack_marks_the_worktree_when_the_tab_is_gone",
+        "tests.test_display.DisplayFailedReadTests.test_failed_worker_read_marks_no_worktree"
       ],
       "status": "NOT_RUN"
     },
@@ -6203,7 +6204,8 @@
       "offline_test": [
         "tests.test_display.DisplayOwnershipTests.test_automatic_task_name_issue_and_host_names_win",
         "tests.test_display.DisplayOwnershipTests.test_pods_own_task_gap_fill_reads_back_as_pod",
-        "tests.test_display.DisplayOwnershipTests.test_host_named_and_main_worker_placements_are_host_owned"
+        "tests.test_display.DisplayOwnershipTests.test_host_named_and_main_worker_placements_are_host_owned",
+        "tests.test_display.DisplayOwnershipTests.test_main_task_worktree_is_never_gap_filled"
       ],
       "status": "NOT_RUN"
     },

@@ -127,7 +127,7 @@ def kind(body: dict, state: dict) -> str:
 def job(body: dict, worker_kind: str, task: str = "") -> str:
     value = _words(body.get("purpose", ""))
     if task:
-        phrase = r"[\s-]+".join(re.escape(word) for word in task.split())
+        phrase = r"[\s-]+".join(re.escape(word) for word in re.split(r"[\s-]+", task) if word)
         value = re.sub(r"(?<![\w-])" + phrase + r"(?![\w-])", " ", value, flags=re.I)
         value = " ".join(word.strip("-") for word in value.split() if word.strip("-"))
     value = value or NOUNS[worker_kind]
@@ -414,7 +414,8 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
     mode = (task or {}).get("displayNameMode")
     filled = task_name(state, None)
     # A name Orca reports fixed is the host's unless it is exactly the name Pod fills in.
-    owner = "host" if mode == "fixed" and (not filled or (task or {}).get("displayName") != filled) else "pod"
+    owner = ("host" if (task or {}).get("isMainWorktree") is True
+             or mode == "fixed" and (not filled or (task or {}).get("displayName") != filled) else "pod")
     name = task_name(state, task) if owner == "host" else filled
     number, other = issue(state)
     expected = {"name": name}
