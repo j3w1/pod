@@ -104,7 +104,7 @@ class TabCase(ProductionCase):
                     worker["agentTerminalHandle"] = "term-other"
                 elif case.endswith("_none"):
                     worker.pop("agentTerminalHandle")
-        if case == "reused_absent":
+        if case.startswith("reused_absent"):
             # Orca's exact worker-show for an earlier Dispatch after a later Dispatch reused its terminal and that
             # terminal's record is gone: no terminal, no raw resource and an absent projected resource (R125).
             result["terminal"] = None
@@ -113,6 +113,10 @@ class TabCase(ProductionCase):
             projection.update(resource={"state": "absent", "reason": "not_materialized"},
                               liveness={"verdict": "unverifiable", "reason": "missing_status"},
                               nextAction={"kind": "none", "argv": []})
+            if case == "reused_absent_other":
+                worker["agentTerminalHandle"] = "term-other"
+            elif case == "reused_absent_none":
+                worker.pop("agentTerminalHandle")
         return value
 
     def packet(self, serves, **fields):
@@ -256,6 +260,42 @@ class TitleTests(TabCase):
         raw = self.write(self.finished_rows(), close=True)
         self.assertEqual(self.ack("checkpoint", {}, raw)["worker_tabs"], [])
         self.assertIsNotNone(read(self.project, "objective")["checkpoint"]["closure"])
+
+    def reused_with_identity(self, route):
+        # R125 with A475's identity rule first: a bound reuse admission proves nothing while the earlier worker no
+        # longer names the admitted terminal, so the row stays unreadable and the closing route refuses unchanged.
+        frozen, admission = self.title_admission("investigate", "Investigator: writer")
+        self.settle(admission)
+        self.keep(admission)
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        fresh = self.packet(["S"], role="investigate", resolves="new question", stop_condition="answer", purpose="Trace tokenizer")
+        later = self.start("follow-up", fresh, reuse_of=admission["admission_id"])["admission"]
+        self.settle(later)
+        self.report(later, fresh, map={"obligations": self.waiting_rows()})
+        self.tab_cases[later["native_binding"]["dispatchId"]] = "missing_released"
+        earlier = admission["native_binding"]["dispatchId"]
+        snapshot = self.saved()
+        for case in ("reused_absent_other", "reused_absent_none"):
+            with self.subTest(case=case, route=route):
+                self.restore(snapshot)
+                self.tab_cases[earlier] = case
+                rows = self.status()["worker_tabs"]
+                self.assertEqual([(row["dispatch"], row["row"], row["blocks_closure"]) for row in rows],
+                                 [(earlier, "unreadable", True)])
+                before = self.saved()
+                with self.assertRaises(PodError) as caught:
+                    if route == "checkpoint":
+                        self.write(self.finished_rows(), close=True)
+                    else:
+                        self.report(later, fresh, map={"obligations": self.finished_rows(), "close": True})
+                self.assertEqual(caught.exception.code, "worker_terminal_unverified")
+                self.assertEqual(before, self.saved())
+
+    def test_a_closing_checkpoint_refuses_a_reused_row_whose_worker_names_another_or_no_terminal(self):
+        self.reused_with_identity("checkpoint")
+
+    def test_a_closing_report_refuses_a_reused_row_whose_worker_names_another_or_no_terminal(self):
+        self.reused_with_identity("report")
 
     def test_adapter_refuses_terminal_rename(self):
         with self.assertRaises(PodError) as caught:

@@ -130,9 +130,11 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     owner = resource.get("ownerDispatchId") or release.get("ownerDispatchId")
     if owner is not None and owner != dispatch:
         return finish("reused_later")
-    if owner is None and not failure and _reused_by_later_admission(state, admission, handle, dispatch):
-        # Pod's own bound reuse admission moved this terminal to a later Dispatch, and Orca no longer names the
-        # resource's owner: the tab belongs to that later assignment alone (R125).
+    if (owner is None and not failure and handle and facts.get("worker_terminal") == handle
+            and _reused_by_later_admission(state, admission, handle, dispatch)):
+        # Pod's own bound reuse admission moved this terminal to a later Dispatch, Orca no longer names the
+        # resource's owner, and the worker still names the admitted terminal (identity first, as for A475): the
+        # tab belongs to that later assignment alone (R125).
         return finish("reused_later")
     observation = facts.get("terminal_observation") or {}
     if (not failure and not terminal and observation.get("status") == "missing"
