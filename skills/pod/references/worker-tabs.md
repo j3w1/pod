@@ -31,8 +31,10 @@ the issue lives in another repository, and never sets its status, comment or
 parent.
 
 **The checkpoint's `display` record.** At intake record `task`: the task in plain
-words, such as `Copilot retirement`, up to 48 characters. Text shaped like an id
-refuses `invalid_display_name`. List in `continued` the admission ids of workers
+words, such as `Copilot retirement`, up to 48 characters. Use letters only, with
+inner hyphens or apostrophes; ordinary words such as Status or Model are fine.
+Digits, paths, underscores and ids refuse `invalid_display_name`, which names the
+refused tokens. List in `continued` the admission ids of workers
 you resumed after a relaunch, and `coordinator` when this tab resumed the objective.
 The record stays until a checkpoint supplies a new one, which replaces it whole,
 so restate every field you keep.
@@ -53,13 +55,18 @@ adds its job: `Implementer · Source retirement`. When two tabs in one worktree
 would share a title, Pod adds the job, then a number.
 
 **Worker worktrees.** Pod names a worker's own worktree by its job, taken from
-the packet's `purpose` and never from its responsibility. Write `purpose` as the
+the packet's `purpose` and never from its responsibility, but only when Orca
+reports that worktree unnamed and not a main checkout at the first worker placed
+there. Create a worker worktree without a display name when Pod should name it. A
+worktree the host already named, or a main checkout, stays the host's: Pod gives
+no worktree command and leaves its name, parent, links, status and comment alone. Write `purpose` as the
 job in plain words, such as `Source retirement` or `Fixture tests`, without the
 task's name. Pod drops the task's words, falls back to a kind noun such as
 `Implementation`, stays within 40 characters and numbers a repeated sibling name.
-Its status is `in-progress` while the worker works, `in-review` while it waits on
-review or a correction cycle, and `completed` once every worker placed there has
-a recorded report, each with a one-line comment.
+Its status is `in-progress` while an implementer, fixer or investigator works
+there, `in-review` while a reviewer works there or its result waits on review or a
+correction cycle, and `completed` once every worker placed there has a recorded
+report, each with a one-line comment.
 
 **The coordinator tab.** It is `Coordinator` when this conversation runs in the
 task worktree and `Coordinator · <task>` anywhere else, for example on a main
@@ -89,10 +96,12 @@ record the task words in the checkpoint's `display` record.
   command); `session_rename` is null for every worker tab and `session_reason`
   says why.
 - Only a Claude coordinator tab gets a session rename, from the display readback's
-  coordinator row, marked `sender` `host`. The host or another terminal sends its
-  `/rename` text once, only after `terminal wait --for tui-idle` succeeds for that
-  exact terminal: never mid-turn and never into another objective's tab. Never
-  type into your own coordinator tab yourself. A Codex coordinator has no such
+  coordinator row, marked `sender` `host`; `next_action` offers it only when the
+  coordinator title differs, for example after a relaunch or model switch. The
+  host or another terminal sends its `/rename` text once, only after
+  `terminal wait --for tui-idle` succeeds for that exact terminal: never mid-turn
+  and never into another objective's tab. Never type into your own coordinator tab
+  yourself; with no host, the owner may type it at the idle prompt, or leave it. A Codex coordinator has no such
   step: `session_reason` explains that its row relies on Orca's custom tab title.
   This is the only provider-prompt input Pod describes for names; missing live
   proof stays NOT_RUN.
@@ -101,9 +110,9 @@ record the task words in the checkpoint's `display` record.
 claim, a continuation or resume, each admission and each recorded report, and
 after a relaunch or model switch. It reads Orca and writes nothing. Each row names
 its layer, its owner (`pod` or `host`), the expected and observed names and a
-verdict. Run every `command` it gives, and pass the coordinator's idle-prompt
-session rename in `next_action` to your host. A host row never has a command. For `unreadable`, repeat the named
-read.
+verdict. Run every `command` it gives, and pass a coordinator session rename in
+`next_action` to your host. A host row never has a command. For `unreadable`,
+repeat the named read. A worker worktree that was removed is simply absent.
 
 **Say only what the readback proves.** `backend_matches` proves Orca's backend
 names, not what the desktop shows; `desktop` stays NOT_VERIFIED until owner-visible

@@ -1058,7 +1058,9 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                         packet_id=validated["packet_id"], worktree=worktree,
                         frozen_packet=validated, expected_runtime=capability["runtime"],
                         placement_binding=placement_binding, reuse_of=reuse_of,
-                        accompanying=accompanying, continuity_port=native_port)
+                        accompanying=accompanying, continuity_port=native_port,
+                        placement_naming=None if placement is None else
+                        {"mode": placement.get("display_name_mode"), "main": placement.get("main")})
     if admission["existing"]:
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
                                       worktree=worktree, port=native_port, issue_port=issue_port)

@@ -530,11 +530,11 @@ An admission acknowledgement adds:
 | `session_rename` | Always null for a worker tab, with `session_reason`: "Pod sends no input to a worker tab: Orca marks a tab that receives input user-owned, which stops its release or reuse; the row relies on the Task display name and Orca's custom tab title (stablyai/orca#30037)". |
 | `worktree_command` | For a worker in its own worktree, the `orca worktree set` argv of R140: name, parent, issue, pull request, status and comment at the first admission placed in that path, status and comment only for a later one. Null otherwise. |
 
-Report acknowledgements and every worker_tabs row add `worktree_status` and `worktree_command` (status and comment) for a worker in a Pod-named worktree, and give `retained_title` as the plain role title with its rename (R128).
+Report acknowledgements, for the reporting worker whether or not its tab is still listed, and every worker_tabs row add `worktree_status` and `worktree_command` (status and comment) for a worker in a Pod-named worktree. A row with a pending retention gives `retained_title` as the plain role title with its rename (R128).
 
-A checkpoint may carry the optional `display` record (R142): `task` (plain words, at most 48 characters; identifier-shaped text refuses `invalid_display_name`), `continued` (at most 32 entries, each `coordinator` or an existing admission id of this objective) and boolean `host_tab`. The record persists until a checkpoint supplies a new one, which replaces it whole.
+A checkpoint may carry the optional `display` record (R142): `task` (plain words, at most 48 characters: letters with optional inner hyphens or apostrophes and no run of seven or more hex letters; digits, paths, underscores and ids refuse `invalid_display_name`, naming the refused tokens), `continued` (at most 32 entries, each `coordinator` or an existing admission id of this objective) and boolean `host_tab`. The record persists until a checkpoint supplies a new one, which replaces it whole.
 
-`pod internal display --input FILE` takes `project`, `objective` and optional `owner`. It reads exactly `orca terminal list --json`, `orca worktree list --json` and `orca --version`, which are already allowlisted, and writes nothing.
+`pod internal display --input FILE` takes exactly `project` and `objective`. It reads exactly `orca terminal list --json`, `orca worktree list --json` and `orca --version`, which are already allowlisted, and writes nothing.
 
 | Field | Meaning |
 | --- | --- |
@@ -542,7 +542,7 @@ A checkpoint may carry the optional `display` record (R142): `task` (plain words
 | `orca` | `version` and `limitation`. On Orca 1.4.229 or older the limitation is "Orca shows CLI titles in the desktop row only from the release containing stablyai/orca#30037; until then a row can show the agent's own title (stablyai/orca#29975)". |
 | `desktop` | Always `NOT_VERIFIED`: only owner-visible evidence, such as a screenshot, proves a desktop row. |
 | `verdict` | `drift` if any Pod row differs or is unreadable; otherwise `orca_limitation` on Orca 1.4.229 or older; otherwise `backend_matches`. Never success. |
-| `next_action` | The commands to run, and the coordinator's idle-prompt session rename for its host. |
+| `next_action` | The commands to run, and, only when the coordinator row differs, the coordinator's idle-prompt session rename for its host. |
 
 Each row has `layer` (`task_worktree`, `coordinator_tab`, `worker_worktree` or `worker_tab`), `owner` (`pod` or `host`), `target` (worktree selector or terminal handle), `expected` (the name or title; worktree rows add `parent`, `issue`, `pr`, `status` and `comment`), `observed` (the same fields as read back), `verdict` (`matches`, `differs`, `unreadable` or `host`), `command` (argv only when Pod owns the layer and it differs), `session_rename` (tab rows only: null for worker tabs as above; for a Claude coordinator tab `text` (`/rename <title>`), `sender` `host`, `wait` (argv for `orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json`) and `command` (argv for `orca terminal send --terminal <handle> --text "/rename <title>" --enter --json`), null for a Codex coordinator with the custom-title reason) and `reason` when no command can be given. The pull request is the one number Pod's records name for the objective's delivery, else none.
 

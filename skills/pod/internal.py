@@ -636,7 +636,7 @@ def _op_contract(request: dict) -> dict:
 
 
 def _op_display(request: dict) -> dict:
-    exact(request, {"project", "objective", "owner"}, {"project", "objective"}, name="request")
+    exact(request, {"project", "objective"}, {"project", "objective"}, name="request")
     from .ledger import read
     from .orca import read_command
     from .display import projection

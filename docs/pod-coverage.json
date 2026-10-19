@@ -6120,7 +6120,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+        "tests.test_display.DisplayOwnershipTests.test_host_named_and_main_worker_placements_are_host_owned",
+        "tests.test_display.DisplayAckTests.test_host_named_production_placement_gets_no_worktree_command"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -6128,7 +6132,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayNameTests.test_purpose_only_filter_task_phrase_and_fallback",
+      "offline_test": [
+        "tests.test_display.DisplayNameTests.test_purpose_only_filter_task_phrase_and_fallback",
+        "tests.test_display.DisplayNameTests.test_generated_tokens_never_reach_names_and_hyphen_forms_are_filtered"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -6144,7 +6151,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+        "tests.test_display.DisplayAckTests.test_report_ack_marks_the_worktree_when_the_tab_is_gone"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -6152,7 +6162,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayTitleTests.test_rounds_recompute_and_failed_starts_do_not_consume",
+      "offline_test": [
+        "tests.test_display.DisplayTitleTests.test_rounds_recompute_and_failed_starts_do_not_consume",
+        "tests.test_display.DisplayTitleTests.test_round_ordinals_recompute_after_a_deferred_earlier_review"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -6187,7 +6200,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayOwnershipTests.test_automatic_task_name_issue_and_host_names_win",
+      "offline_test": [
+        "tests.test_display.DisplayOwnershipTests.test_automatic_task_name_issue_and_host_names_win",
+        "tests.test_display.DisplayOwnershipTests.test_pods_own_task_gap_fill_reads_back_as_pod",
+        "tests.test_display.DisplayOwnershipTests.test_host_named_and_main_worker_placements_are_host_owned"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -6195,7 +6212,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayOpTests.test_differs_returns_exact_commands_and_host_has_none",
+      "offline_test": [
+        "tests.test_display.DisplayOpTests.test_differs_returns_exact_commands_and_host_has_none",
+        "tests.test_display.DisplayOpTests.test_absent_worker_worktree_is_not_drift_and_rename_offered_only_on_difference"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -6203,7 +6223,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayAckTests.test_checkpoint_display_validation_persistence_and_whole_replacement",
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_checkpoint_display_validation_persistence_and_whole_replacement",
+        "tests.test_display.DisplayAckTests.test_display_task_accepts_ordinary_words_and_names_refused_tokens"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -6222,7 +6245,9 @@
       "offline_test": [
         "tests.test_display.DisplayAckTests.test_shared_worktree_metadata_only_and_coordinator_host_rename",
         "tests.test_display.DisplayAckTests.test_claude_worker_admission_sends_no_input",
-        "tests.test_display.DisplayAckTests.test_naming_sends_no_worker_input_and_keeps_release_and_reuse"
+        "tests.test_display.DisplayAckTests.test_naming_sends_no_worker_input_and_keeps_release_decisions",
+        "tests.test_display.DisplayAckTests.test_naming_keeps_terminal_reuse",
+        "tests.test_display.DisplayOpTests.test_absent_worker_worktree_is_not_drift_and_rename_offered_only_on_difference"
       ],
       "status": "NOT_RUN"
     },

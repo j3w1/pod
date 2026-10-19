@@ -49,7 +49,7 @@ def _words(value: str) -> str:
             skip_value = True
             continue
         if (re.fullmatch(r"[A-Za-z]{1,24}(?:-[A-Za-z]{1,24})?", token)
-                and not re.fullmatch(r"[a-fA-F]{7,}", token)
+                and not any(re.fullmatch(r"[a-fA-F]{7,}", part) for part in token.split("-"))
                 and all(part.casefold() not in _OMIT for part in token.split("-"))):
             words.append(token)
     return " ".join(words)
@@ -61,17 +61,29 @@ def _cut(text: str, limit: int) -> str:
     return text[:limit + 1].rsplit(" ", 1)[0] if " " in text[:limit + 1] else text[:limit]
 
 
+def task_rejections(value: str) -> list[str]:
+    """Tokens a task name refuses: anything but plain words (digits, paths, ids, hex runs)."""
+    return [token for token in value.split()
+            if not re.fullmatch(r"[A-Za-z]+(?:['-][A-Za-z]+)*", token)
+            or any(re.fullmatch(r"[a-fA-F]{7,}", part) for part in re.split(r"['-]", token))]
+
+
 def validate_record(value: object, admissions: dict | None = None) -> dict:
+    task = value.get("task") if isinstance(value, dict) else None
+    rejected = task_rejections(task) if isinstance(task, str) else []
+    if rejected:
+        raise PodError("invalid_display_name", "Display task takes plain words only; refused: "
+                       + ", ".join(token[:24] for token in rejected[:4]))
     if (not isinstance(value, dict) or set(value) != {"task", "continued", "host_tab"}
             or not isinstance(value["task"], str) or not 1 <= len(value["task"]) <= 48
-            or _words(value["task"]) != value["task"]
+            or not value["task"].split() or value["task"] != " ".join(value["task"].split())
             or not isinstance(value["continued"], list) or len(value["continued"]) > 32
             or any(not isinstance(key, str) or not key for key in value["continued"])
             or len(set(value["continued"])) != len(value["continued"])
             or type(value["host_tab"]) is not bool
             or admissions is not None and any(key != "coordinator" and key not in admissions
                                               for key in value["continued"])):
-        raise PodError("invalid_display_name", "Display needs plain task words, existing continued admissions and host_tab")
+        raise PodError("invalid_display_name", "Display needs plain task words (at most 48 characters), existing continued admissions and host_tab")
     return value
 
 
@@ -115,13 +127,14 @@ def kind(body: dict, state: dict) -> str:
 def job(body: dict, worker_kind: str, task: str = "") -> str:
     value = _words(body.get("purpose", ""))
     if task:
-        value = re.sub(r"(?<!\w)" + re.escape(task) + r"(?!\w)", " ", value, flags=re.I)
-        value = " ".join(value.split())
+        phrase = r"[\s-]+".join(re.escape(word) for word in task.split())
+        value = re.sub(r"(?<![\w-])" + phrase + r"(?![\w-])", " ", value, flags=re.I)
+        value = " ".join(word.strip("-") for word in value.split() if word.strip("-"))
     value = value or NOUNS[worker_kind]
     return _cut(value[0].upper() + value[1:], 40)
 
 
-def admission_facts(state: dict, body: dict, path: str | None) -> dict:
+def admission_facts(state: dict, body: dict, path: str | None, naming: dict | None = None) -> dict:
     worker_kind = kind(body, state)
     rows = ordered(state)
     reviews = [row for row in rows if row.get("role") == "review"]
@@ -136,9 +149,11 @@ def admission_facts(state: dict, body: dict, path: str | None) -> dict:
                       if placement(row) == path and (row.get("display") or {}).get("worktree_name")), None)
         used = {row["display"]["worktree_name"].casefold() for row in rows if placement(row) != path
                 and (row.get("display") or {}).get("worktree_name")}
-        name = prior or worker_job
+        # Pod names only a worktree Orca reports unnamed and not main; anything else is the host's.
+        unnamed = bool(naming and naming.get("mode") == "automatic" and naming.get("main") is False)
+        name = prior or (worker_job if unnamed else None)
         ordinal = 2
-        while not prior and name.casefold() in used:
+        while not prior and name and name.casefold() in used:
             suffix = f" {ordinal}"
             name = _cut(worker_job, 44 - len(suffix)) + suffix
             ordinal += 1
@@ -154,13 +169,25 @@ def facts(state: dict, row: dict) -> dict:
             "worktree_name": None}
 
 
+def round_of(state: dict, row: dict) -> int | None:
+    """Per-objective review ordinal in admission order; a fixer takes the latest earlier review's round."""
+    kind = facts(state, row)["kind"]
+    if kind not in ("reviewer", "follow_up_reviewer", "fixer"):
+        return None
+    seq = row.get("admitted_seq", 0)
+    earlier = sum(1 for other in ordered(state) if other.get("role") == "review"
+                  and (other.get("admitted_seq", 0), other["admission_id"]) < (seq, row["admission_id"]))
+    return earlier + 1 if kind != "fixer" else max(1, earlier)
+
+
 def _title(state: dict, row: dict, review_count: int | None = None) -> str:
     display = facts(state, row)
     value = WORDS[display["kind"]]
     if review_count is None:
         review_count = sum(r.get("role") == "review" for r in ordered(state))
-    if display["round"] is not None and review_count > 1:
-        value += f" · round {display['round']}"
+    number = round_of(state, row)
+    if number is not None and review_count > 1:
+        value += f" · round {number}"
     if not display["own_worktree"] and display["job"]:
         value += " · " + display["job"]
     return value
@@ -267,6 +294,10 @@ def worktree_status(state: dict, path: str) -> tuple[str, str]:
                     and row.get("report") is None), None)
     if working:
         return "in-progress", worker_title(state, working) + " working"
+    reviewing = next((row for row in rows if facts(state, row)["kind"] in ("reviewer", "follow_up_reviewer")
+                      and row.get("report") is None), None)
+    if reviewing:
+        return "in-review", worker_title(state, reviewing) + " working"
     assurance = any(ob.get("kind") == "assurance" and ob.get("state") not in ("satisfied", "withdrawn")
                     for ob in (state.get("checkpoint") or {}).get("obligations", []))
     if any(row.get("report") is None or retention_reason(state, row, None) in ("corrections", "delta review")
@@ -381,8 +412,10 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
     path = task_path(state)
     task = by_path.get(path)
     mode = (task or {}).get("displayNameMode")
-    owner = "host" if mode == "fixed" else "pod"
-    name = task_name(state, task)
+    filled = task_name(state, None)
+    # A name Orca reports fixed is the host's unless it is exactly the name Pod fills in.
+    owner = "host" if mode == "fixed" and (not filled or (task or {}).get("displayName") != filled) else "pod"
+    name = task_name(state, task) if owner == "host" else filled
     number, other = issue(state)
     expected = {"name": name}
     command = ["orca", "worktree", "set", "--worktree", "path:" + path] if path else None
@@ -411,11 +444,21 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
                                (coordinator or {}).get("agentIdentity"), coordinator=True) if title else
         {"session_rename": None, "session_reason": "record display.task"})
 
-    named = {}
+    named, hosted = {}, {}
     for row in ordered(state):
         if facts(state, row)["worktree_name"]:
             named.setdefault(placement(row), row)
+        elif facts(state, row)["own_worktree"] and placement(row):
+            hosted.setdefault(placement(row), row)
+    for worker_path in hosted:
+        if worker_path in named or worktrees is not None and worker_path not in by_path:
+            continue
+        add("worker_worktree", "host", "path:" + worker_path, {}, observed_worktree(by_path.get(worker_path)),
+            None, repeat_worktree)
     for worker_path, row in named.items():
+        # A complete inventory proves a removed worktree absent; it is not drift.
+        if worktrees is not None and worker_path not in by_path:
+            continue
         status, comment = worktree_status(state, worker_path)
         expected = {"name": facts(state, row)["worktree_name"], "parent": path,
                     "issue": number if not other else None, "pr": pr(state), "status": status, "comment": comment}
@@ -453,7 +496,8 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         elif row["verdict"] == "unreadable":
             actions.append({"command": row["read_command"], "reason": row["reason"]})
         # Only the coordinator row can carry a provider rename; its host sends it at an idle prompt.
-        if row.get("session_rename") and row["layer"] == "coordinator_tab" and row["owner"] == "pod":
+        if (row.get("session_rename") and row["layer"] == "coordinator_tab" and row["owner"] == "pod"
+                and row["verdict"] == "differs"):
             actions.append({"session_rename": row["session_rename"],
                             "guard": "the host sends it once, only after the exact terminal is tui-idle"})
     if parsed is None:

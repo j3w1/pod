@@ -481,7 +481,7 @@ class ClosureTests(TabCase):
         raw = self.report(admission, frozen, map={"obligations": self.waiting_rows()})
         row = raw["worker_tab"]
         self.assertEqual(row["row"], "retained_owned"); self.assertFalse(row["owner_kept"])
-        self.assertEqual(row["reason"], "owner_request"); self.assertEqual(row["retained_title"]["title"], "Investigator · Investigation")
+        self.assertEqual(row["reason"], "owner_request"); self.assertNotIn("retained_title", row)
         self.assertEqual(self.status()["worker_tabs"][0]["row"], "retained_owned")
         before = self.saved()
         for report_route in (False, True):

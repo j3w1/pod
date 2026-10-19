@@ -18,13 +18,16 @@ def state_fixture():
         "objective_source": {"repository": "acme/example", "number": 17}, "obligations": []}, "admissions": {}}
 
 
-def admit(state, role="implement", purpose="Source changes", path="/project/worker", **fields):
+UNNAMED = {"mode": "automatic", "main": False}
+
+
+def admit(state, role="implement", purpose="Source changes", path="/project/worker", naming=UNNAMED, **fields):
     key = "assignment-" + str(len(state["admissions"]) + 1)
     body = {"role": role, "purpose": purpose, "serves": [], **fields}
     row = {"admission_id": key, "role": role, "state": "bound", "admitted_seq": len(state["admissions"]) + 1,
            "serves": body["serves"], "reuse_of": fields.get("reuse_of"), "report": None,
            "request": {"agent": "claude"}, "recovery": {"placement_binding": {"path": path}},
-           "display": display.admission_facts(state, body, path),
+           "display": display.admission_facts(state, body, path, naming),
            "native_binding": {"terminalHandle": "tab-" + key}}
     state["admissions"][key] = row
     return row
@@ -74,6 +77,27 @@ class DisplayNameTests(unittest.TestCase):
             self.assertIsNone(re.search(r"\d|/|[a-f0-9]{7,}|branch|Confidential|instructions|Parser|repair", value, re.I))
 
 
+    def test_generated_tokens_never_reach_names_and_hyphen_forms_are_filtered(self):
+        self.assertEqual(display.job({"purpose": "Fix-deadbeefcafe parser cleanup"}, "implementer"), "Parser cleanup")
+        self.assertEqual(display.job({"purpose": "parser-repair source retirement"}, "implementer", "Parser repair"),
+                         "Source retirement")
+        rng = random.Random(8383)
+        alphabet = "abcdefghijklmnopqrstuvwxyz"
+        for _ in range(256):
+            unsafe = [rng.choice(["", "x-"]) + "".join(rng.choice("abcdef0123456789") for _ in range(rng.randint(7, 12))),
+                      rng.choice(["feature/", "orca/", "agent/"]) + "".join(rng.choice(alphabet) for _ in range(5)),
+                      "/".join("".join(rng.choice(alphabet) for _ in range(4)) for _ in range(3)),
+                      "".join(rng.choice(alphabet) for _ in range(3)) + "_" + str(rng.randint(1, 999)),
+                      rng.choice(["term", "ctx", "task", "run"]) + "_" + "".join(rng.choice("0123456789abcdef") for _ in range(8))]
+            words = ["".join(rng.choice(alphabet) for _ in range(rng.randint(2, 8))) for _ in range(3)]
+            mixed = words + unsafe; rng.shuffle(mixed)
+            body = {"purpose": " ".join(mixed), "responsibility": "Secretive prompt words"}
+            value = display.job(body, "implementer", "Parser repair")
+            self.assertIsNone(re.search(r"\d|/|_|Secretive|prompt|Parser|repair", value, re.I), value)
+            self.assertFalse(any(re.fullmatch(r"[a-f]{7,}", part, re.I) for part in re.split(r"[\s-]", value)), value)
+            self.assertLessEqual(len(value), 40)
+
+
 class DisplayTitleTests(unittest.TestCase):
     def test_role_words_correction_and_delta(self):
         state = state_fixture()
@@ -100,6 +124,15 @@ class DisplayTitleTests(unittest.TestCase):
         self.assertEqual(display.worker_title(state, fixer), "Fixer · round 2")
         first["state"] = "closed"; second["state"] = "unresolved"
         self.assertEqual(display.worker_title(state, first), "Reviewer · round 1")
+
+    def test_round_ordinals_recompute_after_a_deferred_earlier_review(self):
+        state = state_fixture()
+        first = admit(state, "review", path="/project/a")
+        second = admit(state, "review", path="/project/b")
+        first["state"] = "deferred"
+        third = admit(state, "review", path="/project/c")
+        self.assertEqual([display.worker_title(state, row) for row in (second, third)],
+                         ["Reviewer · round 1", "Reviewer · round 2"])
 
     def test_shared_worktree_collisions_continued_and_bound(self):
         state = state_fixture()
@@ -153,7 +186,7 @@ class DisplayStatusTests(unittest.TestCase):
                 row = admit(state, role, **fields)
                 status, comment = display.worktree_status(state, "/project/worker")
                 self.assertEqual(status, initial)
-                self.assertEqual(comment, display.worker_title(state, row) + " working" if initial == "in-progress" else "Waiting on review")
+                self.assertEqual(comment, display.worker_title(state, row) + " working")
                 row["report"] = {"outcome": "succeeded"}
                 self.assertEqual(display.worktree_status(state, "/project/worker"), ("completed", "Report recorded"))
                 state["checkpoint"]["obligations"].append({"id": "A", "kind": "assurance", "state": "waiting"})
@@ -207,6 +240,34 @@ class DisplayOwnershipTests(unittest.TestCase):
         self.assertNotIn("--issue", row["command"])
 
 
+    def test_host_named_and_main_worker_placements_are_host_owned(self):
+        for naming in ({"mode": "fixed", "main": False}, {"mode": "automatic", "main": True}, None):
+            with self.subTest(naming=naming):
+                state = state_fixture(); terms, trees = inventories(state)
+                row = admit(state, purpose="Source analysis", path="/project/host", naming=naming)
+                self.assertIsNone(row["display"]["worktree_name"])
+                self.assertTrue(row["display"]["own_worktree"])
+                self.assertEqual(display.worker_title(state, row), "Implementer")
+                self.assertIsNone(display.admission_output(state, row)["worktree_command"])
+                trees["result"]["worktrees"].append({"id": "host-tree", "path": "/project/host", "displayName": "Host chosen name",
+                    "displayNameMode": "fixed", "parentWorktreeId": None, "isMainWorktree": bool(naming and naming["main"])})
+                output = display.projection(state, terms, trees, {"version": "1.4.230"})
+                host = [item for item in output["rows"] if item["target"] == "path:/project/host"]
+                self.assertEqual(len(host), 1)
+                self.assertEqual((host[0]["owner"], host[0]["verdict"], host[0]["command"]), ("host", "host", None))
+                self.assertFalse(any("/project/host" in str(action) for action in output["next_action"]))
+        state = state_fixture()
+        first = admit(state, path="/project/worker")
+        later = admit(state, "review", path="/project/worker", naming={"mode": "fixed", "main": False})
+        self.assertEqual(later["display"]["worktree_name"], first["display"]["worktree_name"])
+
+    def test_pods_own_task_gap_fill_reads_back_as_pod(self):
+        state = state_fixture(); terms, trees = inventories(state)
+        trees["result"]["worktrees"][0].update(displayNameMode="fixed", displayName="Parser repair (#17)", linkedIssue=17)
+        row = display.projection(state, terms, trees, {"version": "1.4.230"})["rows"][0]
+        self.assertEqual((row["owner"], row["verdict"], row["command"]), ("pod", "matches", None))
+
+
 class DisplayOpTests(TabCase):
     def display_read(self, argv, **kwargs):
         self.display_calls.append(argv)
@@ -232,12 +293,13 @@ class DisplayOpTests(TabCase):
         return state
 
     def binding(self):
-        return {key: value for key, value in self.port.placement.items() if key != "runtime"}
+        return {key: value for key, value in self.port.placement.items()
+                if key not in ("runtime", "display_name_mode", "main")}
 
     def run_display(self):
         before = self.saved()
         with patch("pod.orca.read_command", side_effect=self.display_read), patch("pod.orca.mutate_command") as mutation:
-            result = self.op("display")
+            result = internal.run("display", {"project": str(self.project), "objective": "objective"})
         self.assertEqual(self.display_calls[-3:], [["terminal", "list", "--json"], ["worktree", "list", "--json"], ["--version"]])
         self.assertEqual(self.saved(), before); mutation.assert_not_called()
         self.assertEqual(result["desktop"], "NOT_VERIFIED")
@@ -308,9 +370,29 @@ class DisplayOpTests(TabCase):
 
 
 
+    def test_absent_worker_worktree_is_not_drift_and_rename_offered_only_on_difference(self):
+        state = state_fixture(); admit(state, path="/project/worker")
+        terms, trees = inventories(state)
+        terms["result"]["terminals"][0]["agentIdentity"] = "claude"
+        output = display.projection(state, terms, trees, {"version": "1.4.230"})
+        self.assertNotIn("worker_worktree", [row["layer"] for row in output["rows"]])
+        self.assertEqual(output["verdict"], "drift")  # the task worktree is still unnamed
+        trees["result"]["worktrees"][0].update(displayNameMode="fixed", displayName="Parser repair (#17)", linkedIssue=17)
+        output = display.projection(state, terms, trees, {"version": "1.4.230"})
+        self.assertEqual(output["verdict"], "backend_matches")
+        self.assertIsNotNone(output["rows"][1]["session_rename"])
+        self.assertFalse(any("session_rename" in action for action in output["next_action"]))
+        terms["result"]["terminals"][0]["title"] = "Auto prompt"
+        output = display.projection(state, terms, trees, {"version": "1.4.230"})
+        self.assertTrue(any("session_rename" in action for action in output["next_action"]))
+        trees["result"]["truncated"] = True
+        self.assertEqual(display.projection(state, terms, trees, {"version": "1.4.230"})["verdict"], "drift")
+
+
 class DisplayAckTests(TabCase):
     def binding(self):
-        return {key: value for key, value in self.port.placement.items() if key != "runtime"}
+        return {key: value for key, value in self.port.placement.items()
+                if key not in ("runtime", "display_name_mode", "main")}
 
     def test_checkpoint_display_validation_persistence_and_whole_replacement(self):
         value = {"task": "Parser repair", "continued": [], "host_tab": True}
@@ -337,7 +419,7 @@ class DisplayAckTests(TabCase):
         self.intake(self.sub("S"), worktree=objective,
                     display={"task": "Parser repair", "continued": [], "host_tab": False})
         child = {**objective, "path": str(self.root / "child")}
-        self.port.placement = {**child, "runtime": "runtime"}
+        self.port.placement = {**child, "runtime": "runtime", "display_name_mode": "automatic", "main": False}
         frozen = self.packet(["S"], role="investigate", resolves="one question", stop_condition="one answer",
                              purpose="Parser repair source analysis", worktree=objective, placement=child)
         self.assertEqual(frozen["task_display_name"], "Investigator")
@@ -353,7 +435,7 @@ class DisplayAckTests(TabCase):
         self.settle(row)
         reported = self.report(row, frozen, map={"obligations": self.waiting_rows()})
         finished = self.ack("report", {"admission_id": row["admission_id"]}, reported)["worker_tab"]
-        self.assertEqual(finished["retained_title"]["title"], "Investigator")
+        self.assertNotIn("retained_title", finished)
         self.assertEqual(finished["worktree_status"], "completed")
         self.assertEqual(finished["worktree_command"][-4:], ["completed", "--comment", "Report recorded", "--json"])
         later = self.packet(["S"], role="investigate", resolves="next question", stop_condition="answer",
@@ -399,26 +481,29 @@ class DisplayAckTests(TabCase):
         self.assertEqual(result["session_reason"], display.WORKER_REASON)
         self.assertFalse(sends_input(result))
 
-    def test_naming_sends_no_worker_input_and_keeps_release_and_reuse(self):
-        # Orca marks a tab that receives input user-owned; worker naming stays metadata only.
-        objective = self.binding()
-        self.intake(self.sub("S"), worktree=objective,
-                    display={"task": "Parser repair", "continued": [], "host_tab": False})
+    def claude_placement(self, purpose, resolves="one question"):
+        objective = getattr(self, "objective_binding", None) or self.binding()
+        self.objective_binding = objective
         child = {**objective, "path": str(self.root / "child")}
-        self.port.placement = {**child, "runtime": "runtime"}
+        self.port.placement = {**child, "runtime": "runtime", "display_name_mode": "automatic", "main": False}
         from pod.records import packet
+        frozen = self.packet(["S"], role="investigate", resolves=resolves, stop_condition="answer",
+                             purpose=purpose, worktree=objective, placement=child)
+        body = deepcopy(frozen["body"]); body["route"].update(agent="claude", model="claude-sonnet-5-5", effort="high")
+        return packet(body), child
 
-        def claude(frozen):
-            body = deepcopy(frozen["body"])
-            body["route"].update(agent="claude", model="claude-sonnet-5-5", effort="high")
-            return packet(body)
-
-        frozen = claude(self.packet(["S"], role="investigate", resolves="one question", stop_condition="one answer",
-                                    purpose="Source analysis", worktree=objective, placement=child))
+    def naming_worker(self):
+        self.intake(self.sub("S"), worktree=self.binding(),
+                    display={"task": "Parser repair", "continued": [], "host_tab": False})
+        frozen, child = self.claude_placement("Source analysis")
         started = self.start("first", frozen, worktree="path:" + child["path"])
-        admission = started["admission"]; key = admission["admission_id"]
         self.assertFalse(sends_input(started))
-        self.settle(admission)
+        self.settle(started["admission"])
+        return frozen, child, started["admission"]
+
+    def test_naming_sends_no_worker_input_and_keeps_release_decisions(self):
+        # Orca marks a tab that receives input user-owned; worker naming stays metadata only.
+        frozen, child, admission = self.naming_worker(); key = admission["admission_id"]
         snapshot = self.saved()
         from pod.ledger import _path, _read, _write
         lifecycle = ("row", "state", "command", "ownership", "release_state", "blocks_closure",
@@ -438,15 +523,50 @@ class DisplayAckTests(TabCase):
                 self.assertEqual({field: named.get(field) for field in lifecycle},
                                  {field: unnamed.get(field) for field in lifecycle})
                 self.assertIsNone(unnamed.get("worktree_command"))
-        self.restore(snapshot); self.tab_case = "owned"
+
+    def test_naming_keeps_terminal_reuse(self):
+        frozen, child, admission = self.naming_worker()
+        self.tab_case = "owned"
         self.report(admission, frozen, map={"obligations": self.waiting_rows()})
-        fresh = claude(self.packet(["S"], role="investigate", resolves="next question", stop_condition="answer",
-                                   purpose="Other analysis", worktree=objective, placement=child))
-        reused = self.start("follow-up", fresh, worktree="path:" + child["path"], reuse_of=key)
+        fresh, _ = self.claude_placement("Other analysis", resolves="next question")
+        reused = self.start("follow-up", fresh, worktree="path:" + child["path"], reuse_of=admission["admission_id"])
         self.assertEqual(reused["admission"]["state"], "bound")
         self.assertEqual(reused["rename_command"][4], admission["native_binding"]["terminalHandle"])
         self.assertTrue(reused["title"].endswith(" (continued)"))
         self.assertFalse(sends_input(reused))
+
+    def test_host_named_production_placement_gets_no_worktree_command(self):
+        self.intake(self.sub("S"), worktree=self.binding(),
+                    display={"task": "Parser repair", "continued": [], "host_tab": False})
+        frozen, child = self.claude_placement("Source analysis")
+        self.port.placement = {**self.port.placement, "display_name_mode": "fixed"}
+        result = self.start("first", frozen, worktree="path:" + child["path"])
+        self.assertIsNone(result["worktree_command"])
+        self.assertIsNone(result["admission"]["display"]["worktree_name"])
+        self.assertEqual(result["title"], "Investigator")
+
+    def test_report_ack_marks_the_worktree_when_the_tab_is_gone(self):
+        frozen, child, admission = self.naming_worker()
+        snapshot = self.saved()
+        for case in ("disconnected", "not_materialized"):
+            with self.subTest(case=case):
+                self.restore(snapshot); self.tab_case = case
+                raw = self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+                row = self.ack("report", {"admission_id": admission["admission_id"]}, raw)["worker_tab"]
+                self.assertFalse(row["listed"])
+                self.assertEqual(row["worktree_status"], "completed")
+                self.assertEqual(row["worktree_command"][-4:], ["completed", "--comment", "Report recorded", "--json"])
+
+    def test_display_task_accepts_ordinary_words_and_names_refused_tokens(self):
+        for task in ("User onboarding", "Status page", "Model selection", "High contrast theme", "Task runner cleanup",
+                     "Admin dashboard", "Token rotation", "Default branch rename", "Root cause analysis", "Can't-stop fix"):
+            self.assertEqual(display.validate_record({"task": task, "continued": [], "host_tab": False})["task"], task)
+        for task, token in (("Parser term_fixture", "term_fixture"), ("Fix deadbeef", "deadbeef"),
+                            ("Rename branch/name", "branch/name"), ("Release v2 rollout", "v2")):
+            with self.subTest(task=task), self.assertRaises(PodError) as error:
+                display.validate_record({"task": task, "continued": [], "host_tab": False})
+            self.assertEqual(error.exception.code, "invalid_display_name")
+            self.assertIn(token, str(error.exception))
 
     def test_admission_display_facts_are_validated_and_immutable(self):
         self.intake(self.sub("S"))

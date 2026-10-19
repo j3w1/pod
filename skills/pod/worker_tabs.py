@@ -98,10 +98,8 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
 
     def finish(kind, wording="", **fields):
         result = {**row, "row": kind, "wording": wording, **fields}
-        if result["listed"]:
-            result.update(worktree_command(state, admission))
-            result["retained_title"] = rename(worker_title(state, admission), handle,
-                                               started=kind not in ("unreadable", "runtime_changed"))
+        # Marking the worker's worktree does not depend on whether its tab is still listed.
+        result.update(worktree_command(state, admission))
         return result
 
     # These exclusions precede even unreadable facts and an owner's keep.
@@ -174,6 +172,8 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
             option = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
                       if keep else f"Orca's release option: {next_step}.")
             wording = decision + " " + option + cycle
+        if reason:
+            fields["retained_title"] = rename(worker_title(state, admission), handle)
         return finish("owner_kept_owned" if keep else "retained_owned" if row["release_state"] == "retained" else "owned",
                       wording, **fields)
     row["state"] = "kept"

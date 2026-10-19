@@ -1631,7 +1631,8 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
                     map_state: dict,
                     ctx: dict, placement_binding: dict, moment: datetime, native: dict,
                     run_id: str, task_id: str, plan_revision: str, packet_id: str,
-                    worktree: str, reuse_of: str | None, accompanying: dict | None) -> tuple[dict, dict]:
+                    worktree: str, reuse_of: str | None, accompanying: dict | None,
+                    placement_naming: dict | None = None) -> tuple[dict, dict]:
     from . import __version__
     from .catalog import route_key
     from .obligations import admit, reserved_admission_shape
@@ -1670,7 +1671,7 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
            **shape, "map_revision": body["map_revision"], "result": result,
            "boundary_exceeded": [], "admitted_seq": new_map["seq"]}
     from .display import admission_facts
-    row["display"] = admission_facts(state, body, worktree_path)
+    row["display"] = admission_facts(state, body, worktree_path, placement_naming)
     return row, new_map
 
 
@@ -1679,7 +1680,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             task_id: str, plan_revision: str, packet_id: str, worktree: str,
             frozen_packet: dict, expected_runtime: str, placement_binding: dict,
             reuse_of: str | None = None, accompanying: dict | None = None,
-            now: datetime | None = None, continuity_port=None) -> dict:
+            now: datetime | None = None, continuity_port=None,
+            placement_naming: dict | None = None) -> dict:
     """Final serialized admission: preference read is last, before writing the row.
 
     The served obligations become active in the same locked write that persists the
@@ -1801,7 +1803,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             project, objective, owner, admission_id, requested, snapshot, state, body,
             checkpoint_value, map_state,
             ctx, placement_binding, moment, native, run_id, task_id, plan_revision, packet_id,
-            worktree, reuse_of, accompanying)
+            worktree, reuse_of, accompanying, placement_naming)
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
