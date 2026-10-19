@@ -117,6 +117,14 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     owner = resource.get("ownerDispatchId") or release.get("ownerDispatchId")
     if owner is not None and owner != dispatch:
         return finish("reused_later")
+    observation = facts.get("terminal_observation") or {}
+    if (not failure and not terminal and observation.get("status") == "missing"
+            and observation.get("exactWorker") is False
+            and row["ownership"] in ("released", "user_owned", "external")):
+        # Orca's exact read has no terminal record of this worker, and Orca released the resource or does not own
+        # it: the tab is gone, which reads as disconnected (R125). It releases and closes nothing; an owned
+        # resource without a terminal record stays unreadable.
+        return finish("disconnected")
     if not failure and not resource and not release and not terminal:
         return finish("not_materialized", "This worker has no tab.")
     if failure and runtime_changed:
