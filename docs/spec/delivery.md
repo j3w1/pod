@@ -34,9 +34,45 @@ Before the first remote Git mutation, obtain the one three-way delivery decision
 
 ### R93 — Verified delivery record
 
-Type: H · Scenarios: [A167](#a167), [A168](#a168), [A169](#a169)
+Type: H · Scenarios: [A167](#a167), [A168](#a168), [A169](#a169), [A478](#a478), [A479](#a479), [A480](#a480), [A481](#a481), [A482](#a482)
 
 After an allowed merge lands, fetch its target and record the merge PASS with its provider `merge_commit` through `governor-outcome`, which applies these checks then (R116), then checkpoint `delivery: {record}`. Verify this objective's record, `merge` authorization, candidate/tree, canonical target identity and exact merge, squash or fast-forward result with matching tree and readback. The target is the one admitted with the merge decision; the action and its `merge` authorization name it as `<remote>/<base>`. A mismatch refuses `delivery_unverified`; a moved target requires a new direct user snapshot decision when recording or restating delivery. A later close: true checkpoint with that verified delivery keeps its trusted baseline without governance_refresh or an owner snapshot decision solely because the target advanced past the delivery; closure adopts no changed policy and records no adoption (R144, R147). Outside that closure-only exemption, recording or restating a delivery never skips currency, and a delivery result stays current only for the base and target it was verified against. Store one idempotent record; retain the trusted governance baseline and valid existing proof without refresh or rebind. Candidate-authored policy gains no authority.
+
+The policy base, observed target and admitted merge parent are distinct. Before a
+merge admission writes any journal or consumes relayed consent, its prepared target
+must be the governance `base_ref` and its currently resolved commit must pass the
+same currency predicate as other governed work: the policy base, or this objective's
+verified delivery result for exactly that base and target. Otherwise refuse without
+a journal or context write. Record that exact observed commit as
+`target_binding.commit`; retain the policy base in `governance_binding.base` and in
+any delivery record. A second delivery may therefore merge from the first verified
+result without adopting its policy. It creates no second delivery record or further
+currency exception.
+
+When `target_binding.commit` is present it must be a full object id. Verify parents
+against that commit: merge parents are exactly `[commit, candidate]`, squash parents
+exactly `[commit]`, or a fast-forward result equals the candidate with that commit
+an ancestor. Every candidate, tree, authorization, target and provider readback check
+still applies. A carried row uses its copied target binding under the same rule.
+Wrong parents refuse `result_not_exact`, explaining that the target moved after
+admission and a new snapshot decision cannot settle that row. FAILED and CANCELED
+still refuse when the target contains the landed result; neither an arbitrary
+descendant nor a new snapshot rewrites an admitted merge.
+
+Earlier rows without that commit first use their original policy-base check.
+Only `governor-outcome PASS` may recover a failing parent check using this
+objective's map delivery result, when the row is not carried, the delivery names a
+different ALLOW merge PASS row in this journal, that row's zoned receipt
+`finished_at` is at or before this row's admission `at`, the delivery base equals
+this row's admitted policy base, its target ref equals this row's target ref, and
+every other R93 check passes. No other path infers a earlier parent. Recovery
+adds a kernel-owned row `parent_basis` with `commit`, `basis: verified_delivery`,
+`delivery_record`, `admitted_base` and `observed_at_admission: false`, returned in the
+outcome acknowledgement. The marker is separate from `target_binding` and cannot
+be caller-supplied. Never rewrite the admitted bindings, decision, authorization or
+existing provider evidence; keep any earlier uncertainty evidence. Subsequent
+checks use the recorded recovery basis. Ineligible earlier rows keep their
+refusal and unchanged state.
 
 ### R94 — Objective cleanup plan and consent
 
@@ -105,6 +141,11 @@ When the objective is delivered under the existing delivered test and R117 has o
 - <a id="a167"></a>**A167** — For exact merge, squash and fast-forward commits with the authorized tree and target, an allowed merge PASS plus matching provider readback stores one delivery record and permits closure without governance refresh or proof rebind.
 - <a id="a168"></a>**A168** — A missing/other-objective record, wrong scope/candidate/tree, wrong remote or target alias even with equal SHA, a merge naming another target than its prepared unit, rebase result, readback mismatch or second different record refuses `delivery_unverified` or `delivery_recorded` without a write.
 - <a id="a169"></a>**A169** — When the target moves after a verified delivery result, including when the same record is restated or first recorded late, a non-closing checkpoint's currency refuses `governance_changed` and names a direct user decision for the new exact snapshot; candidate-authored policy is not adopted.
+- <a id="a478"></a>**A478** — Through real Governor and outcome operations on synthetic baseline A, first delivered result B, candidate C on B and result M with parents B and C, the second merge settles PASS after first delivery by merge, squash or fast-forward. Its policy binding and the one delivery record keep A; its target binding commits to B. Second squash and fast-forward results use that same admitted operational parent.
+- <a id="a479"></a>**A479** — A stale or unavailable target, this objective's landed merge without a verified delivery record, a prepared target ref unrelated to governance even at an equal commit, and a target moving during admission each refuse before any journal/context write or relayed-consent consumption.
+- <a id="a480"></a>**A480** — An admitted target commit must be a full object id; a present invalid value never falls back to earlier recovery. A result on a later parent refuses without a write and explains that a snapshot decision cannot settle the row; FAILED and CANCELED still refuse for the landed result. Changed candidate, authorized or Git tree, and authorization still refuse. A carried copy settles only from its provider readback using its copied admitted parent.
+- <a id="a481"></a>**A481** — A synthetic 0.21.1-shaped row first fails its original policy-base check, then settles PASS only through the eligible map-delivery recovery at governor-outcome. It records and acknowledges its unobserved earlier `parent_basis`, retaining its admitted bindings, decision, authorization and earlier uncertainty evidence; replay is byte-identical. A earlier squash recovers the same way; a earlier fast-forward that already passes its base check needs no marker. A delivery settled exactly at admission qualifies. Caller-supplied parent markers or target bindings refuse without a write.
+- <a id="a482"></a>**A482** — Earlier recovery refuses without a write for a wrong parent, delivery settled after admission or without a zoned settlement time, missing or self-referential delivery, a different base or target, a delivery record not naming another ALLOW merge PASS in this journal, changed authorization or result tree, and a carried row even with matching successor delivery. No failed check persists a proposed marker; FAILED and CANCELED still refuse for a landed merge.
 - <a id="a170"></a>**A170** — Worker release remains an explicit coordinator Orca step, separate from read-only cleanup planning. A read-only cleanup plan classifies this objective's clean integrated resources, merged remote head, unique data and protected/shared/active/unknown-terminal resources without changing refs, files, journals or Orca state.
 - <a id="a171"></a>**A171** — After exact-scope consent, unique work is retained, or a bundle is verified by `git bundle verify`, `list-heads` and restoration before guarded removal; a separately confirmed discard is the only unarchived unique-work deletion path.
 - <a id="a172"></a>**A172** — Changed ref or plan digest refuses `cleanup_changed`; deletion uses the plan's no-force Orca worktree command, exact-tip `git update-ref -d` or remote `--force-with-lease`, and protects the default and target branches, main checkout, shared branches and terminals that are not currently owned by a settled objective Dispatch.
@@ -138,7 +179,7 @@ When the objective is delivered under the existing delivered test and R117 has o
 
 ### R119 — Adopt unchanged governance at a checkpoint
 
-Type: B,H · Scenarios: [A331](#a331), [A332](#a332), [A333](#a333), [A334](#a334), [A335](#a335), [A336](#a336), [A337](#a337), [A338](#a338)
+Type: B,H · Scenarios: [A331](#a331), [A332](#a332), [A333](#a333), [A334](#a334), [A335](#a335), [A336](#a336), [A337](#a337), [A338](#a338), [A478](#a478), [A483](#a483)
 
 Governance binds the canonical selected target identity and exact base snapshot. An
 explicit initial user selection is trusted input, including on a nondefault branch
@@ -158,9 +199,11 @@ Pod records a `derived` decision of kind `unchanged_sources`, with the previous 
 new bases, canonical target, sequence and unchanged path/revision table. It moves
 the bound base and citations, retaining the original `proof_base` and governance
 proof identity across the unchanged-source adoption chain. Existing receipts are
-unchanged; merge rows retain their admitted governance base (earlier rows use the
-pre-adoption proof base), so later outcome and delivery recording still verify that
-exact merge; candidate, definition, dependency, environment and other proof checks
+unchanged; merge rows retain their admitted policy base (earlier rows use the
+pre-adoption proof base), their separately observed `target_binding.commit` when
+recorded, and any R93 earlier recovery marker. Outcome and delivery recording
+verify the operational parent without moving policy authority; candidate,
+definition, dependency, environment and other proof checks
 still apply. Adoption never rebinds proof to a changed candidate. Objective commits
 alone do not fire `candidate_policy_target`: only changed bound governance does.
 Admission and Governor effects may refuse until that checkpoint; their next action
@@ -204,6 +247,7 @@ automatic adoptions cannot grow the report or status by repeating their rows.
 - <a id="a336"></a>**A336** — An unreadable bound source at a moved target refuses `governance_changed`, "the target branch moved since governance was bound", with next action `write a checkpoint with governance_refresh` and no write; unavailable evidence is never inferred unchanged.
 - <a id="a337"></a>**A337** — A closing write adopts unchanged governance, relocates citations and retains receipts valid for its unchanged candidate without `rebind`; changing the candidate never rebinds that proof and closure refuses invalidated evidence.
 - <a id="a338"></a>**A338** — Excluded sources do not participate in derived adoption; owner refresh and bound-base observation still read every governance path, so an unreadable excluded source holds a refresh as before. Admission/effect refusal names a plain adopting checkpoint without an owner question. An exact source-changing delivery retains R93's existing exemption and old base, while a later nonclosing checkpoint after a sibling merge still refuses because its policy differs from that bound base; a closing checkpoint with the verified delivery keeps the trusted baseline under R147. A 0.13.3-shaped merge row without `governance_binding` keeps its original base through adoption, outcome and delivery.
+- <a id="a483"></a>**A483** — After M follows the first verified delivery B, a third admission still requires the existing plain checkpoint for unchanged sources or an exact snapshot decision for changed governance. With candidate-authored policy differing from A, the second merge PASS never promotes M to currency and a third admission refuses without any journal/context write, naming the snapshot decision.
 
 ### R120 — Record every owner decision's channel
 

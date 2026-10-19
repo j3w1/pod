@@ -6552,6 +6552,95 @@
         "tests.test_evidence_closure.SweepTests.test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A478",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_merge_after_merge_delivery_uses_delivered_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_merge_after_squash_delivery_uses_delivered_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_merge_after_fast_forward_delivery_uses_delivered_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_squash_uses_observed_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_fast_forward_uses_observed_ancestor"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A479",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_parent_binding.MergeParentTests.test_stale_target_admission_refuses_without_any_write",
+        "tests.test_merge_parent_binding.MergeParentTests.test_own_landed_merge_without_delivery_does_not_become_currency",
+        "tests.test_merge_parent_binding.MergeParentTests.test_unavailable_target_admission_refuses_without_any_write",
+        "tests.test_merge_parent_binding.MergeParentTests.test_unrelated_prepared_target_at_equal_commit_refuses_without_any_write",
+        "tests.test_merge_parent_binding.MergeParentTests.test_target_moved_during_admission_is_rechecked_before_writes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A480",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_parent_binding.MergeParentTests.test_new_row_invalid_target_commit_is_not_a_historical_row",
+        "tests.test_merge_parent_binding.MergeParentTests.test_new_row_wrong_parent_refuses_and_snapshot_cannot_settle_it",
+        "tests.test_merge_parent_binding.MergeParentTests.test_changed_candidate_and_tree_still_refuse_without_any_write",
+        "tests.test_merge_parent_binding.MergeParentTests.test_changed_authorization_and_result_tree_still_refuse_without_any_write",
+        "tests.test_merge_parent_binding.MergeParentTests.test_carried_row_uses_its_copied_observed_parent_for_provider_readback",
+        "tests.test_merge_parent_binding.MergeParentTests.test_new_squash_on_a_later_parent_cannot_settle_the_admitted_row",
+        "tests.test_merge_parent_binding.MergeParentTests.test_new_fast_forward_requires_its_admitted_commit_as_an_ancestor"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A481",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_pass_recovers_only_at_outcome_and_keeps_admitted_evidence",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_squash_recovers_from_the_same_bounded_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_fast_forward_keeps_original_base_check_first",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_delivery_settled_exactly_at_admission_can_recover",
+        "tests.test_merge_parent_binding.MergeParentTests.test_caller_cannot_supply_a_parent_basis_or_replace_the_admitted_binding"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A482",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_wrong_parent_and_failed_landed_merge_keep_refusal",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_delivery_settled_after_admission_cannot_recover",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_delivery_without_a_zoned_settlement_cannot_recover",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_different_delivery_base_or_target_cannot_recover",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_delivery_must_name_another_allowed_merge_pass_in_this_journal",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_absent_or_self_referential_delivery_cannot_recover",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_recovery_keeps_authorization_and_result_tree_checks",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_carried_row_never_uses_successor_delivery_recovery",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_recovery_never_overwrites_recorded_provider_evidence"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A483",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_merge_after_merge_delivery_uses_delivered_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_merge_after_squash_delivery_uses_delivered_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_second_merge_after_fast_forward_delivery_uses_delivered_parent",
+        "tests.test_merge_parent_binding.MergeParentTests.test_third_admission_with_unchanged_sources_needs_a_plain_checkpoint"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

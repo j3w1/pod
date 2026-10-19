@@ -1148,6 +1148,10 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
                         if reason["code"] == "authorization_missing"), None)
         if missing is not None:
             next_action = missing["detail"]
+        target_binding = None
+        if proposal["kind"] == "merge":
+            from .governance import merge_admission_target
+            target_binding = merge_admission_target(project, map_of(state), merge_target(verdict["unit"]))
         record_id = digest({"action": proposal, "at": moment, "revision": journal["revision"]})
         counters = journal["counters"]
         _count(counters["decisions"], decision)
@@ -1184,10 +1188,9 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
             if proposal["kind"] in PUBLICATION_KINDS and verdict["unit"] and verdict["unit"].get("branch"):
                 # Readback and settlement use the branch this push targeted, even if the unit is re-prepared.
                 row["branch"] = dict(verdict["unit"]["branch"])
-            if proposal["kind"] == "merge" and merge_target(verdict["unit"]) is not None:
+            if proposal["kind"] == "merge" and target_binding is not None:
                 # The admitted target, not the unit's later state, is what a delivery record must match.
-                row["target_binding"] = merge_target(verdict["unit"])
-                from .ledger import map_of
+                row["target_binding"] = target_binding
                 governance = (map_of(state) or {}).get("governance")
                 if governance is not None:
                     row["governance_binding"] = {key: governance[key] for key in ("base_ref", "base")}
@@ -1602,7 +1605,7 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
 
 def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
                          provider: dict | None) -> None:
-    from .governance import target_contains_result, verify_merge_result
+    from .governance import historical_merge_parent, target_contains_result, verify_merge_result
     from .ledger import map_of
     record_id = row["record_id"]
     map_state = map_of(state)
@@ -1616,8 +1619,21 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
             raise _outcome_refusal("merge_commit_missing", "A merge PASS keeps the provider merge_commit",
                                    _fetch_first(row) + ", then record PASS with provider.merge_commit", record_id)
         try:
-            verify_merge_result(project, {**row, "receipt": {**row["receipt"], "provider": merged}}, unit,
-                                map_state["governance"])
+            checked = {**row, "receipt": {**row["receipt"], "provider": merged}}
+            try:
+                verify_merge_result(project, checked, unit, map_state["governance"])
+            except PodError as exc:
+                # Earlier rows first keep their original base check. Only this PASS boundary may recover
+                # the known multi-delivery mismatch, and only after all R93 checks pass for that parent.
+                if not isinstance(exc.detail, dict) or exc.detail.get("detail") != "result_not_exact":
+                    raise
+                basis = historical_merge_parent(row, journal, map_state)
+                # Recovery adds a parent basis without replacing earlier provider evidence.
+                if basis is None or any(merged.get(key) != value
+                                        for key, value in (row["receipt"].get("provider") or {}).items()):
+                    raise
+                verify_merge_result(project, {**checked, "parent_basis": basis}, unit, map_state["governance"])
+                row["parent_basis"] = basis
         except PodError as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             raise _outcome_refusal("merge_unverified", "The merge result fails R93's Git checks ("
@@ -1730,6 +1746,8 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
             snapshot = deepcopy(row)
         answer = _readback_answer(project, snapshot, journal, outcome, port, clock)
     result = {"status": "recorded", "record_id": record_id, "outcome": row["outcome"], "receipt": row["receipt"]}
+    if "parent_basis" in row:
+        result["parent_basis"] = deepcopy(row["parent_basis"])
     if row["action"]["kind"] == "merge" and row["outcome"] == "PASS":
         result["readback"] = _merged_readback(project, objective, owner=owner, row=row, port=port,
                                               now=now or datetime.now(timezone.utc))

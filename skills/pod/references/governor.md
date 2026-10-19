@@ -14,6 +14,44 @@ Publish/merge consent may stay `channel: relayed` only when the host configured 
 
 After merge record `governor-outcome` provider `merge_commit` and checkpoint `delivery: {record}`; at closure, reconcile pending rows first, except that the closing write keeps a validation derived from an earlier head the merged pull request superseded as UNKNOWN; verify exact result/tree, target and readback, retaining trusted governance and valid proof. Follow finalization through every validation readback and report consumption to closure. Once delivery is proved, record closure in that turn before the coordinator ends, is released or its tab closes. A closing checkpoint with a verified delivery needs no governance refresh or owner snapshot decision merely because the target moved past that delivery: retain the trusted baseline, adopt no changed policy and record that no adoption occurred. Other target movement keeps the governance rules. Follow project checks/merge queue. Observe mode warns only on efficiency deferrals; enforcement stays advisory unless personal policy names host controls. Workflow proposals remain suggestions. Unknown authority/effects defer; unobserved cost stays unknown; local checks cannot replace required hosted proof. Supersedence cancels only permitted pending cancel-safe older validation, never approving the new candidate.
 
+For multiple delivery units, distinguish the trusted policy base from the current
+target and the merge's admitted parent. At admission the Governor requires the
+prepared target ref to match governance and binds its exact current commit in
+`target_binding.commit`. Currency accepts the policy base or this objective's one
+verified delivery result for that same base and target, without adopting the
+delivered policy. A second merge can therefore use that result as its parent while
+retaining the earlier policy base. Merge parents must be exactly the admitted
+commit and candidate; a squash has only the admitted commit as parent, and a
+fast-forward equals the candidate with the admitted commit as ancestor. Fetch
+first and call the Governor at the merge boundary. If the target moves after
+admission, preserve the evidence and follow the refusal: a later snapshot decision
+cannot settle that row. Never call a landed merge FAILED or CANCELED.
+
+The second merge creates no second map delivery record or new currency exception.
+Before later work, target movement beyond the recorded delivery needs a plain
+checkpoint when every bound governance source is unchanged; Pod adopts that
+snapshot without an owner question. Changed governance needs a fresh owner
+decision for the exact observed `base_ref` and full `base`, recorded with
+`governance_refresh: true` and `revision_authority`. An honestly relayed snapshot
+decision remains relayed. The closing-checkpoint exception above retains the
+trusted baseline and adopts no later policy.
+
+For an earlier merge row lacking `target_binding.commit`, retry the supported
+`governor-outcome PASS` with its exact provider `merge_commit` after fetching.
+Pod first checks its original policy base. It can recover the earlier parent
+only from this objective's map delivery result when that delivery names a different
+ALLOW merge PASS row in the same journal, its receipt finished at or before this
+row's admission, its base and target match this row's admitted policy base and
+target, the row is not carried, and all candidate, tree, authorization and readback
+checks pass. The acknowledgement returns a kernel-owned `parent_basis` marked
+`basis: verified_delivery` and `observed_at_admission: false`, with the commit,
+delivery record and admitted base. This preserves that the parent was not observed
+at admission; admitted bindings and earlier evidence stay recorded. Do not submit
+that marker or edit a journal to obtain recovery. Other earlier cases keep
+their precise refusal and uncertainty; a new snapshot does not rewrite the old
+decision. Carried rows settle through their existing provider-readback path using
+their copied target binding and gain no earlier-delivery inference.
+
 ## Yolo mode
 
 Yolo mode is the owner's standing authorization for one objective, recorded with `pod internal standing-authorization` (read `internal contract` for its record first). It removes only the wait for consent. Every gate still runs: local checks, hosted CI, independent review, exact-head merge, governance currency and the revalidation at each effect.

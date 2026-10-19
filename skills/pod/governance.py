@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import re
 
@@ -135,6 +136,58 @@ def carried_merge_context(row: dict, unit: dict | None, governance: dict | None 
             {"base_ref": (governance or admitted).get("base_ref"), "base": admitted.get("base")})
 
 
+def historical_merge_parent(row: dict, journal: dict, map_state: dict) -> dict | None:
+    """Propose R93's bounded recovery marker; only governor-outcome PASS may persist it after Git checks."""
+    target = row.get("target_binding")
+    if (row.get("carried_from") is not None or not isinstance(target, dict) or "commit" in target
+            or "parent_basis" in row):
+        return None
+    delivery = map_state.get("delivery")
+    if delivery is None:
+        return None
+    validate_delivery_record(delivery)
+    _, governance = carried_merge_context(row, None, map_state["governance"])
+    if (delivery["record"] == row["record_id"] or delivery["base"] != governance.get("base")
+            or delivery["target_ref"] != target.get("ref")):
+        return None
+    prior = [other for other in journal["actions"] if other["record_id"] == delivery["record"]]
+    if (len(prior) != 1 or prior[0]["decision"] != "ALLOW" or prior[0]["outcome"] != "PASS"
+            or prior[0]["action"]["kind"] != "merge"):
+        return None
+    try:
+        finished = datetime.fromisoformat(prior[0]["receipt"]["finished_at"])
+        admitted = datetime.fromisoformat(row["at"])
+        if finished.utcoffset() is None or admitted.utcoffset() is None or finished > admitted:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"commit": delivery["result"], "basis": "verified_delivery", "delivery_record": delivery["record"],
+            "admitted_base": governance["base"], "observed_at_admission": False}
+
+
+def _merge_parent(row: dict, target: dict, governance: dict) -> str:
+    """Keep policy authority separate from an observed parent or an explicitly recovered earlier parent."""
+    if "commit" in target:
+        parent = target["commit"]
+        if not isinstance(parent, str) or not _OBJECT.fullmatch(parent):
+            raise _delivery_refusal("target_identity", "The merge's admitted target commit is not a full object id",
+                                    "preserve the row and inspect its recorded target binding")
+        if "parent_basis" in row:
+            raise PodError("state_unsupported", "An observed merge parent cannot have a earlier recovery marker")
+        return parent
+    if "parent_basis" not in row:
+        return governance["base"]
+    basis = row["parent_basis"]
+    if (not isinstance(basis, dict) or set(basis) != {"commit", "basis", "delivery_record", "admitted_base",
+                                                    "observed_at_admission"}
+            or basis["basis"] != "verified_delivery" or basis["observed_at_admission"] is not False
+            or basis["admitted_base"] != governance["base"]
+            or not isinstance(basis["delivery_record"], str) or not 1 <= len(basis["delivery_record"]) <= 128
+            or not isinstance(basis["commit"], str) or not _OBJECT.fullmatch(basis["commit"])):
+        raise PodError("state_unsupported", "The merge's earlier parent basis is malformed")
+    return basis["commit"]
+
+
 def verify_merge_result(project: Path, row: dict, unit: dict | None, governance: dict) -> dict:
     """R93's Git checks for one merge row: the exact candidate, consent, target and result.
 
@@ -206,17 +259,23 @@ def verify_merge_result(project: Path, row: dict, unit: dict | None, governance:
         raise _delivery_refusal("result_unavailable", "The result parents cannot be observed",
                                 "restore the exact result commit and retry delivery", result=result)
     base, head = governance["base"], candidate["commit"]
+    parent = _merge_parent(row, admitted, governance)
     parents = words[1:]
     if result == head:
         from . import gitio
-        method = "fast-forward" if gitio.is_ancestor(project, base, head, resolve=_resolve_commit) is True else None
-    elif parents == [base, head]:
+        method = "fast-forward" if gitio.is_ancestor(project, parent, head, resolve=_resolve_commit) is True else None
+    elif parents == [parent, head]:
         method = "merge"
-    elif parents == [base]:
+    elif parents == [parent]:
         method = "squash"
     else:
         method = None
     if method is None:
+        if "commit" in admitted:
+            raise _delivery_refusal("result_not_exact", "The result does not use the target commit bound at admission",
+                                    "the target moved after admission; a new snapshot decision cannot settle this row; "
+                                    "preserve the merge evidence and inspect the exact admitted parent and candidate",
+                                    result=result)
         raise _delivery_refusal("result_not_exact", "The result is not an exact merge, squash or fast-forward",
                                 "obtain a direct user decision for the exact new target snapshot", result=result)
     tree = _delivery_object(project, ["rev-parse", "--verify", "--quiet", result + "^{tree}"],
@@ -597,6 +656,39 @@ def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
                       "its later policy is not adopted"}
 
 
+def accepted_current_target(map_state: dict, current: str) -> bool:
+    """R93 currency: only the policy base or this objective's exact delivery for that base and target."""
+    governance = map_state["governance"]
+    if current == governance["base"]:
+        return True
+    delivery = map_state.get("delivery")
+    if delivery is None:
+        return False
+    validate_delivery_record(delivery)
+    return (current == delivery["result"] and delivery["base"] == governance["base"]
+            and delivery["target_ref"] == governance["base_ref"])
+
+
+def merge_admission_target(project: Path, map_state: dict | None, target: dict | None) -> dict | None:
+    """Observe the exact current operational parent before any admission write or consent consumption."""
+    governance = (map_state or {}).get("governance") or {}
+    if target is None or governance.get("base_ref") is None:
+        return target
+    if target["ref"] != governance["base_ref"]:
+        raise _delivery_refusal("target_identity", "The prepared merge target differs from bound governance",
+                                "obtain a direct user decision for the intended target", target=target["ref"])
+    from .obligations import refuse
+    current = _resolve_commit(project, target["ref"])
+    if current is None:
+        raise refuse("governance_unavailable", "governance_unavailable",
+                     "the governance base cannot be resolved; new work holds", base_ref=target["ref"])
+    if not accepted_current_target(map_state, current):
+        raise refuse("governance_changed", "governance_changed",
+                     "the target moved during merge admission; check governance currency again before merging",
+                     base_ref=target["ref"], current=current)
+    return {**target, "commit": current}
+
+
 def require_governance_current(project: Path, map_state: dict | None, *, checkpoint: bool = False) -> tuple[dict, dict] | None:
     """Before new admission or a governed effect: the bound base is still the target's base."""
     if not isinstance(map_state, dict) or map_state.get("obligations") is None:
@@ -613,16 +705,11 @@ def require_governance_current(project: Path, map_state: dict | None, *, checkpo
     if current is None:
         raise refuse("governance_unavailable", "governance_unavailable",
                      "the governance base cannot be resolved; new work holds", base_ref=governance["base_ref"])
-    if current == governance["base"]:
-        return
     # A verified delivery result is current without adopting its policy, but only for the exact base and
     # target it was verified against; a later snapshot decision or retarget ends that exception.
+    if accepted_current_target(map_state, current):
+        return
     delivery = map_state.get("delivery")
-    if delivery is not None:
-        validate_delivery_record(delivery)
-        if (current == delivery["result"] and delivery["base"] == governance["base"]
-                and delivery["target_ref"] == governance["base_ref"]):
-            return
     unchanged = unchanged_governance(project, map_state)
     if checkpoint and unchanged is not None:
         return unchanged
