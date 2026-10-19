@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import stat
 
 from .errors import PodError
@@ -232,16 +233,15 @@ def _journal_bytes(root: Path) -> bytes | None:
         os.lstat(path)
     except FileNotFoundError:
         return None
+    from .governor import MAX_JOURNAL
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as file:
             if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
                 raise PodError("journal_unreadable", "The Governor journal is not a regular file")
-            from .governor import MAX_JOURNAL
             data = file.read(MAX_JOURNAL + 1)
     except OSError as exc:
         raise PodError("journal_unreadable", "The Governor journal cannot be read") from exc
-    from .governor import MAX_JOURNAL
     if len(data) > MAX_JOURNAL:
         raise PodError("journal_unreadable", "The Governor journal exceeds its bound")
     return data
@@ -326,8 +326,8 @@ def _phase(root: Path, raw: dict) -> str:
 
 
 def _settled_record(project: Path, row: dict) -> bool:
-    """Whether a recovery coordinator's own record is finished: closed, closed by evidence, under historical
-    retirement, or continued along a chain that ended closed (R110)."""
+    """Whether a recovery coordinator's own record is finished: closed, closed by evidence, ended by the owner's
+    historical retirement, or continued along a chain that ended closed (R110)."""
     from .succession import chain_state
     if present(row["root"]):
         return True
@@ -348,8 +348,8 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
     from .operations import OrcaPort
     project = Path(project)
     proof = _Proof(objective)
-    root = objective_root(project, objective)
     try:
+        root = objective_root(project, objective)
         if not _record_exists(root / "context.json"):
             proof.add("not_applicable", "objective_unknown", "No record of that objective exists in this repository.")
             return proof.result()
@@ -389,8 +389,19 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
                                            "retired": "The owner's historical retirement covers it.",
                                            "continued": "A successor continues it; its chain tail closes it."}[phase])
         return proof.result()
+    try:
+        _checks(project, objective, root, raw, kind, doc, proof, port=port or OrcaPort(project), remote=remote,
+                now=now)
+    except PodError as exc:
+        # A fact the proof needs could not be read: nothing is closed on it (C2).
+        proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
+    return proof.result()
+
+
+def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc: dict, proof: _Proof, *, port,
+            remote, now: datetime | None) -> None:
+    """Conditions 2 to 8 after the record is read, cheapest first; each unmet one is added to `proof`."""
     _claims(project, objective, raw, kind, proof)
-    port = port or OrcaPort(project)
     remote = remote if isinstance(remote, _Remote) else _Remote(project, remote)
     scan: dict = {}
 
@@ -401,7 +412,7 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
 
     owner = _coordinator(doc, proof)
     if owner is False:
-        return proof.result()
+        return
     dispatches = _runs(project, doc, owner, proof, records)
     _work(doc, dispatches, proof, port=port)
     state = raw if kind == "current" else None
@@ -411,9 +422,8 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
     _preserved(project, root, doc, state, proof, remote, now=now)
     from .obligations import TERMINAL
     from .ledger import map_of
-    obligations = (map_of(state) or {}).get("obligations") or [] if state is not None else []
+    obligations = ((map_of(state) or {}).get("obligations") or []) if state is not None else []
     proof.facts["unfinished"] = [ob["id"] for ob in obligations if ob.get("state") not in TERMINAL][:MAX_LISTED]
-    return proof.result()
 
 
 def _claims(project: Path, objective: str, raw: dict, kind: str, proof: _Proof) -> None:
@@ -805,7 +815,7 @@ def _create(root: Path, content: dict) -> bool:
     data = encoded(content, compact=True)
     if len(data) > MAX_FILE:
         raise PodError("record_too_large", "The evidence closure exceeds its bound; nothing was written")
-    temporary = root / f".{FILE}.{os.getpid()}.{_sha(data)[:12]}.tmp"
+    temporary = root / f".{FILE}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "wb") as file:

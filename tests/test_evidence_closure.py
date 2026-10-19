@@ -722,6 +722,9 @@ class SweepTests(ClosureCase):
         detected = self.retire()
         self.assertEqual(detected["objectives"][0]["condition"], "objective_closed")
         self.assertNotIn("question", detected)
+        # CE's cleanup reads it as closed, like an objective its coordinator closed (R94).
+        self.assertEqual(run("cleanup-plan", {"project": project, "objective": "objective"})["closure_basis"],
+                         "evidence")
         self.assertEqual((len(self.port.starts), self.mutations), (starts, []))
         self.assertFalse([call for call in self.remote.calls[sent:] if call[0] in MUTATIONS])
         self.assertEqual(self.files(), closed)
