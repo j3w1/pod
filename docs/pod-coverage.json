@@ -6499,6 +6499,59 @@
         "tests.test_worker_tabs.ClosureTests.test_closing_report_accepts_a_gone_terminal_record_and_holds_an_unconfirmed_one"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A476",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_cleanup_plan.CleanupScaleTests.test_large_inventory_plan_expect_apply_only_objective_resources",
+        "tests.test_cleanup_plan.CleanupScaleTests.test_shared_branch_beyond_the_old_inventory_bound_remains_protected",
+        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_still_has_a_resource_bound",
+        "tests.test_github.StreamingRepositoryTests.test_canonical_and_linked_identity_keep_the_common_dir_key_and_full_shape",
+        "tests.test_github.StreamingRepositoryTests.test_detached_identity_preserves_its_path_with_no_branch",
+        "tests.test_github.StreamingRepositoryTests.test_bare_backed_worktree_uses_the_bare_common_dir_and_first_inventory_entry",
+        "tests.test_github.StreamingRepositoryTests.test_separate_git_dir_keeps_gits_main_entry_and_refuses_an_unlisted_checkout",
+        "tests.test_github.StreamingRepositoryTests.test_complete_nul_inventory_survives_chunk_boundaries_and_detached_and_bare_rows",
+        "tests.test_github.StreamingRepositoryTests.test_truncated_empty_missing_and_duplicate_inventory_fields_refuse",
+        "tests.test_github.StreamingRepositoryTests.test_discovery_and_cleanup_refuse_failed_empty_or_incomplete_native_inventory",
+        "tests.test_github.StreamingRepositoryTests.test_discovery_refuses_a_complete_inventory_that_omits_the_current_worktree",
+        "tests.test_github.StreamingRepositoryTests.test_other_discovery_reads_keep_their_output_bound_and_allowlist",
+        "tests.test_cleanup_plan.CleanupScaleTests.test_full_registry_consumer_bound_does_not_bound_objective_plan"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A477",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_exact_selector_removes_released_worker_and_its_local_and_remote_branches_while_open",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_internal_entry_point_passes_the_exact_dispatch_selector",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_recorded_reuse_reason_is_exact_and_changes_expect",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_native_retention_and_reuse_keep_the_exact_reason",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_active_unreleased_live_or_unknown_worker_resources_stay_held",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_foreign_user_owned_and_current_integration_resources_stay_held",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_unreported_and_other_assignment_placements_are_held",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_dirty_ignored_stash_and_foreign_terminal_keep_all_worker_resources",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_unmerged_and_corrupt_archive_hold_worker_refs",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_changed_release_report_or_remote_tip_invalidates_expect",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_default_target_and_changed_branch_bindings_remain_protected",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_moved_after_delivery_hold_is_unchanged",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_projection_release_without_a_terminal_resource_is_supported",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_incomplete_resource_and_wrong_worker_terminal_never_prove_release",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_selector_shape_and_unknown_identity_are_refused_without_writes",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_incomplete_connected_or_foreign_terminal_readbacks_hold_release",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_final_reused_round_can_remove_the_reported_released_placement",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_reuse_history_active_unknown_or_foreign_ownership_holds_and_changes_expect",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_reuse_requires_a_complete_exact_chain_or_positive_independent_historical_release",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_contradictory_projection_ownership_and_unknown_integration_stay_held",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_missing_earlier_native_resource_after_reuse_stays_held",
+        "tests.test_evidence_closure.SweepTests.test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }
