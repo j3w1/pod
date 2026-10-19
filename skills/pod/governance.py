@@ -173,7 +173,7 @@ def _merge_parent(row: dict, target: dict, governance: dict) -> str:
             raise _delivery_refusal("target_identity", "The merge's admitted target commit is not a full object id",
                                     "preserve the row and inspect its recorded target binding")
         if "parent_basis" in row:
-            raise PodError("state_unsupported", "An observed merge parent cannot have a earlier recovery marker")
+            raise PodError("state_unsupported", "An observed merge parent cannot also carry a recovered parent marker")
         return parent
     if "parent_basis" not in row:
         return governance["base"]
