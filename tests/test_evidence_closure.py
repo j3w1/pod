@@ -142,6 +142,10 @@ class ClosureCase(RetirementCase):
         self.assertEqual((state["state"], state["acts_next"], state["coordinator_needed"], state["reason"]["basis"]),
                          ("closed", "none", False, "evidence"))
         self.assertTrue(state["summary"].startswith("Closed by evidence, coordinator gone: "), state["summary"])
+        block = shown["evidence_closure"]
+        self.assertEqual((block["schema"], block["objective"], block["basis"], block["at"] is not None,
+                          sorted(block["counts"])), ("pod-evidence-closure/v1", objective, "evidence", True,
+                                                     ["failed", "reconciled", "unknown", "unreported"]))
         self.assertEqual((shown["evidence_closure"]["statement"], shown["retained_terminals"],
                           shown["assignments"]["active"], shown["assignments"]["unverified"]),
                          (STATEMENT, [], [], []))
@@ -217,6 +221,55 @@ class ClosureCase(RetirementCase):
                                               worktree=self.binding(), objective_source=self.source)})
         claimed = self.claim(SuccessionCase.decide(self))
         self.assertEqual(claimed["status"], "claimed", claimed)
+
+    def published_twice(self, *, reconcile_head=True):
+        """A live coordinator's delivery (C11): the earlier head C0 and then the merged head C1 published through
+        pr_update, each leaving a derived ci.yml validation; PR 7 merged at C1 carrying both; PoD#1 ticked by Pod."""
+        self.prepare()
+        earlier = self.candidate
+        self.op("governor-execute", action=self.action(kind="pr_update", effects=["workflow:ci.yml"]))
+        head = self.move()
+        self.op("checkpoint", value=self.core(obligations=self.stored()))
+        prepared = self.op("governor-prepare", unit="default",
+                           branch={"remote": "origin", "branch": "delivery", "base": "target"})["candidate"]
+        self.authorization = {**self.authorization, "candidate": prepared["commit"], "tree": prepared["tree"]}
+        self.op("governor-execute", action=self.action(kind="pr_update", effects=["workflow:ci.yml"]))
+        derived = {row["commit"]: row["record_id"] for row in _read_journal(_record_path(self.project, "objective"))[
+            "actions"] if row.get("derived_from")}
+        if reconcile_head:
+            self.ci(head, "success")
+            self.assertEqual(self.op("governor-reconcile", record_id=derived[head])["status"], "PASS")
+        self.remote.pulls[7] = {**MERGED, "head": head, "commits": [earlier, head]}
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        self.op("checkpoint", value=self.core(obligations=rows))
+        self.assertEqual(self.op("pod-tick", pod=1)["status"], "confirmed")
+        return derived[earlier], derived[head]
+
+    def ci(self, commit, conclusion):
+        later = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+        ran = self.remote._start("ci.yml", commit, event="pull_request", created_at=later)
+        self.remote.complete(ran["id"], conclusion)
+
+    def close_live(self):
+        """The live coordinator's own closing checkpoint, answered as the CLI acknowledges it."""
+        from pod.internal import acknowledge
+        request = {"project": str(self.project), "objective": "objective", "owner": "owner",
+                   "value": self.core(obligations=self.stored(), close=True)}
+        return acknowledge("checkpoint", request, run("checkpoint", request))
+
+    def held(self, *, reason=None, reconcile=None):
+        """The closing write refuses and writes nothing; returns the refusal."""
+        before = self.everything()
+        error = self.refused(self.close_live, code="obligation_unaccounted")
+        self.assertEqual(self.everything(), before)
+        if reason is not None:
+            self.assertIn(reason, [row["reason"] for row in error.detail["closure_preservation"]["held"]])
+        if reconcile is not None:
+            self.assertEqual(error.detail["next_action"], f"run governor-reconcile for record {reconcile}, then write "
+                                                          "the closing checkpoint again")
+        return error
 
     def everything(self):
         root = self.root / "state"
@@ -307,6 +360,74 @@ class DeliveryClosesTests(unittest.TestCase):
                           if row.get("provenance") == "derived" or row.get("kind") == "snapshot"], [])
         self.assertNotIn("question", json.dumps(closed))
 
+    def test_a_superseded_earlier_head_validation_is_preserved_at_closure(self):
+        case = _live_case(self)
+        earlier, head = case.published_twice()
+        state = case.status()["readiness"]
+        self.assertEqual((state["state"], state["acts_next"]), ("finalizing", "coordinator"))
+        self.assertTrue(state["summary"].startswith("Delivered, not closed: settle each of the 1 publication-derived"))
+        self.assertNotIn("superseded_by_merged_head", state["summary"])  # Nothing is claimed before the check.
+        journal = _record_path(case.project, "objective").read_bytes()
+        closed = case.close_live()
+        row = {"record": earlier, "kind": "workflow_dispatch", "recorded": "pending", "outcome": "UNKNOWN",
+               "reason": "superseded_by_merged_head", "pr": 7, "merged_head": case.candidate}
+        self.assertEqual((closed["closure_preserved"], closed["finalization"]["preserved_at_closure"],
+                          closed["finalization"]["finished"]), ([row], [row], True))
+        self.assertEqual(_record_path(case.project, "objective").read_bytes(), journal)  # Nothing is stamped.
+        self.assertEqual({entry["record_id"]: entry["outcome"] for entry in _read_journal(
+            _record_path(case.project, "objective"))["actions"]}[earlier], "pending")
+        shown = case.status()
+        self.assertEqual((shown["readiness"]["state"], shown["closure_preserved"]), ("closed", [row]))
+        from pod.succession import _closure_recorded
+        self.assertTrue(_closure_recorded(case.project, "objective", read(case.project, "objective")))
+        self.assertFalse([call for call in case.remote.calls if call[0] in MUTATIONS[2:]])
+        self.assertEqual(_questions(closed), [])
+
+    def test_the_merged_head_unreadable_commits_and_unproved_delivery_still_hold_the_closure(self):
+        case = _live_case(self)
+        earlier, head = case.published_twice(reconcile_head=False)
+        case.held(reason="the merged delivery head itself")  # Its validation decides the merged result.
+        case.ci(case.candidate, "success")
+        self.assertEqual(case.op("governor-reconcile", record_id=head)["status"], "PASS")
+        pull = case.remote.pulls[7]
+        commits = pull.pop("commits")
+        error = case.held(reason="a merged delivery pull request's commits could not be read completely")
+        self.assertEqual([row["record"] for row in error.detail["closure_preservation"]["held"]], [earlier])
+        pull.update(commits=commits, truncated=True)
+        case.held(reason="a merged delivery pull request's commits could not be read completely")
+        pull.update(truncated=False, state="OPEN")
+        error = case.held()
+        self.assertEqual((error.detail["closure_preservation"]["proof"]["status"],
+                          error.detail["closure_preservation"]["proof"]["conditions"][0]["code"]),
+                         ("not_proved", "pr_not_merged"))
+
+    def test_a_settling_readback_and_other_unsettled_kinds_still_hold_the_closure(self):
+        case = _live_case(self)
+        earlier, _ = case.published_twice()
+        case.ci(case.remote.pulls[7]["commits"][0], "failure")
+        case.held(reconcile=earlier)  # Pod's readback settles it now: reconcile first.
+        case.remote.runs_by.clear()
+        path = _record_path(case.project, "objective")
+        recorded = path.read_bytes()
+        journal = _read_journal(path)
+        base = next(row for row in journal["actions"] if row["record_id"] == earlier)
+        for kind, fields in (("workflow_dispatch", {"derived_from": None}),  # A requested dispatch, zero runs.
+                             ("release", {"derived_from": None})):
+            with self.subTest(kind=kind):
+                extra = {**deepcopy(base), **fields, "record_id": kind[0] * 64, "logical_key": kind[0] * 64,
+                         "action": {**base["action"], "kind": kind}}
+                _write_journal(path, {**deepcopy(journal), "actions": journal["actions"] + [extra]})
+                error = case.held()
+                self.assertNotIn("closure_preservation", error.detail)  # Today's rule, with no provider read.
+                path.write_bytes(recorded)
+        self.assertEqual(case.close_live()["closure_preserved"][0]["record"], earlier)
+
+
+def _live_case(test):
+    case = ClosureCase(); case.setUp()
+    test.addCleanup(case.doCleanups)
+    return case
+
 
 def _tab_closed(case):
     case.exits["owner"] = "operator_close"
@@ -381,7 +502,7 @@ class LostCoordinatorTests(GroupedTable):
             verdict = case.swept(result)
             self.assertEqual(_questions(result), [])
             if not closes:
-                self.assertEqual((verdict["result"], verdict["party"], verdict["conditions"][0]["code"]),
+                self.assertEqual((verdict["outcome"], verdict["party"], verdict["conditions"][0]["code"]),
                                  ("not_proved", "lead", condition), verdict)
                 self.assertIsNone(case.closure())
                 shown = case.status()
@@ -389,7 +510,7 @@ class LostCoordinatorTests(GroupedTable):
                                  ("coordinator_lost", "lead"))
                 self.assertEqual(case.files(), before)
                 return
-            self.assertEqual(verdict["result"], "closed", verdict)
+            self.assertEqual(verdict["outcome"], "closed", verdict)
             stored = case.closure()
             self.assertEqual((stored["statement"], stored["relation"], stored["delivery"][0]["pr"],
                               stored["source"]["proof"]), (STATEMENT, "tail", 7, "pod_ticks"))
@@ -425,9 +546,9 @@ class UndeliveredTests(ClosureCase):
         verdict = self.swept(result)
         self.assertEqual(code, 0)
         if status == "skipped":
-            self.assertEqual((verdict["result"], verdict["conditions"][0]["code"]), ("skipped", condition), verdict)
+            self.assertEqual((verdict["outcome"], verdict["conditions"][0]["code"]), ("skipped", condition), verdict)
         else:
-            self.assertEqual((verdict["result"], verdict["party"]), (status, "lead"), verdict)
+            self.assertEqual((verdict["outcome"], verdict["party"]), (status, "lead"), verdict)
             self.assertIn(condition, [row["code"] for row in verdict["conditions"]])
         self.assertIsNone(self.closure())
         self.assertEqual(self.everything(), before)
@@ -451,7 +572,7 @@ class UndeliveredTests(ClosureCase):
         self.remote.issues[("acme/example", 82)].update(state="CLOSED", state_reason="NOT_PLANNED")
         self.stays_open("source_unproved")
         self.remote.issues[("acme/example", 82)].update(state_reason="COMPLETED")
-        self.assertEqual(self.swept(self.sweep()[1])["result"], "closed")
+        self.assertEqual(self.swept(self.sweep()[1])["outcome"], "closed")
         self.assertEqual(self.closure()["source"]["proof"], "issue_completed")
 
     def test_a_delivery_pull_request_that_is_not_merged_stays_open(self):
@@ -514,7 +635,7 @@ class PreservedResultsTests(ClosureCase):
                                {**pending("f" * 64, "release"), "outcome": "FAILED"}]
         _write_journal(path, journal)
         before, recorded = self.files(), path.read_bytes()
-        self.assertEqual(self.swept(self.sweep()[1])["result"], "closed")
+        self.assertEqual(self.swept(self.sweep()[1])["outcome"], "closed")
         rows = {row["id"]: row for row in self.closure()["preserved"] if row["kind"] == "governor"}
         self.assertEqual((rows[derived["record_id"]]["outcome"], rows[derived["record_id"]]["reconciled"]),
                          ("PASS", True))
@@ -540,9 +661,13 @@ class ChainTests(ClosureCase):
         self.terminals["next"] = "stale"
         frozen, own = self.files(), self.files("successor")
         code, result = self.sweep()
-        self.assertEqual((self.swept(result, "successor")["result"], self.swept(result)["result"]),
+        self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
                          ("closed", "already_closed"))
-        self.assertEqual(self.swept(result, "successor")["predecessors"], ["objective"])
+        self.assertEqual(self.swept(result, "successor")["party"], None)
+        # The continued predecessor keeps reading continued, with its own entry beside its frozen record.
+        shown = self.status()
+        self.assertEqual((shown["readiness"]["state"], shown["evidence_closure"]["relation"],
+                          shown["evidence_closure"]["schema"]), ("continued", "predecessor", "pod-evidence-closure/v1"))
         tail, entry = self.closure("successor"), self.closure()
         self.assertEqual((tail["relation"], [row["pr"] for row in tail["delivery"]]), ("tail", [7]))
         self.assertEqual(tail["delivery"][0]["recorded_by"], "objective")
@@ -556,7 +681,7 @@ class ChainTests(ClosureCase):
         self.assert_closed_by_evidence("successor")
         before = self.everything()
         again = self.sweep()[1]
-        self.assertEqual({row["result"] for repository in again["repositories"] for row in repository["objectives"]},
+        self.assertEqual({row["outcome"] for repository in again["repositories"] for row in repository["objectives"]},
                          {"already_closed"})
         self.assertEqual(self.everything(), before)
 
@@ -567,11 +692,11 @@ class ChainTests(ClosureCase):
         code, result = self.sweep()
         for name in ("objective", "recovery"):
             verdict = self.swept(result, name)
-            self.assertEqual((verdict["result"], [row["code"] for row in verdict["conditions"]]),
+            self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
                              ("not_proved", ["pr_not_merged"]), verdict)
         self.remote.pulls[8] = dict(MERGED)
         result = self.sweep()[1]
-        self.assertEqual((self.swept(result)["result"], self.swept(result, "recovery")["result"]), ("closed", "closed"))
+        self.assertEqual((self.swept(result)["outcome"], self.swept(result, "recovery")["outcome"]), ("closed", "closed"))
         for name in ("objective", "recovery"):
             stored = self.closure(name)
             self.assertEqual((stored["relation"], [row["pr"] for row in stored["delivery"]]), ("tail", [7, 8]))
@@ -636,14 +761,20 @@ class SweepTests(ClosureCase):
         self.assertNotIn("delivery_proof", self.listed()["objective"])  # The plain list stays record-only.
         before = self.everything()
         code, result = self.sweep("--repository", str(self.project), "--repository", str(other))
-        self.assertEqual((code, result["status"], len(result["repositories"])), (0, "swept", 2))
+        self.assertEqual((code, result["schema"], result["status"], len(result["repositories"])),
+                         (0, "pod-cli/v5", "swept", 2))
+        self.assertEqual([sorted(row) for row in result["repositories"]],
+                         [["objectives", "path", "reason", "repo_key", "repository", "status"]] * 2)
+        self.assertEqual({tuple(sorted(row)) for repository in result["repositories"]
+                          for row in repository["objectives"]}, {("conditions", "objective", "outcome", "party")})
+        self.assertTrue(result["next_safe_action"])
         self.assertEqual(result["counts"], {"closed": 2, "already_closed": 0, "not_proved": 1, "unverified": 1,
                                             "skipped": 0})
-        self.assertEqual(self.swept(result, "widgets")["result"], "closed")
+        self.assertEqual(self.swept(result, "widgets")["outcome"], "closed")
         lead, unread = self.swept(result, "lead-task"), self.swept(result, "unread")
         self.assertEqual((lead["party"], [row["code"] for row in lead["conditions"]]),
                          ("lead", ["source_unproved", "delivery_unrecorded"]))
-        self.assertEqual((unread["result"], unread["conditions"][0]["code"]), ("unverified", "owner_unverified"))
+        self.assertEqual((unread["outcome"], unread["conditions"][0]["code"]), ("unverified", "owner_unverified"))
         self.assertEqual(_questions(result), [])
         written = sorted(set(self.everything()) - set(before))
         self.assertEqual(len(written), 2)
@@ -659,7 +790,9 @@ class SweepTests(ClosureCase):
         code, text = self.sweep("--repository", str(self.project), text=True)
         self.assertEqual(code, 0)
         self.assertIn("a task for the project lead", text)
-        self.assertEqual(self.sweep("--repository", str(self.root / "missing"))[0], 1)
+        code, missing = self.sweep("--repository", str(self.root / "missing"), "--repository", str(other))
+        self.assertEqual((code, [row["status"] for row in missing["repositories"]]), (0, ["unavailable", "swept"]))
+        self.assertTrue(missing["repositories"][0]["reason"])
 
     def listed_delivered(self):
         out = StringIO()
@@ -729,9 +862,14 @@ class SweepTests(ClosureCase):
             self.refused(calls["journal backstop"], code="unsafe_state")
         finally:
             root.chmod(mode)
-        # CE's cleanup reads it as closed, like an objective its coordinator closed (R94).
-        self.assertEqual(run("cleanup-plan", {"project": project, "objective": "objective"})["closure_basis"],
-                         "evidence")
+        # CE's cleanup reads it as closed, like an objective its coordinator closed (R94); its remote branch read
+        # is answered locally, never by the network.
+        from pod import cleanup
+        local = cleanup._git
+        with patch("pod.cleanup._git", side_effect=lambda where, argv: None if argv[:1] == ["ls-remote"]
+                   else local(where, argv)):
+            plan = run("cleanup-plan", {"project": project, "objective": "objective"})
+        self.assertEqual(plan["closure_basis"], "evidence")
         self.assertEqual((len(self.port.starts), self.mutations), (starts, []))
         self.assertFalse([call for call in self.remote.calls[sent:] if call[0] in MUTATIONS])
         self.assertEqual(self.files(), closed)
@@ -744,7 +882,7 @@ class SweepTests(ClosureCase):
         before, starts, calls = self.everything(), len(self.port.starts), len(self.remote.calls)
         self.native_calls.clear()
         code, result = self.sweep()
-        self.assertEqual((code, self.swept(result)["result"]), (0, "closed"))
+        self.assertEqual((code, self.swept(result)["outcome"]), (0, "closed"))
         self.assertNotIn(["orchestration", "run-current", "--json"], self.native_calls)
         self.assertEqual((len(self.port.starts), self.mutations), (starts, []))
         self.assertFalse([call for call in self.remote.calls[calls:] if call[0] in MUTATIONS])

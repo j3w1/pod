@@ -254,6 +254,14 @@ def _summary(block: dict) -> str:
     if state == "closed_external":
         return (f"Closed with external work: {len(block['external'])} remaining gate(s) outside the objective, "
                 f"for the {block['acts_next']}; Pod needs nothing more and its coordinator may close.")
+    derived = (pending or {}).get("records", {}).get("validation_readback") or []
+    if (state == "finalizing" and pending["remaining"] == ["validation_readback", "closure"]
+            and all(entry.get("derived_from") for entry in derived)):
+        # Never claims a row preservable before the closing write checks it (C11, Amendment 3).
+        return (f"Delivered, not closed: settle each of the {len(derived)} publication-derived validation(s) with "
+                "governor-reconcile, or write the closing checkpoint (close: true), which reads each back and "
+                "preserves only an earlier-head validation the merged delivery superseded; no owner decision is "
+                "needed, and it is not safe to close the coordinator.")
     if state == "finalizing" and pending["remaining"] == ["closure"]:
         return ("Delivered, not closed: the coordinator records closure now with a checkpoint close: true; no owner "
                 "decision is needed, and it is not safe to close the coordinator.")

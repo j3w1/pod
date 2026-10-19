@@ -101,6 +101,17 @@ def load(root: Path) -> dict:
     return value
 
 
+def tail_closed(root: Path) -> bool:
+    """Whether status reads this objective as closed by evidence: any entry but a continued predecessor's, which
+    keeps reading continued with its entry beside it (C4, Amendment 1)."""
+    if not present(root):
+        return False
+    try:
+        return load(root)["relation"] != "predecessor"
+    except PodError:
+        return True  # A closure record that cannot be read still ends the objective; status says so.
+
+
 def refuse_closed(root: Path) -> None:
     """Every write of an objective closed by evidence refuses, its own coordinator's included (R141, C4)."""
     presence = _presence(root)
@@ -144,7 +155,7 @@ def block(root: Path) -> dict | None:
         value = load(root)
     except PodError as exc:
         return {"status": "unreadable", "code": exc.code}
-    return {"status": "recorded", **{key: deepcopy(value[key]) for key in sorted(_FIELDS - {"schema"})}}
+    return {"status": "recorded", **{key: deepcopy(value[key]) for key in sorted(_FIELDS)}}
 
 
 # --------------------------------------------------------------------------- reading records
@@ -804,6 +815,82 @@ def counts(rows: list[dict]) -> dict:
     return tally
 
 
+# --------------------------------------------------------------------------- a live coordinator's closure (C11)
+
+SUPERSEDED = "superseded_by_merged_head"
+MAX_PR_COMMITS = 250  # GitHub lists at most this many commits of a pull request; a full list may be truncated.
+
+
+def closure_preservation(project: Path, objective: str, state: dict, journal: dict, *, remote=None,
+                         now: datetime | None = None) -> dict | None:
+    """Whether a delivered objective's closing write may preserve its unsettled Governor rows (C11, Amendment 3).
+
+    Only a publication-derived validation row (workflow_dispatch derived from a publication) whose commit an
+    earlier head of a merged delivery pull request carried, positively superseded by that pull request's different
+    merged head, may be preserved, after a read-only readback that does not settle it. None (today's rule, with no
+    provider read) when no row is unsettled, when any unsettled row is of another kind, or when finalization names
+    anything but such validation readbacks before closure. Otherwise `{proof, preserved, settles, held}`: the
+    delivery proof of C2.6 and C2.7 over the delivery chain, the rows to preserve UNKNOWN, the rows Pod's readback
+    now settles (reconcile first), and the rows that keep holding the closure with why.
+    """
+    from .governor import finalization
+    rows = [row for row in journal["actions"] if row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")]
+    if not rows or any(row["action"]["kind"] != "workflow_dispatch" or not isinstance(row.get("derived_from"), str)
+                       for row in rows):
+        return None
+    if any(name not in ("validation_readback", "closure") for name in finalization(state, journal)["remaining"]):
+        return None
+    proof = _Proof(objective)
+    remote = remote if isinstance(remote, _Remote) else _Remote(project, remote)
+    out = {"proof": None, "preserved": [], "settles": [], "held": []}
+    try:
+        doc = _documented(state, current=True)
+        scan: dict = {}
+
+        def records() -> tuple[list[dict], list[str]]:
+            if not scan:
+                scan["found"], scan["unreadable"] = _scan(project)
+            return scan["found"], scan["unreadable"]
+        _source(doc, state, proof, remote)
+        _delivery(project, _members(project, objective, state, doc, proof, records), proof, remote)
+    except PodError as exc:
+        proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
+    verdict = proof.result()
+    out["proof"] = {"status": verdict["status"],
+                    "conditions": [{"code": row["code"], "message": row["message"]} for row in verdict["conditions"]]}
+    if verdict["status"] != "proved":
+        return out
+    from .github import repository_context
+    repository = repository_context(project)["repository"]
+    heads = {}
+    for merged in proof.facts["delivery"]:
+        try:
+            read = remote.get().pr_commits(repository=repository, number=merged["pr"])
+            heads[merged["pr"]] = read if not read["truncated"] else None
+        except PodError:
+            heads[merged["pr"]] = None
+    moment = now or datetime.now(timezone.utc)
+    for row in rows:
+        commit = row.get("commit")
+        superseded = next(((number, read["head"]) for number, read in heads.items()
+                           if read is not None and commit and read["head"] != commit and commit in read["commits"]),
+                          None)
+        if superseded is None:
+            reason = ("the merged delivery head itself" if any(read and read["head"] == commit for read in heads.values())
+                      else "a merged delivery pull request's commits could not be read completely"
+                      if None in heads.values() else "no merged delivery pull request carried its commit")
+            out["held"].append({"record": row["record_id"], "reason": reason})
+            continue
+        outcome, settled, evidence, _ = _readback(project, row, journal, remote, moment)
+        if settled:
+            out["settles"].append({"record": row["record_id"], "outcome": outcome, "evidence": evidence})
+            continue
+        out["preserved"].append({"record": row["record_id"], "kind": "workflow_dispatch", "recorded": row["outcome"],
+                                 "outcome": "UNKNOWN", "reason": SUPERSEDED, "pr": superseded[0],
+                                 "merged_head": superseded[1]})
+    return out
+
+
 # --------------------------------------------------------------------------- the closure write
 
 
@@ -1071,20 +1158,19 @@ def render(result: dict) -> None:
 # --------------------------------------------------------------------------- sweep (R144)
 
 
-def _outcome(objective: str, record: str | None, verdict: dict) -> dict:
+def _outcome(objective: str, verdict: dict) -> dict:
     status = verdict["status"]
-    result = {"closed": "closed", "replayed": "already_closed", "not_proved": "not_proved",
-              "unverified": "unverified"}.get(status, "skipped")
-    row = {"objective": objective, "record": record, "result": result,
-           "conditions": [dict(item) for item in verdict.get("conditions", [])][:MAX_LISTED]}
-    if result in ("closed", "already_closed"):
-        row["closure"] = verdict.get("closure")
-        for key in ("predecessors", "completed"):
-            if verdict.get(key):
-                row[key] = list(verdict[key])
-    if result in ("not_proved", "unverified"):
-        row.update(party="lead", next_action=LEAD_ACTION)
-    return row
+    outcome = {"closed": "closed", "replayed": "already_closed", "not_proved": "not_proved",
+               "unverified": "unverified"}.get(status, "skipped")
+    return {"objective": objective, "outcome": outcome,
+            "conditions": [{"code": item["code"], "message": item["message"]}
+                           for item in verdict.get("conditions", [])][:MAX_LISTED],
+            "party": "lead" if outcome in ("not_proved", "unverified") else None}
+
+
+def _unavailable(target: Path, reason: str) -> dict:
+    return {"path": str(target), "repository": None, "repo_key": None, "status": "unavailable", "reason": reason,
+            "objectives": []}
 
 
 def sweep(project: Path, *, repositories: list[str] | None = None, objectives: list[str] | None = None,
@@ -1092,7 +1178,8 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
     """Close every provably delivered open objective of each repository (C6), idempotently.
 
     Needs no Orca terminal, Run binding or live coordinator; starts nothing and mutates no Orca, Git or provider
-    state. It writes only `closure-evidence.json` files, and a second run writes nothing.
+    state. It writes only `closure-evidence.json` files, and a second run writes nothing. A repository it cannot
+    read is reported `unavailable` with its reason; the sweep still ran.
     """
     from .github import repository_context
     from .listing import objective_list
@@ -1100,18 +1187,25 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
     names = list(dict.fromkeys(objectives or []))
     if len(targets) > MAX_LISTED or len(names) > MAX_LISTED:
         raise PodError("sweep_scope_unavailable", f"A sweep names at most {MAX_LISTED} repositories and objectives")
+    out = {"schema": "pod-cli/v5", "status": "swept", "repositories": [],
+           "counts": {name: 0 for name in RESULTS}, "next_safe_action": None}
     for target in targets:
         if not target.is_dir():
-            raise PodError("sweep_scope_unavailable", "A swept repository path is not a directory",
-                           {"repository": str(target)})
-        if repository_context(target.resolve())["repo_key"] is None:
-            raise PodError("sweep_scope_unavailable", "A swept path is not a Git repository",
-                           {"repository": str(target)})
-    out = {"schema": "pod-sweep/v1", "status": "swept", "repositories": [],
-           "counts": {name: 0 for name in RESULTS}}
-    for target in targets:
+            out["repositories"].append(_unavailable(target, "the path is not a directory"))
+            continue
         target = target.resolve()
-        listed = objective_list(target, repository=str(target))
+        try:
+            context = repository_context(target)
+            if context["repo_key"] is None:
+                out["repositories"].append(_unavailable(target, "the path is not a Git repository"))
+                continue
+            listed = objective_list(target, repository=str(target))
+        except PodError as exc:
+            out["repositories"].append(_unavailable(target, f"the repository could not be read ({exc.code})"))
+            continue
+        if listed["status"] == "unreadable":
+            out["repositories"].append(_unavailable(target, listed["next_safe_action"]))
+            continue
         rows = listed["objectives"]
         if names:
             rows = [row for row in rows if row["objective"] in names]
@@ -1123,19 +1217,27 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
                 continue
             done.add(row["objective"])
             verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=remote)
-            results.append(_outcome(row["objective"], row["record"], verdict))
+            results.append(_outcome(row["objective"], verdict))
         for name in names:
             if name not in done:
-                results.append({"objective": name, "record": None, "result": "skipped",
-                                "conditions": [{"code": "objective_unknown", "status": "not_applicable",
-                                                "message": "No record of that objective is listed in this "
-                                                           "repository."}]})
+                results.append(_outcome(name, {"status": "not_applicable", "conditions": [
+                    {"code": "objective_unknown", "message": "No record of that objective is listed in this "
+                                                             "repository."}]}))
         for row in results:
-            out["counts"][row["result"]] += 1
-        out["repositories"].append({"repository": str(target), "repo_key": listed["scope"]["repo_key"],
-                                    "list_status": listed["status"], "complete": listed["complete"],
-                                    "unreadable_records": listed["unreadable_records"],
+            out["counts"][row["outcome"]] += 1
+        reason = None if listed["complete"] else "some records are unreadable or unattributed: " + ", ".join(
+            str(item.get("record", item)) for item in listed["unreadable_records"][:4])
+        out["repositories"].append({"path": str(target), "repository": context["repository"],
+                                    "repo_key": context["repo_key"], "status": "swept", "reason": reason,
                                     "objectives": results})
+    tally = out["counts"]
+    out["next_safe_action"] = (
+        f"{tally['not_proved'] + tally['unverified']} objective(s) are tasks for the project lead: resolve each "
+        "named condition, then sweep again; no owner decision is needed"
+        if tally["not_proved"] + tally["unverified"] else
+        "every provably delivered objective is closed; nothing else needs the sweep")
+    if any(row["status"] == "unavailable" for row in out["repositories"]):
+        out["next_safe_action"] += "; an unavailable repository was not swept"
     return out
 
 
@@ -1144,9 +1246,11 @@ def render_sweep(result: dict) -> None:
     tally = result["counts"]
     print("Pod sweep: " + ", ".join(f"{tally[name]} {name.replace('_', ' ')}" for name in RESULTS))
     for repository in result["repositories"]:
-        print(f"Repository {clean(repository['repository'])}: {len(repository['objectives'])} objective(s)"
-              + ("" if repository["complete"] else "; some records are unreadable"))
+        print(f"Repository {clean(repository['path'])}: {repository['status']}, "
+              f"{len(repository['objectives'])} objective(s)"
+              + (f"; {clean(repository['reason'])}" if repository["reason"] else ""))
         for row in repository["objectives"]:
             reason = "; ".join(f"{item['code']}: {clean(item['message'])}" for item in row["conditions"][:3])
-            print(f"  {clean(row['objective'])[:64]}: {row['result'].replace('_', ' ')}"
-                  + (f" ({reason})" if reason else "") + (" — a task for the project lead" if row.get("party") else ""))
+            print(f"  {clean(row['objective'])[:64]}: {row['outcome'].replace('_', ' ')}"
+                  + (f" ({reason})" if reason else "") + (" - a task for the project lead" if row["party"] else ""))
+    print(f"Next: {result['next_safe_action']}")

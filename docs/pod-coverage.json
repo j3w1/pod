@@ -6276,6 +6276,18 @@
         "tests.test_evidence_closure.SweepTests.test_the_sweep_needs_no_terminal_or_run_binding_and_mutates_nothing"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A457",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.DeliveryClosesTests.test_a_superseded_earlier_head_validation_is_preserved_at_closure",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_merged_head_unreadable_commits_and_unproved_delivery_still_hold_the_closure",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_a_settling_readback_and_other_unsettled_kinds_still_hold_the_closure"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

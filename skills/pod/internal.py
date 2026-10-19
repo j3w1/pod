@@ -854,6 +854,12 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
         if "pod_tick_intake" in result:
             acknowledgement["pod_tick_intake"] = result["pod_tick_intake"]
         acknowledgement["finalization"] = _finalization_view(request, acknowledgement["worker_tabs"])
+        if result.get("closure_preserved"):
+            # Superseded derived validations the closure preserved UNKNOWN, named as such (C11).
+            acknowledgement["closure_preserved"] = result["closure_preserved"]
+            if isinstance(acknowledgement["finalization"], dict):
+                acknowledgement["finalization"] = {**acknowledgement["finalization"],
+                                                   "preserved_at_closure": result["closure_preserved"]}
     if "runtime_continuity" in result and operation != "runtime-continuity":
         acknowledgement["runtime_continuity"] = result["runtime_continuity"]
     for key in ("warnings", "invalidations", "source_rejections"):

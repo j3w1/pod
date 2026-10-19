@@ -1701,7 +1701,7 @@ def validate_map_record(state: dict) -> None:
             if not isinstance(text, str) or not text.strip() or "\x00" in text:
                 raise refuse("obligation_invalid", "malformed", "quiescence retains its derived report text", record="quiescence")
     if value["closure"] is not None:
-        closed = _exact(value["closure"], {"seq", "revision", "report"}, {"seq", "revision", "report"}, "closure")
+        closed = _closure_record(value["closure"])
         if any(type(closed[field]) is not int or closed[field] != value[field] for field in ("seq", "revision")) or not isinstance(closed["report"], dict):
             raise refuse("obligation_invalid", "malformed", "closure retains its map sequence and report", record="closure")
     reopened = value["reopened"]
@@ -1815,13 +1815,39 @@ def _close(state: dict, ctx: dict) -> dict:
                      next_action="settle each pending or UNKNOWN Governor row from Pod's readback with "
                                  "governor-reconcile, or record its outcome with the evidence it needs, then close")
     closure = {"seq": state["seq"], "revision": state["revision"]}
+    if ctx.get("closure_preserved"):
+        # Superseded derived validations a delivered objective's closure preserved UNKNOWN (C11); the journal
+        # keeps them exactly as recorded.
+        closure["preserved"] = [dict(row) for row in ctx["closure_preserved"]]
     return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
+
+
+CLOSURE_FIELDS = {"seq", "revision", "report"}
+PRESERVED_FIELDS = {"record", "kind", "recorded", "outcome", "reason", "pr", "merged_head"}
+
+
+def _closure_record(value: object) -> dict:
+    """A stored closure: its sequence, revision and report, and optionally the rows it preserved (C11)."""
+    closed = _exact(value, CLOSURE_FIELDS | {"preserved"}, CLOSURE_FIELDS, "closure")
+    rows = closed.get("preserved")
+    if "preserved" in closed and (
+            not isinstance(rows, list) or not 0 < len(rows) <= 64
+            or any(not isinstance(row, dict) or set(row) != PRESERVED_FIELDS
+                   or not isinstance(row["record"], str) or not 0 < len(row["record"]) <= 128
+                   or row["kind"] != "workflow_dispatch" or row["recorded"] not in ("pending", "UNKNOWN")
+                   or row["outcome"] != "UNKNOWN" or row["reason"] != "superseded_by_merged_head"
+                   or type(row["pr"]) is not int or row["pr"] < 1
+                   or not isinstance(row["merged_head"], str) or _COMMIT.fullmatch(row["merged_head"]) is None
+                   for row in rows)
+            or len({row["record"] for row in rows}) != len(rows)):
+        raise refuse("obligation_invalid", "malformed", "closure preserves only superseded derived validations",
+                     record="closure")
+    return closed
 
 
 def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
     """Recheck recorded closure with the same row, closure and report contracts."""
-    closure = _exact(state.get("closure"), {"seq", "revision", "report"},
-                     {"seq", "revision", "report"}, "closure")
+    closure = _closure_record(state.get("closure"))
     for key in ("seq", "revision"):
         if type(state.get(key)) is not int or state[key] < 1 or type(closure[key]) is not int or closure[key] != state[key]:
             raise refuse("obligation_invalid", "malformed", "closure sequence and revision match the map", record="closure")

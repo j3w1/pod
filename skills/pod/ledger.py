@@ -897,14 +897,15 @@ def _outstanding_ids(state: dict, native: dict | None) -> list[str]:
     return outstanding
 
 
-def _governor_pending(project: Path, objective: str) -> bool:
+def _governor_pending(project: Path, objective: str, excluded: frozenset = frozenset()) -> bool:
+    """Whether an allowed Governor row is unsettled, apart from the rows a closure preserved (`excluded`, C11)."""
     from .governor import _read_journal, _record_path
     try:
         journal = _read_journal(_record_path(project, objective))
     except PodError:
         return True
     return any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")
-               for row in journal["actions"])
+               and row["record_id"] not in excluded for row in journal["actions"])
 
 
 def _authorization_granted(project: Path, objective: str, *, context: dict | None = None):
@@ -1071,6 +1072,13 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
     ctx = kernel_context(project, objective, state, None)
     if (state.get("checkpoint") or {}).get("closure") is None:
         return ctx
+    preserved = state["checkpoint"]["closure"].get("preserved") if isinstance(state["checkpoint"]["closure"], dict) \
+        else None
+    if isinstance(preserved, list) and preserved:
+        # The rows this closure preserved stay unsettled in the journal; they never reopen it (C11).
+        ctx["closure_preserved"] = preserved
+        ctx["governor_pending"] = _governor_pending(project, objective, excluded=frozenset(
+            row.get("record") for row in preserved if isinstance(row, dict)))
     ctx["outstanding"] = [key for key in ctx["outstanding"]
                           if state["admissions"][key]["state"] != "bound"
                           or (state["admissions"][key].get("report") or {}).get("status") != "validated_observation"]
@@ -1237,8 +1245,10 @@ def validate_checkpoint_snapshot(project: Path, state: dict) -> None:
     validate_map_record(value)
 
 
-def _closure_unrecorded(project: Path, objective: str, state: dict, *, delivered: bool) -> dict | None:
-    """What finalization still names before closure, for a write that closes (R117).
+def _closure_unrecorded(project: Path, objective: str, state: dict, *, delivered: bool,
+                        preserved: frozenset = frozenset()) -> dict | None:
+    """What finalization still names before closure, for a write that closes (R117); rows this closure preserves
+    are not among them (C11).
 
     An unreadable journal is left to closure's own settlement check, which refuses it.
     """
@@ -1247,6 +1257,11 @@ def _closure_unrecorded(project: Path, objective: str, state: dict, *, delivered
         view = finalization(state, _read_journal(_record_path(project, objective)))
     except PodError:
         return None
+    if preserved and "validation_readback" in view["remaining"]:
+        kept = [entry for entry in view["records"]["validation_readback"] if entry["record"] not in preserved]
+        view["records"]["validation_readback"] = kept
+        if not kept:
+            view["remaining"] = [name for name in view["remaining"] if name != "validation_readback"]
     remaining = [name for name in view["remaining"]
                  if name != "closure" and not (delivered and name == "delivery_record")]
     if not remaining:
@@ -1254,6 +1269,36 @@ def _closure_unrecorded(project: Path, objective: str, state: dict, *, delivered
     return {"remaining": remaining,
             "next_action": "record " + ", ".join(remaining) + " in that order before closure. Next: "
                            + finalization_step(remaining[0], view["records"][remaining[0]])}
+
+
+def _closure_preservation(project: Path, objective: str, state: dict, ctx: dict) -> frozenset:
+    """C11 at a closing write: a delivered objective's closure is not held by a publication-derived validation of
+    an earlier head that the merged delivery superseded. Returns the record ids it preserves (also put in `ctx`)."""
+    from .governor import _read_journal, _record_path
+    from .evidence_closure import closure_preservation
+    try:
+        journal = _read_journal(_record_path(project, objective))
+    except PodError:
+        return frozenset()
+    found = closure_preservation(project, objective, state, journal)
+    if found is None:
+        return frozenset()
+    if found["settles"]:
+        row = found["settles"][0]
+        from .obligations import refuse
+        raise refuse("obligation_unaccounted", "closure_unfinished",
+                     f"Pod's readback now settles derived validation {row['record'][:12]} ({row['outcome']}); "
+                     "record it first", record="closure",
+                     next_action=f"run governor-reconcile for record {row['record']}, then write the closing "
+                                 "checkpoint again")
+    if found["proof"]["status"] != "proved" or found["held"] or not found["preserved"]:
+        ctx["closure_preservation"] = {"proof": found["proof"], "held": found["held"],
+                                       "preserved_at_closure": found["preserved"]}
+        return frozenset()
+    ids = frozenset(row["record"] for row in found["preserved"])
+    ctx["closure_preserved"] = found["preserved"]
+    ctx["governor_pending"] = _governor_pending(project, objective, excluded=ids)
+    return ids
 
 
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
@@ -1376,11 +1421,18 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             # A new closure proves that no incomplete claim, from any writer, names this objective as successor
             # (R118); a repeated one answers from the recorded closure as before (R117).
             refuse_incomplete(project, objective, state, full=True)
+            kept = _closure_preservation(project, objective, state, ctx)
             # A delivery recorded in the closing write itself does not count: closure is the last record, and
             # its report is derived before that write adds the delivery.
             ctx["closure_unrecorded"] = _closure_unrecorded(
-                project, objective, state, delivered=(prior_map or {}).get("delivery") is not None)
-        map_state = accept_write(prior_map, proposed, ctx)
+                project, objective, state, delivered=(prior_map or {}).get("delivery") is not None, preserved=kept)
+        try:
+            map_state = accept_write(prior_map, proposed, ctx)
+        except PodError as exc:
+            if ctx.get("closure_preservation") and isinstance(exc.detail, dict):
+                # Today's refusal stands, naming why no row could be preserved (C11).
+                exc.detail = {**exc.detail, "closure_preservation": ctx["closure_preservation"]}
+            raise
         from .standing import checkpoint_times
         checkpoint_times(state, prior_map, map_state)
         if verified_delivery is not None:
@@ -1484,6 +1536,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             result["pod_tick_intake"] = tick_intake(state, map_state)
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx, standing_normal=True)
+        if (ctx or {}).get("closure_preserved"):
+            # Named in the closing write's own answer, as its closure records them (C11).
+            result["closure_preserved"] = [dict(row) for row in ctx["closure_preserved"]]
         if (ctx or {}).get("governance_kept"):
             # What the closing write did not adopt, said in its own answer (R143).
             result["governance_adoption"] = dict(ctx["governance_kept"])

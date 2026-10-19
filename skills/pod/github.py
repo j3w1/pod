@@ -41,6 +41,7 @@ ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
 # What a delivery proof reads (R141): an issue's closing reason, and one pull request by its number.
 ISSUE_STATE_FIELDS = "number,url,state,stateReason,body"
 PR_VIEW_FIELDS = "number,url,state,mergedAt,mergeCommit"
+PR_COMMITS_FIELDS = "number,headRefOid,commits"
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
 _ISSUE_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)/?\Z")
 _COMMENT_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)\Z")
@@ -193,7 +194,8 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
             and argv[3] == "--repo" and _name(argv[4]) and argv[5:] == ["--json", ISSUE_STATE_FIELDS]):
         return True
     if (len(argv) == 7 and argv[:2] == ["pr", "view"] and _RUN_ID.fullmatch(argv[2])
-            and argv[3] == "--repo" and _name(argv[4]) and argv[5:] == ["--json", PR_VIEW_FIELDS]):
+            and argv[3] == "--repo" and _name(argv[4]) and argv[5:] in (["--json", PR_VIEW_FIELDS],
+                                                                        ["--json", PR_COMMITS_FIELDS])):
         return True
     if (len(argv) == 4 and argv[0] == "api"
             and re.fullmatch(r"repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/comments/[1-9][0-9]*", argv[1])
@@ -660,6 +662,20 @@ class GhPort:
         return {"number": number, "url": row.get("url") if isinstance(row.get("url"), str) else None,
                 "state": row["state"], "merged_at": row.get("mergedAt") if isinstance(row.get("mergedAt"), str) else None,
                 "merge_commit": oid if isinstance(oid, str) and _GIT_ID.fullmatch(oid) else None}
+
+    def pr_commits(self, *, repository: str, number: int) -> dict:
+        """One pull request's head and commits, read only (C11); a list at GitHub's bound may be truncated."""
+        from .evidence_closure import MAX_PR_COMMITS
+        row = self._gh_json(["pr", "view", str(number), "--repo", repository, "--json", PR_COMMITS_FIELDS])
+        commits = row.get("commits") if isinstance(row, dict) else None
+        head = row.get("headRefOid") if isinstance(row, dict) else None
+        if (not isinstance(row, dict) or row.get("number") != number or not isinstance(commits, list)
+                or not isinstance(head, str) or not _GIT_ID.fullmatch(head)):
+            raise PodError("gh_contract", "gh pr view returned an unsupported commit list")
+        oids = [item.get("oid") for item in commits if isinstance(item, dict)]
+        if len(oids) != len(commits) or not all(isinstance(oid, str) and _GIT_ID.fullmatch(oid) for oid in oids):
+            raise PodError("gh_contract", "gh pr view returned an unsupported commit list")
+        return {"number": number, "head": head, "commits": oids, "truncated": len(oids) >= MAX_PR_COMMITS}
 
     def amendment(self, *, repository: str, number: int, comment: int) -> dict:
         try:

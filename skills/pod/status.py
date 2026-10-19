@@ -307,18 +307,18 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 return result
             context_root = record_root = matches[0][0] if matches else None
             state = matches[0][1] if matches else None
-            from .evidence_closure import present, status_fields
+            from .evidence_closure import status_fields, tail_closed
             name = ((state or {}).get("checkpoint") or {}).get("objective")
-            if record_root is not None and isinstance(name, str) and present(record_root):
+            if record_root is not None and isinstance(name, str) and tail_closed(record_root):
                 # Closed by evidence: read from its closure record, never written or converted (R141, R142).
                 result.update(run=run, **status_fields(project, name, record_root))
                 return result
             superseded = superseded_for_run(run) if context_root is None else []
         else:
-            from .evidence_closure import present, status_fields
+            from .evidence_closure import status_fields, tail_closed
             from .ledger import objective_root
             closed = objective_root(project, objective)
-            if present(closed):
+            if tail_closed(closed):
                 # Any reader, current or older record: the closure record and documented fields only (C4).
                 result.update(status_fields(project, objective, closed))
                 return result
@@ -458,6 +458,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             result["report"] = view["report"]
             if checkpoint.get("closure"):
                 result["blocker"] = result["blocker"] or "objective_closed"
+                if checkpoint["closure"].get("preserved"):
+                    # Results the closure preserved UNKNOWN, as recorded (C11).
+                    result["closure_preserved"] = [dict(row) for row in checkpoint["closure"]["preserved"]]
             elif (checkpoint.get("quiescence") or {}).get("state") == "quiescent":
                 result["blocker"] = result["blocker"] or "quiescent"
                 result["next_safe_action"] = checkpoint["quiescence"]["interim_report"]
@@ -553,6 +556,12 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                           next_action="rerun the same internal succession claim to complete it")
         elif block is not None:
             result["succession"]["state"] = "claimed"
+        if record_root is not None:
+            # A continued predecessor closed with its chain keeps reading continued, with its own entry (C4).
+            from .evidence_closure import block as closure_block
+            entry = closure_block(record_root)
+            if entry is not None:
+                result["evidence_closure"] = entry
     if state is not None and checkpoint is not None and isinstance(objective, str) and record_root is not None:
         # New fields only: every earlier field above keeps its exact value (R114).
         error = result["obligations"].get("error") if isinstance(result.get("obligations"), dict) else None
