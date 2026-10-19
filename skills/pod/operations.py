@@ -166,7 +166,9 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
         facts["native_role"] = projection["role"]
     if isinstance(projection.get("nextAction"), dict):
         facts["native_next_action"] = projection["nextAction"]
-    if resource is not None or result.get("terminal") is not None:
+    if resource is not None or result.get("terminal") is not None or observation:
+        # Orca's gone-record observation is judged against the worker's own terminal, so its identity is kept even
+        # when the raw resource is omitted (R125, A475).
         facts["worker_terminal"] = worker.get("agentTerminalHandle")
     if worker.get("agentTerminalHandle") != handle:
         facts.update(tab=None, placement_readback="unavailable")

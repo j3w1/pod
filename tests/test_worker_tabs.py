@@ -78,7 +78,9 @@ class TabCase(ProductionCase):
             # The shape of Orca's exact worker-show once a finished worker's terminal record is gone (R125, A475).
             state = {"missing_released": "released", "missing_user_owned": "user_owned",
                      "missing_owned": "owned", "missing_unconfirmed": "released",
-                     "missing_other_worker": "released", "missing_no_worker": "released"}[case]
+                     "missing_other_worker": "released", "missing_no_worker": "released",
+                     "missing_bare_match": "released", "missing_bare_other": "released",
+                     "missing_bare_none": "released", "missing_null_other": "released"}[case]
             settled = "released" if state == "released" else "retained" if state == "user_owned" else "not_requested"
             resource.update(ownershipState=state, releaseState=settled,
                             retainedReason="user_takeover" if state == "user_owned" else None)
@@ -92,6 +94,16 @@ class TabCase(ProductionCase):
             if case in ("missing_other_worker", "missing_no_worker"):
                 # The worker no longer names the admitted terminal, so its absence is not proved (review F1).
                 worker["agentTerminalHandle"] = "term-other" if case == "missing_other_worker" else None
+            if case.startswith(("missing_bare_", "missing_null_")):
+                # Orca omits the raw resource (or reports it null); only the projection's resource remains (audit F1).
+                if case.startswith("missing_bare_"):
+                    result.pop("terminalResource")
+                else:
+                    result["terminalResource"] = None
+                if case.endswith("_other"):
+                    worker["agentTerminalHandle"] = "term-other"
+                elif case.endswith("_none"):
+                    worker.pop("agentTerminalHandle")
         return value
 
     def packet(self, serves, **fields):
@@ -442,12 +454,16 @@ class TableTests(TabCase):
         # Review F1: the admitted terminal is not proved gone when the worker no longer names it.
         frozen, admission = self.worker()
         self.report(admission, frozen, map={"obligations": self.waiting_rows()})
-        for case in ("missing_other_worker", "missing_no_worker"):
+        for case in ("missing_other_worker", "missing_no_worker", "missing_bare_other", "missing_bare_none",
+                     "missing_null_other"):
             with self.subTest(case=case):
                 self.tab_case = case
                 row = self.status()["worker_tabs"][0]
                 self.assertEqual((row["row"], row["state"], row["blocks_closure"]), ("unreadable", "unknown", True))
                 self.assertEqual(row["failed_read"]["code"], "worker_terminal_unverified")
+        # Without the raw resource, a worker that still names the admitted terminal reads as its gone tab.
+        self.tab_case = "missing_bare_match"
+        self.assertEqual(self.status()["worker_tabs"], [])
 
     def test_coordinator_setup_and_other_objective_excluded(self):
         self.table((("coordinator", "excluded", False, False),
@@ -494,7 +510,8 @@ class ClosureTests(TabCase):
                 except PodError as error:
                     self.assertTrue(blocked, str(error))
                     unreadable = case in ("unreadable", "missing_unconfirmed", "missing_other_worker",
-                                          "missing_no_worker")
+                                          "missing_no_worker", "missing_bare_other", "missing_bare_none",
+                                          "missing_null_other")
                     self.assertEqual(error.code, "worker_terminal_unverified" if unreadable else "worker_tabs_open")
                     self.assertIn("worker-show" if unreadable else "worker-release", str(error))
                     self.assertEqual(before, self.saved(), "refusal changed context, map or report bytes")
@@ -539,7 +556,8 @@ class ClosureTests(TabCase):
             cases = [("missing_released", False), ("missing_user_owned", False), ("missing_unconfirmed", True)]
             if not report_route:
                 # A closing report refuses a differing worker terminal earlier (report_attempt_unverified).
-                cases += [("missing_other_worker", True), ("missing_no_worker", True)]
+                cases += [("missing_other_worker", True), ("missing_no_worker", True), ("missing_bare_other", True),
+                          ("missing_bare_none", True), ("missing_null_other", True)]
             self.closing(tuple(cases), report_route=report_route)
 
     def test_checkpoint_ignores_reused_and_unrelated_terminals(self):

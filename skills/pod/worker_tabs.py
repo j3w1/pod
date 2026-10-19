@@ -120,7 +120,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     observation = facts.get("terminal_observation") or {}
     if (not failure and not terminal and observation.get("status") == "missing"
             and observation.get("exactWorker") is False
-            and handle and facts.get("worker_terminal", handle) == handle
+            and handle and facts.get("worker_terminal") == handle
             and row["ownership"] in ("released", "user_owned", "external")):
         # Orca's exact read has no terminal record of this worker, the worker still names the admitted terminal,
         # and Orca released the resource or does not own it: the tab is gone, which reads as disconnected (R125).
