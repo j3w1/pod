@@ -603,10 +603,10 @@ def _op_succession(request: dict) -> dict:
 
 
 def _op_historical_retirement(request: dict) -> dict:
-    exact(request, {"project", "objectives", "decision"}, {"project", "objectives"}, name="request")
+    exact(request, {"project", "objectives", "decision", "proof"}, {"project", "objectives"}, name="request")
     from .retirement import historical_retirement
     return historical_retirement(Path(request["project"]), request["objectives"],
-                                 decision=request.get("decision"))
+                                 decision=request.get("decision"), proof=request.get("proof"))
 
 
 def _op_record_compaction(request: dict) -> dict:
@@ -684,6 +684,8 @@ _FINALIZATION_REFUSALS = {"objective_closed", "pod_ticks_due", "outcome_evidence
 
 def _finalization_refusal(operation: str, exc: PodError) -> bool:
     """A refusal on the path to finishing names what remains, in recording order (R2)."""
+    if isinstance(exc.detail, dict) and exc.detail.get("basis") == "evidence":
+        return False  # Closed by evidence: nothing remains to record, and the refusal says so (R141).
     detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else None
     return (operation in _FINALIZATION_OPERATIONS
             and (exc.code in _FINALIZATION_REFUSALS or detail == "closure_unfinished"
@@ -769,6 +771,8 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
                 if key in checkpoint["observations"]}
         if "report" in result:
             acknowledgement["report"] = result["report"]
+        if "governance_adoption" in result:
+            acknowledgement["governance_adoption"] = result["governance_adoption"]
         if "standing_authorization" in result:
             acknowledgement["standing_authorization"] = result["standing_authorization"]
     elif operation == "report":

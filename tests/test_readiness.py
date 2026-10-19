@@ -196,16 +196,20 @@ class LostCoordinatorTests(ReadinessCase):
         before = self.snapshot()
         peer = self.read_as("next")
         readiness = peer["readiness"]
+        # R141: undelivered work of a lost coordinator is a task for the project lead, never an owner question.
         self.assertEqual((readiness["state"], readiness["acts_next"], readiness["coordinator_needed"]),
-                         ("coordinator_lost", "owner", True))
+                         ("coordinator_lost", "lead", True))
         self.assertEqual((readiness["coordinator"]["liveness"], readiness["coordinator"]["code"]),
                          ("lost", "terminal_handle_stale"))
         routes = {row["route"]: (row["status"], row["condition"]) for row in readiness["recovery"]["routes"]}
-        self.assertEqual(routes, {"same_run_resume": ("blocked", "owner_not_live"),
+        self.assertEqual(routes, {"evidence_closure": ("blocked", "source_unproved"),
+                                  "same_run_resume": ("blocked", "owner_not_live"),
                                   "owner_handoff": ("available", "fresh"),
                                   "successor_claim": ("available", "claimable")})
+        self.assertEqual(readiness["recovery"]["routes"][0]["route"], "evidence_closure")
         self.assertEqual(readiness["recovery"]["route"], "owner_handoff")
-        self.assertIn("recoverable through owner handoff", readiness["summary"])
+        self.assertEqual(readiness["summary"],
+                         "Coordinator lost; delivery not proved (source_unproved): a task for the project lead.")
         claim = peer["successor_claim"]
         self.assertEqual((claim["status"], claim["facts"]["predecessor_owner"], claim["facts"]["runs"],
                           claim["unreported"]), ("claim_available", "owner", ["run"], [self.admission["admission_id"]]))
@@ -215,7 +219,8 @@ class LostCoordinatorTests(ReadinessCase):
         routes = {row["route"]: (row["status"], row["condition"]) for row in closed_tab["recovery"]["routes"]}
         self.assertEqual(routes["owner_handoff"], ("blocked", "owner_not_lost"))
         self.assertEqual(closed_tab["recovery"]["route"], "successor_claim")
-        self.assertIn("Orca reports its terminal closed; recoverable through successor claim", closed_tab["summary"])
+        self.assertEqual((closed_tab["coordinator"]["liveness"], closed_tab["acts_next"]), ("exited", "lead"))
+        self.assertIn("delivery not proved (source_unproved)", closed_tab["summary"])
         self.assertEqual(before, self.snapshot())
         self.assertEqual(self.mutations, [])
 
@@ -231,15 +236,16 @@ class LostCoordinatorTests(ReadinessCase):
         # R118: a successor's claim carries the pending derived validation and settles it by readback.
         self.assertEqual(readiness["recovery"]["route"], "successor_claim")
         routes = {row["route"]: (row["status"], row["condition"]) for row in readiness["recovery"]["routes"]}
-        self.assertEqual(routes, {"same_run_resume": ("blocked", "owner_not_live"),
+        self.assertEqual(routes, {"evidence_closure": ("blocked", "source_unproved"),
+                                  "same_run_resume": ("blocked", "owner_not_live"),
                                   "owner_handoff": ("blocked", "owner_not_lost"),
                                   "successor_claim": ("available", "claimable")})
         derived = readiness["finalization"]["records"]["validation_readback"]
         self.assertEqual([(row["kind"], row["state"], row["derived_from"]) for row in derived],
                          [("workflow_dispatch", "pending", published["record_id"])])
         self.assertEqual(self.read_as("next")["successor_claim"]["facts"]["carried"], [derived[0]["record"]])
-        self.assertIn(f"Pod still needs the validation readback of publication {published['record_id'][:12]}",
-                      readiness["summary"])
+        self.assertEqual(readiness["summary"],
+                         "Coordinator lost; delivery not proved (source_unproved): a task for the project lead.")
         self.assertEqual(self.read_as(None)["readiness"], readiness)
         # A pending release has no readback: the claim refuses it, and the summary names that exact refusal.
         self.rows(self.row("r" * 64, "release", "pending", receipt={"started_at": "2026-01-01T00:00:00+00:00"}))
@@ -247,9 +253,10 @@ class LostCoordinatorTests(ReadinessCase):
         routes = {row["route"]: (row["status"], row["condition"]) for row in blocked["recovery"]["routes"]}
         self.assertEqual(routes["successor_claim"], ("blocked", "predecessor_effect_pending"))
         self.assertIsNone(blocked["recovery"]["route"])
-        self.assertIn("recovery blocked: successor claim refused (predecessor_effect_pending: The predecessor's "
-                      "pending release rrrrrrrrrrrr cannot be carried: a release is performed by the project and has "
-                      "no readback.)", blocked["summary"])
+        claim = next(row for row in blocked["recovery"]["routes"] if row["route"] == "successor_claim")
+        self.assertEqual(claim["message"], "The predecessor's pending release rrrrrrrrrrrr cannot be carried: a "
+                         "release is performed by the project and has no readback.")
+        self.assertIn("a task for the project lead", blocked["summary"])
 
 
 class EndedTests(ReadinessCase):

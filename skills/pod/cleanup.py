@@ -429,7 +429,12 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]
     from .standing import cleanup_projection
-    return {"schema": "pod-cleanup-plan/v1", "objective": objective,
+    from .evidence_closure import present
+    from .ledger import objective_root
+    # An objective closed by evidence reads as closed, like one its coordinator closed (R141).
+    basis = ("evidence" if present(objective_root(project, objective))
+             else "coordinator" if checkpoint.get("closure") else None)
+    return {"schema": "pod-cleanup-plan/v1", "objective": objective, "closure_basis": basis,
             "standing_authorization": cleanup_projection(state, resources),
             "target": observed_target,
             "resources": resources, "digest": plan_hash,

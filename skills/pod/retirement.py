@@ -591,13 +591,84 @@ def _locate(path: str, repository: str, host: _Host, entries: set[str]) -> dict:
     return _location(path, "unknown", "path_unverified", _UNPROVEN[shown], filesystem=shown)
 
 
+def fleet_dispatches(fleet: dict) -> tuple[list[str], tuple[str, str] | None]:
+    """One Run's worker list as R112 reads it: complete, naming a runtime and Dispatch identities Pod can record and
+    pass back to Orca exactly. Returns those Dispatch identities, or the refusal that holds the proof."""
+    from .orca import _passable
+    if fleet.get("complete") is not True:
+        return [], ("workers_unverified", "A Run's worker list is incomplete.")
+    # An identity Pod would record or pass back to Orca must be text it can hold exactly (R113).
+    if not _passable(fleet["runtime"]) or not _text(fleet["runtime"], 256):
+        return [], ("workers_unverified", "A Run's worker list names an Orca runtime identity that is not UTF-8 "
+                    "text without NUL of at most 256 characters, so Pod cannot record it.")
+    found = []
+    for row in fleet["workers"]:
+        dispatch = row.get("dispatchId") if isinstance(row, dict) else None
+        if not isinstance(dispatch, str) or not dispatch:
+            return [], ("workers_unverified", "A worker has no Dispatch identity.")
+        if not _passable(dispatch):
+            return [], ("workers_unverified", "A worker's Dispatch identity cannot be encoded as UTF-8 text "
+                        "without NUL, so Pod cannot read it.")
+        found.append(dispatch)
+    return found, None
+
+
+def work_activity(admissions: dict, dispatches: dict, *, port) -> tuple[tuple | None, int]:
+    """R112's proof that no recorded work is live, read-only: each reserved or unresolved start Orca may still hold,
+    then every Dispatch of the Runs' complete worker lists and of each bound admission, with its exact recorded
+    identity. `dispatches` names the worker Dispatches (value None); bound admissions are added to it. Returns the
+    first unproven fact as (condition, message, next action), or None, and how many Dispatches read settled."""
+    from .ledger import _native_assignment_settled
+    from .operations import _receipt_from_request_show
+    activity, settled = None, 0
+    for key, row in admissions.items():
+        if row["state"] == "bound":
+            dispatches[row["native_binding"]["dispatchId"]] = (key, row["native_binding"])
+        elif activity is None and row["state"] in ("reserved", "unresolved") and isinstance(row.get("request_uuid"), str):
+            # A request Orca still holds could yet start a worker; absent or completed ones are settled by
+            # the complete worker lists above.
+            try:
+                found, _ = _receipt_from_request_show(port.request_show(row["request_uuid"]), row["request_uuid"])
+            except PodError as exc:
+                activity = ("workers_unverified", f"Admission {key[:12]}'s start request could not be read ({exc.code}).",
+                            None)
+                continue
+            if found == "pending":
+                activity = ("work_live", f"Admission {key[:12]}'s start request is still pending in Orca.",
+                            "Let Orca settle the request, then detect again.")
+    for dispatch in sorted(dispatches):
+        if activity is not None:
+            break
+        try:
+            shown = port.show_worker(dispatch)
+        except PodError as exc:
+            activity = ("workers_unverified", f"A recorded Dispatch could not be read ({exc.code}).", None)
+            break
+        result = shown.get("result") if isinstance(shown, dict) else None
+        if dispatches[dispatch] is not None:
+            key, bound = dispatches[dispatch]
+            parts = [result.get(name) if isinstance(result, dict) else None for name in ("dispatch", "projection", "worker")]
+            if not all(isinstance(part, dict) for part in parts) or (
+                    parts[0].get("id"), parts[0].get("runId"), parts[0].get("taskId"), parts[1].get("id"),
+                    parts[2].get("worktreeId")) != (bound["dispatchId"], bound["runId"], bound["taskId"],
+                                                    bound["workerId"], bound["worktreeId"]):
+                activity = ("workers_unverified", f"Admission {key[:12]} has a differing native identity.", None)
+                break
+        if not _native_assignment_settled(shown):
+            activity = ("work_live", "A recorded Dispatch is live or unsettled; retirement waits for it.",
+                        "Settle the work through Orca, then detect again.")
+            break
+        settled += 1
+    return activity, settled
+
+
 def _detect(project: Path, objective: str, release: list[str], state: dict | None, *, port,
             repository: str, host: _Host) -> dict:
     """Fresh facts for one objective, read-only; an unproven fact refuses it alone."""
     from .handoff import unfinished
-    from .ledger import _native_assignment_settled, _run_references, map_of
+    from .ledger import _run_references, map_of
     from .obligations import TERMINAL
-    from .orca import _passable, run_show, terminal_identity, worker_rows
+    from .orca import run_show, terminal_identity, worker_rows
     verdict = {"objective": objective, "status": "refused", "condition": None,
                "facts": {"objective": objective, "owner": None, "runs": [], "release": list(release),
                          "locations": [], "retained": [], "unrecorded_locations": None, "records": []}}
@@ -629,6 +700,11 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
         return fail("objective_closed", "The objective is closed; a closed objective needs no retirement.")
+    from .evidence_closure import present
+    from .ledger import objective_root
+    if present(objective_root(project, objective)):
+        return fail("objective_closed", "The objective was closed by evidence, coordinator gone; a closed objective "
+                    "needs no retirement.")
     claimants, unreadable = _claimants(project, objective)
     if claimants:
         # An interrupted claim recorded the predecessor's link before this objective's own back-link.
@@ -692,64 +768,16 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         explicitly_unbound = shown.get("coordinator_known") is True and shown["coordinator_handle"] is None
         if changed and not explicitly_unbound:
             return fail("generation_changed", "A recorded Run's consumer generation changed.")
-        if fleet.get("complete") is not True:
-            return fail("workers_unverified", "A Run's worker list is incomplete.")
-        # An identity Pod would record or pass back to Orca must be text it can hold exactly (R113).
-        if not _passable(fleet["runtime"]) or not _text(fleet["runtime"], 256):
-            return fail("workers_unverified", "A Run's worker list names an Orca runtime identity that is not UTF-8 "
-                        "text without NUL of at most 256 characters, so Pod cannot record it.")
+        found, refused = fleet_dispatches(fleet)
+        if refused is not None:
+            return fail(*refused)
         runtime = runtime or fleet["runtime"]
         runs.append({"run": run, "generation": shown["consumer_generation"]})
-        for row in fleet["workers"]:
-            dispatch = row.get("dispatchId") if isinstance(row, dict) else None
-            if not isinstance(dispatch, str) or not dispatch:
-                return fail("workers_unverified", "A worker has no Dispatch identity.")
-            if not _passable(dispatch):
-                return fail("workers_unverified", "A worker's Dispatch identity cannot be encoded as UTF-8 text "
-                            "without NUL, so Pod cannot read it.")
+        for dispatch in found:
             dispatches[dispatch] = None
     verdict["facts"]["runs"] = runs
     # Every remaining fact is read before any refusal, so a refusal from here on keeps complete facts.
-    activity = None
-    from .operations import _receipt_from_request_show
-    for key, row in state["admissions"].items():
-        if row["state"] == "bound":
-            dispatches[row["native_binding"]["dispatchId"]] = (key, row["native_binding"])
-        elif activity is None and row["state"] in ("reserved", "unresolved") and isinstance(row.get("request_uuid"), str):
-            # A request Orca still holds could yet start a worker; absent or completed ones are settled by
-            # the complete worker lists above.
-            try:
-                found, _ = _receipt_from_request_show(port.request_show(row["request_uuid"]), row["request_uuid"])
-            except PodError as exc:
-                activity = ("workers_unverified", f"Admission {key[:12]}'s start request could not be read ({exc.code}).",
-                            None)
-                continue
-            if found == "pending":
-                activity = ("work_live", f"Admission {key[:12]}'s start request is still pending in Orca.",
-                            "Let Orca settle the request, then detect again.")
-    for dispatch in sorted(dispatches):
-        if activity is not None:
-            break
-        try:
-            shown = port.show_worker(dispatch)
-        except PodError as exc:
-            activity = ("workers_unverified", f"A recorded Dispatch could not be read ({exc.code}).", None)
-            break
-        result = shown.get("result") if isinstance(shown, dict) else None
-        if dispatches[dispatch] is not None:
-            key, bound = dispatches[dispatch]
-            parts = [result.get(name) if isinstance(result, dict) else None for name in ("dispatch", "projection", "worker")]
-            if not all(isinstance(part, dict) for part in parts) or (
-                    parts[0].get("id"), parts[0].get("runId"), parts[0].get("taskId"), parts[1].get("id"),
-                    parts[2].get("worktreeId")) != (bound["dispatchId"], bound["runId"], bound["taskId"],
-                                                    bound["workerId"], bound["worktreeId"]):
-                activity = ("workers_unverified", f"Admission {key[:12]} has a differing native identity.", None)
-                break
-        if not _native_assignment_settled(shown):
-            activity = ("work_live", "A recorded Dispatch is live or unsettled; retirement waits for it.",
-                        "Settle the work through Orca, then detect again.")
-            break
-        settled += 1
+    activity, settled = work_activity(state["admissions"], dispatches, port=port)
     entries = _recorded_entries(state)
     located = [_locate(path, repository, host, entries.get(path, set())) for path in release]
     verdict["locations"] = located
@@ -882,12 +910,87 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
     return question
 
 
+DELIVERED_ACTION = "pod sweep closes it by evidence; no owner decision is needed"
+# Refusals read from Pod's records alone, before any native read; a delivery proof never replaces them.
+_RECORD_REFUSALS = ("objective_unknown", "objective_continued", "objective_continues", "objective_closed",
+                    "scope_unreadable", "owner_unrecorded", "handoff_pending", "path_not_recorded")
+
+
+def _proof_requested(value: object) -> list[str]:
+    """The objectives a delivery proof closes: each named once, with an optional release list that evidence closure
+    does not need, since a closed objective's recorded worktrees are all freed (R143)."""
+    if not isinstance(value, list) or not 0 < len(value) <= MAX_OBJECTIVES:
+        raise PodError("invalid_request", f"objectives is a list of 1 to {MAX_OBJECTIVES} entries")
+    names = []
+    for item in value:
+        row = exact(item, REQUEST, {"objective"}, name="retirement_objective")
+        bounded_text(row["objective"], name="objective", limit=256)
+        if not _encodable(row["objective"]):
+            raise PodError("invalid_request", "objective must be text that can be encoded as UTF-8")
+        if "release" in row:
+            _requested([row])
+        names.append(row["objective"])
+    if len(set(names)) != len(names):
+        raise PodError("invalid_request", "Each objective is named once")
+    return names
+
+
+def _close_proved(project: Path, objectives: object, *, port=None) -> dict:
+    """`proof: delivery` in place of a decision (R143): each proved objective closes by evidence, each other is
+    refused with its conditions, a task for the project lead. Nothing asks the owner."""
+    from .evidence_closure import LEAD_ACTION, close_by_evidence
+    from .github import repository_context
+    from .ledger import record_name
+    names = _proof_requested(objectives)
+    context = repository_context(project, fresh=True)
+    if context["repo_key"] is None:
+        raise PodError("retirement_scope_unavailable", "Historical retirement needs a Git repository",
+                       {"next_action": "run it from the repository's canonical checkout"})
+    results = []
+    for name in names:
+        verdict = close_by_evidence(project, name, caller="historical-retirement", port=port)
+        status = {"closed": "closed", "replayed": "replayed"}.get(verdict["status"], "refused")
+        row = {"objective": name, "record": record_name(project, context, name), "status": status,
+               "proof": verdict["status"], "conditions": verdict.get("conditions", [])}
+        if status == "refused":
+            row.update(condition=verdict["conditions"][0]["code"] if verdict.get("conditions") else verdict["status"],
+                       party="lead", next_action=LEAD_ACTION)
+        else:
+            row.update(closure=verdict.get("closure"),
+                       next_action=f"Read it with pod status --objective {name}; it is closed by evidence.")
+        results.append(row)
+    done = [row for row in results if row["status"] != "refused"]
+    return {"status": "closed" if len(done) == len(results) else "partially_closed" if done else "refused",
+            "repository": context["repo_key"], "proof": "delivery", "objectives": results}
+
+
+def _delivered(project: Path, verdict: dict, *, port) -> dict:
+    """Detection's delivered objective leaves the owner question: delivery proved closes it by evidence (R143). Its
+    retirement facts stay complete, so an optional owner decision still binds them exactly as before."""
+    from .evidence_closure import prove
+    proof = prove(project, verdict["objective"], port=port)
+    if proof["status"] != "proved":
+        return verdict
+    return {**verdict, "status": "delivered", "condition": "delivered", "retirement": verdict["condition"],
+            "delivery": [row["pr"] for row in proof["facts"]["delivery"]],
+            "message": "Delivery is proved; this objective closes by evidence, with no owner decision.",
+            "next_action": DELIVERED_ACTION}
+
+
 def historical_retirement(project: Path, objectives: object, *, decision: object | None = None,
-                          port=None) -> dict:
-    """Detect without a decision; retire with an exact one. Each objective succeeds or refuses alone."""
+                          port=None, proof: object | None = None) -> dict:
+    """Detect without a decision; retire with an exact one. Each objective succeeds or refuses alone.
+
+    Detection names a delivered objective `delivered`, outside the owner question; `proof: delivery` closes each
+    proved objective by evidence instead of retiring it (R143). An owner decision keeps working exactly as before.
+    """
     from .github import repository_context
     from .ledger import _lock, _path, _read, _write_retirement, record_name
     from .operations import OrcaPort
+    if proof is not None:
+        if decision is not None or proof != "delivery":
+            raise PodError("invalid_request", "proof is \"delivery\", given in place of a decision")
+        return _close_proved(project, objectives, port=port)
     requested = _requested(objectives)
     context = repository_context(project, fresh=True)
     repository = context["repo_key"]
@@ -922,6 +1025,11 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                 # Each objective reads the host afresh: an earlier objective's inventory is never its proof.
                 verdict = _detect(project, name, row["release"], state, port=port, repository=repository,
                                   host=_Host(project))
+                if (decision is None and verdict["status"] in ("eligible", "refused")
+                        and verdict["condition"] not in _RECORD_REFUSALS):
+                    # A delivered objective closes by evidence instead, outside the owner question (R143). The
+                    # record checks above still precede every native read.
+                    verdict = _delivered(project, verdict, port=port)
             verdict["record"] = record_name(project, context, name)
             if decision is None:
                 results.append(verdict)
@@ -973,14 +1081,18 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
     done = [row for row in results if row["status"] in ("retired", "replayed")]
     if decision is None:
         eligible = [row for row in results if row["status"] == "eligible"]
+        delivered = [row["objective"] for row in results if row["status"] == "delivered"]
         tally = {"pending": 0, "unknown": 0, "failed": 0, "unreported": 0}
         for row in eligible:
             for key, value in counts(row["facts"]["records"]).items():
                 tally[key] += value
         out = {"status": "retirement_available" if eligible else "retirement_unavailable",
                "repository": repository, "objectives": results}
+        if delivered:
+            out["delivered"] = delivered
         if eligible:
-            out["question"] = _question(eligible, [row for row in results if row["status"] != "eligible"], tally)
+            out["question"] = _question(eligible, [row for row in results
+                                                   if row["status"] not in ("eligible", "delivered")], tally)
             out["next_action"] = ("Ask the owner the question. Then rerun the request with only the objectives the "
                                   "owner's answer names, and a user_direct decision of exactly {provenance, "
                                   "instruction, repository, reason, objectives}, each of those objectives in order as "
@@ -989,6 +1101,9 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                   "objective stays refused alone.")
         else:
             out["next_action"] = "Historical retirement fits no requested objective now; resolve each named condition."
+        if delivered:
+            out["next_action"] += (" Delivered " + ", ".join(delivered) + ": " + DELIVERED_ACTION
+                                   + " (or rerun this request with proof: delivery).")
         return out
     return {"status": "retired" if len(done) == len(results) else "partially_retired" if done else "refused",
             "repository": repository, "objectives": results}

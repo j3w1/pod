@@ -572,6 +572,31 @@ def unchanged_governance(project: Path, map_state: dict) -> tuple[dict, dict] | 
                       "sources": revisions(sources)}
 
 
+def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
+    """The closing checkpoint's narrow exemption (R143): after a verified delivery (R93) the target has since moved
+    past, closure keeps the trusted baseline and adopts nothing, so it needs no governance refresh or owner snapshot
+    decision. Returns what it kept, which the closing write reports; None when the exemption does not apply."""
+    governance = map_state.get("governance") or {}
+    delivery = map_state.get("delivery")
+    if delivery is None or governance.get("base_ref") is None or governance.get("base") is None:
+        return None
+    validate_delivery_record(delivery)
+    if delivery["base"] != governance["base"] or delivery["target_ref"] != governance["base_ref"]:
+        return None
+    if (governance.get("selection") == "default"
+            and _symbolic_ref(project, "refs/remotes/origin/HEAD") != governance["base_ref"]):
+        return None  # A changed default target is a retarget, never kept by closure.
+    current = _resolve_commit(project, governance["base_ref"])
+    if current is None or current in (governance["base"], delivery["result"]):
+        return None
+    if git_is_ancestor(project, delivery["result"], current) is not True:
+        return None
+    return {"adopted": False, "base_ref": governance["base_ref"], "base": governance["base"], "target": current,
+            "delivery": delivery["result"],
+            "reason": "closure keeps the trusted baseline of the verified delivery; the target moved past it and "
+                      "its later policy is not adopted"}
+
+
 def require_governance_current(project: Path, map_state: dict | None, *, checkpoint: bool = False) -> tuple[dict, dict] | None:
     """Before new admission or a governed effect: the bound base is still the target's base."""
     if not isinstance(map_state, dict) or map_state.get("obligations") is None:

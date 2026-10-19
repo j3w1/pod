@@ -95,8 +95,7 @@ def base(state: dict, journal: dict, *, outstanding: set[str]) -> dict:
             block["external"] = gates
     elif delivered:
         block["state"] = "finalizing"
-        if waiting and names == ["closure"]:
-            block["acts_next"] = waiting[0]["party"] or "unknown"
+        # Delivered with only closure left: the coordinator records it now, whoever a recorded wait names (R140).
     elif waiting:
         block.update(state="waiting", acts_next=waiting[0]["party"] or "unknown")
     elif outstanding and not any(ob["state"] == "active" and ob.get("executor") == "coordinator"
@@ -187,6 +186,23 @@ def _handoff_route(state: dict, facts: dict) -> dict:
                        "that terminal's status runs the remaining checks"}
 
 
+def _evidence_route(project: Path | None, objective: str, port) -> dict:
+    """Closure by evidence (R141): first and needing no owner decision. Its proof reads Orca and GitHub."""
+    route = {"route": "evidence_closure"}
+    if project is None:
+        return {**route, "status": "unverified", "condition": "record_elsewhere",
+                "message": "this record is not one of this repository's; read it from its own worktree"}
+    from .evidence_closure import prove
+    proof = prove(project, objective, port=port)
+    if proof["status"] == "proved":
+        return {**route, "status": "available", "condition": "proved",
+                "message": "delivery is proved; pod sweep closes it by evidence, with no owner decision"}
+    first = next((row for row in proof["conditions"] if row["status"] == proof["status"]), proof["conditions"][0])
+    return {**route, "status": "unverified" if proof["status"] == "unverified" else "blocked",
+            "condition": first["code"], "message": first["message"],
+            "conditions": [{key: row[key] for key in ("code", "status", "message")} for row in proof["conditions"]]}
+
+
 def _claim_route(claim: dict | None) -> dict:
     route = {"route": "successor_claim"}
     if claim is None:
@@ -238,6 +254,9 @@ def _summary(block: dict) -> str:
     if state == "closed_external":
         return (f"Closed with external work: {len(block['external'])} remaining gate(s) outside the objective, "
                 f"for the {block['acts_next']}; Pod needs nothing more and its coordinator may close.")
+    if state == "finalizing" and pending["remaining"] == ["closure"]:
+        return ("Delivered, not closed: the coordinator records closure now with a checkpoint close: true; no owner "
+                "decision is needed, and it is not safe to close the coordinator.")
     if state == "finalizing":
         return f"Delivered but finalizing: Pod still needs {_phrase(pending)}; not safe to close the coordinator."
     if state == "waiting":
@@ -247,17 +266,10 @@ def _summary(block: dict) -> str:
         more = f" and {len(block['waiting_on']) - 1} more" if len(block["waiting_on"]) > 1 else ""
         return f"Waiting {who}: {clean(need)[:120]} ({row['obligation']}){more}; not finished."
     if state == "coordinator_lost":
-        how = {"lost": "stale or gone", "exited": "closed"}[block["coordinator"]["liveness"]]
-        recovery = block["recovery"]
-        text = f"Coordinator lost: Orca reports its terminal {how}"
-        if recovery["route"] is not None:
-            text += "; recoverable through " + recovery["route"].replace("_", " ")
-        else:
-            claim = next(row for row in recovery["routes"] if row["route"] == "successor_claim")
-            text += f"; recovery blocked: successor claim refused ({claim['condition']}: {claim['message']})"
-        if pending and pending["remaining"]:
-            text += f"; Pod still needs {_phrase(pending)}"
-        return text + "."
+        route = next(row for row in block["recovery"]["routes"] if row["route"] == "evidence_closure")
+        if route["status"] == "available":
+            return "Coordinator lost; delivery proved: pod sweep closes it by evidence, with no owner decision."
+        return f"Coordinator lost; delivery not proved ({route['condition']}): a task for the project lead."
     if state == "working" and block.get("unverified"):
         return (f"Working: {block['unverified']['admissions']} assignment(s) cannot be verified "
                 f"({block['unverified']['code']}); not finished.")
@@ -327,7 +339,8 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
         from .status import project_for_state
         from .succession import claim_view
         bound = project_for_state(state["checkpoint"], project)
-        if objective_root(bound, objective) == root:
+        local = objective_root(bound, objective) == root
+        if local:
             claim = claim_view(bound, objective, state, port=port or OrcaPort(bound), previous=identity)
         else:  # The claim reads its predecessor's journal through this repository's records only.
             claim = {"status": "claim_unavailable", "condition": "predecessor_unverified",
@@ -337,14 +350,21 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
         out["successor_claim"] = claim
         facts = block.get("coordinator") or {}
         if facts.get("liveness") in ("lost", "exited") and block["state"] in ("working", "waiting", "finalizing"):
-            routes = [{"route": "same_run_resume", "status": "blocked", "condition": "owner_not_live",
+            # The evidence closure comes first and needs no owner; handoff and claim stay listed as optional.
+            routes = [_evidence_route(bound if local else None, objective, port or OrcaPort(bound)),
+                      {"route": "same_run_resume", "status": "blocked", "condition": "owner_not_live",
                        "message": "Orca reports the recorded coordinator's terminal "
                                   + ("closed" if facts["liveness"] == "exited" else "stale or gone")
                                   + "; a conversation resumed in another terminal does not hold its Run"},
                       _handoff_route(state, facts), _claim_route(claim)]
-            block.update(state="coordinator_lost", acts_next="owner",
+            block.update(state="coordinator_lost", acts_next="lead",
                          recovery={"route": next((row["route"] for row in routes if row["status"] == "available"),
                                                  None), "routes": routes})
+            if routes[0]["status"] == "available":
+                # Delivered: the optional claim's next action points to the evidence closure, not the owner (R143).
+                from .evidence_closure import SWEEP_ACTION
+                out["successor_claim"] = {**claim, "next_action": SWEEP_ACTION[0].upper() + SWEEP_ACTION[1:]
+                                          + "; a claim stays optional and moves authority only."}
     if "summary" not in block:
         block["summary"] = _summary(block)
     tabs = worker_tabs if worker_tabs is not None else (view or {}).get("worker_tabs", [])

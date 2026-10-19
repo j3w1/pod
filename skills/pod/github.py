@@ -38,6 +38,9 @@ PR_FIELDS = "number,url,headRefOid,state,isDraft"
 PR_READ_FIELDS = "number,url,headRefOid,state,mergeCommit,mergedAt"
 PR_LIST_LIMIT = 10
 ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
+# What a delivery proof reads (R141): an issue's closing reason, and one pull request by its number.
+ISSUE_STATE_FIELDS = "number,url,state,stateReason,body"
+PR_VIEW_FIELDS = "number,url,state,mergedAt,mergeCommit"
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
 _ISSUE_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)/?\Z")
 _COMMENT_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)\Z")
@@ -185,6 +188,12 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
         return True
     if (len(argv) == 7 and argv[:2] == ["issue", "view"] and _RUN_ID.fullmatch(argv[2])
             and argv[3] == "--repo" and _name(argv[4]) and argv[5:] == ["--json", ISSUE_FIELDS]):
+        return True
+    if (len(argv) == 7 and argv[:2] == ["issue", "view"] and _RUN_ID.fullmatch(argv[2])
+            and argv[3] == "--repo" and _name(argv[4]) and argv[5:] == ["--json", ISSUE_STATE_FIELDS]):
+        return True
+    if (len(argv) == 7 and argv[:2] == ["pr", "view"] and _RUN_ID.fullmatch(argv[2])
+            and argv[3] == "--repo" and _name(argv[4]) and argv[5:] == ["--json", PR_VIEW_FIELDS]):
         return True
     if (len(argv) == 4 and argv[0] == "api"
             and re.fullmatch(r"repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/comments/[1-9][0-9]*", argv[1])
@@ -624,6 +633,33 @@ class GhPort:
                 or not isinstance(rows.get("body"), str)):
             raise PodError("issue_identity_mismatch", "GitHub returned a different or incomplete issue")
         return rows
+
+    def issue_state(self, *, repository: str, number: int) -> dict:
+        """One issue's state, closing reason and body, read only: what a delivery proof checks (R141)."""
+        rows = self._gh_json(["issue", "view", str(number), "--repo", repository, "--json", ISSUE_STATE_FIELDS])
+        try:
+            returned = parse_issue_locator(str(rows.get("url", ""))) if isinstance(rows, dict) else None
+        except PodError:
+            returned = None
+        if (returned is None or rows.get("number") != number or returned["number"] != number
+                or returned["repository"].casefold() != repository.casefold()
+                or rows.get("state") not in ("OPEN", "CLOSED") or not isinstance(rows.get("body"), str)
+                or not isinstance(rows.get("stateReason"), (str, type(None)))):
+            raise PodError("issue_identity_mismatch", "GitHub returned a different or incomplete issue")
+        return {"number": number, "url": rows["url"], "state": rows["state"], "state_reason": rows.get("stateReason"),
+                "body": rows["body"]}
+
+    def pr_view(self, *, repository: str, number: int) -> dict:
+        """One pull request by its number, read only: whether a delivery pull request merged (R141)."""
+        row = self._gh_json(["pr", "view", str(number), "--repo", repository, "--json", PR_VIEW_FIELDS])
+        if (not isinstance(row, dict) or row.get("number") != number
+                or row.get("state") not in ("OPEN", "CLOSED", "MERGED")):
+            raise PodError("gh_contract", "gh pr view returned an unsupported shape")
+        merged = row.get("mergeCommit") if isinstance(row.get("mergeCommit"), dict) else {}
+        oid = merged.get("oid")
+        return {"number": number, "url": row.get("url") if isinstance(row.get("url"), str) else None,
+                "state": row["state"], "merged_at": row.get("mergedAt") if isinstance(row.get("mergedAt"), str) else None,
+                "merge_commit": oid if isinstance(oid, str) and _GIT_ID.fullmatch(oid) else None}
 
     def amendment(self, *, repository: str, number: int, comment: int) -> dict:
         try:

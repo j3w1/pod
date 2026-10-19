@@ -691,6 +691,8 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
             raise PodError("native_authority_unverified", "Caller is not the recorded owner; objective belongs to another coordinator")
         # A rebind is no work: a successor an incomplete claim reserves may rebind so that it can finish the claim.
         _require_open(state, reserved=False)
+        from .evidence_closure import refuse_objective
+        refuse_objective(project, objective)
         refs = _run_references(state)
         if len(set(refs.values())) != 1:
             raise PodError("native_authority_unverified", "Objective Run references span runtimes")
@@ -1276,9 +1278,23 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
             verified_delivery = verify_delivery(project, objective, prior_map, record_id,
                                                 seq=prior_map["seq"] + 1)
+        kept = None
         if prior_map is not None and not refresh:
             current_map = prior_map if verified_delivery is None else {**prior_map, "delivery": verified_delivery}
-            unchanged = require_governance_current(project, current_map, checkpoint=True)
+            try:
+                unchanged = require_governance_current(project, current_map, checkpoint=True)
+            except PodError as exc:
+                # A closing write after its verified delivery keeps the trusted baseline instead of asking for a
+                # snapshot decision; a delivery named in the closing write itself never counts (R143).
+                closing = (proposed.get("close") is True and not prior_map.get("closure")
+                           and verified_delivery is None)
+                if exc.code != "governance_changed" or not closing:
+                    raise
+                from .governance import closure_keeps_baseline
+                kept = closure_keeps_baseline(project, prior_map)
+                if kept is None:
+                    raise
+                unchanged = None
             if unchanged is not None:
                 adopted_observation, derived_adoption = unchanged
         if prior_map is None:
@@ -1333,6 +1349,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             ctx["authorization_granted"] = _authorization_granted(project, objective, context=ctx["standing_context"])
         ctx["operation"] = "checkpoint"
         ctx["governance_refresh"] = refresh
+        if kept is not None:
+            ctx["governance_kept"] = kept
         ctx["derived_adoption"] = derived_adoption
         ctx["recorded_questions"] = previous.get("questions", [])
         if dispositions:
@@ -1466,6 +1484,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             result["pod_tick_intake"] = tick_intake(state, map_state)
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx, standing_normal=True)
+        if (ctx or {}).get("governance_kept"):
+            # What the closing write did not adopt, said in its own answer (R143).
+            result["governance_adoption"] = dict(ctx["governance_kept"])
         from .standing import projection as standing_projection
         from .governor import _read_journal, _record_path
         try:
@@ -1694,6 +1715,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                for row in state["admissions"].values()):
             raise PodError("unresolved_prior_attempt", "An unsettled Task cannot be replaced")
         _require_open(state)
+        from .evidence_closure import refuse_objective
+        refuse_objective(project, objective)
         if any(row["phase"] != "completed" for row in state.get("pod_ticks", {}).get("requests", {}).values()):
             raise PodError("pod_tick_pending", "Recover the pending pod internal pod-tick request before admission")
         map_state = map_of(state)

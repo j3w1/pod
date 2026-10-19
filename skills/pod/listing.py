@@ -92,8 +92,12 @@ def _schema(raw: dict) -> str:
     return "current"
 
 
-def objective_list(project: Path, *, repository: str | None = None, worktree: str | None = None) -> dict:
-    """Every recorded objective of one repository, or of one worktree of it."""
+def objective_list(project: Path, *, repository: str | None = None, worktree: str | None = None,
+                   delivered: bool = False) -> dict:
+    """Every recorded objective of one repository, or of one worktree of it.
+
+    `delivered` adds each open objective's read-only delivery proof (R144), which reads Orca and GitHub; the plain
+    list stays record-only."""
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, record_name, state_root
     target = Path(worktree or repository or project).expanduser().resolve()
@@ -152,12 +156,23 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
         if record_name(target, context, name) != entry.name:
             continue  # Another repository's record, or another name under this key.
         facts = _facts(raw)
-        row = {"objective": name, "record": entry.name, "phase": _phase(raw), "schema": _schema(raw),
+        from .evidence_closure import block as closure_block, compact
+        closure = closure_block(Path(entry.path))
+        phase = _phase(raw)
+        if closure is not None and phase == "open":
+            phase = "closed"  # Closed by evidence, whatever the record's schema (R141, R142).
+        row = {"objective": name, "record": entry.name, "phase": phase, "schema": _schema(raw),
                **facts}
         from .succession import links
         row.update(links(target, raw))
         from .readiness import label
-        row["readiness"] = label(Path(entry.path), raw) if row["schema"] == "current" else "unavailable"
+        if closure is not None and phase == "closed":
+            row["readiness"] = "closed"
+        else:
+            row["readiness"] = label(Path(entry.path), raw) if row["schema"] == "current" else "unavailable"
+        row["closure_basis"] = "evidence" if closure is not None else "coordinator" if phase == "closed" else None
+        row["evidence_closure"] = (None if closure is None else closure if closure["status"] == "unreadable"
+                                   else compact(closure))
         if row["phase"] == "retired" and row["schema"] == "current":
             from .retirement import status_block
             row["retirement"] = status_block(raw)
@@ -170,6 +185,12 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
                 continue
         rows.append(row)
     rows.sort(key=lambda row: (row["objective"], row["record"]))
+    if delivered:
+        from .evidence_closure import prove
+        for row in rows[:MAX_ROWS]:
+            if row["phase"] == "open":
+                proof = prove(target, row["objective"])
+                row["delivery_proof"] = {"status": proof["status"], "conditions": proof["conditions"]}
     truncated = len(rows) > MAX_ROWS or len(directories) > MAX_SCAN
     result.update(objectives=rows[:MAX_ROWS], total=len(rows), truncated=truncated,
                   unreadable_records=unreadable[:MAX_DIAGNOSTICS],
@@ -192,10 +213,16 @@ def render(result: dict) -> None:
           + ("; truncated" if result["truncated"] else "") + ("" if result["complete"] else "; incomplete"))
     for row in result["objectives"]:
         link = (f" -> {clean(row['continued_by'])}" if row.get("continued_by") else "")
+        if row.get("closure_basis") == "evidence":
+            link += " (closed by evidence, coordinator gone)"
         print(f"  {clean(row['objective'])[:64]} | {row['phase']}{link} | {row['schema']} | "
               f"runs {', '.join(clean(run) for run in row['runs'][:4]) or 'none'} | "
               f"worktrees {', '.join(clean(path) for path in row['worktrees'][:2]) or 'unrecorded'} | "
               f"readiness {row['readiness']}")
+        proof = row.get("delivery_proof")
+        if proof is not None:
+            print(f"    Delivery proof: {proof['status'].replace('_', ' ')}"
+                  + "".join(f"; {clean(item['code'])}" for item in proof["conditions"][:4]))
     for item in result["unreadable_records"]:
         print(f"  Unreadable record {clean(item['record'])}: {clean(item['code'])}")
     for record in result["unattributed_records"]:
