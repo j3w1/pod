@@ -117,9 +117,11 @@ TABLE = {
                                   "verification_gaps", "next_safe_action", "route_decisions", "objective", "blocker", "remaining_gates")},
         "objective_source": {"type": "object", "form": "bound issue source"},
         "native_refs": items(32, {"type": "object", "form": "runId and runtime text"}),
-        "worktree": record("worktree_binding"), "verification": record("verification"),
+        "worktree": record("worktree_binding"), "verification": record("verification"), "display": record("display"),
     }, ("schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs", "assignments",
         "questions", "verification_gaps", "next_safe_action")),
+    "display": definition({"task": text(48), "continued": items(32, text(256)),
+                           "host_tab": {"type": "boolean"}}, ("task", "continued", "host_tab")),
     "map": definition(_MAP_FIELDS, form="seq is required for update; obligations are required at intake; otherwise omitted fields carry forward"),
     "obligation": definition({
         "id": ident(), "kind": choice(KINDS), "provenance": choice(PROVENANCES),

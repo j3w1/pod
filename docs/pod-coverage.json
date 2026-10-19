@@ -6114,6 +6114,121 @@
         "tests.test_standing_authorization.StandingCompatibilityTests.test_e3_never_yolo_close_reopen_close_keeps_0180_readability_and_defer_text"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A480",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_codex_and_own_worktree_first_then_later",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A481",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayNameTests.test_purpose_only_filter_task_phrase_and_fallback",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A482",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayStatusTests.test_implementer_reviewer_fixer_investigator_statuses",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A483",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayAckTests.test_admission_title_rename_codex_and_own_worktree_first_then_later",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A484",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayTitleTests.test_rounds_recompute_and_failed_starts_do_not_consume",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A485",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayTitleTests.test_coordinator_inside_outside_and_successor",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A486",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_display.DisplayAckTests.test_packet_fallback_is_plain_role_and_earlier_rows_keep_bytes",
+        "tests.test_worker_tabs.TitleTests.test_reviewer_and_finer_role"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A487",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A488",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayOwnershipTests.test_automatic_task_name_issue_and_host_names_win",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A489",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayOpTests.test_differs_returns_exact_commands_and_host_has_none",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A490",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayAckTests.test_checkpoint_display_validation_persistence_and_whole_replacement",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A491",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayOpTests.test_read_only_matches_new_backend_and_old_limitation",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A492",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_display.DisplayAckTests.test_shared_worktree_claude_guard_and_recorded_continuation",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A493",
+      "required_evidence": [
+        "live_native"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
     }
   ]
 }

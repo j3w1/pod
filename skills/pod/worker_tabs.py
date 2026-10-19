@@ -6,45 +6,16 @@ readback and records; the projection is also the new-write closure precondition.
 
 from __future__ import annotations
 
-import re
 import shlex
 
 from .contracts import bound
 from .errors import PodError
-from .readiness import STATES
+from .display import _words, worker_title, worktree_command
 
 TITLE_LIMIT = 96
 ROLE_LABEL_LIMIT = bound("packet", "role_label")
 PURPOSE_LIMIT = bound("packet", "purpose")
 _ROLES = {"implement": "Implementer", "investigate": "Investigator", "review": "Reviewer"}
-_OMIT = frozenset("""status progress outcome pending running working ready completed complete done
-    succeeded success failed failure blocked stopped active retained released approved authorized
-    finished verified reviewed passing pass fail stale unverifiable disconnected
-    authority authorization permission owner user system developer coordinator admin root model effort codex claude gpt
-    opus fable sonnet haiku astra sol luna gemini openai anthropic low medium high xhigh max ultra minimal native default secret secrets
-    password token credential credentials bearer api key terminal handle run task dispatch admission
-    packet id uuid sha sha256 term ctx wtr req sk pk""".split()) | frozenset(STATES)
-
-
-def _words(value: str) -> str:
-    # A title admits ordinary words only, never identifier/path/credential-shaped
-    # tokens. Do not split an unsafe token into seemingly safe pieces.
-    words = []
-    skip_value = False
-    for token in value.split():
-        token = token.strip(",.;:!?()[]{}\"'")
-        if skip_value:
-            skip_value = False
-            continue
-        if token.casefold() in {"model", "effort", "authority", "password", "token", "bearer", "secret",
-                                "credential", "key", "id", "terminal", "handle", "run", "task", "dispatch",
-                                "admission", "packet"}:
-            skip_value = True
-            continue
-        if (re.fullmatch(r"[A-Za-z]{1,24}(?:-[A-Za-z]{1,24})?", token)
-                and all(part.casefold() not in _OMIT for part in token.split("-"))):
-            words.append(token)
-    return " ".join(words)
 
 
 def title(body: dict) -> str:
@@ -126,7 +97,12 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
            "command": None, "wording": "", "blocks_closure": False, "listed": False}
 
     def finish(kind, wording="", **fields):
-        return {**row, "row": kind, "wording": wording, **fields}
+        result = {**row, "row": kind, "wording": wording, **fields}
+        if result["listed"]:
+            result.update(worktree_command(state, admission))
+            result["retained_title"] = rename(worker_title(state, admission), handle,
+                                               started=kind not in ("unreadable", "runtime_changed"))
+        return result
 
     # These exclusions precede even unreadable facts and an owner's keep.
     if (not settled or handle == state.get("owner") or facts.get("native_role") in ("coordinator", "setup")
@@ -198,8 +174,6 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
             option = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
                       if keep else f"Orca's release option: {next_step}.")
             wording = decision + " " + option + cycle
-        if reason and packet_body is not None:
-            fields["retained_title"] = rename(f"{title(packet_body)} (retained: {reason})", handle)
         return finish("owner_kept_owned" if keep else "retained_owned" if row["release_state"] == "retained" else "owned",
                       wording, **fields)
     row["state"] = "kept"
