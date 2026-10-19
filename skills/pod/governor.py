@@ -1630,7 +1630,9 @@ def _check_merge_outcome(project: Path, state: dict, journal: dict, row: dict, o
                  if isinstance(failure.detail, dict) and failure.detail.get("detail") == "result_not_exact" else None)
         if basis is not None:
             recorded = row["receipt"]
-            if (any(merged.get(key) != value for key, value in (recorded.get("provider") or {}).items())
+            # Compare as JSON, not Python values: 1, 1.0 and true are different recorded evidence.
+            if (any(digest(merged.get(key)) != digest(value)
+                    for key, value in (recorded.get("provider") or {}).items())
                     or detail is not None and recorded.get("detail") not in (None, detail)):
                 raise _outcome_refusal("receipt_recorded", "Recovery keeps this row's recorded provider evidence and "
                                        "detail", "record PASS again without provider fields or detail that replace "

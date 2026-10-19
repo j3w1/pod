@@ -434,6 +434,22 @@ class MergeParentTests(KernelCase):
         self.assertEqual(refused.detail["detail"], "receipt_recorded")
         self.assertNotIn("parent_basis", self.row(second))
 
+    def test_historical_recovery_keeps_json_types_of_recorded_provider_values(self):
+        """Python treats 1 and True as equal; recorded JSON evidence does not."""
+        second, result = self.earlier()
+        recorded = {"merge_commit": result, "pr": 1, "draft": True, "zero": 0, "nested": {"n": 1}}
+        self.op("governor-outcome", record_id=second, outcome="UNKNOWN", provider=recorded)
+        for key, replacement in (("pr", True), ("draft", 1), ("zero", False), ("nested", {"n": True})):
+            with self.subTest(key=key):
+                refused = self.refuses_unchanged("governor-outcome", record_id=second, outcome="PASS",
+                                                  provider={**recorded, key: replacement})
+                self.assertEqual(refused.detail["detail"], "receipt_recorded")
+        self.assertNotIn("parent_basis", self.row(second))
+        # Restating the same JSON values is no replacement, so recovery proceeds and keeps them exactly.
+        self.assertEqual(self.outcome(second, result)["outcome"], "PASS")
+        self.assertEqual(json.dumps(self.row(second)["receipt"]["provider"], sort_keys=True),
+                         json.dumps(recorded, sort_keys=True))
+
     def carried_copy(self, record, result):
         """Exercise the real claim-copy and readback paths; surrounding claim authority has its own suite."""
         journal = _read_journal(_record_path(self.project, "objective"))

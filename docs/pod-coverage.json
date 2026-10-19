@@ -6608,7 +6608,8 @@
         "tests.test_merge_parent_binding.MergeParentTests.test_historical_squash_recovers_from_the_same_bounded_parent",
         "tests.test_merge_parent_binding.MergeParentTests.test_historical_fast_forward_keeps_original_base_check_first",
         "tests.test_merge_parent_binding.MergeParentTests.test_historical_delivery_settled_exactly_at_admission_can_recover",
-        "tests.test_merge_parent_binding.MergeParentTests.test_caller_cannot_supply_a_parent_basis_or_replace_the_admitted_binding"
+        "tests.test_merge_parent_binding.MergeParentTests.test_caller_cannot_supply_a_parent_basis_or_replace_the_admitted_binding",
+        "tests.test_merge_parent_binding.MergeParentTests.test_historical_recovery_keeps_json_types_of_recorded_provider_values"
       ],
       "status": "NOT_RUN"
     },
