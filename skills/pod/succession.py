@@ -648,7 +648,16 @@ def claim_view(project: Path, objective: str, state: dict, *, port, previous: di
 
 def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                decision: object | None = None, port=None) -> dict:
-    """Detect without a decision; claim with an exact one. Locks are taken in path order."""
+    """Detect without a decision; claim with an exact one. Locks are taken in path order.
+
+    Detection of a delivered predecessor names the evidence closure as its next action; that read-only proof runs
+    after the locks are released, as it reads Orca and GitHub (R143)."""
+    result = _succession(project, objective, owner=owner, predecessor=predecessor, decision=decision, port=port)
+    return _delivered_route(project, predecessor, result, port=port) if decision is None else result
+
+
+def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
+                decision: object | None = None, port=None) -> dict:
     from .ledger import _lock, _path, _read, _write, _write_succession, require_authority
     from .operations import OrcaPort
     bounded_text(predecessor, name="predecessor", limit=256)
@@ -740,7 +749,7 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
             raise PodError(verdict["condition"], verdict["message"] + " The successor's reservation was released.",
                            {"succession": verdict, "next_action": verdict["next_action"]})
         if decision is None:
-            return _delivered_route(project, predecessor, verdict, port=port)
+            return verdict
         if verdict["status"] != "claim_available":
             raise PodError(verdict["condition"], verdict["message"],
                            {"succession": verdict, "next_action": verdict["next_action"]})
@@ -800,7 +809,7 @@ def _delivered_route(project: Path, predecessor: str, verdict: dict, *, port) ->
     if verdict["status"] != "claim_available":
         return verdict
     from .evidence_closure import SWEEP_ACTION, prove
-    if prove(project, predecessor, port=port)["status"] != "proved":
+    if prove(project, predecessor, port=port, readback=False)["status"] != "proved":
         return verdict
     shown = {key: value for key, value in verdict.items() if key != "question"}
     return {**shown, "delivered": True,

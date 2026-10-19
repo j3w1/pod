@@ -59,15 +59,21 @@ def _sha(data: bytes) -> str:
 # --------------------------------------------------------------------------- the stored record
 
 
-def present(root: Path) -> bool:
-    """Whether an evidence closure is recorded beside this objective's record; an unreadable entry counts."""
+def _presence(root: Path) -> str:
+    """`present`, `absent`, or `unknown` when this host cannot inspect the objective's directory."""
     try:
         os.lstat(root / FILE)
     except FileNotFoundError:
-        return False
+        return "absent"
     except OSError:
-        return True  # Never read an entry Pod cannot inspect as absent.
-    return True
+        return "unknown"
+    return "present"
+
+
+def present(root: Path) -> bool:
+    """Whether an evidence closure is recorded beside this objective's record. Only a recorded one reads as closed;
+    an entry Pod cannot inspect is never proof of closure (and `refuse_closed` refuses writes on it)."""
+    return _presence(root) == "present"
 
 
 def load(root: Path) -> dict:
@@ -97,8 +103,13 @@ def load(root: Path) -> dict:
 
 def refuse_closed(root: Path) -> None:
     """Every write of an objective closed by evidence refuses, its own coordinator's included (R141, C4)."""
-    if not present(root):
+    presence = _presence(root)
+    if presence == "absent":
         return
+    if presence == "unknown":
+        # Never write past a closure Pod cannot rule out; the code names the unreadable state, not a closure.
+        raise PodError("unsafe_state", "Whether this objective is closed by evidence cannot be read; nothing was "
+                       "written", {"next_action": "restore access to the objective's state directory, then retry"})
     try:
         at = load(root)["at"]
     except PodError:
@@ -337,8 +348,12 @@ def _settled_record(project: Path, row: dict) -> bool:
     return phase == "continued" and chain_state(project, row["raw"])["state"] == "successor_closed"
 
 
-def prove(project: Path, objective: str, *, port=None, remote=None, now: datetime | None = None) -> dict:
+def prove(project: Path, objective: str, *, port=None, remote=None, now: datetime | None = None,
+          readback: bool = True) -> dict:
     """Whether this objective's delivery is proved (C2), read-only: never writes, locks or asks anyone.
+
+    Preserved results never decide the status, so a reader that only asks whether delivery is proved passes
+    `readback=False` and Pod's provider readback of pending rows waits for the closure write.
 
     Returns `{status, conditions, facts}`: `proved`, `not_proved` (a task for the project lead), `unverified`
     (something could not be read) or `not_applicable` (closed, continued, under historical retirement, live, or a
@@ -391,7 +406,7 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
         return proof.result()
     try:
         _checks(project, objective, root, raw, kind, doc, proof, port=port or OrcaPort(project), remote=remote,
-                now=now)
+                now=now, readback=readback)
     except PodError as exc:
         # A fact the proof needs could not be read: nothing is closed on it (C2).
         proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
@@ -399,7 +414,7 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
 
 
 def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc: dict, proof: _Proof, *, port,
-            remote, now: datetime | None) -> None:
+            remote, now: datetime | None, readback: bool) -> None:
     """Conditions 2 to 8 after the record is read, cheapest first; each unmet one is added to `proof`."""
     _claims(project, objective, raw, kind, proof)
     remote = remote if isinstance(remote, _Remote) else _Remote(project, remote)
@@ -419,7 +434,7 @@ def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc
     _source(doc, state, proof, remote)
     members = _members(project, objective, raw, doc, proof, records)
     _delivery(project, members, proof, remote)
-    _preserved(project, root, doc, state, proof, remote, now=now)
+    _preserved(project, root, doc, state, proof, remote, now=now, readback=readback)
     from .obligations import TERMINAL
     from .ledger import map_of
     obligations = ((map_of(state) or {}).get("obligations") or []) if state is not None else []
@@ -711,7 +726,7 @@ def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: 
 
 
 def _preserved(project: Path, root: Path, doc: dict, state: dict | None, proof: _Proof, remote: _Remote, *,
-               now: datetime | None) -> None:
+               now: datetime | None, readback: bool) -> None:
     """Pending, UNKNOWN and FAILED results kept as they read: reconciled only by Pod's read-only readback (R118's
     `_observe`), never stamped and never written back (C2.8)."""
     from .governor import _read_journal
@@ -733,7 +748,9 @@ def _preserved(project: Path, root: Path, doc: dict, state: dict | None, proof: 
                 "candidate": _clip(row.get("candidate_id") or row["action"]["candidate"], 256),
                 "recorded": row["outcome"], "outcome": row["outcome"] if row["outcome"] == "FAILED" else "UNKNOWN",
                 "reconciled": False, "evidence": None, "reason": None}
-        if row["outcome"] != "FAILED":
+        if row["outcome"] != "FAILED" and not readback:
+            item["reason"] = "read back when its closure is recorded"
+        elif row["outcome"] != "FAILED":
             item["outcome"], item["reconciled"], item["evidence"], item["reason"] = _readback(
                 project, row, journal, remote, moment)
         rows.append(item)

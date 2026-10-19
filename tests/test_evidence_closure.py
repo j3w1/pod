@@ -722,6 +722,13 @@ class SweepTests(ClosureCase):
         detected = self.retire()
         self.assertEqual(detected["objectives"][0]["condition"], "objective_closed")
         self.assertNotIn("question", detected)
+        # A directory Pod cannot inspect never reads as closed, and its writes still refuse, by their own code.
+        mode = root.stat().st_mode & 0o777
+        root.chmod(0)
+        try:
+            self.refused(calls["journal backstop"], code="unsafe_state")
+        finally:
+            root.chmod(mode)
         # CE's cleanup reads it as closed, like an objective its coordinator closed (R94).
         self.assertEqual(run("cleanup-plan", {"project": project, "objective": "objective"})["closure_basis"],
                          "evidence")

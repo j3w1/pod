@@ -189,7 +189,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
         from .evidence_closure import prove
         for row in rows[:MAX_ROWS]:
             if row["phase"] == "open":
-                proof = prove(target, row["objective"])
+                proof = prove(target, row["objective"], readback=False)
                 row["delivery_proof"] = {"status": proof["status"], "conditions": proof["conditions"]}
     truncated = len(rows) > MAX_ROWS or len(directories) > MAX_SCAN
     result.update(objectives=rows[:MAX_ROWS], total=len(rows), truncated=truncated,

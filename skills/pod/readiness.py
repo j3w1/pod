@@ -193,7 +193,7 @@ def _evidence_route(project: Path | None, objective: str, port) -> dict:
         return {**route, "status": "unverified", "condition": "record_elsewhere",
                 "message": "this record is not one of this repository's; read it from its own worktree"}
     from .evidence_closure import prove
-    proof = prove(project, objective, port=port)
+    proof = prove(project, objective, port=port, readback=False)
     if proof["status"] == "proved":
         return {**route, "status": "available", "condition": "proved",
                 "message": "delivery is proved; pod sweep closes it by evidence, with no owner decision"}

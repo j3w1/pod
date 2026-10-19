@@ -968,7 +968,7 @@ def _delivered(project: Path, verdict: dict, *, port) -> dict:
     """Detection's delivered objective leaves the owner question: delivery proved closes it by evidence (R143). Its
     retirement facts stay complete, so an optional owner decision still binds them exactly as before."""
     from .evidence_closure import prove
-    proof = prove(project, verdict["objective"], port=port)
+    proof = prove(project, verdict["objective"], port=port, readback=False)
     if proof["status"] != "proved":
         return verdict
     return {**verdict, "status": "delivered", "condition": "delivered", "retirement": verdict["condition"],
