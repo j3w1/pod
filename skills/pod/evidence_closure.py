@@ -466,10 +466,11 @@ def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc
     owner = _coordinator(doc, proof)
     if owner is False:
         return
-    dispatches = _runs(project, doc, owner, proof, records)
-    _work(doc, dispatches, proof, port=port)
+    runs, dispatches = _runs(project, doc, owner, proof, records)
+    proof.facts.update(runs=runs, dispatches_settled=_work(doc, dispatches, proof, port=port))
     state = raw if kind == "current" else None
     members = _members(project, objective, raw, kind, doc, proof, records)
+    proof.facts["predecessor_runs"] = _predecessor_work(project, members, proof, records, port=port)
     _source(members, doc, state, proof, remote)
     _delivery(project, members, proof, remote)
     _preserved(project, root, doc, state, proof, remote, now=now, readback=readback)
@@ -532,22 +533,28 @@ def _coordinator(doc: dict, proof: _Proof):
     return owner
 
 
-def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records) -> dict | None:
-    """Each recorded Run: who holds it now (R146 rebinding) and its complete worker list (R112)."""
+def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *,
+          whose: str | None = None) -> tuple[list[dict], dict | None]:
+    """Each recorded Run of one record: who holds it now (R146 rebinding) and its complete worker list (R112).
+
+    `whose` names a continued predecessor, whose conditions then say so; the objective's own conditions name no
+    one. Returns the Run facts read and the worker Dispatches, or None for them when a list could not be read."""
     from .orca import run_show, terminal_identity, worker_rows
     from .retirement import fleet_dispatches
+
+    def add(status: str, code: str, message: str) -> None:
+        proof.add(status, code, message if whose is None else f"Predecessor objective {whose}: {message}")
     runs, dispatches, unread = [], {}, False
     if not doc["runs"]:
-        proof.facts.update(runs=[], dispatches_settled=0)
-        proof.add("not_proved", "runs_unrecorded", "The objective records no Run whose work could be proven settled.")
-        return None
+        add("not_proved", "runs_unrecorded", "The objective records no Run whose work could be proven settled.")
+        return [], None
     held = []
     for run in doc["runs"][:32]:
         try:
             shown = run_show(run)
         except PodError as exc:
             runs.append({"run": run, "generation": None, "holder": None})
-            proof.add("unverified", "workers_unverified", f"A recorded Run could not be read ({exc.code}).")
+            add("unverified", "workers_unverified", f"A recorded Run could not be read ({exc.code}).")
             unread = True
             continue
         holder = shown["coordinator_handle"]
@@ -555,8 +562,8 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records) -
         if not shown.get("coordinator_known", False):
             # A reply that omits the coordinator proves nobody absent: only an explicit null is an unbound Run.
             runs[-1]["holder_known"] = False
-            proof.add("unverified", "workers_unverified", "Orca's reply for a recorded Run does not say who "
-                      "coordinates it, so a holder cannot be ruled out.")
+            add("unverified", "workers_unverified", "Orca's reply for a recorded Run does not say who "
+                "coordinates it, so a holder cannot be ruled out.")
         elif holder not in (None, owner) and not _gone(terminal_identity(holder)):
             # A live (or unproven) holder: its own records referencing this Run must all be finished.
             found, unreadable = records()
@@ -569,21 +576,20 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records) -
         try:
             fleet = worker_rows(run)
         except PodError as exc:
-            proof.add("unverified", "workers_unverified", f"A Run's worker list could not be read ({exc.code}).")
+            add("unverified", "workers_unverified", f"A Run's worker list could not be read ({exc.code}).")
             unread = True
             continue
         found, refused = fleet_dispatches(fleet)
         if refused is not None:
-            proof.add("unverified", *refused)
+            add("unverified", *refused)
             unread = True
             continue
         for dispatch in found:
             dispatches[dispatch] = None
     if held:
-        proof.add("not_proved", "run_held", "A live coordinator of an open objective holds a recorded Run; it "
-                  "settles that Run first.")
-    proof.facts.update(runs=runs, dispatches_settled=0)
-    return None if unread else dispatches
+        add("not_proved", "run_held", "A live coordinator of an open objective holds a recorded Run; it settles "
+            "that Run first.")
+    return runs, None if unread else dispatches
 
 
 def _record_runs(raw: dict) -> list[str]:
@@ -591,22 +597,43 @@ def _record_runs(raw: dict) -> list[str]:
     return _facts(raw)["runs"]
 
 
-def _work(doc: dict, dispatches: dict | None, proof: _Proof, *, port) -> None:
-    """R112's work proof, unchanged: no live or unsettled Dispatch and no start Orca still holds pending."""
+def _work(doc: dict, dispatches: dict | None, proof: _Proof, *, port, whose: str | None = None) -> int:
+    """R112's work proof, unchanged: no live or unsettled Dispatch and no start Orca still holds pending. Returns
+    how many Dispatches read settled; `whose` names a continued predecessor in its condition."""
     from .retirement import work_activity
     if dispatches is None:
-        return
+        return 0
     activity, settled = work_activity(doc["admissions"], dispatches, port=port)
-    proof.facts["dispatches_settled"] = settled
     if activity is not None:
         code, message, _ = activity
+        message = message.replace("retirement waits for it", "closure waits for it")
         proof.add("not_proved" if code == "work_live" else "unverified", code,
-                  message.replace("retirement waits for it", "closure waits for it"))
+                  message if whose is None else f"Predecessor objective {whose}: {message}")
+    return settled
+
+
+def _member_work(project: Path, row: dict, proof: _Proof, records, *, port) -> dict:
+    """One continued predecessor's own Runs and native work, read now with the objective's own checks (R110's
+    holder rule with R146's rebinding, generation recorded and never blocking, complete worker lists, settled
+    Dispatches, start requests): what its closure entry records. Its claim ended its coordinator's authority, so
+    the recorded owner may still be named as its Runs' holder."""
+    runs, dispatches = _runs(project, row["doc"], row["doc"]["owner"], proof, records, whose=row["objective"])
+    return {"objective": row["objective"], "runs": runs,
+            "dispatches_settled": _work(row["doc"], dispatches, proof, port=port, whose=row["objective"])}
+
+
+def _predecessor_work(project: Path, members: list[dict] | None, proof: _Proof, records, *, port) -> list[dict]:
+    """Every record whose closure entry the tail's closure writes is proved fresh, not only the tail (R146): each
+    continued predecessor's Runs and work, nearest first. A predecessor Run held by a live coordinator of an open
+    objective holds the whole chain (`run_held`)."""
+    return [_member_work(project, row, proof, records, port=port) for row in members or []
+            if row["relation"] == "predecessor"]
 
 
 def _chain_issues(objective: str, doc: dict, members: list[dict] | None) -> list[tuple[dict, str]]:
     """Every distinct issue source the delivery chain binds, with the member that binds it: the objective's own
-    first, then each predecessor's along the chain (R146). Recovery members bind the objective's own issue."""
+    first, then each predecessor's along the chain (R146). A recovery member binds the issue of the member whose
+    Run it shares."""
     rows = [(doc["issue"], objective)] + [(row["doc"]["issue"], row["objective"]) for row in members or []
                                           if row["relation"] != "objective"]
     found, seen = [], set()
@@ -731,9 +758,10 @@ def _lineage(project: Path, raw: dict) -> tuple[list[dict], tuple[str, str, str]
 
 def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, proof: _Proof,
              records) -> list[dict] | None:
-    """The delivery chain: the objective, its continued predecessors (R146's walk, at most eight) and this
-    repository's records that share a recorded Run with it and bind the same source issue. Every member is
-    classified before it is used; a chain Pod cannot read whole adds the condition that names why."""
+    """The delivery chain: the objective, its continued predecessors (R146's walk, at most eight) and, for every
+    member, this repository's records that share one of that member's recorded Runs and bind that member's source
+    issue: a recovery of a predecessor's Run belongs to the delivery as much as one of the objective's own. Every
+    member is classified before it is used; a chain Pod cannot read whole adds the condition that names why."""
     from .ledger import objective_root
     members = {objective: {"objective": objective, "root": objective_root(project, objective), "raw": raw,
                            "kind": kind, "doc": doc, "relation": "objective"}}
@@ -743,26 +771,38 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
     proof.facts["chain_complete"] = problem is None
     if problem is not None:
         proof.add(*problem)
-    issue = doc["issue"]
-    if issue is not None and doc["runs"]:
+    # Each member's own Runs and issue, recovery members included, until no member adds another or the bound is
+    # crossed; the bound then refuses below, never a part of the chain.
+    pending, read = list(members.values()), {}
+    while pending and len(members) <= MAX_MEMBERS:
+        base = pending.pop(0)
+        issue, shared = base["doc"]["issue"], set(base["doc"]["runs"])
+        if issue is None or not shared:
+            continue
         found, _ = records()
         for row in found:
             if row["objective"] in members:
                 continue
-            try:
-                other = _documented(row["raw"], current=False)
-            except PodError:
+            if row["objective"] not in read:
+                try:
+                    read[row["objective"]] = _documented(row["raw"], current=False)
+                except PodError:
+                    read[row["objective"]] = None
+            other = read[row["objective"]]
+            if other is None:
                 continue
             if (other["issue"] is not None and other["issue"]["locator"].casefold() == issue["locator"].casefold()
-                    and set(other["runs"]) & set(doc["runs"])):
+                    and set(other["runs"]) & shared):
                 peer = _record_class(row["raw"])
                 if peer == "unknown":
                     proof.add("unverified", "schema_unknown", f"Recovery objective {row['objective']}, which shares "
-                              "its Run and source, uses a schema this Pod does not know.")
+                              f"a Run and source with {base['objective']}, uses a schema this Pod does not know.")
                 elif peer not in SUPPORTED:
                     proof.add("unverified", "record_unreadable", f"Recovery objective {row['objective']}, which "
-                              "shares its Run and source, does not validate under its schema.")
+                              f"shares a Run and source with {base['objective']}, does not validate under its "
+                              "schema.")
                 members[row["objective"]] = {**row, "kind": peer, "doc": other, "relation": "recovery"}
+                pending.append(members[row["objective"]])
     rows = list(members.values())
     proof.facts["chain"] = [{"objective": row["objective"], "relation": row["relation"],
                              "phase": _phase(row["root"], row["raw"])} for row in rows][:MAX_MEMBERS]
@@ -1047,9 +1087,10 @@ def _create(root: Path, content: dict) -> bool:
     return True
 
 
-def _predecessor_content(project: Path, row: dict, tail: dict, *, caller: str, at: str) -> dict:
+def _predecessor_content(project: Path, row: dict, tail: dict, work: dict, *, caller: str, at: str) -> dict:
     """A continued predecessor's own entry, naming the tail closure; its record stays frozen as R110 left it. The
-    row was classified by R146's walk, so its record class is the one that walk read, never assumed."""
+    row was classified by R146's walk, so its record class is the one that walk read, never assumed, and `work` is
+    the Run and Dispatch facts the proof read for it, never placeholders."""
     raw = row["raw"]
     try:
         _, data = _read_record(row["root"])
@@ -1058,7 +1099,7 @@ def _predecessor_content(project: Path, row: dict, tail: dict, *, caller: str, a
         data, journal = b"", None
     from .listing import _facts
     located = _facts(raw)
-    link = raw.get("continued_by") or {}
+    link = raw.get("continued_by") if isinstance(raw.get("continued_by"), dict) else {}
     admissions = row["doc"]["admissions"]
     preserved = [{"kind": "admission", "id": key, "role": item["role"], "state": item["state"],
                   "dispatch": (item["native_binding"] or {}).get("dispatchId"),
@@ -1069,9 +1110,8 @@ def _predecessor_content(project: Path, row: dict, tail: dict, *, caller: str, a
                         "governor_sha256": _sha(journal) if journal is not None else None},
              "coordinator": {"handle": raw.get("owner") if isinstance(raw.get("owner"), str) else None,
                              "liveness": "claimed", "cause": None},
-             "runs": [{"run": run, "generation": None, "holder": None}
-                      for run in (link.get("runs") if isinstance(link.get("runs"), list) else [])][:32],
-             "dispatches_settled": 0, "source": deepcopy(tail["source"]), "sources": deepcopy(tail["sources"]),
+             "runs": [dict(item) for item in work["runs"]][:32], "dispatches_settled": work["dispatches_settled"],
+             "source": deepcopy(tail["source"]), "sources": deepcopy(tail["sources"]),
              "delivery": deepcopy(tail["delivery"]),
              "chain": deepcopy(tail["chain"]), "preserved": preserved[:MAX_PRESERVED], "counts": counts(preserved),
              "unfinished": list(link.get("unfinished") or [])[:MAX_LISTED],
@@ -1108,13 +1148,15 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
         for path in sorted({root / "context.json", *(row["root"] / "context.json" for row in chain)}, key=str):
             stack.enter_context(_lock(path))
         if present(root):
-            return _replay(project, root, chain, caller=caller)
+            return _replay(project, root, chain, caller=caller, port=port)
         verdict = prove(project, objective, port=port, remote=remote, now=now)
         if verdict["status"] != "proved":
             return {"objective": objective, "status": verdict["status"], "conditions": verdict["conditions"]}
         certified = [row["objective"] for row in verdict["facts"]["chain"] if row["relation"] == "predecessor"]
-        if certified != [row["objective"] for row in chain]:
-            # Every predecessor the proof certified gets its entry under its own lock, or nothing is written.
+        work = {row["objective"]: row for row in verdict["facts"].get("predecessor_runs") or []}
+        if certified != [row["objective"] for row in chain] or set(work) != set(certified):
+            # Every predecessor the proof certified, its Runs and work read, gets its entry under its own lock, or
+            # nothing is written.
             return {"objective": objective, "status": "unverified", "conditions": [{
                 "code": "chain_inconsistent", "status": "unverified",
                 "message": "The succession chain changed while it was being closed; nothing was written."}]}
@@ -1122,37 +1164,63 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
         content = _content(project, objective, verdict["facts"], caller=caller, at=at, relation="tail",
                            tail={"objective": objective, "at": at})
         if not _create(root, content):
-            return _replay(project, root, chain, caller=caller)
-        written = _complete_chain(project, chain, content, caller=caller)
+            return _replay(project, root, chain, caller=caller, port=port)
+        written = _complete_chain(project, _missing(chain, content), content, work, caller=caller)
         return {"objective": objective, "status": "closed", "closure": compact(content), "predecessors": written}
 
 
-def _complete_chain(project: Path, chain: list[dict], tail: dict, *, caller: str) -> list[str]:
-    """Write each missing entry of a predecessor the tail closure names; never one it does not name, and never one
-    for a record R146's walk did not classify as supported."""
+def _missing(chain: list[dict], tail: dict) -> list[dict]:
+    """The predecessors whose entry the tail closure still owes: those it names, that R146's walk classified as
+    supported, without an entry yet; never one it does not name."""
     named = {row.get("objective") for row in (tail["chain"] if isinstance(tail["chain"], list) else [])
              if isinstance(row, dict) and row.get("relation") == "predecessor"}
+    return [row for row in chain if row["objective"] in named and row["kind"] in SUPPORTED and not present(row["root"])]
+
+
+def _complete_chain(project: Path, rows: list[dict], tail: dict, work: dict, *, caller: str) -> list[str]:
+    """Write each owed predecessor entry with the Run and work facts read for it. Returns the names written."""
     written = []
-    for row in chain:
-        if row["objective"] not in named or row["kind"] not in SUPPORTED or present(row["root"]):
-            continue
-        if _create(row["root"], _predecessor_content(project, row, tail, caller=caller, at=tail["at"])):
+    for row in rows:
+        if _create(row["root"], _predecessor_content(project, row, tail, work[row["objective"]], caller=caller,
+                                                     at=tail["at"])):
             written.append(row["objective"])
     return written
 
 
-def _replay(project: Path, root: Path, chain: list[dict], *, caller: str) -> dict:
+def _replay(project: Path, root: Path, chain: list[dict], *, caller: str, port=None) -> dict:
     """An existing closure: `replayed` with nothing written, or `chain_completed` naming the predecessor entries an
-    interrupted closure left out, which this retry wrote. Existing files are never rewritten."""
+    interrupted closure left out, which this retry wrote. Existing files are never rewritten.
+
+    Each owed entry's predecessor has its Runs and work proved fresh first, as the first closure did (R146); while
+    any of them holds, nothing is written and the answer is that proof's status and conditions with the stored
+    closure, a task for the project lead."""
     try:
         stored = load(root)
     except PodError as exc:
         return {"objective": root.name, "status": "replayed", "closure": {"status": "unreadable", "code": exc.code}}
-    completed = _complete_chain(project, chain, stored, caller=caller) if stored["relation"] == "tail" else []
-    out = {"objective": stored["objective"], "status": "chain_completed" if completed else "replayed",
-           "closure": compact(stored)}
+    owed = _missing(chain, stored) if stored["relation"] == "tail" else []
+    out = {"objective": stored["objective"], "status": "replayed", "closure": compact(stored)}
+    if not owed:
+        return out
+    from .operations import OrcaPort
+    proof = _Proof(stored["objective"])
+    scan: dict = {}
+
+    def records() -> tuple[list[dict], list[dict]]:
+        if not scan:
+            scan["found"], scan["unreadable"] = _scan(project)
+        return scan["found"], scan["unreadable"]
+    port = port or OrcaPort(project)
+    try:
+        work = {row["objective"]: _member_work(project, row, proof, records, port=port) for row in owed}
+    except PodError as exc:
+        proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
+    verdict = proof.result()
+    if verdict["status"] != "proved":
+        return {**out, "status": verdict["status"], "conditions": verdict["conditions"]}
+    completed = _complete_chain(project, owed, stored, work, caller=caller)
     if completed:
-        out["predecessors"] = completed
+        out.update(status="chain_completed", predecessors=completed)
     return out
 
 
@@ -1229,6 +1297,53 @@ def status_fields(project: Path, objective: str, root: Path) -> dict:
            "next_action": "objective closed by evidence, coordinator gone; nothing remains to record"}
     if failure is not None:
         out["record_error"] = failure
+    return out
+
+
+def older_predecessor_fields(project: Path, objective: str, root: Path) -> dict | None:
+    """What status shows for an older continued predecessor whose chain tail closed by evidence (R146): read-only,
+    through its own entry, R146's documented fields and its succession link, as a current predecessor reads:
+    phase `continued`, its evidence entry and the settled chain. The record is never validated as current or
+    converted. None unless the record is older and its entry is a readable predecessor entry: the ordinary reader
+    then answers, and still refuses an older record without closure (R90)."""
+    if not present(root):
+        return None
+    try:
+        value = load(root)
+        raw, _ = _read_record(root)
+    except PodError:
+        return None
+    if value["relation"] != "predecessor" or _record_class(raw) != "older":
+        return None
+    from .readiness import CONTRACT
+    from .succession import ACTION, chain_state
+    from .term import clean
+    out = status_fields(project, objective, root)
+    link = raw.get("continued_by") if isinstance(raw.get("continued_by"), dict) else {}
+    successor = link.get("objective") if _text(link.get("objective"), 1024) else None
+    chain = (chain_state(project, raw) if successor is not None
+             else {"state": "unknown", "objective": None, "reason": "its successor link is unreadable"})
+    claimed_at = _clip(link.get("at"), 64)
+    for item in out["assignments"]["settled"]:
+        # The claim settled what its predecessor left open, as a current predecessor reads (R110).
+        if item.pop("settlement", None) is not None:
+            item.pop("closed_at", None)
+            item.update(settlement="claim" if item["state"] == "bound" else "claim_no_dispatch", claimed_at=claimed_at)
+    succession = {"continued_by": successor, "at": claimed_at, "state": chain["state"],
+                  "chain_end": chain.get("objective")}
+    if chain.get("reason"):
+        succession["reason"] = chain["reason"]
+    action = ACTION.format(successor) if successor is not None else (
+        "Read it with pod status --list; its successor link is unreadable and this record accepts no writes.")
+    named = clean(successor)[:64] if successor is not None else "(unreadable)"
+    readiness = {"contract": CONTRACT, "state": "continued", "acts_next": "successor", "coordinator_needed": False,
+                 "coordinator": out["readiness"]["coordinator"], "finalization": None,
+                 "reason": {"successor": successor, "succession_state": chain["state"]},
+                 "summary": f"Continued by successor objective {named} ({chain['state'].replace('_', ' ')}); read "
+                            "that objective, as this record accepts no writes."}
+    out.pop("closure_basis")  # Its tail closed by evidence; this record itself reads continued.
+    out.update(phase="continued", blocker="objective_continued", record_class="older", succession=succession,
+               readiness=readiness, next_safe_action=action, next_action=action)
     return out
 
 

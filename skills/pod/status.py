@@ -315,12 +315,18 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 return result
             superseded = superseded_for_run(run) if context_root is None else []
         else:
-            from .evidence_closure import status_fields, tail_closed
+            from .evidence_closure import older_predecessor_fields, status_fields, tail_closed
             from .ledger import objective_root
             closed = objective_root(project, objective)
             if tail_closed(closed):
                 # Any reader, current or older record: the closure record and documented fields only (C4).
                 result.update(status_fields(project, objective, closed))
+                return result
+            continued = older_predecessor_fields(project, objective, closed)
+            if continued is not None:
+                # An older predecessor whose chain closed by evidence reads continued through the same read-only
+                # path; a current one reads below as before (R146).
+                result.update(continued)
                 return result
             state = read(project, objective)
             result["recorded_questions"] = recorded_questions(state.get("checkpoint") if state else None)
@@ -620,7 +626,8 @@ def project_for_state(checkpoint: dict, project: Path) -> Path:
 
 
 def render(result: dict) -> None:
-        if result.get("closure_basis") == "evidence":
+        if result.get("closure_basis") == "evidence" or (result.get("record_class") == "older"
+                                                         and result.get("evidence_closure")):
             from .evidence_closure import render as render_closed
             render_closed(result)
             return

@@ -906,6 +906,89 @@ class ChainTests(ClosureCase):
                          ("older", "current"))
         self.assertEqual(self.files(), frozen)
 
+    def recovery_of_the_predecessors_run(self, *, bound):
+        """F8: a recovery objective on the predecessor's own Run and source records pull request 8, still open, and
+        its coordinator is gone; then a successor on its own Run claims the predecessor, bound to the same issue or
+        claim-only, and its coordinator is gone too."""
+        self.shipped(unknown_start=False)
+        self.recovery(live=False, pr=8)
+        self.remote.pulls[8] = {"state": "OPEN"}
+        control = prove(self.project, "objective")
+        self.assertEqual((control["status"], [row["code"] for row in control["conditions"]]),
+                         ("not_proved", ["pr_not_merged"]))
+        if bound:
+            self.successor_bound()
+        else:
+            self.claimed_direct()
+        self.run_holders["run-s"] = "next"
+        self.terminals["next"] = "stale"
+        # Across the supported claim the same open pull request still holds the whole chain; nothing is written.
+        before = self.everything()
+        verdict = self.swept(self.sweep()[1], "successor")
+        self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
+                         ("not_proved", ["pr_not_merged"]), verdict)
+        self.assertIn("Pull request #8 is open", verdict["conditions"][0]["message"])
+        self.assertEqual(close_by_evidence(self.project, "successor", caller="sweep")["status"], "not_proved")
+        self.assertEqual(self.everything(), before)
+        # Once it merges, the proof includes both pull requests, and the recovery closes on its own proof.
+        self.remote.pulls[8] = dict(MERGED)
+        result = self.sweep()[1]
+        self.assertEqual({name: self.swept(result, name)["outcome"] for name in ("successor", "objective", "recovery")},
+                         {"successor": "closed", "objective": "closed", "recovery": "closed"})
+        tail = self.closure("successor")
+        self.assertEqual([(row["pr"], row["recorded_by"]) for row in tail["delivery"]],
+                         [(7, "objective"), (8, "recovery")])
+        self.assertEqual({row["objective"]: row["relation"] for row in tail["chain"]},
+                         {"successor": "objective", "objective": "predecessor", "recovery": "recovery"})
+        self.assertEqual((self.closure()["relation"], [row["pr"] for row in self.closure()["delivery"]]),
+                         ("predecessor", [7, 8]))
+        self.assertEqual((self.closure("recovery")["relation"], [row["pr"] for row in self.closure("recovery")[
+            "delivery"]]), ("tail", [7, 8]))
+        self.assertEqual({name: data for name, data in self.everything().items() if name in before}, before)
+
+    def test_a_recovery_of_a_predecessors_run_holds_a_bound_successors_chain_until_it_merges(self):
+        self.recovery_of_the_predecessors_run(bound=True)
+
+    def test_a_recovery_of_a_predecessors_run_holds_a_claim_only_successors_chain_until_it_merges(self):
+        self.recovery_of_the_predecessors_run(bound=False)
+
+    def test_a_live_recovery_on_a_predecessors_run_holds_its_chain_and_a_settled_one_closes_it(self):
+        """F9: each record the closure writes an entry for has its own Runs and work proved fresh, and its entry
+        records the facts read: a resumed live recovery coordinator of an open objective on the predecessor's Run
+        holds the chain (`run_held`); once its own objective ended, the chain closes."""
+        self.shipped(unknown_start=False)
+        self.recovery(live=True)
+        control = prove(self.project, "objective")
+        self.assertEqual([row["code"] for row in control["conditions"]], ["run_held"])
+        self.terminals["recovery"] = "stale"  # Stale long enough for a supported claim on another Run,
+        self.claimed_direct()
+        self.run_holders["run-s"] = "next"
+        self.terminals["next"] = "stale"
+        self.terminals["recovery"] = "live"  # then the recovery coordinator resumes, its own objective still open.
+        before = self.everything()
+        verdict = self.swept(self.sweep()[1], "successor")
+        self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
+                         ("not_proved", ["run_held"]), verdict)
+        self.assertTrue(verdict["conditions"][0]["message"].startswith("Predecessor objective objective: "),
+                        verdict["conditions"][0]["message"])
+        self.assertEqual(close_by_evidence(self.project, "successor", caller="sweep")["status"], "not_proved")
+        self.assertEqual(self.everything(), before)
+        self.assertIsNone(self.closure())
+        # Positive control: the recovery's own objective is closed, so the Run settles with it.
+        self.rewrite("recovery", closure=lambda raw: raw["checkpoint"].update(closure={
+            "seq": raw["checkpoint"]["seq"], "revision": raw["checkpoint"]["revision"], "report": {}}))
+        frozen = self.files()
+        result = self.sweep()[1]
+        self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
+                         ("closed", "closed"))
+        entry = self.closure()
+        self.assertEqual(entry["runs"], [{"run": "run", "generation": 2, "holder": "recovery",
+                                          "rebound": "rebound_settled", "settled_with": ["recovery"]}])
+        self.assertEqual(entry["dispatches_settled"], 1)
+        self.assertEqual([(row["run"], row["holder"]) for row in self.closure("successor")["runs"]],
+                         [("run-s", "next")])
+        self.assertEqual(self.files(), frozen)
+
     def interrupted(self):
         """A tail closure interrupted after the tail's own entry was published and before its predecessor's."""
         from pod import evidence_closure
@@ -937,6 +1020,65 @@ class ChainTests(ClosureCase):
         again = close_by_evidence(self.project, "successor", caller="sweep")
         self.assertEqual((again["status"], "predecessors" in again), ("replayed", False))
         self.assertEqual(self.everything(), after)
+
+    def test_a_retry_proves_an_owed_predecessor_entry_fresh_before_it_writes_it(self):
+        """F9 on the retry: an owed entry's predecessor has its Runs and work proved fresh before it is written; a
+        live recovery coordinator of an open objective on its Run holds it, and the entry records the facts read."""
+        self.interrupted()
+        self.other("recovery", "recovery", run_id="run")
+        self.run_holders["run"] = "recovery"
+        before = self.everything()
+        held = close_by_evidence(self.project, "successor", caller="sweep")
+        self.assertEqual((held["status"], [row["code"] for row in held.get("conditions", [])], "predecessors" in held),
+                         ("not_proved", ["run_held"], False))
+        self.assertEqual(held["closure"]["relation"], "tail")
+        self.assertIn("Predecessor objective objective: ", held["conditions"][0]["message"])
+        self.assertEqual(self.everything(), before)
+        self.terminals["recovery"] = "gone"
+        result = close_by_evidence(self.project, "successor", caller="sweep")
+        self.assertEqual((result["status"], result["predecessors"]), ("chain_completed", ["objective"]))
+        self.assertEqual((self.closure()["runs"], self.closure()["dispatches_settled"]),
+                         ([{"run": "run", "generation": 1, "holder": "recovery"}], 1))
+        self.assertEqual({name: data for name, data in self.everything().items() if name in before}, before)
+
+    def test_an_older_predecessor_closed_with_its_chain_reads_continued_in_its_status(self):
+        """F10: individual status reads an older evidence-closed predecessor through the documented-field path, as a
+        current predecessor reads; an older record without its closure keeps its refusal."""
+        self.shipped(unknown_start=False)
+        self.successor_bound()
+        self.terminals["next"] = "stale"
+        self.rewrite(schema=_older(STATE_SCHEMAS["context"]))
+        self.assertEqual(self.status()["blocker"], "state_unsupported")  # No closure yet: R90's refusal stays.
+        frozen = self.files()
+        result = self.sweep()[1]
+        self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
+                         ("closed", "closed"))
+        shown = self.status()
+        self.assertEqual((shown["status"], shown["blocker"], shown.get("phase"), shown.get("record_class"),
+                          "closure_basis" in shown), ("observed", "objective_continued", "continued", "older", False))
+        state = shown["readiness"]
+        self.assertEqual((state["state"], state["acts_next"], state["coordinator_needed"], state["reason"]),
+                         ("continued", "successor", False, {"successor": "successor",
+                                                            "succession_state": "successor_closed"}))
+        self.assertEqual(state["summary"], "Continued by successor objective successor (successor closed); read that "
+                                           "objective, as this record accepts no writes.")
+        self.assertEqual((shown["succession"]["continued_by"], shown["succession"]["state"]),
+                         ("successor", "successor_closed"))
+        entry = shown["evidence_closure"]
+        self.assertEqual((entry["status"], entry["relation"], entry["record"]["class"], entry["tail"]["objective"]),
+                         ("recorded", "predecessor", "older", "successor"))
+        self.assertEqual(shown["next_safe_action"], "Read the successor objective with pod status --objective "
+                                                    "successor; this record accepts no writes.")
+        self.assertEqual({row["settlement"] for row in shown["assignments"]["settled"] if "settlement" in row},
+                         {"claim"})
+        self.assertEqual(_questions(shown), [])
+        text = self.text_status()
+        self.assertIn("Continued by successor objective successor (successor closed)", text)
+        self.assertIn("Closed with its chain tail successor", text)
+        listed = self.listed()["objective"]
+        self.assertEqual((listed["schema"], listed["phase"], listed["succession_state"]),
+                         ("superseded", "continued", "successor_closed"))
+        self.assertEqual(self.files(), frozen)
 
     def test_a_sweep_after_an_interrupted_chain_closure_reports_the_entry_it_wrote_as_closed(self):
         """F7 through the sweep: the tail it found closed is already_closed, the predecessor it closed now closed."""
