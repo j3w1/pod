@@ -744,7 +744,11 @@ class CleanupWorkerTests(KernelCase):
         state = read(self.project, "objective")
         state["admissions"][self.admission["admission_id"]]["recovery"]["placement_binding"]["branch"] = None
         with patch("pod.cleanup.read", return_value=state):
-            self.assert_held("worker placement branch identity is unavailable")
+            result = self.observed()
+        self.assertEqual({row["kind"] for row in result["resources"]}, {"worktree", "local_branch"})
+        for row in result["resources"]:
+            self.assertIsNone(row["delete_argv"])
+            self.assertIn("worker placement branch identity is unavailable", " ".join(row["reasons"]))
 
     def final_reused_round(self):
         """Record both rounds through admission/report entry points; native reuse keeps one resource."""

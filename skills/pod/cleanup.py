@@ -131,7 +131,7 @@ def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None, 
                 or release.get("ownerDispatchId") not in (None, expected_owner)):
             reasons.append("worker resource is reused or belongs to another native binding")
         if expected_owner != binding.get("dispatchId") and not isinstance(resource, dict):
-            reasons.append("historical worker resource transfer has not been proved")
+            reasons.append("earlier worker resource transfer has not been proved")
         # Older supported worker-show replies omit terminalResource after release. Their exact-bound
         # projection.resource must positively say released twice, with exited liveness and the exact
         # worker terminal; an absent resource, ownership field or terminal never supplies that proof.
@@ -173,7 +173,7 @@ def _reuse_predecessors(state: dict, selected: dict) -> set[str]:
 
 def _placement_history(state: dict, selected: dict, paths: set[str], port, *,
                        selected_released: bool) -> tuple[list[dict], list[str]]:
-    """Historical placement use is safe only with fresh release or exact transfer proof."""
+    """Earlier placement use is safe only with fresh release or exact transfer proof."""
     predecessors = _reuse_predecessors(state, selected) if selected_released else set()
     history, holds = [], []
     for admission in state["admissions"].values():
