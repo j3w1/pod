@@ -77,7 +77,8 @@ class TabCase(ProductionCase):
         if case.startswith("missing_"):
             # The shape of Orca's exact worker-show once a finished worker's terminal record is gone (R125, A475).
             state = {"missing_released": "released", "missing_user_owned": "user_owned",
-                     "missing_owned": "owned", "missing_unconfirmed": "released"}[case]
+                     "missing_owned": "owned", "missing_unconfirmed": "released",
+                     "missing_other_worker": "released", "missing_no_worker": "released"}[case]
             settled = "released" if state == "released" else "retained" if state == "user_owned" else "not_requested"
             resource.update(ownershipState=state, releaseState=settled,
                             retainedReason="user_takeover" if state == "user_owned" else None)
@@ -88,6 +89,9 @@ class TabCase(ProductionCase):
             result["terminal"] = None
             if case != "missing_unconfirmed":
                 result["observation"] = {"status": "missing", "exactWorker": False}
+            if case in ("missing_other_worker", "missing_no_worker"):
+                # The worker no longer names the admitted terminal, so its absence is not proved (review F1).
+                worker["agentTerminalHandle"] = "term-other" if case == "missing_other_worker" else None
         return value
 
     def packet(self, serves, **fields):
@@ -434,6 +438,17 @@ class TableTests(TabCase):
                     ("missing_owned", "unreadable", True, True),
                     ("missing_unconfirmed", "unreadable", True, True)))
 
+    def test_a_gone_record_stays_unreadable_while_the_worker_names_another_or_no_terminal(self):
+        # Review F1: the admitted terminal is not proved gone when the worker no longer names it.
+        frozen, admission = self.worker()
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        for case in ("missing_other_worker", "missing_no_worker"):
+            with self.subTest(case=case):
+                self.tab_case = case
+                row = self.status()["worker_tabs"][0]
+                self.assertEqual((row["row"], row["state"], row["blocks_closure"]), ("unreadable", "unknown", True))
+                self.assertEqual(row["failed_read"]["code"], "worker_terminal_unverified")
+
     def test_coordinator_setup_and_other_objective_excluded(self):
         self.table((("coordinator", "excluded", False, False),
                     ("setup", "excluded", False, False), ("other_objective", "excluded", False, False)))
@@ -478,7 +493,8 @@ class ClosureTests(TabCase):
                         ack = self.ack("checkpoint", {}, raw)
                 except PodError as error:
                     self.assertTrue(blocked, str(error))
-                    unreadable = case in ("unreadable", "missing_unconfirmed")
+                    unreadable = case in ("unreadable", "missing_unconfirmed", "missing_other_worker",
+                                          "missing_no_worker")
                     self.assertEqual(error.code, "worker_terminal_unverified" if unreadable else "worker_tabs_open")
                     self.assertIn("worker-show" if unreadable else "worker-release", str(error))
                     self.assertEqual(before, self.saved(), "refusal changed context, map or report bytes")
@@ -520,8 +536,11 @@ class ClosureTests(TabCase):
     def test_closing_routes_accept_a_gone_terminal_record_and_hold_an_unconfirmed_one(self):
         # A475: neither closing route is held by a worker whose terminal record Orca reports gone.
         for report_route in (False, True):
-            self.closing((("missing_released", False), ("missing_user_owned", False), ("missing_unconfirmed", True)),
-                         report_route=report_route)
+            cases = [("missing_released", False), ("missing_user_owned", False), ("missing_unconfirmed", True)]
+            if not report_route:
+                # A closing report refuses a differing worker terminal earlier (report_attempt_unverified).
+                cases += [("missing_other_worker", True), ("missing_no_worker", True)]
+            self.closing(tuple(cases), report_route=report_route)
 
     def test_checkpoint_ignores_reused_and_unrelated_terminals(self):
         self.closing(tuple((case, False) for case in ("reused_later", "coordinator", "setup", "other_objective")),
