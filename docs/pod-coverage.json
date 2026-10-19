@@ -6486,6 +6486,19 @@
         "tests.test_evidence_closure.ChainTests.test_a_retry_settles_frozen_predecessors_of_the_same_returning_owner"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A475",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.TableTests.test_a_gone_terminal_record_reads_disconnected_only_for_a_released_or_unowned_resource",
+        "tests.test_worker_tabs.ClosureTests.test_closing_checkpoint_accepts_a_gone_terminal_record_and_holds_an_unconfirmed_one",
+        "tests.test_worker_tabs.ClosureTests.test_closing_checkpoint_holds_a_gone_terminal_record_without_the_workers_own_identity",
+        "tests.test_worker_tabs.ClosureTests.test_closing_report_accepts_a_gone_terminal_record_and_holds_an_unconfirmed_one"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

@@ -145,6 +145,8 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
     ownership = resource if isinstance(resource, dict) else {}
     observed_terminal = result.get("terminal")
     observed_terminal = observed_terminal if isinstance(observed_terminal, dict) else {}
+    observation = result.get("observation")
+    observation = observation if isinstance(observation, dict) and result.get("terminal") is None else {}
     # Only presentation facts: terminal previews and unrelated archive/endpoint data are not status.
     facts.update(
         native_release={key: release[key] for key in ("state", "releaseState", "terminalState", "ownerDispatchId", "id")
@@ -156,12 +158,17 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
                             "releaseState", "retainedReason", "terminalHandle", "worktreeId") if key in ownership} or None,
         terminal_readback={key: observed_terminal[key] for key in ("handle", "tabId", "worktreeId", "connected",
                            "writable", "orphaned") if key in observed_terminal} or None,
+        # Orca's own statement about the worker's terminal record, from the same exact read (R125).
+        terminal_observation={key: observation[key] for key in ("status", "exactWorker") if key in observation}
+                             or None,
         retained_reason=ownership.get("retainedReason") or worker.get("retainedReason") or worker.get("retainReason"))
     if "role" in projection:
         facts["native_role"] = projection["role"]
     if isinstance(projection.get("nextAction"), dict):
         facts["native_next_action"] = projection["nextAction"]
-    if resource is not None or result.get("terminal") is not None:
+    if resource is not None or result.get("terminal") is not None or observation:
+        # Orca's gone-record observation is judged against the worker's own terminal, so its identity is kept even
+        # when the raw resource is omitted (R125, A475).
         facts["worker_terminal"] = worker.get("agentTerminalHandle")
     if worker.get("agentTerminalHandle") != handle:
         facts.update(tab=None, placement_readback="unavailable")
