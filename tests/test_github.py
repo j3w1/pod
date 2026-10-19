@@ -830,14 +830,14 @@ class StreamingRepositoryTests(unittest.TestCase):
         return patch("pod.gitio.subprocess.run", side_effect=execute)
 
     def test_discovery_and_cleanup_refuse_failed_empty_or_incomplete_native_inventory(self):
-        from pod.cleanup import _worktrees
+        from pod.cleanup import _objective_worktrees
         for value, returncode in (("", 1), ("", 0), (self.porcelain[:-1], 0)):
             with self.subTest(returncode=returncode, length=len(value)), self.failing_inventory(
                     value, returncode=returncode):
                 with self.assertRaises(PodError):
                     repository_context(self.main)
                 with self.assertRaises(PodError) as refused:
-                    _worktrees(self.main, {str(self.linked)}, {"refs/heads/orca/issue-7"})
+                    _objective_worktrees(self.main, {str(self.linked)}, {"refs/heads/orca/issue-7"})
                 self.assertEqual(refused.exception.code, "cleanup_unavailable")
 
     def test_discovery_refuses_a_complete_inventory_that_omits_the_current_worktree(self):

@@ -420,10 +420,23 @@ class CleanupScaleTests(unittest.TestCase):
         for index, path in enumerate(self.unrelated[:47]):
             state["admissions"][f"scope-{index}"] = {"recovery": {"placement_binding": {
                 "path": str(path), "branch": f"unrelated-{index:03}"}}}
-        with patch("pod.cleanup.read", return_value=state), self.assertRaises(PodError) as refused:
+        with patch("pod.cleanup.read", return_value=state), \
+                patch("pod.cleanup._terminal_facts", side_effect=AssertionError("over-bound native read")), \
+                patch("pod.cleanup._dirt", side_effect=AssertionError("over-bound status read")), \
+                self.assertRaises(PodError) as refused:
             self.case.observed()
         self.assertEqual(refused.exception.code, "cleanup_unavailable")
         self.assertEqual(str(refused.exception), "Objective cleanup resource bound is exceeded")
+
+    def test_full_registry_consumer_bound_does_not_bound_objective_plan(self):
+        from pod.cleanup import _worktrees
+        with self.assertRaises(PodError) as refused:
+            _worktrees(self.case.project)
+        self.assertEqual(refused.exception.code, "cleanup_unavailable")
+        result = self.case.observed()
+        self.assertEqual({row["id"] for row in result["resources"]},
+                         {"worktree:" + str(self.case.child), "local_branch:refs/heads/objective",
+                          "remote_branch:origin/objective"})
 
 
 class CleanupWorkerTests(KernelCase):
@@ -511,13 +524,15 @@ class CleanupWorkerTests(KernelCase):
         result = shown["result"]
         binding = self.admission["native_binding"]
         case = self.resource_case
-        result["projection"].update(resource={"state": "released", "releaseState": "released"},
+        owner = getattr(self, "resource_owners", {}).get(dispatch, dispatch)
+        result["projection"].update(resource={"state": "released", "releaseState": "released",
+                                              "ownerDispatchId": owner},
                                     liveness={"verdict": "exited"})
         if case != "projection_only":
             result["terminalResource"] = {
                 "worktreeId": binding["worktreeId"], "terminalHandle": binding["terminalHandle"],
                 "ownerDispatchId": dispatch, "ownershipState": "released", "releaseState": "released"}
-            result["terminalResource"]["ownerDispatchId"] = getattr(self, "resource_owners", {}).get(dispatch, dispatch)
+            result["terminalResource"]["ownerDispatchId"] = owner
         if case in ("unreleased", "retained", "reused", "foreign", "user_owned", "live"):
             result["terminalResource"].update(ownershipState="owned", releaseState="not_requested")
             result["projection"]["resource"] = {"state": "owned", "releaseState": "not_requested"}
@@ -525,6 +540,7 @@ class CleanupWorkerTests(KernelCase):
             result["terminalResource"].update(releaseState="retained", retainedReason=self.retained_reason)
         if case == "reused":
             result["terminalResource"]["ownerDispatchId"] = "dispatch-next-round"
+            result["projection"]["resource"]["ownerDispatchId"] = "dispatch-next-round"
         if case == "foreign":
             result["terminalResource"]["worktreeId"] = "foreign-worktree"
         if case == "user_owned":
@@ -819,14 +835,43 @@ class CleanupWorkerTests(KernelCase):
         self.assertEqual(result["worker"]["placement_history"][0]["proof"], "released")
         self.assertIsNotNone(self.resource(result, "worktree")["delete_argv"])
 
+    def test_missing_earlier_native_resource_after_reuse_stays_held(self):
+        final = self.final_reused_round()
+        selector = {"admission": final["admission_id"]}
+        first = self.observed(worker=selector)
+        show = self.port.show_worker
+
+        def unavailable(dispatch):
+            shown = show(dispatch)
+            if dispatch == self.dispatch:
+                # Observed Orca response after reuse/release; identities remain fixture-owned.
+                shown["result"]["projection"].update(
+                    resource={"state": "absent", "reason": "not_materialized"},
+                    liveness={"verdict": "unverifiable", "reason": "missing_status"})
+                shown["result"].pop("terminalResource", None)
+                shown["result"]["terminal"] = None
+            return shown
+
+        with patch.object(self.port, "show_worker", side_effect=unavailable):
+            result = self.observed(worker=selector)
+            self.assert_held("other admission", result)
+            with self.assertRaises(PodError) as changed:
+                self.observed(worker=selector, expect=first["expect"])
+            self.assertEqual(changed.exception.code, "cleanup_changed")
+
     def test_selector_shape_and_unknown_identity_are_refused_without_writes(self):
         before = (objective_root(self.project, "objective") / "context.json").read_bytes()
-        invalid = ({}, {"admission": "a", "dispatch": "b"}, {"dispatch": "unknown"},
-                   {"admission": self.admission["admission_id"], "reuse_reason": ""},
-                   {"admission": self.admission["admission_id"], "reuse_reason": "x" * 513})
-        for worker in invalid:
-            with self.subTest(worker=worker), self.assertRaises(PodError):
+        invalid = (({}, "invalid_cleanup_worker"),
+                   ({"admission": "a", "dispatch": "b"}, "invalid_cleanup_worker"),
+                   ({"dispatch": "unknown"}, "cleanup_worker_unavailable"),
+                   ({"admission": self.admission["admission_id"], "reuse_reason": ""},
+                    "invalid_cleanup_reuse_reason"),
+                   ({"admission": self.admission["admission_id"], "reuse_reason": "x" * 513},
+                    "invalid_cleanup_reuse_reason"))
+        for worker, code in invalid:
+            with self.subTest(worker=worker), self.assertRaises(PodError) as refused:
                 plan(self.project, "objective", worker=worker, orca_reader=self.orca_read, native_port=self.port)
+            self.assertEqual(refused.exception.code, code)
         self.assertEqual((objective_root(self.project, "objective") / "context.json").read_bytes(), before)
 
 

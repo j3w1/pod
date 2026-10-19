@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import StringIO
 from pathlib import Path
 import re
 import subprocess
@@ -26,7 +27,22 @@ def _git(project: Path, argv: list[str]) -> str | None:
     return result.stdout
 
 
-def _worktrees(project: Path, paths: set[str], branches: set[str]) -> tuple[dict, dict, str | None]:
+def _worktrees(project: Path) -> list[dict]:
+    """Keep the bounded full-list contract used by R113's registry observations."""
+    try:
+        with worktree_inventory(project) as inventory:
+            output = inventory.read(MAX_GIT_OUTPUT + 1)
+            if len(output) > MAX_GIT_OUTPUT:
+                raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read")
+            rows = list(worktree_rows(StringIO(output)))
+    except PodError as exc:
+        raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read") from exc
+    if len(rows) > MAX_RESOURCES:
+        raise PodError("cleanup_unavailable", "Git worktree inventory exceeds the cleanup bound")
+    return rows
+
+
+def _objective_worktrees(project: Path, paths: set[str], branches: set[str]) -> tuple[dict, dict, str | None]:
     """Keep objective rows and all checkouts of their refs, without a repository-size bound.
 
     Spool the complete read to disk: the first pass discovers current refs at the bound paths;
@@ -51,6 +67,30 @@ def _worktrees(project: Path, paths: set[str], branches: set[str]) -> tuple[dict
             return by_path, checkouts, main_path
     except PodError as exc:
         raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read") from exc
+
+
+def _branch_refs(journal: dict, checkout_refs: set[str], selected_branches: set[str], *,
+                 worker: bool) -> tuple[set[str], set[tuple[str, str]]]:
+    local = {ref for ref in checkout_refs if ref.startswith("refs/heads/")}
+    remotes = set()
+    for unit in journal["units"].values():
+        branch = unit.get("branch")
+        if not isinstance(branch, dict):
+            continue
+        if isinstance(branch.get("branch"), str):
+            ref = "refs/heads/" + branch["branch"]
+            if not worker or ref in selected_branches:
+                local.add(ref)
+        remote = branch.get("remote")
+        if not isinstance(remote, str) or not _BRANCH.fullmatch(remote):
+            continue
+        # A prepared name alone proves no remote ownership; only Governor publications count.
+        for key in unit.get("published", {}):
+            if isinstance(key, str) and key.startswith(remote + "/"):
+                name = key[len(remote) + 1:]
+                if not worker or "refs/heads/" + name in selected_branches:
+                    remotes.add((remote, name))
+    return local, remotes
 
 
 def _selected_worker(state: dict, worker: object) -> tuple[dict | None, str | None]:
@@ -396,6 +436,9 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     if state is None or not isinstance(state.get("checkpoint"), dict):
         raise PodError("cleanup_unavailable", "Objective checkpoint is unavailable")
     checkpoint = state["checkpoint"]
+    if older is not None and worker is not None:
+        raise PodError("cleanup_worker_unavailable",
+                       "Older evidence-closed records do not document worker report and release evidence")
     selected, reuse_reason = _selected_worker(state, worker)
     port = native_port or OrcaPort(project)
     worker_facts, worker_holds = (_worker_facts(selected, state, port, reuse_reason)
@@ -448,7 +491,12 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     selected_branches = {"refs/heads/" + branch for branches in expected_branches.values() for branch in branches}
     journal_branches = {"refs/heads/" + branch["branch"] for unit in journal["units"].values()
                         if isinstance(branch := unit.get("branch"), dict) and isinstance(branch.get("branch"), str)}
-    by_path, checkouts, main_path = _worktrees(project, paths, selected_branches | journal_branches)
+    by_path, checkouts, main_path = _objective_worktrees(project, paths, selected_branches | journal_branches)
+    checkout_refs = {row["branch"] for row in by_path.values() if isinstance(row.get("branch"), str)}
+    local_branches, remote_names = _branch_refs(journal, checkout_refs, selected_branches,
+                                               worker=selected is not None)
+    if len(paths) + len(local_branches) + len(remote_names) > MAX_RESOURCES:
+        raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     governance = checkpoint.get("governance") or {}
     target_ref = governance.get("base_ref")
     target = resolve_commit(project, target_ref) if isinstance(target_ref, str) else None
@@ -465,7 +513,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
               and row.get("action", {}).get("kind") == "merge"}
     if delivered.get("candidate"):
         merged.add(delivered["candidate"])
-    resources, covered_branches = [], set()
+    resources = []
     successor, successor_paths = _successor_paths(project, state)
     for path_text in sorted(paths):
         path = Path(path_text)
@@ -519,15 +567,6 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                                    delete_argv=["orca", "worktree", "rm", "--worktree", "path:" + path_text,
                                                 "--json"] if deletable else None,
                                    archive_argv=archive_argv, archive_verified=archive_verified))
-        if branch_ref:
-            covered_branches.add(branch_ref)
-    local_branches = {ref for ref in covered_branches if ref.startswith("refs/heads/")}
-    for unit in journal["units"].values():
-        branch = unit.get("branch")
-        if isinstance(branch, dict) and isinstance(branch.get("branch"), str):
-            ref = "refs/heads/" + branch["branch"]
-            if selected is None or ref in selected_branches:
-                local_branches.add(ref)
     for ref in sorted(local_branches):
         branch = ref.removeprefix("refs/heads/")
         tip = resolve_commit(project, ref)
@@ -565,21 +604,6 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                                                   branch.replace("/", "_") + ".bundle", ref]
                                                  if classification == "unique" else None),
                                    archive_verified=verified))
-    remote_names = set()
-    for unit in journal["units"].values():
-        branch = unit.get("branch")
-        if not isinstance(branch, dict):
-            continue
-        remote = branch.get("remote")
-        if not isinstance(remote, str) or not _BRANCH.fullmatch(remote):
-            continue
-        # Only branches this objective's Governor published are its remote resources; a prepared branch
-        # name alone proves nothing about who created the remote branch.
-        for key in unit.get("published", {}):
-            if isinstance(key, str) and key.startswith(remote + "/"):
-                branch_name = key[len(remote) + 1:]
-                if selected is None or "refs/heads/" + branch_name in selected_branches:
-                    remote_names.add((remote, branch_name))
     for remote, branch in sorted(remote_names):
         ref = "refs/heads/" + branch
         output = _git(project, ["ls-remote", remote, ref]) if _BRANCH.fullmatch(branch) else None

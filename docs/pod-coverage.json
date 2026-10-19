@@ -6517,7 +6517,8 @@
         "tests.test_github.StreamingRepositoryTests.test_truncated_empty_missing_and_duplicate_inventory_fields_refuse",
         "tests.test_github.StreamingRepositoryTests.test_discovery_and_cleanup_refuse_failed_empty_or_incomplete_native_inventory",
         "tests.test_github.StreamingRepositoryTests.test_discovery_refuses_a_complete_inventory_that_omits_the_current_worktree",
-        "tests.test_github.StreamingRepositoryTests.test_other_discovery_reads_keep_their_output_bound_and_allowlist"
+        "tests.test_github.StreamingRepositoryTests.test_other_discovery_reads_keep_their_output_bound_and_allowlist",
+        "tests.test_cleanup_plan.CleanupScaleTests.test_full_registry_consumer_bound_does_not_bound_objective_plan"
       ],
       "status": "NOT_RUN"
     },
@@ -6546,7 +6547,9 @@
         "tests.test_cleanup_plan.CleanupWorkerTests.test_final_reused_round_can_remove_the_reported_released_placement",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_reuse_history_active_unknown_or_foreign_ownership_holds_and_changes_expect",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_reuse_requires_a_complete_exact_chain_or_positive_independent_historical_release",
-        "tests.test_cleanup_plan.CleanupWorkerTests.test_contradictory_projection_ownership_and_unknown_integration_stay_held"
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_contradictory_projection_ownership_and_unknown_integration_stay_held",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_missing_earlier_native_resource_after_reuse_stays_held",
+        "tests.test_evidence_closure.SweepTests.test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan"
       ],
       "status": "NOT_RUN"
     }

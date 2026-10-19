@@ -1629,6 +1629,17 @@ class SweepTests(ClosureCase):
         self.assertEqual(worktree["identity"]["path"], self.where())
         self.assertEqual(self.everything(), before)
 
+        from pod.evidence_closure import closed_older_state
+        older = closed_older_state(self.project, "objective")
+        dispatch = next(row["native_binding"]["dispatchId"] for row in older["admissions"].values()
+                        if isinstance(row.get("native_binding"), dict))
+        for selector in ({"dispatch": dispatch}, {"admission": next(iter(older["admissions"]))}):
+            with self.subTest(selector=selector):
+                self.refused(lambda: run("cleanup-plan", {"project": project, "objective": "objective",
+                                                          "worker": selector}),
+                             code="cleanup_worker_unavailable")
+                self.assertEqual(self.everything(), before)
+
     def test_the_sweep_needs_no_terminal_or_run_binding_and_mutates_nothing(self):
         self.shipped()
         os.environ.pop("ORCA_TERMINAL_HANDLE", None)
