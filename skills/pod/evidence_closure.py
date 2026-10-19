@@ -40,8 +40,9 @@ LEAD_ACTION = ("A task for the project lead: resolve each named condition, then 
                "decision is needed.")
 RESULTS = ("closed", "already_closed", "not_proved", "unverified", "skipped")
 _FIELDS = {"schema", "objective", "repository", "at", "statement", "basis", "caller", "relation", "tail", "pod",
-           "record", "coordinator", "runs", "dispatches_settled", "source", "delivery", "chain", "preserved",
-           "counts", "unfinished", "worktrees", "locations_complete"}
+           "record", "coordinator", "runs", "dispatches_settled", "source", "sources", "delivery", "chain",
+           "preserved", "counts", "unfinished", "worktrees", "locations_complete"}
+SUPPORTED = ("current", "older")
 
 
 def _clip(value: object, limit: int = MAX_TEXT) -> str | None:
@@ -96,6 +97,7 @@ def load(root: Path) -> dict:
             or value["relation"] not in ("tail", "predecessor") or not isinstance(value["tail"], dict)
             or not isinstance(value["counts"], dict) or not isinstance(value["preserved"], list)
             or not isinstance(value["delivery"], list) or not isinstance(value["runs"], list)
+            or not isinstance(value["sources"], list)
             or not isinstance(value["worktrees"], list) or type(value["locations_complete"]) is not bool):
         raise PodError("closure_evidence_unreadable", "The evidence closure is malformed")
     return value
@@ -269,8 +271,18 @@ def _journal_bytes(root: Path) -> bytes | None:
     return data
 
 
-def _scan(project: Path) -> tuple[list[dict], list[str]]:
-    """Every readable record of this repository, any schema, and the record directories that could not be read."""
+ROOT_UNREADABLE = "state_root_unreadable"
+BEYOND_BOUND = "beyond_scan_bound"
+UNATTRIBUTED = "unattributed"
+
+
+def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dict]]:
+    """Every readable record of this repository, any schema, and what kept the scan from reading all of them.
+
+    The second list names each problem as `{record, code}`: a record directory that could not be read, one whose
+    record names no objective (`unattributed`), the state root itself (`state_root_unreadable`), or the directories
+    past the scan's own bound (`beyond_scan_bound` with their `count`). `orphans` also names a directory holding
+    Pod files without the record that names them, as R108's list does."""
     from .github import repository_context
     from .ledger import _record_exists, record_name, state_root
     from .listing import MAX_SCAN, _name
@@ -278,29 +290,40 @@ def _scan(project: Path) -> tuple[list[dict], list[str]]:
     root = state_root(project)
     try:
         if root.is_symlink():
-            return [], [str(root)]
+            return [], [{"record": None, "code": ROOT_UNREADABLE}]
         with os.scandir(root) as frontier:
             entries = sorted((entry for entry in frontier if not entry.name.startswith(".")),
                              key=lambda entry: entry.name)
     except FileNotFoundError:
         return [], []
     except OSError:
-        return [], [str(root)]
-    found, unreadable = [], [] if len(entries) <= MAX_SCAN else ["(records beyond the scan bound)"]
+        return [], [{"record": None, "code": ROOT_UNREADABLE}]
+    found = []
+    unreadable = ([] if len(entries) <= MAX_SCAN
+                  else [{"record": None, "code": BEYOND_BOUND, "count": len(entries) - MAX_SCAN}])
     for entry in entries[:MAX_SCAN]:
         try:
             if entry.is_symlink():
-                unreadable.append(entry.name)
+                unreadable.append({"record": entry.name, "code": "unsafe_state"})
                 continue
-            if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if not _record_exists(Path(entry.path) / "context.json"):
+                if orphans:
+                    with os.scandir(entry.path) as contents:
+                        if any(item.name != ".lock" for item in contents):
+                            unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
                 continue
             raw, _ = _read_record(Path(entry.path))
-        except (OSError, PodError):
-            unreadable.append(entry.name)
+        except PodError as exc:
+            unreadable.append({"record": entry.name, "code": exc.code})
+            continue
+        except OSError:
+            unreadable.append({"record": entry.name, "code": "unreadable"})
             continue
         name = _name(raw)
         if name is None:
-            unreadable.append(entry.name)
+            unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
             continue
         if record_name(project, context, name) == entry.name:
             found.append({"objective": name, "root": Path(entry.path), "raw": raw})
@@ -316,8 +339,9 @@ class _Proof:
         self.facts: dict = {"objective": objective}
 
     def add(self, status: str, code: str, message: str) -> None:
-        if len(self.conditions) < MAX_LISTED:
-            self.conditions.append({"code": code, "status": status, "message": message})
+        row = {"code": code, "status": status, "message": message}
+        if len(self.conditions) < MAX_LISTED and row not in self.conditions:
+            self.conditions.append(row)
 
     def result(self) -> dict:
         found = {row["status"] for row in self.conditions}
@@ -349,10 +373,13 @@ def _phase(root: Path, raw: dict) -> str:
 
 def _settled_record(project: Path, row: dict) -> bool:
     """Whether a recovery coordinator's own record is finished: closed, closed by evidence, ended by the owner's
-    historical retirement, or continued along a chain that ended closed (R110)."""
+    historical retirement, or continued along a chain that ended closed (R110). A record on a schema Pod does not
+    know proves nothing finished, whatever its raw fields say."""
     from .succession import chain_state
     if present(row["root"]):
         return True
+    if _record_class(row["raw"]) not in SUPPORTED:
+        return False
     phase = _phase(row["root"], row["raw"])
     if phase in ("closed", "retired"):
         return True
@@ -431,7 +458,7 @@ def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc
     remote = remote if isinstance(remote, _Remote) else _Remote(project, remote)
     scan: dict = {}
 
-    def records() -> tuple[list[dict], list[str]]:
+    def records() -> tuple[list[dict], list[dict]]:
         if not scan:
             scan["found"], scan["unreadable"] = _scan(project)
         return scan["found"], scan["unreadable"]
@@ -442,8 +469,8 @@ def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc
     dispatches = _runs(project, doc, owner, proof, records)
     _work(doc, dispatches, proof, port=port)
     state = raw if kind == "current" else None
-    _source(doc, state, proof, remote)
-    members = _members(project, objective, raw, doc, proof, records)
+    members = _members(project, objective, raw, kind, doc, proof, records)
+    _source(members, doc, state, proof, remote)
     _delivery(project, members, proof, remote)
     _preserved(project, root, doc, state, proof, remote, now=now, readback=readback)
     from .obligations import TERMINAL
@@ -525,7 +552,12 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records) -
             continue
         holder = shown["coordinator_handle"]
         runs.append({"run": run, "generation": shown["consumer_generation"], "holder": holder})
-        if holder not in (None, owner) and not _gone(terminal_identity(holder)):
+        if not shown.get("coordinator_known", False):
+            # A reply that omits the coordinator proves nobody absent: only an explicit null is an unbound Run.
+            runs[-1]["holder_known"] = False
+            proof.add("unverified", "workers_unverified", "Orca's reply for a recorded Run does not say who "
+                      "coordinates it, so a holder cannot be ruled out.")
+        elif holder not in (None, owner) and not _gone(terminal_identity(holder)):
             # A live (or unproven) holder: its own records referencing this Run must all be finished.
             found, unreadable = records()
             mine = [row for row in found if row["raw"].get("owner") == holder and run in _record_runs(row["raw"])]
@@ -572,10 +604,26 @@ def _work(doc: dict, dispatches: dict | None, proof: _Proof, *, port) -> None:
                   message.replace("retirement waits for it", "closure waits for it"))
 
 
-def _source(doc: dict, state: dict | None, proof: _Proof, remote: _Remote) -> None:
-    """PoDs all ticked, or the issue closed as completed; for a direct objective its recorded criteria (R141)."""
-    issue = doc["issue"]
-    if issue is None:
+def _chain_issues(objective: str, doc: dict, members: list[dict] | None) -> list[tuple[dict, str]]:
+    """Every distinct issue source the delivery chain binds, with the member that binds it: the objective's own
+    first, then each predecessor's along the chain (R142). Recovery members bind the objective's own issue."""
+    rows = [(doc["issue"], objective)] + [(row["doc"]["issue"], row["objective"]) for row in members or []
+                                          if row["relation"] != "objective"]
+    found, seen = [], set()
+    for issue, name in rows:
+        if issue is not None and issue["locator"].casefold() not in seen:
+            seen.add(issue["locator"].casefold())
+            found.append((issue, name))
+    return found
+
+
+def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _Proof, remote: _Remote) -> None:
+    """PoDs all ticked, or the issue closed as completed, for every issue source the delivery chain binds (R141,
+    R142); a claim-only successor without its own binding is proved by its chain's. A standalone objective with no
+    issue source anywhere in its chain is proved by its own recorded criteria and verified delivery record."""
+    objective = proof.facts["objective"]
+    issues = _chain_issues(objective, doc, members)
+    if not issues:
         from .ledger import map_of
         from .governance import validate_delivery_record
         map_state = map_of(state) if state is not None else None
@@ -589,69 +637,115 @@ def _source(doc: dict, state: dict | None, proof: _Proof, remote: _Remote) -> No
                   and any(ob.get("state") == "satisfied" for ob in criteria) and delivered)
         proof.facts["source"] = {"locator": None, "repository": None, "number": None,
                                  "proof": "recorded_criteria" if proved else None, "state": None,
-                                 "state_reason": None, "pod_lines": None, "body_sha256": None}
+                                 "state_reason": None, "pod_lines": None, "body_sha256": None, "bound_by": objective}
+        proof.facts["sources"] = []
         if not proved:
             proof.add("not_proved", "source_unproved", "A direct objective needs every criterion satisfied or "
                       "withdrawn, at least one satisfied, and a verified delivery record.")
         return
-    facts = {"locator": issue["locator"], "repository": issue["repository"], "number": issue["number"],
-             "proof": None, "state": None, "state_reason": None, "pod_lines": None, "body_sha256": None}
-    proof.facts["source"] = facts
-    try:
-        row = remote.get().issue_state(repository=issue["repository"], number=issue["number"])
-    except PodError as exc:
-        proof.add("unverified", "source_unreadable", f"The source issue could not be read on GitHub ({exc.code}).")
-        return
-    from .github import pod_lines
-    lines = [line for rows in pod_lines(row["body"]).values() for line in rows]
-    ticked = sum(line["ticked"] for line in lines)
-    facts.update(state=row["state"], state_reason=_clip(row.get("state_reason"), 64),
-                 pod_lines={"ticked": ticked, "total": len(lines)}, body_sha256=_sha(row["body"].encode()))
-    if lines and ticked == len(lines):
-        facts["proof"] = "pod_ticks"
-    elif row["state"] == "CLOSED" and row.get("state_reason") == "COMPLETED":
-        facts["proof"] = "issue_completed"
-    else:
-        proof.add("not_proved", "source_unproved", f"The source issue has {ticked} of {len(lines)} PoD line(s) "
-                  f"ticked and is {row['state'].lower()}" + (f" ({row.get('state_reason')})"
-                                                              if row.get("state_reason") else "") + ".")
+    proof.facts["sources"] = []
+    for issue, bound_by in issues:
+        facts = {"locator": issue["locator"], "repository": issue["repository"], "number": issue["number"],
+                 "proof": None, "state": None, "state_reason": None, "pod_lines": None, "body_sha256": None,
+                 "bound_by": bound_by}
+        proof.facts["sources"].append(facts)
+        whose = "The source issue" if bound_by == objective else f"Source issue {issue['locator']} of {bound_by}"
+        try:
+            row = remote.get().issue_state(repository=issue["repository"], number=issue["number"])
+        except PodError as exc:
+            proof.add("unverified", "source_unreadable", f"{whose} could not be read on GitHub ({exc.code}).")
+            continue
+        from .github import pod_lines
+        lines = [line for rows in pod_lines(row["body"]).values() for line in rows]
+        ticked = sum(line["ticked"] for line in lines)
+        facts.update(state=row["state"], state_reason=_clip(row.get("state_reason"), 64),
+                     pod_lines={"ticked": ticked, "total": len(lines)}, body_sha256=_sha(row["body"].encode()))
+        if lines and ticked == len(lines):
+            facts["proof"] = "pod_ticks"
+        elif row["state"] == "CLOSED" and row.get("state_reason") == "COMPLETED":
+            facts["proof"] = "issue_completed"
+        else:
+            proof.add("not_proved", "source_unproved", f"{whose} has {ticked} of {len(lines)} PoD line(s) "
+                      f"ticked and is {row['state'].lower()}" + (f" ({row.get('state_reason')})"
+                                                                  if row.get("state_reason") else "") + ".")
+    proof.facts["source"] = dict(proof.facts["sources"][0])
 
 
-def _links(raw: dict) -> list[str]:
-    return [link["objective"] for link in (raw.get("continued_by"), raw.get("continues"))
-            if isinstance(link, dict) and isinstance(link.get("objective"), str)]
+def _lineage(project: Path, raw: dict) -> tuple[list[dict], tuple[str, str, str] | None]:
+    """A chain tail's continued predecessors, nearest first, and why the walk could not reach the chain's head.
+
+    Each step follows a completed claim (`continues` without a pending state) whose predecessor names this record
+    back as its successor, at most eight steps (R142). Every predecessor is classified before it is used: a record
+    on a schema Pod does not know, or one that does not validate under its own, ends the walk. Returns the rows read
+    (`objective`, `root`, `raw`, `kind`, `doc`) and None when the walk reached a record that continues nothing, or
+    `(status, code, message)` naming what kept the chain from being read whole: a bound crossed, a loop, a link the
+    other side does not confirm, an incomplete claim, or a record that is unreadable or unsupported. Never certify
+    the part of a chain it could read."""
+    from .ledger import _record_exists, objective_root
+    from .listing import _name
+    found, current = [], raw
+    seen = {_name(raw)}
+    while True:
+        back = current.get("continues")
+        name = _name(current)
+        if back is None:
+            return found, None
+        if not isinstance(back, dict) or not _text(back.get("objective"), 1024):
+            return found, ("unverified", "chain_inconsistent", f"Objective {name} records a malformed claim of its "
+                           "predecessor.")
+        prior_name = back["objective"]
+        if back.get("state") is not None:
+            return found, ("unverified", "claim_incomplete", "Its own claim of a predecessor is incomplete."
+                           if not found else f"The claim of {prior_name} by {name} is incomplete.")
+        if prior_name in seen:
+            return found, ("unverified", "chain_inconsistent", f"The succession chain loops back to {prior_name}.")
+        if len(found) == MAX_HOPS:
+            return found, ("not_proved", "scope_too_large", f"The succession chain continues past {MAX_HOPS} "
+                           "predecessors; Pod cannot prove the delivery of all of it.")
+        root = objective_root(project, prior_name)
+        try:
+            if not _record_exists(root / "context.json"):
+                raise PodError("record_unreadable", "The linked record is missing")
+            prior, _ = _read_record(root)
+        except (PodError, OSError):
+            return found, ("unverified", "record_unreadable", f"Linked objective {prior_name} cannot be read.")
+        link = prior.get("continued_by")
+        if _name(prior) != prior_name or not isinstance(link, dict) or link.get("objective") != name:
+            return found, ("unverified", "chain_inconsistent", f"Linked objective {prior_name} does not name {name} "
+                           "as its successor.")
+        kind = _record_class(prior)
+        if kind not in SUPPORTED:
+            return found, (("unverified", "schema_unknown", f"Linked objective {prior_name} uses a schema this Pod "
+                            "does not know; its chain is never closed by evidence.") if kind == "unknown"
+                           else ("unverified", "record_unreadable", f"Linked objective {prior_name} does not "
+                                 "validate under its schema."))
+        try:
+            doc = _documented(prior, current=kind == "current")
+        except PodError:
+            return found, ("unverified", "record_unreadable", f"A documented field of linked objective {prior_name} "
+                           "is unreadable.")
+        seen.add(prior_name)
+        found.append({"objective": prior_name, "root": root, "raw": prior, "kind": kind, "doc": doc})
+        current = prior
 
 
-def _members(project: Path, objective: str, raw: dict, doc: dict, proof: _Proof, records) -> list[dict] | None:
-    """The delivery chain: the objective, its succession links both ways (at most eight hops) and this repository's
-    records that share a recorded Run with it and bind the same source issue."""
+def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, proof: _Proof,
+             records) -> list[dict] | None:
+    """The delivery chain: the objective, its continued predecessors (R142's walk, at most eight) and this
+    repository's records that share a recorded Run with it and bind the same source issue. Every member is
+    classified before it is used; a chain Pod cannot read whole adds the condition that names why."""
     from .ledger import objective_root
     members = {objective: {"objective": objective, "root": objective_root(project, objective), "raw": raw,
-                           "relation": "objective"}}
-    frontier, depth = [objective], 0
-    found, unreadable = None, None
-    while frontier and depth < MAX_HOPS:
-        depth += 1
-        following = []
-        for name in frontier:
-            for link in _links(members[name]["raw"]):
-                if link in members:
-                    continue
-                if found is None:
-                    found, unreadable = records()
-                row = next((item for item in found if item["objective"] == link), None)
-                if row is None:
-                    proof.add("unverified", "record_unreadable", f"Linked objective {link} cannot be read.")
-                    continue
-                relation = "successor" if (members[name]["raw"].get("continued_by") or {}).get("objective") == link \
-                    else "predecessor"
-                members[link] = {**row, "relation": relation}
-                following.append(link)
-        frontier = following
+                           "kind": kind, "doc": doc, "relation": "objective"}}
+    lineage, problem = _lineage(project, raw)
+    for row in lineage:
+        members[row["objective"]] = {**row, "relation": "predecessor"}
+    proof.facts["chain_complete"] = problem is None
+    if problem is not None:
+        proof.add(*problem)
     issue = doc["issue"]
     if issue is not None and doc["runs"]:
-        if found is None:
-            found, unreadable = records()
+        found, _ = records()
         for row in found:
             if row["objective"] in members:
                 continue
@@ -661,7 +755,14 @@ def _members(project: Path, objective: str, raw: dict, doc: dict, proof: _Proof,
                 continue
             if (other["issue"] is not None and other["issue"]["locator"].casefold() == issue["locator"].casefold()
                     and set(other["runs"]) & set(doc["runs"])):
-                members[row["objective"]] = {**row, "relation": "recovery"}
+                peer = _record_class(row["raw"])
+                if peer == "unknown":
+                    proof.add("unverified", "schema_unknown", f"Recovery objective {row['objective']}, which shares "
+                              "its Run and source, uses a schema this Pod does not know.")
+                elif peer not in SUPPORTED:
+                    proof.add("unverified", "record_unreadable", f"Recovery objective {row['objective']}, which "
+                              "shares its Run and source, does not validate under its schema.")
+                members[row["objective"]] = {**row, "kind": peer, "doc": other, "relation": "recovery"}
     rows = list(members.values())
     proof.facts["chain"] = [{"objective": row["objective"], "relation": row["relation"],
                              "phase": _phase(row["root"], row["raw"])} for row in rows][:MAX_MEMBERS]
@@ -709,8 +810,11 @@ def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: 
         for number in numbers:
             recorded.setdefault(number, row["objective"])
     if not recorded:
-        proof.add("not_proved", "delivery_unrecorded", "No delivery pull request is recorded for this objective or "
-                  "its chain.")
+        # A chain Pod could not read whole may record its pull requests in a member it could not read; that
+        # member's own condition already holds the proof, so nothing is claimed unrecorded.
+        if proof.facts.get("chain_complete", True):
+            proof.add("not_proved", "delivery_unrecorded", "No delivery pull request is recorded for this objective "
+                      "or its chain.")
         return
     if len(recorded) > MAX_PRS:
         proof.add("not_proved", "scope_too_large", f"The chain records more than {MAX_PRS} pull requests.")
@@ -847,12 +951,14 @@ def closure_preservation(project: Path, objective: str, state: dict, journal: di
         doc = _documented(state, current=True)
         scan: dict = {}
 
-        def records() -> tuple[list[dict], list[str]]:
+        def records() -> tuple[list[dict], list[dict]]:
             if not scan:
                 scan["found"], scan["unreadable"] = _scan(project)
             return scan["found"], scan["unreadable"]
-        _source(doc, state, proof, remote)
-        _delivery(project, _members(project, objective, state, doc, proof, records), proof, remote)
+        # The same source and pull-request proof as R141's, over the same chain (C2.6, C2.7).
+        members = _members(project, objective, state, "current", doc, proof, records)
+        _source(members, doc, state, proof, remote)
+        _delivery(project, members, proof, remote)
     except PodError as exc:
         proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
     verdict = proof.result()
@@ -905,6 +1011,7 @@ def _content(project: Path, objective: str, facts: dict, *, caller: str, at: str
             "record": dict(facts["record"]), "coordinator": dict(facts["coordinator"]),
             "runs": [dict(row) for row in facts["runs"]][:32],
             "dispatches_settled": facts["dispatches_settled"], "source": deepcopy(facts["source"]),
+            "sources": deepcopy(facts["sources"])[:MAX_MEMBERS],
             "delivery": [dict(row) for row in facts["delivery"]][:MAX_PRS],
             "chain": [dict(row) for row in facts["chain"]][:MAX_MEMBERS],
             "preserved": deepcopy(facts["preserved"])[:MAX_PRESERVED], "counts": dict(facts["counts"]),
@@ -940,32 +1047,9 @@ def _create(root: Path, content: dict) -> bool:
     return True
 
 
-def _predecessors(project: Path, raw: dict) -> list[dict]:
-    """The continued predecessors of a chain tail, by completed links only, at most eight."""
-    from .ledger import objective_root
-    found, current, seen = [], raw, set()
-    for _ in range(MAX_HOPS):
-        back = current.get("continues")
-        name = (current.get("checkpoint") or {}).get("objective")
-        if not isinstance(back, dict) or not isinstance(back.get("objective"), str) or back.get("state") is not None:
-            break
-        if back["objective"] in seen:
-            break
-        root = objective_root(project, back["objective"])
-        try:
-            prior, _ = _read_record(root)
-        except PodError:
-            break
-        if (prior.get("continued_by") or {}).get("objective") != name:
-            break
-        seen.add(back["objective"])
-        found.append({"objective": back["objective"], "root": root, "raw": prior})
-        current = prior
-    return found
-
-
 def _predecessor_content(project: Path, row: dict, tail: dict, *, caller: str, at: str) -> dict:
-    """A continued predecessor's own entry, naming the tail closure; its record stays frozen as R110 left it."""
+    """A continued predecessor's own entry, naming the tail closure; its record stays frozen as R110 left it. The
+    row was classified by R142's walk, so its record class is the one that walk read, never assumed."""
     raw = row["raw"]
     try:
         _, data = _read_record(row["root"])
@@ -975,23 +1059,20 @@ def _predecessor_content(project: Path, row: dict, tail: dict, *, caller: str, a
     from .listing import _facts
     located = _facts(raw)
     link = raw.get("continued_by") or {}
-    try:
-        doc = _documented(raw, current=True)
-        admissions = doc["admissions"]
-    except PodError:
-        admissions = {}
+    admissions = row["doc"]["admissions"]
     preserved = [{"kind": "admission", "id": key, "role": item["role"], "state": item["state"],
                   "dispatch": (item["native_binding"] or {}).get("dispatchId"),
                   "outcome": "unreported" if item["state"] == "bound" else "UNKNOWN"}
                  for key, item in sorted(admissions.items())
                  if item["state"] not in ("closed", "deferred") and not (item["state"] == "bound" and item["reported"])]
-    facts = {"record": {"class": "current", "context_sha256": _sha(data),
+    facts = {"record": {"class": row["kind"], "context_sha256": _sha(data),
                         "governor_sha256": _sha(journal) if journal is not None else None},
              "coordinator": {"handle": raw.get("owner") if isinstance(raw.get("owner"), str) else None,
                              "liveness": "claimed", "cause": None},
              "runs": [{"run": run, "generation": None, "holder": None}
                       for run in (link.get("runs") if isinstance(link.get("runs"), list) else [])][:32],
-             "dispatches_settled": 0, "source": deepcopy(tail["source"]), "delivery": deepcopy(tail["delivery"]),
+             "dispatches_settled": 0, "source": deepcopy(tail["source"]), "sources": deepcopy(tail["sources"]),
+             "delivery": deepcopy(tail["delivery"]),
              "chain": deepcopy(tail["chain"]), "preserved": preserved[:MAX_PRESERVED], "counts": counts(preserved),
              "unfinished": list(link.get("unfinished") or [])[:MAX_LISTED],
              "worktrees": located["worktrees"][:MAX_LISTED], "locations_complete": located["locations_complete"]}
@@ -1003,9 +1084,11 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
                       now: datetime | None = None) -> dict:
     """Close one objective by evidence (C3): under its lock and its predecessors', proved again, written once.
 
-    `closed` writes `closure-evidence.json` beside the record and one for each continued predecessor of the chain;
-    `replayed` writes nothing (it only completes a predecessor entry an interruption left out); anything else is the
-    proof's own status with its conditions, and nothing is written.
+    `closed` writes `closure-evidence.json` beside the record and one for each continued predecessor of the chain,
+    naming those in `predecessors`. An existing closure writes nothing and returns `replayed`, unless an
+    interruption left a predecessor the stored closure names without its entry: then the retry writes only those
+    entries and returns `chain_completed`, naming them in `predecessors`. Anything else is the proof's own status
+    with its conditions, and nothing is written.
     """
     from .ledger import _lock, _record_exists, objective_root
     from .util import bounded_text
@@ -1018,7 +1101,7 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
                                 "message": "No record of that objective exists in this repository."}]}
     try:
         raw, _ = _read_record(root)
-        chain = _predecessors(project, raw)
+        chain, _ = _lineage(project, raw)
     except PodError:
         chain = []
     with ExitStack() as stack:
@@ -1029,6 +1112,12 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
         verdict = prove(project, objective, port=port, remote=remote, now=now)
         if verdict["status"] != "proved":
             return {"objective": objective, "status": verdict["status"], "conditions": verdict["conditions"]}
+        certified = [row["objective"] for row in verdict["facts"]["chain"] if row["relation"] == "predecessor"]
+        if certified != [row["objective"] for row in chain]:
+            # Every predecessor the proof certified gets its entry under its own lock, or nothing is written.
+            return {"objective": objective, "status": "unverified", "conditions": [{
+                "code": "chain_inconsistent", "status": "unverified",
+                "message": "The succession chain changed while it was being closed; nothing was written."}]}
         at = (now or datetime.now(timezone.utc)).isoformat()
         content = _content(project, objective, verdict["facts"], caller=caller, at=at, relation="tail",
                            tail={"objective": objective, "at": at})
@@ -1039,9 +1128,13 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
 
 
 def _complete_chain(project: Path, chain: list[dict], tail: dict, *, caller: str) -> list[str]:
+    """Write each missing entry of a predecessor the tail closure names; never one it does not name, and never one
+    for a record R142's walk did not classify as supported."""
+    named = {row.get("objective") for row in (tail["chain"] if isinstance(tail["chain"], list) else [])
+             if isinstance(row, dict) and row.get("relation") == "predecessor"}
     written = []
     for row in chain:
-        if present(row["root"]):
+        if row["objective"] not in named or row["kind"] not in SUPPORTED or present(row["root"]):
             continue
         if _create(row["root"], _predecessor_content(project, row, tail, caller=caller, at=tail["at"])):
             written.append(row["objective"])
@@ -1049,14 +1142,17 @@ def _complete_chain(project: Path, chain: list[dict], tail: dict, *, caller: str
 
 
 def _replay(project: Path, root: Path, chain: list[dict], *, caller: str) -> dict:
+    """An existing closure: `replayed` with nothing written, or `chain_completed` naming the predecessor entries an
+    interrupted closure left out, which this retry wrote. Existing files are never rewritten."""
     try:
         stored = load(root)
     except PodError as exc:
         return {"objective": root.name, "status": "replayed", "closure": {"status": "unreadable", "code": exc.code}}
     completed = _complete_chain(project, chain, stored, caller=caller) if stored["relation"] == "tail" else []
-    out = {"objective": stored["objective"], "status": "replayed", "closure": compact(stored)}
+    out = {"objective": stored["objective"], "status": "chain_completed" if completed else "replayed",
+           "closure": compact(stored)}
     if completed:
-        out["completed"] = completed
+        out["predecessors"] = completed
     return out
 
 
@@ -1136,6 +1232,47 @@ def status_fields(project: Path, objective: str, root: Path) -> dict:
     return out
 
 
+def closed_older_state(project: Path, objective: str) -> dict | None:
+    """The cleanup plan's read of an older record closed by evidence (R94, R142), before the validating reader.
+
+    Only R142's documented fields are read, through this module's bounded raw read; the record is never validated
+    as current, converted or written. Fields the plan uses that older records do not document (the governance
+    target, a verified delivery, recovery placements, terminal bindings) read as absent, so every resource whose
+    safety depends on them stays protected. A continuation link of any shape is kept, so a successor's locations
+    stay protected. None when no evidence closure is recorded or the record is not an older one: the ordinary reader
+    then answers, and still refuses an older open record."""
+    from .ledger import objective_root
+    root = objective_root(project, objective)
+    if not present(root):
+        return None
+    try:
+        raw, _ = _read_record(root)
+    except PodError:
+        return None
+    if _record_class(raw) != "older":
+        return None
+    try:
+        doc = _documented(raw, current=False)
+    except PodError as exc:
+        raise PodError("cleanup_unavailable", "A documented field of this older closed record is unreadable",
+                       {"next_action": "read it with pod status --objective NAME; nothing was planned"}) from exc
+    bound = raw["checkpoint"].get("worktree")
+    worktree = None
+    if isinstance(bound, dict) and isinstance(bound.get("path"), str):
+        worktree = {"path": bound["path"]}
+        if isinstance(bound.get("branch"), str):
+            worktree["branch"] = bound["branch"]
+    state = {"checkpoint": {"objective": objective, "worktree": worktree, "governance": {}, "delivery": None,
+                            "closure": None},
+             "admissions": {key: {"state": row["state"], "run_id": row["run_id"],
+                                  "native_binding": row["native_binding"]} for key, row in doc["admissions"].items()}}
+    if "continued_by" in raw:
+        link = raw["continued_by"]
+        state["continued_by"] = {"objective": link["objective"] if isinstance(link, dict) and _text(
+            link.get("objective"), 1024) else "(an unreadable successor)"}
+    return state
+
+
 def render(result: dict) -> None:
     from .term import clean
     value = result.get("evidence_closure") or {}
@@ -1159,9 +1296,11 @@ def render(result: dict) -> None:
 
 
 def _outcome(objective: str, verdict: dict) -> dict:
+    """One objective's sweep row. `already_closed` means its own closure existed and nothing was written for it; a
+    predecessor entry the sweep wrote is reported as that predecessor's own `closed` row (see `sweep`)."""
     status = verdict["status"]
-    outcome = {"closed": "closed", "replayed": "already_closed", "not_proved": "not_proved",
-               "unverified": "unverified"}.get(status, "skipped")
+    outcome = {"closed": "closed", "replayed": "already_closed", "chain_completed": "already_closed",
+               "not_proved": "not_proved", "unverified": "unverified"}.get(status, "skipped")
     return {"objective": objective, "outcome": outcome,
             "conditions": [{"code": item["code"], "message": item["message"]}
                            for item in verdict.get("conditions", [])][:MAX_LISTED],
@@ -1173,16 +1312,63 @@ def _unavailable(target: Path, reason: str) -> dict:
             "objectives": []}
 
 
+def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str], list[dict]]:
+    """The records one sweep visits: each named objective resolved directly from its own record, or else every
+    record of the repository through the sweep's own bounded scan (never a presentation list). Returns the rows
+    (`objective`, `phase`), the named objectives that have no record, and what kept the scan from reading every
+    record (empty when it read them all)."""
+    from .ledger import _record_exists, objective_root
+    if names:
+        rows, missing = [], []
+        for name in names:
+            root = objective_root(target, name)
+            if not _record_exists(root / "context.json"):
+                missing.append(name)
+                continue
+            try:
+                raw, _ = _read_record(root)
+                phase = _phase(root, raw)
+            except PodError:
+                phase = "open"  # Its closure reports why it cannot be read.
+            rows.append({"objective": name, "phase": phase})
+        return rows, missing, []
+    found, problems = _scan(target, orphans=True)
+    return [{"objective": row["objective"], "phase": _phase(row["root"], row["raw"])} for row in found], [], problems
+
+
+def _scope_reason(problems: list[dict]) -> str:
+    """Plain words for what kept a sweep from reading every record of a repository."""
+    from .listing import MAX_SCAN
+    beyond = sum(row.get("count", 0) for row in problems if row["code"] == BEYOND_BOUND)
+    orphaned = [row["record"] for row in problems if row["code"] == UNATTRIBUTED]
+    unread = [row for row in problems if row["code"] not in (BEYOND_BOUND, UNATTRIBUTED)]
+    parts = []
+    if any(row["code"] == ROOT_UNREADABLE for row in problems):
+        return "the Pod state root cannot be enumerated; nothing can be proven absent"
+    if beyond:
+        parts.append(f"{beyond} record directory(ies) lie beyond the sweep's {MAX_SCAN}-directory scan bound")
+    if unread:
+        parts.append(f"{len(unread)} record(s) cannot be read ("
+                     + ", ".join(f"{row['record'][:16]}: {row['code']}" for row in unread[:4])
+                     + (", ..." if len(unread) > 4 else "") + ")")
+    if orphaned:
+        parts.append(f"{len(orphaned)} director(ies) hold Pod files without a record naming them ("
+                     + ", ".join(name[:16] for name in orphaned[:4]) + (", ..." if len(orphaned) > 4 else "") + ")")
+    return ("the sweep could not read every record of this repository: " + "; ".join(parts)
+            + "; an objective among them may still be open")[:MAX_TEXT]
+
+
 def sweep(project: Path, *, repositories: list[str] | None = None, objectives: list[str] | None = None,
           port=None, remote=None) -> dict:
     """Close every provably delivered open objective of each repository (C6), idempotently.
 
     Needs no Orca terminal, Run binding or live coordinator; starts nothing and mutates no Orca, Git or provider
-    state. It writes only `closure-evidence.json` files, and a second run writes nothing. A repository it cannot
-    read is reported `unavailable` with its reason; the sweep still ran.
+    state. It writes only `closure-evidence.json` files, and a run after every entry exists writes nothing. Each
+    repository's records are enumerated by the sweep's own bounded scan; named objectives are resolved directly. A
+    repository it cannot read is `unavailable`; one whose records it could not all read is `incomplete`, with the
+    reason, and the sweep never claims its objectives all closed. The sweep still ran.
     """
     from .github import repository_context
-    from .listing import objective_list
     targets = [Path(path).expanduser() for path in (repositories or [str(project)])]
     names = list(dict.fromkeys(objectives or []))
     if len(targets) > MAX_LISTED or len(names) > MAX_LISTED:
@@ -1199,16 +1385,13 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
             if context["repo_key"] is None:
                 out["repositories"].append(_unavailable(target, "the path is not a Git repository"))
                 continue
-            listed = objective_list(target, repository=str(target))
+            rows, missing, problems = _sweep_scope(target, names)
         except PodError as exc:
             out["repositories"].append(_unavailable(target, f"the repository could not be read ({exc.code})"))
             continue
-        if listed["status"] == "unreadable":
-            out["repositories"].append(_unavailable(target, listed["next_safe_action"]))
+        if any(row["code"] == ROOT_UNREADABLE for row in problems):
+            out["repositories"].append(_unavailable(target, _scope_reason(problems)))
             continue
-        rows = listed["objectives"]
-        if names:
-            rows = [row for row in rows if row["objective"] in names]
         # Successor tails first: closing a tail writes its continued predecessors' entries too.
         rows = sorted(rows, key=lambda row: (row["phase"] == "continued", row["objective"]))
         done, results = set(), []
@@ -1218,26 +1401,37 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
             done.add(row["objective"])
             verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=remote)
             results.append(_outcome(row["objective"], verdict))
-        for name in names:
-            if name not in done:
-                results.append(_outcome(name, {"status": "not_applicable", "conditions": [
-                    {"code": "objective_unknown", "message": "No record of that objective is listed in this "
-                                                             "repository."}]}))
+            # A predecessor entry this sweep wrote, with its tail or completing an interrupted closure, closed that
+            # predecessor now: it is reported as its own `closed` row, never as an earlier closure replayed.
+            for name in verdict.get("predecessors") or []:
+                if name not in done:
+                    done.add(name)
+                    results.append(_outcome(name, {"status": "closed"}))
+        for name in missing:
+            results.append(_outcome(name, {"status": "not_applicable", "conditions": [
+                {"code": "objective_unknown", "message": "No record of that objective exists in this repository."}]}))
         for row in results:
             out["counts"][row["outcome"]] += 1
-        reason = None if listed["complete"] else "some records are unreadable or unattributed: " + ", ".join(
-            str(item.get("record", item)) for item in listed["unreadable_records"][:4])
         out["repositories"].append({"path": str(target), "repository": context["repository"],
-                                    "repo_key": context["repo_key"], "status": "swept", "reason": reason,
+                                    "repo_key": context["repo_key"], "status": "incomplete" if problems else "swept",
+                                    "reason": _scope_reason(problems) if problems else None,
                                     "objectives": results})
     tally = out["counts"]
-    out["next_safe_action"] = (
-        f"{tally['not_proved'] + tally['unverified']} objective(s) are tasks for the project lead: resolve each "
-        "named condition, then sweep again; no owner decision is needed"
-        if tally["not_proved"] + tally["unverified"] else
-        "every provably delivered objective is closed; nothing else needs the sweep")
-    if any(row["status"] == "unavailable" for row in out["repositories"]):
-        out["next_safe_action"] += "; an unavailable repository was not swept"
+    statuses = {row["status"] for row in out["repositories"]}
+    lead = tally["not_proved"] + tally["unverified"]
+    if lead:
+        text = (f"{lead} objective(s) are tasks for the project lead: resolve each named condition, then sweep "
+                "again; no owner decision is needed")
+    elif statuses <= {"swept"}:
+        text = "every provably delivered objective is closed; nothing else needs the sweep"
+    else:
+        text = "every provably delivered objective the sweep could read is closed"
+    if "unavailable" in statuses:
+        text += "; an unavailable repository was not swept"
+    if "incomplete" in statuses:
+        text += ("; a repository's records could not all be read, so an objective there may still be open: "
+                 "restore them as its reason names, then sweep again")
+    out["next_safe_action"] = text
     return out
 
 

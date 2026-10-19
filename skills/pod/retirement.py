@@ -949,14 +949,16 @@ def _close_proved(project: Path, objectives: object, *, port=None) -> dict:
     results = []
     for name in names:
         verdict = close_by_evidence(project, name, caller="historical-retirement", port=port)
-        status = {"closed": "closed", "replayed": "replayed"}.get(verdict["status"], "refused")
+        status = {"closed": "closed", "replayed": "replayed",
+                  "chain_completed": "chain_completed"}.get(verdict["status"], "refused")
         row = {"objective": name, "record": record_name(project, context, name), "status": status,
                "proof": verdict["status"], "conditions": verdict.get("conditions", [])}
         if status == "refused":
             row.update(condition=verdict["conditions"][0]["code"] if verdict.get("conditions") else verdict["status"],
                        party="lead", next_action=LEAD_ACTION)
         else:
-            row.update(closure=verdict.get("closure"),
+            # `predecessors` names each predecessor entry this call wrote (R142); a replay writes none.
+            row.update(closure=verdict.get("closure"), predecessors=verdict.get("predecessors", []),
                        next_action=f"Read it with pod status --objective {name}; it is closed by evidence.")
         results.append(row)
     done = [row for row in results if row["status"] != "refused"]

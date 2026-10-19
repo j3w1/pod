@@ -188,17 +188,17 @@ Type: B · Scenarios: [A256](#a256), [A257](#a257), [A284](#a284)
 
 ### R144 — Sweep provably delivered open objectives
 
-Type: B,H,I · Scenarios: [A455](#a455), [A456](#a456)
+Type: B,H,I · Scenarios: [A455](#a455), [A456](#a456), [A459](#a459), [A460](orca.md#a460)
 
-`pod sweep [--repository PATH]... [--objective NAME]... [--json]` runs R141's proof and closure over each selected repository's records (R108). The default is the current directory's repository; repositories are paths, since Pod knows no host registry. A registering host passes each repository. Repeated objective names narrow the scope. Process successor tails before predecessors, each objective once, and report per objective:
+`pod sweep [--repository PATH]... [--objective NAME]... [--json]` runs R141's proof and closure over each selected repository's records (R108). The default is the current directory's repository; repositories are paths, since Pod knows no host registry. A registering host passes each repository. The sweep enumerates every record of each repository with its own bounded scan (R108's 1024-directory bound), never the list's 128 presentation rows. Repeated objective names narrow the scope, and each is resolved directly from its own record; a named objective with no record reads `skipped` / `objective_unknown`. Process successor tails before predecessors, each objective once, and report per objective:
 
-- `closed`: newly closed by evidence.
-- `already_closed`: existing evidence file replayed; no write.
+- `closed`: newly closed by evidence by this sweep, including a continued predecessor whose entry this sweep wrote with its tail or after an interrupted closure (R141's `predecessors`), reported as that predecessor's own row.
+- `already_closed`: its own evidence file already existed; nothing was written for it.
 - `not_proved`: every unmet condition, with `party: lead`.
 - `unverified`: conditions naming unavailable proof.
 - `skipped`: ordinary closure, historical retirement, ordinary continuation or a live coordinator.
 
-A second sweep writes nothing and reports already_closed for each objective it closed. The command needs no Orca terminal, Run binding or live coordinator, starts nothing and mutates no Orca, Git or provider state. It writes only closure-evidence.json files through R141-R142. Exit zero means the sweep ran, whatever it found; only invocation or scope errors exit nonzero. Lost work not proved delivered stays open as a project-lead task, never an owner question. Host cleanup and project leads can run it before every cleanup; R94's plan reads evidence-closed objectives as closed.
+Each repository row reads `swept` when its records were all read. It reads `incomplete` when some could not be: directories past the scan bound, an unreadable record, or a directory of Pod files that no record names. Its `reason` then names each, the readable objectives are still swept, and the next action never says that every provable objective is closed. A repository that cannot be enumerated at all reads `unavailable`. Once every entry exists a sweep writes nothing and reports already_closed for each objective it closed. The command needs no Orca terminal, Run binding or live coordinator, starts nothing and mutates no Orca, Git or provider state. It writes only closure-evidence.json files through R141-R142. Exit zero means the sweep ran, whatever it found; only invocation or scope errors exit nonzero. Lost work not proved delivered stays open as a project-lead task, never an owner question. Host cleanup and project leads can run it before every cleanup; R94's plan reads evidence-closed objectives as closed.
 
 `pod status --list --delivered [--json]` runs the same proof read-only and adds `delivery_proof {status, conditions}` to each open row. The plain list remains record-only with no Orca or provider read; evidence closures carry R108's closure_basis and compact evidence_closure while schema remains truthful. Listing and proof write nothing and offer no owner question.
 
@@ -479,6 +479,7 @@ byte-identical. No new personal or project config key exists.
 
 - <a id="a455"></a>**A455** - `pod sweep` over two repositories closes every proved objective and reports not_proved and unverified ones as lead tasks with conditions; a second run writes nothing and reports already_closed; `pod status --list --delivered` reports each open row's proof; the plain list shows `closure_basis: evidence`.
 - <a id="a456"></a>**A456** - The sweep needs no Orca terminal, Run binding or live coordinator, starts nothing, and makes no Orca, Git or provider mutation: only closure-evidence files are written.
+- <a id="a459"></a>**A459** - With 128 finished records sorting before a delivered open objective, the sweep's own scan reaches and closes it, and a named sweep resolves it from its own record; a named objective with no record reads `skipped` / `objective_unknown`. Past the scan bound, or with an unreadable record or a directory of Pod files no record names, the repository reads `incomplete` with a reason naming each, its readable objectives are still swept, and the next action never says every provable objective is closed.
 
 ## Public interfaces
 

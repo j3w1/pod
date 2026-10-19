@@ -64,6 +64,7 @@ class ClosureCase(RetirementCase):
             guard.start(); self.addCleanup(guard.stop)
         self.source = issue_intake(self.project, LOCATOR, port=self.remote)["source"]
         self.exits = {}
+        self.holder_omitted = set()  # Runs whose run-show reply leaves out coordinator_handle entirely.
 
     def native_read(self, argv, **kwargs):
         if argv[:2] == ["terminal", "show"] and argv[3] in self.exits:
@@ -71,7 +72,10 @@ class ClosureCase(RetirementCase):
             return {"runtime": self.port.runtime, "result": {"terminal": {
                 "handle": argv[3], "connected": False, "writable": False, "orphaned": False,
                 "exitCause": {"kind": self.exits[argv[3]]}}}}
-        return super().native_read(argv, **kwargs)
+        answer = super().native_read(argv, **kwargs)
+        if argv[:2] == ["orchestration", "run-show"] and argv[3] in self.holder_omitted:
+            answer["result"]["run"].pop("coordinator_handle", None)
+        return answer
 
     def packet(self, serves, **fields):
         return super().packet(serves, objective_source=self.source, **fields)
@@ -182,17 +186,21 @@ class ClosureCase(RetirementCase):
                                               worktree=self.binding(),
                                               **({"objective_source": self.source} if source else {}))})
         if pr is not None:
-            path = _record_path(self.project, name)
-            journal = _read_journal(path)
-            journal["actions"].append({
-                "record_id": f"{name}-pr", "logical_key": f"{name}-pr", "attempt": 1,
-                "action": {"kind": "pr_update", "candidate": self.candidate, "target": "origin/delivery",
-                           "unit": "default"},
-                "decision": "ALLOW", "outcome": "PASS",
-                "receipt": {"started_at": "2026-10-01T00:00:00+00:00", "provider": {"pr": pr}},
-                "warnings": [], "reasons": [], "classifications": [], "run_event": None, "rejected_run": None})
-            _write_journal(path, journal)
+            self.record_pr(name, pr)
         os.environ["ORCA_TERMINAL_HANDLE"] = "next"
+
+    def record_pr(self, name, pr):
+        """A delivery pull request in an objective's journal, as its own executed pr_update leaves it."""
+        path = _record_path(self.project, name)
+        journal = _read_journal(path)
+        journal["actions"].append({
+            "record_id": f"{name}-pr", "logical_key": f"{name}-pr", "attempt": 1,
+            "action": {"kind": "pr_update", "candidate": self.candidate, "target": "origin/delivery",
+                       "unit": "default"},
+            "decision": "ALLOW", "outcome": "PASS",
+            "receipt": {"started_at": "2026-10-01T00:00:00+00:00", "provider": {"pr": pr}},
+            "warnings": [], "reasons": [], "classifications": [], "run_event": None, "rejected_run": None})
+        _write_journal(path, journal)
 
     def recovery(self, *, ended=None, live=True, pr=None):
         """A recovery coordinator rebound the objective's Run (at another generation) for its own objective, which
@@ -221,6 +229,56 @@ class ClosureCase(RetirementCase):
                                               worktree=self.binding(), objective_source=self.source)})
         claimed = self.claim(SuccessionCase.decide(self))
         self.assertEqual(claimed["status"], "claimed", claimed)
+
+    def claimed_direct(self):
+        """A claim-only successor with no issue binding of its own: a direct objective claims the delivered one and
+        satisfies its own criterion with evidence. It delivers nothing new, so it records no delivery of its own."""
+        from tests.test_succession import SuccessionCase
+        self.successor()
+        self.assertEqual(self.claim(SuccessionCase.decide(self))["status"], "claimed")
+        rows = deepcopy(read(self.project, "successor")["checkpoint"]["obligations"])
+        for row in rows:
+            row.pop("executor", None)
+            row.update(state="satisfied", evidence=[self.proof(row["id"])])
+        run("checkpoint", {"project": str(self.project), "objective": "successor", "owner": "next",
+                           "value": self.core(obligations=rows)})
+        return rows
+
+    def claimed_chain(self, count, *, tail_pr=None):
+        """`count` supported succession claims, each objective on its own Run claiming the one before, each
+        coordinator then lost; `tail_pr` is a pull request the tail records after its claim. Returns its name."""
+        previous = "objective"
+        for index in range(1, count + 1):
+            name, owner, run_id = f"chain-{index}", f"owner-{index}", f"run-{index}"
+            self.other(name, owner, run_id=run_id)
+            self.run_holders[run_id] = owner
+            os.environ["ORCA_TERMINAL_HANDLE"] = owner
+            request = {"project": str(self.project), "objective": name, "owner": owner, "predecessor": previous}
+            facts = run("succession", request)["facts"]
+            claimed = run("succession", {**request, "decision": {
+                "provenance": "user_direct", "instruction": "Continue the delivered predecessor", **facts}})
+            self.assertEqual(claimed["status"], "claimed", claimed)
+            self.terminals[owner] = "stale"
+            previous = name
+        if tail_pr is not None:
+            self.record_pr(previous, tail_pr)
+        os.environ["ORCA_TERMINAL_HANDLE"] = "next"
+        return previous
+
+    def finished(self, count):
+        """Synthetic record-only controls: `count` objectives an earlier coordinator closed, each sorting before the
+        delivered objective, so the presentation list's first rows are all of them. They add no work."""
+        seed = json.loads((objective_root(self.project, "objective") / "context.json").read_text())
+        for index in range(count):
+            raw = deepcopy(seed)
+            raw["admissions"] = {}
+            checkpoint = raw["checkpoint"]
+            checkpoint.update(objective=f"aaa-{index:03d}", objective_source=None,
+                              native_refs=[{"runId": "finished-run", "runtime": "runtime"}],
+                              closure={"seq": checkpoint["seq"], "revision": checkpoint["revision"], "report": {}})
+            root = objective_root(self.project, checkpoint["objective"])
+            root.mkdir()
+            (root / "context.json").write_text(json.dumps(raw))
 
     def published_twice(self, *, reconcile_head=True):
         """A live coordinator's delivery (C11): the earlier head C0 and then the merged head C1 published through
@@ -422,6 +480,36 @@ class DeliveryClosesTests(unittest.TestCase):
                 path.write_bytes(recorded)
         self.assertEqual(case.close_live()["closure_preserved"][0]["record"], earlier)
 
+    def test_a_live_claim_only_successor_closes_on_its_chains_source(self):
+        """F1 at the closing write (C11): a successor with no issue binding of its own is delivered by the issue its
+        claimed predecessor binds, read at that write; that source still unticked and open still holds it."""
+        from pod.internal import acknowledge
+        case = _live_case(self)
+        case.shipped(unknown_start=False, ticked=False)
+        rows = case.claimed_direct()
+        path = _record_path(case.project, "successor")
+        carried = next(row for row in _read_journal(path)["actions"] if row.get("carried_from"))
+        self.assertEqual((carried["action"]["kind"], carried["outcome"], bool(carried["derived_from"])),
+                         ("workflow_dispatch", "pending", True))
+        # Pull request 7 merged at a later head that carries the commit the carried validation ran on.
+        case.remote.pulls[7] = {**MERGED, "head": "f" * 40, "commits": [carried["commit"], "f" * 40]}
+        request = {"project": str(case.project), "objective": "successor", "owner": "next",
+                   "value": case.core(obligations=rows, close=True)}
+        journal, before = path.read_bytes(), case.everything()
+        error = case.refused(lambda: run("checkpoint", request), code="obligation_unaccounted")
+        proof = error.detail["closure_preservation"]["proof"]
+        self.assertEqual((proof["status"], [row["code"] for row in proof["conditions"]]),
+                         ("not_proved", ["source_unproved"]))
+        self.assertIn(f"Source issue {LOCATOR} of objective", proof["conditions"][0]["message"])
+        self.assertEqual(case.everything(), before)
+        case.remote.issues[("acme/example", 82)]["body"] = TICKED
+        closed = acknowledge("checkpoint", request, run("checkpoint", request))
+        self.assertEqual([(row["record"], row["reason"], row["pr"]) for row in closed["closure_preserved"]],
+                         [(carried["record_id"], "superseded_by_merged_head", 7)])
+        self.assertTrue(closed["finalization"]["finished"])
+        self.assertEqual(path.read_bytes(), journal)  # Nothing is stamped.
+        self.assertEqual(_questions(closed), [])
+
 
 def _live_case(test):
     case = ClosureCase(); case.setUp()
@@ -598,6 +686,19 @@ class UndeliveredTests(ClosureCase):
         self.worker_list_failure = True
         self.stays_open("workers_unverified", status="unverified")
 
+    def test_a_run_reply_that_omits_its_coordinator_reads_unverified(self):
+        """F2: only an explicit null proves a Run unbound; a reply that leaves the field out proves nothing."""
+        self.shipped()
+        self.holder_omitted.add("run")
+        verdict = self.stays_open("workers_unverified", status="unverified")
+        self.assertEqual([row["code"] for row in verdict["conditions"]], ["workers_unverified"])
+        self.assertEqual(prove(self.project, "objective")["facts"]["runs"][0]["holder_known"], False)
+        # Positive control: Orca names no coordinator explicitly, so nobody holds the Run.
+        self.holder_omitted.clear()
+        self.run_holders["run"] = None
+        self.assertEqual(self.swept(self.sweep()[1])["outcome"], "closed")
+        self.assertEqual([(row["run"], row["holder"]) for row in self.closure()["runs"]], [("run", None)])
+
     def test_a_start_request_orca_still_holds_pending_stays_open(self):
         self.shipped()
         self.port.state = "pending"
@@ -668,9 +769,10 @@ class ChainTests(ClosureCase):
         self.terminals["next"] = "stale"
         frozen, own = self.files(), self.files("successor")
         code, result = self.sweep()
+        # The predecessor's entry was written by this sweep, with its tail: it reads closed now, never replayed.
         self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
-                         ("closed", "already_closed"))
-        self.assertEqual(self.swept(result, "successor")["party"], None)
+                         ("closed", "closed"))
+        self.assertEqual((self.swept(result, "successor")["party"], result["counts"]["closed"]), (None, 2))
         # The continued predecessor keeps reading continued, with its own entry beside its frozen record.
         shown = self.status()
         self.assertEqual((shown["readiness"]["state"], shown["evidence_closure"]["relation"],
@@ -709,6 +811,147 @@ class ChainTests(ClosureCase):
             self.assertEqual((stored["relation"], [row["pr"] for row in stored["delivery"]]), ("tail", [7, 8]))
         self.assertEqual({row["objective"]: row["relation"] for row in self.closure()["chain"]},
                          {"objective": "objective", "recovery": "recovery"})
+
+    def test_a_claim_only_successor_without_its_own_issue_closes_on_its_chains_source(self):
+        """F1: the claimed chain's issue proves a successor bound to none, and stays its proof: unticked and open, it
+        holds both; a standalone direct objective keeps its recorded-criteria rule (SweepTests' lead task)."""
+        self.shipped(unknown_start=False, ticked=False)
+        self.claimed_direct()
+        self.terminals["next"] = "stale"
+        before = self.everything()
+        verdict = self.swept(self.sweep()[1], "successor")
+        self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
+                         ("not_proved", ["source_unproved"]), verdict)
+        self.assertIn(f"Source issue {LOCATOR} of objective has 0 of 1 PoD line(s) ticked and is open",
+                      verdict["conditions"][0]["message"])
+        self.assertEqual(self.everything(), before)
+        self.remote.issues[("acme/example", 82)]["body"] = TICKED
+        result = self.sweep()[1]
+        self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
+                         ("closed", "closed"))
+        tail = self.closure("successor")
+        self.assertEqual((tail["source"]["proof"], tail["source"]["bound_by"], tail["source"]["locator"],
+                          [row["bound_by"] for row in tail["sources"]], [row["pr"] for row in tail["delivery"]]),
+                         ("pod_ticks", "objective", LOCATOR, ["objective"], [7]))
+        self.assertEqual((self.closure()["relation"], self.closure()["sources"]), ("predecessor", tail["sources"]))
+        self.assert_closed_by_evidence("successor")
+
+    def test_a_chain_within_eight_predecessors_needs_every_pull_request_and_gives_each_its_entry(self):
+        """F3 control: at the bound the whole chain is read; its oldest pull request still decides."""
+        self.shipped(unknown_start=False)
+        self.remote.pulls[7] = {"state": "OPEN"}
+        tail = self.claimed_chain(8)
+        before = self.everything()
+        verdict = self.swept(self.sweep()[1], tail)
+        self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
+                         ("not_proved", ["pr_not_merged"]), verdict)
+        self.assertEqual(self.everything(), before)
+        self.remote.pulls[7] = dict(MERGED)
+        result = self.sweep()[1]
+        names = ["objective"] + [f"chain-{index}" for index in range(1, 8)]
+        self.assertEqual({row["objective"]: row["outcome"] for row in result["repositories"][0]["objectives"]},
+                         {tail: "closed", **{name: "closed" for name in names}})
+        self.assertEqual([row["objective"] for row in self.closure(tail)["chain"]][1:], names[::-1])
+        for name in names:
+            self.assertEqual(self.closure(name)["tail"]["objective"], tail, name)
+
+    def test_a_chain_past_eight_predecessors_or_with_a_broken_link_is_never_closed(self):
+        """F3: a chain the walk cannot read whole refuses, never certifying the part it read."""
+        self.shipped(unknown_start=False)
+        self.remote.pulls[7] = {"state": "OPEN"}  # Only the predecessor past the bound records it,
+        tail = self.claimed_chain(9, tail_pr=8)
+        self.remote.pulls[8] = dict(MERGED)  # while the part of the chain within the bound reads delivered.
+        before = self.everything()
+        verdict = self.swept(self.sweep()[1], tail)
+        self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
+                         ("not_proved", ["scope_too_large"]), verdict)
+        self.assertEqual(close_by_evidence(self.project, tail, caller="sweep")["status"], "not_proved")
+        self.assertEqual(self.everything(), before)
+        # A link the other side does not confirm, and a loop, read unverified: nothing is written.
+        cut = self.rewrite("chain-8", continued_by=lambda raw: raw["continued_by"].update(objective="elsewhere"))
+        self.assertIn("does not name chain-9 as its successor", " ".join(
+            row["message"] for row in prove(self.project, tail)["conditions"] if row["code"] == "chain_inconsistent"))
+        self.rewrite("chain-8", continued_by=lambda raw: raw["continued_by"].update(objective=tail))
+        self.rewrite("chain-7", continues=lambda raw: raw["continues"].update(objective=tail))
+        looped = prove(self.project, tail)
+        self.assertEqual((looped["status"], [row["code"] for row in looped["conditions"]]),
+                         ("unverified", ["chain_inconsistent"]))
+        self.assertIn("loops back to chain-9", looped["conditions"][0]["message"])
+        self.assertEqual(close_by_evidence(self.project, tail, caller="sweep")["status"], "unverified")
+        self.assertIsNone(self.closure(tail))
+        self.assertEqual(cut["continued_by"]["objective"], "elsewhere")
+
+    def test_a_chain_member_on_an_unknown_schema_is_never_closed_and_an_older_one_keeps_its_class(self):
+        """F6: every member is classified before the tail's proof uses it or an entry is written for it."""
+        self.shipped(unknown_start=False)
+        self.successor_bound()
+        self.terminals["next"] = "stale"
+        family, number = STATE_SCHEMAS["context"].rsplit("/v", 1)
+        self.rewrite(schema=f"{family}/v{int(number) + 1}")
+        before = self.everything()
+        verdict = self.swept(self.sweep()[1], "successor")
+        self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
+                         ("unverified", ["schema_unknown"]), verdict)
+        self.assertEqual(self.everything(), before)
+        self.assertEqual((self.listed()["objective"]["schema"], self.listed()["objective"]["closure_basis"]),
+                         ("unsupported", None))
+        # A supported older predecessor closes with its tail, and its entry names the class it was read as.
+        self.rewrite(schema=_older(STATE_SCHEMAS["context"]))
+        frozen = self.files()
+        result = self.sweep()[1]
+        self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
+                         ("closed", "closed"))
+        self.assertEqual((self.closure()["record"]["class"], self.closure("successor")["record"]["class"]),
+                         ("older", "current"))
+        self.assertEqual(self.files(), frozen)
+
+    def interrupted(self):
+        """A tail closure interrupted after the tail's own entry was published and before its predecessor's."""
+        from pod import evidence_closure
+        self.shipped(unknown_start=False)
+        self.successor_bound()
+        self.terminals["next"] = "stale"
+        create = evidence_closure._create
+
+        def stop(root, content):
+            if content["relation"] == "predecessor":
+                raise OSError("interrupted before the predecessor entry")
+            return create(root, content)
+        with patch("pod.evidence_closure._create", side_effect=stop):
+            with self.assertRaises(OSError):
+                close_by_evidence(self.project, "successor", caller="sweep")
+        self.assertIsNotNone(self.closure("successor"))
+        self.assertIsNone(self.closure())
+        return self.everything()
+
+    def test_a_retry_after_an_interrupted_chain_closure_names_the_entries_it_writes(self):
+        """F7: the retry writes only the missing predecessor entry and says so; a complete replay writes nothing."""
+        before = self.interrupted()
+        result = close_by_evidence(self.project, "successor", caller="sweep")
+        self.assertEqual((result["status"], result["predecessors"]), ("chain_completed", ["objective"]))
+        after = self.everything()
+        self.assertEqual([name.rsplit("/", 1)[1] for name in set(after) - set(before)], [FILE])
+        self.assertEqual({name: data for name, data in after.items() if name in before}, before)
+        self.assertEqual(self.closure()["tail"]["objective"], "successor")
+        again = close_by_evidence(self.project, "successor", caller="sweep")
+        self.assertEqual((again["status"], "predecessors" in again), ("replayed", False))
+        self.assertEqual(self.everything(), after)
+
+    def test_a_sweep_after_an_interrupted_chain_closure_reports_the_entry_it_wrote_as_closed(self):
+        """F7 through the sweep: the tail it found closed is already_closed, the predecessor it closed now closed."""
+        before = self.interrupted()
+        code, result = self.sweep()
+        self.assertEqual((code, self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
+                         (0, "already_closed", "closed"))
+        rows = result["repositories"][0]["objectives"]
+        self.assertEqual(result["counts"], {name: sum(row["outcome"] == name for row in rows)
+                                            for name in result["counts"]})
+        written = set(self.everything()) - set(before)
+        self.assertEqual(len(written), 1)
+        settled = self.everything()
+        again = self.sweep()[1]
+        self.assertEqual({row["outcome"] for row in again["repositories"][0]["objectives"]}, {"already_closed"})
+        self.assertEqual(self.everything(), settled)
 
 
 class SweepTests(ClosureCase):
@@ -880,6 +1123,79 @@ class SweepTests(ClosureCase):
         self.assertEqual((len(self.port.starts), self.mutations), (starts, []))
         self.assertFalse([call for call in self.remote.calls[sent:] if call[0] in MUTATIONS])
         self.assertEqual(self.files(), closed)
+
+    def test_the_sweep_reads_every_record_past_the_list_bound_and_names_what_it_cannot_read(self):
+        """F4: the sweep's own bounded scan, never the list's 128 rows; named objectives resolve directly; a
+        repository it cannot read whole is `incomplete` with its reason, and nothing claims it all closed."""
+        self.shipped()
+        self.finished(128)
+        self.assertNotIn("objective", self.listed())  # The presentation list stops at its first 128 rows.
+        code, first = self.sweep()
+        repository = first["repositories"][0]
+        self.assertEqual((code, repository["status"], repository["reason"], self.swept(first)["outcome"]),
+                         (0, "swept", None, "closed"))
+        self.assertEqual(first["counts"], {"closed": 1, "already_closed": 0, "not_proved": 0, "unverified": 0,
+                                           "skipped": 128})
+        self.assertEqual(first["next_safe_action"],
+                         "every provably delivered objective is closed; nothing else needs the sweep")
+        settled = self.everything()
+        # Named objectives are resolved from their own records, never filtered from a list; a repeat writes nothing.
+        named = self.sweep("--objective", "objective", "--objective", "missing")[1]
+        self.assertEqual([(row["objective"], row["outcome"], [item["code"] for item in row["conditions"]])
+                          for row in named["repositories"][0]["objectives"]],
+                         [("objective", "already_closed", []), ("missing", "skipped", ["objective_unknown"])])
+        self.assertEqual(self.everything(), settled)
+        # Records the scan cannot read: one unreadable, one directory of Pod files no record names, and every
+        # directory past a scan bound lowered for the test.
+        (objective_root(self.project, "aaa-000") / "context.json").write_text("{broken")
+        stray = objective_root(self.project, "objective").parent / ("0" * 64)
+        stray.mkdir()
+        (stray / "governor.json").write_text("{}")
+        with patch("pod.listing.MAX_SCAN", 0):
+            code, blind = self.sweep()
+            named = self.sweep("--objective", "objective")[1]
+        repository = blind["repositories"][0]
+        self.assertEqual((code, blind["status"], repository["status"], repository["objectives"]),
+                         (0, "swept", "incomplete", []))
+        self.assertIn("130 record directory(ies) lie beyond the sweep's 0-directory scan bound", repository["reason"])
+        self.assertNotIn("every provably delivered objective is closed", blind["next_safe_action"])
+        self.assertIn("could not all be read", blind["next_safe_action"])
+        self.assertEqual((named["repositories"][0]["status"], self.swept(named)["outcome"]), ("swept", "already_closed"))
+        code, partial = self.sweep()
+        repository = partial["repositories"][0]
+        self.assertEqual(repository["status"], "incomplete")
+        self.assertIn("1 record(s) cannot be read (" + objective_root(self.project, "aaa-000").name[:16],
+                      repository["reason"])
+        self.assertIn("1 director(ies) hold Pod files without a record naming them (" + "0" * 16, repository["reason"])
+        rows = repository["objectives"]
+        self.assertEqual((len(rows), partial["counts"]), (128, {"closed": 0, "already_closed": 1, "not_proved": 0,
+                                                                 "unverified": 0, "skipped": 127}))
+        self.assertTrue(all(row["outcome"] in ("closed", "already_closed", "not_proved", "unverified", "skipped")
+                            for row in rows))
+
+    def test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan(self):
+        """F5: cleanup-plan reads an older evidence-closed record through the evidence path, keeping every guard;
+        an older open record keeps its refusal."""
+        from pod import cleanup
+        self.shipped()
+        self.rewrite(schema=_older(STATE_SCHEMAS["context"]))
+        project, local = str(self.project), cleanup._git
+        remote = patch("pod.cleanup._git", side_effect=lambda where, argv: None if argv[:1] == ["ls-remote"]
+                       else local(where, argv))
+        remote.start(); self.addCleanup(remote.stop)
+        self.refused(lambda: run("cleanup-plan", {"project": project, "objective": "objective"}),
+                     code="state_unsupported")
+        self.assertEqual(self.swept(self.sweep()[1])["outcome"], "closed")
+        before = self.everything()
+        plan = run("cleanup-plan", {"project": project, "objective": "objective"})
+        self.assertEqual((plan["closure_basis"], plan["record_class"]), ("evidence", "older"))
+        self.assertTrue(plan["resources"])
+        self.assertEqual({row["class"] for row in plan["resources"]}, {"protected"})
+        self.assertTrue(all(row["delete_argv"] is None for row in plan["resources"]))
+        self.assertIn("Older record closed by evidence, read through its documented fields only", plan["notes"][-1])
+        worktree = next(row for row in plan["resources"] if row["kind"] == "worktree")
+        self.assertEqual(worktree["identity"]["path"], self.where())
+        self.assertEqual(self.everything(), before)
 
     def test_the_sweep_needs_no_terminal_or_run_binding_and_mutates_nothing(self):
         self.shipped()
