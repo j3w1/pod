@@ -78,6 +78,19 @@ def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | N
     return None
 
 
+def _reused_by_later_admission(state: dict, admission: dict, handle: str | None, dispatch: str | None) -> bool:
+    """Whether a bound reuse admission of this objective moved this admission's terminal to another Dispatch."""
+    if not handle or not dispatch:
+        return False
+    for other in (state.get("admissions") or {}).values():
+        if other is admission or other.get("reuse_of") != admission.get("admission_id"):
+            continue
+        bound = other.get("native_binding") or {}
+        if bound.get("terminalHandle") == handle and bound.get("dispatchId") not in (None, dispatch):
+            return True
+    return False
+
+
 def project(state: dict, admission: dict, facts: dict, *, settled: bool,
             failure: str | None = None, packet_body: dict | None = None,
             acknowledgement: bool = False, runtime_changed: bool = False) -> dict:
@@ -116,6 +129,12 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         return finish("disconnected")
     owner = resource.get("ownerDispatchId") or release.get("ownerDispatchId")
     if owner is not None and owner != dispatch:
+        return finish("reused_later")
+    if (owner is None and not failure and handle and facts.get("worker_terminal") == handle
+            and _reused_by_later_admission(state, admission, handle, dispatch)):
+        # Pod's own bound reuse admission moved this terminal to a later Dispatch, Orca no longer names the
+        # resource's owner, and the worker still names the admitted terminal (identity first, as for A475): the
+        # tab belongs to that later assignment alone (R125).
         return finish("reused_later")
     observation = facts.get("terminal_observation") or {}
     if (not failure and not terminal and observation.get("status") == "missing"

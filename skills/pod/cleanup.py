@@ -502,7 +502,10 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     target = resolve_commit(project, target_ref) if isinstance(target_ref, str) else None
     target_branches = _target_branches(target_ref)
     delivered = checkpoint.get("delivery") or {}
-    moved = bool(delivered and target != delivered.get("result"))
+    delivered_result = delivered.get("result")
+    # Later merges advance the target; it moved after delivery only when it no longer contains the delivered result.
+    moved = bool(delivered) and (target is None or not isinstance(delivered_result, str)
+                                 or is_ancestor(project, delivered_result, target) is not True)
     default = _git(project, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
     default_branch = default.strip().removeprefix("refs/remotes/origin/") if default else None
     stashes = _git(project, ["stash", "list", "--format=%gd:%H"])
