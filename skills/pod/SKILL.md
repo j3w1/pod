@@ -18,6 +18,8 @@ Keep this conversation, model, effort and settings as coordinator; pool edits ne
 
 Close only with every obligation satisfied or validly withdrawn with reason, a final report, final-candidate gates and independent review required by work/project, and Governor-recorded delivery. Withdrawal is not passing verification. Separate implementation, local checks, independent review, hosted CI, live native proof, project acceptance and merge; name uncertainty, unresolved native references and next safe action.
 
+Closure is part of delivery. Once the source's PoDs are all ticked, delivery is merged and installed where in scope, and the final report is consumed, record closure in the same turn. Never end, be released or have the coordinator tab closed before that write; no owner decision is needed. Lost or stranded delivered objectives route to `pod sweep`.
+
 Worker tabs are done when no releasable finished tab remains except an owner-kept one; every other kept tab is closed under the worker-tab standing close authorization or named with Orca's close failure or its need for an owner decision; the final report names every owner-kept tab, including one Orca has since marked user-owned.
 
 The final report lists each bound PES PoD's tick state against its criteria, ticks without Pod proof, ambiguous ticks and due ticks or unticks left blocked at closure, with their reasons; none of those limitations counts as ticked by Pod.
@@ -57,7 +59,7 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - First admission/supervision: [Orca](references/orca-boundary.md).
 - Starting, claiming, continuing or resuming an objective, admitting a worker, accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
 - Any route choice: [models](references/models.md).
-- Failure/resume/reload: [recovery](references/recovery.md).
+- Failure/resume/reload, a lost coordinator or stranded delivery: [recovery](references/recovery.md).
 - Proof/review/REUSE: [verification](references/verification.md).
 - Delivery/Git/CI/deployment, or yolo mode on or off: [Governor](references/governor.md).
-- Worktree/branch deletion: [cleanup](references/cleanup.md).
+- Before cleanup, a sweep or worktree/branch deletion: [cleanup](references/cleanup.md).

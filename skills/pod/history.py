@@ -518,6 +518,8 @@ def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(
 
 def publish_context(path, record, chunks):
     """Publish chunks without replacement before the atomic context replacement."""
+    from .evidence_closure import refuse_closed
+    refuse_closed(path.parent)  # Backstop: a record closed by evidence is never written again (R145).
     _require_size(record, current_bytes=path.stat().st_size if path.exists() else 0)
     ChunkStore(path.parent).put(chunks)
     atomic_json(path, record, limit=CONTEXT_LIMIT, compact=True)
@@ -587,6 +589,8 @@ def record_compaction(project, objective, *, decision=None):
     path = _path(project, objective)
     if not _record_exists(path):
         _fail("objective_unknown", "No record exists for this exact objective; nothing was created")
+    from .evidence_closure import refuse_closed
+    refuse_closed(path.parent)
     if decision is not None:
         try:
             decision = exact(decision, DECISION_FIELDS | {"repository", "objective", "facts"},

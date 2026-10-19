@@ -307,8 +307,27 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 return result
             context_root = record_root = matches[0][0] if matches else None
             state = matches[0][1] if matches else None
+            from .evidence_closure import status_fields, tail_closed
+            name = ((state or {}).get("checkpoint") or {}).get("objective")
+            if record_root is not None and isinstance(name, str) and tail_closed(record_root):
+                # Closed by evidence: read from its closure record, never written or converted (R145, R146).
+                result.update(run=run, **status_fields(project, name, record_root))
+                return result
             superseded = superseded_for_run(run) if context_root is None else []
         else:
+            from .evidence_closure import older_predecessor_fields, status_fields, tail_closed
+            from .ledger import objective_root
+            closed = objective_root(project, objective)
+            if tail_closed(closed):
+                # Any reader, current or older record: the closure record and documented fields only (C4).
+                result.update(status_fields(project, objective, closed))
+                return result
+            continued = older_predecessor_fields(project, objective, closed)
+            if continued is not None:
+                # An older predecessor whose chain closed by evidence reads continued through the same read-only
+                # path; a current one reads below as before (R146).
+                result.update(continued)
+                return result
             state = read(project, objective)
             result["recorded_questions"] = recorded_questions(state.get("checkpoint") if state else None)
             if state is None or not isinstance(state.get("checkpoint"), dict):
@@ -445,6 +464,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             result["report"] = view["report"]
             if checkpoint.get("closure"):
                 result["blocker"] = result["blocker"] or "objective_closed"
+                if checkpoint["closure"].get("preserved"):
+                    # Results the closure preserved UNKNOWN, as recorded (C11).
+                    result["closure_preserved"] = [dict(row) for row in checkpoint["closure"]["preserved"]]
             elif (checkpoint.get("quiescence") or {}).get("state") == "quiescent":
                 result["blocker"] = result["blocker"] or "quiescent"
                 result["next_safe_action"] = checkpoint["quiescence"]["interim_report"]
@@ -540,12 +562,41 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                           next_action="rerun the same internal succession claim to complete it")
         elif block is not None:
             result["succession"]["state"] = "claimed"
+        if record_root is not None:
+            # A continued predecessor closed with its chain keeps reading continued, with its own entry (C4).
+            from .evidence_closure import block as closure_block
+            entry = closure_block(record_root)
+            if entry is not None:
+                result["evidence_closure"] = entry
     if state is not None and checkpoint is not None and isinstance(objective, str) and record_root is not None:
         # New fields only: every earlier field above keeps its exact value (R114).
         error = result["obligations"].get("error") if isinstance(result.get("obligations"), dict) else None
         result.update(assess(project, objective, state, record_root, view=view, map_error=error,
                              failure=result.get("native_settlement_failure"), owner_reader=handoff is None,
                              worker_tabs=result.get("worker_tabs")))
+        recovery = (result.get("readiness") or {}).get("recovery") or {}
+        if recovery.get("route") == "evidence_closure":
+            # A delivered objective of a lost coordinator closes by evidence; nothing here asks the owner, and an
+            # owner handoff stays optional (R145, R147).
+            from .evidence_closure import SWEEP_ACTION
+            action = SWEEP_ACTION[0].upper() + SWEEP_ACTION[1:]
+            if isinstance(result.get("owner_handoff"), dict):
+                result["owner_handoff"] = {**{key: value for key, value in result["owner_handoff"].items()
+                                              if key != "question"},
+                                           "next_action": action + "; a handoff stays optional and moves authority only."}
+            result.update(next_safe_action=action, next_action=action)
+        elif (result.get("readiness") or {}).get("state") == "coordinator_lost":
+            # Lost and not proved delivered: a task for the project lead, never a question for the owner (R145).
+            # The owner_handoff block keeps its R105 facts unchanged: handoff and successor claim stay optional
+            # recovery routes the lead may take, each with its own recorded decision.
+            evidence = next((row for row in recovery.get("routes") or [] if row.get("route") == "evidence_closure"),
+                            None)
+            code = (evidence or {}).get("condition") or "unverified"
+            action = (f"Coordinator lost; delivery not proved ({code}): a task for the project lead. Resolve the "
+                      "named conditions, then pod sweep closes it by evidence; continuing the work through a successor "
+                      "claim or an owner handoff stays optional, each with its own recorded decision; never run "
+                      "orca orchestration run-use by hand.")
+            result.update(next_safe_action=action, next_action=action)
     if state is not None and record_root is not None:
         from .history import capacity
         try:
@@ -575,6 +626,11 @@ def project_for_state(checkpoint: dict, project: Path) -> Path:
 
 
 def render(result: dict) -> None:
+        if result.get("closure_basis") == "evidence" or (result.get("record_class") == "older"
+                                                         and result.get("evidence_closure")):
+            from .evidence_closure import render as render_closed
+            render_closed(result)
+            return
         if isinstance(result.get("readiness"), dict):
             print(clean(result["readiness"]["summary"]))
         capacity = result.get("record_capacity") or {}

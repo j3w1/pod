@@ -207,6 +207,11 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         from .retirement import ACTION as RETIREMENT
         return fail("objective_retired", "The owner's historical retirement ended this objective's coordination; "
                     "it accepts no coordinator.", definitive=True, action=RETIREMENT.format(objective))
+    from .evidence_closure import present
+    from .ledger import objective_root
+    if present(objective_root(project, objective)):
+        return fail("objective_closed", "The objective was closed by evidence, coordinator gone.", definitive=True,
+                    action="Read it with pod status --objective " + objective + "; it accepts no coordinator.")
     if caller == owner:
         return fail("recorded_owner", "This caller is the recorded owner; use the ordinary authority and runtime-continuity checks.")
     if facts["recorded_runtime"] is None:
@@ -344,6 +349,8 @@ def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: st
     # Any caller, owner or not, is told the objective was continued (R110), or that an incomplete claim names it as
     # successor, whatever writer left that claim (R118).
     refuse_continued(state, claim=claim, reserved=reserved)
+    from .evidence_closure import refuse_objective
+    refuse_objective(project, objective)  # Closed by evidence: no coordinator, owner or not, writes it (R145).
     if reserved:
         refuse_incomplete(project, objective, state, claim=claim)
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)
@@ -375,6 +382,8 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
         # A handoff moves coordination, not work: a successor an incomplete claim reserves may change coordinator
         # so that the new one finishes the claim (R118).
         _require_open(state, reserved=False)
+        from .evidence_closure import refuse_objective
+        refuse_objective(project, objective)
         if state.get("checkpoint") is None or owner != os.environ.get("ORCA_TERMINAL_HANDLE"):
             raise PodError("native_authority_unverified", "Handoff needs this live caller and a recorded objective")
         pending = unfinished(state)

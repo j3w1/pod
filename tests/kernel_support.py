@@ -114,6 +114,46 @@ class GovernorFakePort:
         self.lost = set(lost)
         self.rejected = set(rejected)
         self.delay = delay
+        # Issues by (repository, number) and pull requests by number, as a delivery proof reads them (R145).
+        self.issues = {}
+        self.pulls = {}
+        self.unreadable = set()  # "issue" or "pr": that read answers remote_read_failed.
+
+    def issue(self, *, repository, number):
+        self.calls.append(("issue", repository, number))
+        row = self.issues[(repository, number)]
+        return {"number": number, "title": row.get("title", "PES: Deliver widgets"), "body": row["body"],
+                "state": row.get("state", "OPEN"), "url": f"https://github.com/{repository}/issues/{number}",
+                "updatedAt": "2026-10-01T00:00:00Z"}
+
+    def issue_state(self, *, repository, number):
+        self.calls.append(("issue_state", repository, number))
+        if "issue" in self.unreadable:
+            raise PodError("remote_read_failed", "gh read did not succeed")
+        row = self.issues[(repository, number)]
+        return {"number": number, "url": f"https://github.com/{repository}/issues/{number}",
+                "state": row.get("state", "OPEN"), "state_reason": row.get("state_reason"), "body": row["body"]}
+
+    def pr_view(self, *, repository, number):
+        self.calls.append(("pr_view", repository, number))
+        if "pr" in self.unreadable or number not in self.pulls:
+            raise PodError("remote_read_failed", "gh read did not succeed")
+        return {"number": number, "url": f"https://github.com/{repository}/pull/{number}", "merged_at": None,
+                "merge_commit": None, **self.pulls[number]}
+
+    def issue_body_write(self, *, source, body):
+        """Pod's own PoD tick: the bound issue's body is replaced, as the authenticated GitHub CLI would."""
+        self.calls.append(("issue_body_write", source["repository"], source["number"]))
+        self.issues[(source["repository"], source["number"])]["body"] = body
+        return {"result": "accepted", "status": 200}
+
+    def pr_commits(self, *, repository, number):
+        self.calls.append(("pr_commits", repository, number))
+        row = self.pulls.get(number, {})
+        if "commits" not in row:
+            raise PodError("remote_read_failed", "gh read did not succeed")
+        return {"number": number, "head": row["head"], "commits": list(row["commits"]),
+                "truncated": row.get("truncated", False)}
 
     def branch_head(self, *, remote, branch):
         return self.heads.get(f"{remote}/{branch}")

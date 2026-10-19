@@ -40,7 +40,14 @@ def parser() -> argparse.ArgumentParser:
     scope = status.add_mutually_exclusive_group()
     scope.add_argument("--repository", metavar="PATH", help="with --list: this repository (default: here)")
     scope.add_argument("--worktree", metavar="PATH", help="with --list: objectives that touch this worktree")
+    status.add_argument("--delivered", action="store_true",
+                        help="with --list: prove each open objective's delivery (reads Orca and GitHub)")
     status.add_argument("--json", action="store_true")
+    sweep = sub.add_parser("sweep", help="close every provably delivered open objective by evidence")
+    sweep.add_argument("--repository", metavar="PATH", action="append",
+                       help="a repository to sweep (repeatable; default: here)")
+    sweep.add_argument("--objective", metavar="NAME", action="append", help="only this objective (repeatable)")
+    sweep.add_argument("--json", action="store_true")
     sub.add_parser("update", help="update the installed bundle")
     models = sub.add_parser("models", help="model routes and cached public observations")
     models.add_argument("--json", action="store_true")
@@ -250,7 +257,11 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
         return _doctor(project)
     if args.command == "status" and getattr(args, "list_objectives", False):
         from .listing import objective_list
-        return objective_list(project, repository=args.repository, worktree=args.worktree)
+        return objective_list(project, repository=args.repository, worktree=args.worktree,
+                              delivered=args.delivered)
+    if args.command == "sweep":
+        from .evidence_closure import sweep
+        return sweep(project, repositories=args.repository, objectives=args.objective)
     if args.command == "status":
         return _status(project, args.run, objective=args.objective,
                        current_run_fn=current_run, worker_rows_fn=worker_rows)
@@ -337,7 +348,7 @@ def _exit_code(args: argparse.Namespace, result: dict) -> int:
     if "projection" in result:
         # The route view succeeds as a read; its exit code still reports preference validity.
         return 0 if result["projection"]["preferences"]["status"] == "valid" else 1
-    return 0 if result["status"] in ("valid", "observed", "promoted", "checked", "listed", "absent") else 1
+    return 0 if result["status"] in ("valid", "observed", "promoted", "checked", "listed", "absent", "swept") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -349,6 +360,8 @@ def main(argv: list[str] | None = None) -> int:
         command_parser.error("--list reads every objective; it takes --repository or --worktree, not --objective or --run")
     if args.command == "status" and not args.list_objectives and (args.repository or args.worktree):
         command_parser.error("--repository and --worktree select the scope of --list")
+    if args.command == "status" and args.delivered and not args.list_objectives:
+        command_parser.error("--delivered adds delivery proofs to --list")
     if args.command == "update":
         from .installer import main as installer_main
         return installer_main(["--update"])
@@ -438,6 +451,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "status" and args.list_objectives:
         from .listing import render as render_list
         render_list(result)
+    elif args.command == "sweep":
+        from .evidence_closure import render_sweep
+        render_sweep(result)
     elif args.command == "status":
         render_status(result)
     else:

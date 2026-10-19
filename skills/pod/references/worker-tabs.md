@@ -125,6 +125,8 @@ no identity, progress or outcome.
 
 ## Accept reports and settle tabs
 
+The coordinator's own tab stays until its closure is recorded. Once delivery proof and final-report consumption are complete, record closure in that same turn before ending, being released or having that tab closed. Settle worker tabs through the steps below before the ordinary closing write. If the coordinator is already gone, use the router's recovery guidance for evidence closure.
+
 After each accepted success or failure report, do exactly one: reuse the terminal
 for an immediate supported follow-up, retain it within an active correction cycle
 or on the owner's explicit recorded request, or otherwise run `worker-release`.
@@ -193,12 +195,12 @@ false. The last matching active instruction decides; this changes no map
 revision or frozen packet. Ordinary constraint revocation cannot revoke a keep
 without recording that instruction. A keep binds to this objective, Dispatch
 and terminal until revoked, reused for a later Dispatch or disconnected.
-Ownership changes do not end it. Keep and revocation instructions can still be recorded after closure without changing its map or closure report. Leave owner-kept tabs open even after Orca
+Ownership changes do not end it. Keep and revocation instructions can still be recorded after ordinary coordinator closure without changing its map or closure report; an evidence-closed objective accepts no further Pod write. Leave owner-kept tabs open even after Orca
 marks them user-owned; no close command applies. For an owned tab the release
 command is available when the owner lets it go. Name each kept tab and its
 instruction, and Orca's reason for any unowned tab, in the final report.
 
-Both closing routes wait for every connected Orca-owned unreleased worker tab
+Both coordinator closing routes wait for every connected Orca-owned unreleased worker tab
 except an owner-kept tab; pending, unknown and unreadable facts hold closure too.
 A closing report includes its own tab: record its proof without closing, settle
 the tabs, then close. A tab refusal writes no context, map or report record. Kept

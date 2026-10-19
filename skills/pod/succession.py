@@ -240,6 +240,11 @@ def chain_state(project: Path, state: dict) -> dict:
         if isinstance(current.get("continued_by"), dict):
             return {"state": "unknown", "objective": name, "reason": "successor chain exceeds eight objectives"}
     closed = bool(((current.get("checkpoint") or {}).get("closure")))
+    if not closed and name is not None:
+        # A successor closed by evidence is a closed chain end (R146).
+        from .evidence_closure import present
+        from .ledger import objective_root
+        closed = present(objective_root(project, name))
     return {"state": "successor_closed" if closed else "successor_open", "objective": name}
 
 
@@ -388,6 +393,11 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
     map_state = map_of(prior)
     if map_state is not None and map_state.get("closure"):
         return refused("predecessor_closed", "The predecessor objective is closed; a closed objective needs no successor.")
+    from .evidence_closure import present
+    from .ledger import objective_root
+    if present(objective_root(project, predecessor)):
+        return refused("predecessor_closed", "The predecessor objective was closed by evidence, coordinator gone; a "
+                       "closed objective needs no successor.")
     if prior.get("checkpoint") is None or not prior.get("owner"):
         return refused("predecessor_unclaimable", "The predecessor has no recorded coordinator to end.")
     facts["predecessor_owner"] = prior["owner"]
@@ -638,7 +648,16 @@ def claim_view(project: Path, objective: str, state: dict, *, port, previous: di
 
 def succession(project: Path, objective: str, *, owner: str, predecessor: str,
                decision: object | None = None, port=None) -> dict:
-    """Detect without a decision; claim with an exact one. Locks are taken in path order."""
+    """Detect without a decision; claim with an exact one. Locks are taken in path order.
+
+    Detection of a delivered predecessor names the evidence closure as its next action; that read-only proof runs
+    after the locks are released, as it reads Orca and GitHub (R147)."""
+    result = _succession(project, objective, owner=owner, predecessor=predecessor, decision=decision, port=port)
+    return _delivered_route(project, predecessor, result, port=port) if decision is None else result
+
+
+def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
+                decision: object | None = None, port=None) -> dict:
     from .ledger import _lock, _path, _read, _write, _write_succession, require_authority
     from .operations import OrcaPort
     bounded_text(predecessor, name="predecessor", limit=256)
@@ -670,6 +689,8 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
             raise PodError("successor_unrecorded", "Write the successor objective's first checkpoint before the claim",
                            {"next_action": "checkpoint the successor objective, then rerun internal succession"})
         require_authority(project, objective, owner=owner, state=state, native_port=port, claim=predecessor)
+        from .evidence_closure import refuse_closed
+        refuse_closed(other.parent)  # The predecessor's record accepts no claim once closed by evidence (R145).
         try:
             prior = _read(other)
         except PodError as exc:
@@ -780,6 +801,20 @@ def succession(project: Path, objective: str, *, owner: str, predecessor: str,
         _write(own, state)
         return {"status": "claimed", "replayed": False, "predecessor": predecessor, "successor": objective,
                 "continued_by": prior["continued_by"], CARRIED: list(verdict["facts"][CARRIED])}
+
+
+def _delivered_route(project: Path, predecessor: str, verdict: dict, *, port) -> dict:
+    """A claim stays available with its own decision, but a delivered predecessor needs none: its next action points
+    to the evidence closure instead of asking the owner (R147)."""
+    if verdict["status"] != "claim_available":
+        return verdict
+    from .evidence_closure import SWEEP_ACTION, prove
+    if prove(project, predecessor, port=port, readback=False)["status"] != "proved":
+        return verdict
+    shown = {key: value for key, value in verdict.items() if key != "question"}
+    return {**shown, "delivered": True,
+            "next_action": SWEEP_ACTION[0].upper() + SWEEP_ACTION[1:] + "; a claim stays optional and moves "
+                           "authority only."}
 
 
 def _handed_over(state: dict, original: str, current: str, *, since: str) -> bool:

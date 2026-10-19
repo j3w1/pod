@@ -183,6 +183,8 @@ def _read_journal(path: Path) -> dict:
 
 
 def _write_journal(path: Path, journal: dict) -> None:
+    from .evidence_closure import refuse_closed
+    refuse_closed(path.parent)  # Backstop: a journal closed by evidence is never written again (R145).
     from .util import protect_decision_record
     protect_decision_record(journal)
     journal["revision"] += 1

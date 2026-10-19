@@ -6260,6 +6260,232 @@
       ],
       "offline_test": null,
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A456",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.DeliveryClosesTests.test_delivered_not_closed_names_the_coordinator_even_with_an_owner_or_user_wait"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A457",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_closing_checkpoint_after_its_merge_needs_no_owner_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A458",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_closed_tab"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A459",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_an_exited_coordinator",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_signaled_coordinator"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A460",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_restart_with_a_stale_handle",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_restart_with_a_gone_handle"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A461",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.PreservedResultsTests.test_pending_rows_are_read_back_and_the_rest_preserved_without_writing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A462",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.UndeliveredTests.test_unticked_pods_and_an_open_issue_stay_open_until_the_issue_closes_completed",
+        "tests.test_evidence_closure.UndeliveredTests.test_a_delivery_pull_request_that_is_not_merged_stays_open",
+        "tests.test_evidence_closure.UndeliveredTests.test_no_recorded_delivery_pull_request_stays_open"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A463",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.UndeliveredTests.test_a_live_coordinator_is_never_closed_by_evidence",
+        "tests.test_evidence_closure.UndeliveredTests.test_a_live_dispatch_stays_open_and_unreadable_workers_read_unverified",
+        "tests.test_evidence_closure.UndeliveredTests.test_a_start_request_orca_still_holds_pending_stays_open"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A464",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_an_older_schema_record",
+        "tests.test_evidence_closure.UndeliveredTests.test_an_unknown_schema_is_never_closed",
+        "tests.test_evidence_closure.SweepTests.test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan",
+        "tests.test_evidence_closure.ChainTests.test_an_older_predecessor_closed_with_its_chain_reads_continued_in_its_status"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A465",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_run_rebound_to_a_closed_recovery",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_run_rebound_to_a_recovery_under_retirement",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_run_held_by_a_live_open_recovery",
+        "tests.test_evidence_closure.UndeliveredTests.test_a_run_reply_that_omits_its_coordinator_reads_unverified",
+        "tests.test_evidence_closure.ChainTests.test_a_live_recovery_on_a_predecessors_run_holds_its_chain_and_a_settled_one_closes_it",
+        "tests.test_evidence_closure.ChainTests.test_an_original_owners_open_recovery_holds_the_predecessors_closure",
+        "tests.test_evidence_closure.ChainTests.test_a_returning_owner_does_not_hold_its_frozen_predecessors_open"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A466",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together",
+        "tests.test_evidence_closure.ChainTests.test_run_sharing_recovery_objectives_contribute_their_pull_requests",
+        "tests.test_evidence_closure.ChainTests.test_a_claim_only_successor_without_its_own_issue_closes_on_its_chains_source",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_a_live_claim_only_successor_closes_on_its_chains_source",
+        "tests.test_evidence_closure.ChainTests.test_a_recovery_of_a_predecessors_run_holds_a_bound_successors_chain_until_it_merges",
+        "tests.test_evidence_closure.ChainTests.test_a_recovery_of_a_predecessors_run_holds_a_claim_only_successors_chain_until_it_merges",
+        "tests.test_evidence_closure.ChainTests.test_a_recovery_member_with_malformed_work_facts_holds_the_whole_chain",
+        "tests.test_evidence_closure.ChainTests.test_a_direct_claim_only_successor_closes_on_its_predecessors_verified_delivery",
+        "tests.test_evidence_closure.ChainTests.test_an_all_direct_chain_requires_its_predecessors_criteria_and_delivery",
+        "tests.test_evidence_closure.ChainTests.test_an_all_direct_chain_requires_satisfied_successor_criteria_and_merged_prs",
+        "tests.test_evidence_closure.ChainTests.test_a_returning_owner_does_not_hold_its_frozen_predecessors_open"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A467",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.RetirementProofTests.test_detection_names_a_delivered_objective_outside_the_owner_question",
+        "tests.test_evidence_closure.RetirementProofTests.test_proof_delivery_closes_by_evidence_and_refuses_the_rest_as_lead_tasks",
+        "tests.test_evidence_closure.RetirementProofTests.test_a_user_direct_decision_still_works"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A468",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.SweepTests.test_after_closure_every_write_path_refuses_objective_closed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A469",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.SweepTests.test_two_repositories_close_every_proved_objective_and_a_second_run_writes_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A470",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.SweepTests.test_the_sweep_needs_no_terminal_or_run_binding_and_mutates_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A471",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.DeliveryClosesTests.test_a_superseded_earlier_head_validation_is_preserved_at_closure",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_merged_head_unreadable_commits_and_unproved_delivery_still_hold_the_closure",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_a_settling_readback_and_other_unsettled_kinds_still_hold_the_closure"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A472",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.ChainTests.test_a_chain_past_eight_predecessors_or_with_a_broken_link_is_never_closed",
+        "tests.test_evidence_closure.ChainTests.test_a_chain_within_eight_predecessors_needs_every_pull_request_and_gives_each_its_entry",
+        "tests.test_evidence_closure.ChainTests.test_a_chain_member_on_an_unknown_schema_is_never_closed_and_an_older_one_keeps_its_class"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A473",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.SweepTests.test_the_sweep_reads_every_record_past_the_list_bound_and_names_what_it_cannot_read"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A474",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.ChainTests.test_a_retry_after_an_interrupted_chain_closure_names_the_entries_it_writes",
+        "tests.test_evidence_closure.ChainTests.test_a_sweep_after_an_interrupted_chain_closure_reports_the_entry_it_wrote_as_closed",
+        "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together",
+        "tests.test_evidence_closure.ChainTests.test_a_retry_proves_an_owed_predecessor_entry_fresh_before_it_writes_it",
+        "tests.test_evidence_closure.ChainTests.test_an_original_owners_open_recovery_holds_an_interrupted_closure_retry",
+        "tests.test_evidence_closure.ChainTests.test_a_retry_settles_frozen_predecessors_of_the_same_returning_owner"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

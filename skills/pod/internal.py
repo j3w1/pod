@@ -599,10 +599,10 @@ def _op_succession(request: dict) -> dict:
 
 
 def _op_historical_retirement(request: dict) -> dict:
-    exact(request, {"project", "objectives", "decision"}, {"project", "objectives"}, name="request")
+    exact(request, {"project", "objectives", "decision", "proof"}, {"project", "objectives"}, name="request")
     from .retirement import historical_retirement
     return historical_retirement(Path(request["project"]), request["objectives"],
-                                 decision=request.get("decision"))
+                                 decision=request.get("decision"), proof=request.get("proof"))
 
 
 def _op_record_compaction(request: dict) -> dict:
@@ -698,6 +698,8 @@ _FINALIZATION_REFUSALS = {"objective_closed", "pod_ticks_due", "outcome_evidence
 
 def _finalization_refusal(operation: str, exc: PodError) -> bool:
     """A refusal on the path to finishing names what remains, in recording order (R2)."""
+    if isinstance(exc.detail, dict) and exc.detail.get("basis") == "evidence":
+        return False  # Closed by evidence: nothing remains to record, and the refusal says so (R145).
     detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else None
     return (operation in _FINALIZATION_OPERATIONS
             and (exc.code in _FINALIZATION_REFUSALS or detail == "closure_unfinished"
@@ -783,6 +785,8 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
                 if key in checkpoint["observations"]}
         if "report" in result:
             acknowledgement["report"] = result["report"]
+        if "governance_adoption" in result:
+            acknowledgement["governance_adoption"] = result["governance_adoption"]
         if "standing_authorization" in result:
             acknowledgement["standing_authorization"] = result["standing_authorization"]
     elif operation == "report":
@@ -864,6 +868,12 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
         if "pod_tick_intake" in result:
             acknowledgement["pod_tick_intake"] = result["pod_tick_intake"]
         acknowledgement["finalization"] = _finalization_view(request, acknowledgement["worker_tabs"])
+        if result.get("closure_preserved"):
+            # Superseded derived validations the closure preserved UNKNOWN, named as such (C11).
+            acknowledgement["closure_preserved"] = result["closure_preserved"]
+            if isinstance(acknowledgement["finalization"], dict):
+                acknowledgement["finalization"] = {**acknowledgement["finalization"],
+                                                   "preserved_at_closure": result["closure_preserved"]}
     if "runtime_continuity" in result and operation != "runtime-continuity":
         acknowledgement["runtime_continuity"] = result["runtime_continuity"]
     for key in ("warnings", "invalidations", "source_rejections"):
