@@ -181,6 +181,14 @@ class SingleUnitCompatibilityTests(ks.KernelCase):
                                              assignments=tuple(state["admissions"].values()))
             result = decide(self.project, "objective", owner="owner", action=snapshot["action"], now=ks.NOW,
                             native_projection=logical_projection(self.project, observed, objective="objective"))
+            # The one intended change since 0.15.0 (R93): a merge admitted now also records the exact target commit
+            # currency accepted, here the bound policy base because this objective has no delivery yet.
+            expected = deepcopy(snapshot["journal_after"])
+            before = {row["record_id"] for row in snapshot["journal_before"]["actions"]}
+            base = state["checkpoint"]["governance"]["base"]
+            for row in expected["actions"]:
+                if row["record_id"] not in before and row["action"]["kind"] == "merge" and "target_binding" in row:
+                    row["target_binding"]["commit"] = base
             with self.subTest(stage=stage):
                 self.assertEqual(result, snapshot["decision"])
-                self.assertEqual(_read_journal(journal_path), snapshot["journal_after"])
+                self.assertEqual(_read_journal(journal_path), expected)
