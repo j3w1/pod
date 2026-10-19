@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import subprocess
@@ -12,11 +13,45 @@ from .gitio import OBJECT_ID, is_ancestor, read as git_read, resolve_commit
 from .governor import _read_journal, _record_path
 from .ledger import read
 from .orca import read_command
-from .util import digest, exact
+from .util import bounded_text, digest, exact
 
 MAX_RESOURCES = 96
 MAX_GIT_OUTPUT = 2_000_000
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
+
+
+def worktree_rows(stream):
+    """Read NUL-delimited porcelain incrementally, including paths containing newlines."""
+    pending, current = "", {}
+    while chunk := stream.read(65536):
+        fields = (pending + chunk).split("\0")
+        pending = fields.pop()
+        for field in fields:
+            if field:
+                key, _, value = field.partition(" ")
+                current[key] = value
+            elif current:
+                yield current
+                current = {}
+    if pending or current:
+        raise PodError("git_contract", "Git worktree inventory is incomplete")
+
+
+@contextmanager
+def worktree_inventory(root: Path):
+    """Spool the whole read to disk, independent of repository worktree count and bytes."""
+    try:
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="") as inventory:
+            result = subprocess.run(["git", "--no-optional-locks", "-C", str(root),
+                                     "worktree", "list", "--porcelain", "-z"],
+                                    stdout=inventory, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                    timeout=30, check=False)
+            if result.returncode:
+                raise PodError("repository_identity_unavailable", "Git worktree inventory cannot be read")
+            inventory.seek(0)
+            yield inventory
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        raise PodError("git_unavailable", "Git worktree inventory cannot be read") from exc
 
 
 def _git(project: Path, argv: list[str]) -> str | None:
@@ -26,24 +61,121 @@ def _git(project: Path, argv: list[str]) -> str | None:
     return result.stdout
 
 
-def _worktrees(project: Path) -> list[dict]:
-    output = _git(project, ["worktree", "list", "--porcelain", "-z"])
-    if output is None:
-        raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read")
-    rows, current = [], {}
-    for field in output.split("\0"):
-        if not field:
-            if current:
-                rows.append(current)
-                current = {}
-            continue
-        key, _, value = field.partition(" ")
-        current[key] = value
-    if current:
-        rows.append(current)
-    if len(rows) > MAX_RESOURCES:
-        raise PodError("cleanup_unavailable", "Git worktree inventory exceeds the cleanup bound")
-    return rows
+def _worktrees(project: Path, paths: set[str], branches: set[str]) -> tuple[dict, dict, str | None]:
+    """Keep objective rows and all checkouts of their refs, without a repository-size bound.
+
+    Spool the complete read to disk: the first pass discovers current refs at the bound paths;
+    the second sees every checkout of those refs, even before those paths in Git's output.
+    """
+    try:
+        with worktree_inventory(project) as inventory:
+            by_path, refs, main_path = {}, set(branches), None
+            for row in worktree_rows(inventory):
+                path = row.get("worktree")
+                if main_path is None:
+                    main_path = path
+                if path in paths:
+                    by_path[path] = row
+                    if isinstance(row.get("branch"), str):
+                        refs.add(row["branch"])
+            inventory.seek(0)
+            checkouts: dict[str, list[str]] = {}
+            for row in worktree_rows(inventory):
+                if row.get("branch") in refs and isinstance(row.get("worktree"), str):
+                    checkouts.setdefault(row["branch"], []).append(row["worktree"])
+            return by_path, checkouts, main_path
+    except PodError as exc:
+        raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read") from exc
+
+
+def _selected_worker(state: dict, worker: object) -> tuple[dict | None, str | None]:
+    if worker is None:
+        return None, None
+    selector = exact(worker, {"admission", "dispatch", "reuse_reason"}, set(), name="cleanup_worker")
+    if ("admission" in selector) == ("dispatch" in selector):
+        raise PodError("invalid_cleanup_worker", "Select exactly one admission or Dispatch")
+    key = "admission" if "admission" in selector else "dispatch"
+    identity = bounded_text(selector[key], name="cleanup_worker", limit=256)
+    reason = (bounded_text(selector["reuse_reason"], name="cleanup_reuse_reason", limit=512)
+              if "reuse_reason" in selector else None)
+    matches = [row for row in state["admissions"].values()
+               if (row.get("admission_id") if key == "admission" else
+                   (row.get("native_binding") or {}).get("dispatchId")) == identity]
+    if len(matches) != 1:
+        raise PodError("cleanup_worker_unavailable", "Selector does not name one exact objective admission")
+    return matches[0], reason
+
+
+def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None) -> tuple[dict, list[str]]:
+    """Fresh exact Dispatch release evidence; a missing terminal alone proves no release."""
+    binding = admission.get("native_binding") or {}
+    report = admission.get("report")
+    facts = {"admission": admission["admission_id"], "dispatch": binding.get("dispatchId"),
+             "report": report.get("observation_digest") if isinstance(report, dict) else None,
+             "reuse_reason": reuse_reason}
+    reasons = []
+    if not isinstance(report, dict) or report.get("attempt") != binding.get("dispatchId"):
+        reasons.append("worker report has not been recorded for this Dispatch")
+    if reuse_reason is not None:
+        reasons.append("reused next round: " + reuse_reason)
+    for other in state["admissions"].values():
+        if other.get("reuse_of") == admission["admission_id"]:
+            reasons.append("reused next round by admission " + other["admission_id"])
+    try:
+        from .operations import _assignment_evidence
+        shown = port.show_worker(binding.get("dispatchId"))
+        evidence = _assignment_evidence(shown, admission)
+        placement = evidence["placement"]
+        facts.update(settled=evidence["settled"],
+                     release=placement.get("native_release"),
+                     ownership=placement.get("terminal_ownership"),
+                     terminal=placement.get("terminal_readback"),
+                     liveness=placement.get("native_liveness"))
+        ownership = placement.get("terminal_ownership") or {}
+        release = placement.get("native_release") or {}
+        terminal = placement.get("terminal_readback") or {}
+        native = shown["result"]
+        resource = native.get("terminalResource")
+        facts["worker_terminal"] = native["worker"].get("agentTerminalHandle")
+        if (not isinstance(binding.get("terminalHandle"), str)
+                or native["worker"].get("agentTerminalHandle") != binding["terminalHandle"]):
+            reasons.append("worker terminal identity is unavailable or differs from its recorded binding")
+        observed_terminal = native.get("terminal")
+        if observed_terminal is not None and (not isinstance(observed_terminal, dict)
+                or observed_terminal.get("handle") != binding.get("terminalHandle")
+                or observed_terminal.get("worktreeId") != binding.get("worktreeId")
+                or observed_terminal.get("connected") is not False):
+            reasons.append("worker terminal readback is connected, incomplete or belongs to another binding")
+        owner = ownership.get("ownerDispatchId") or release.get("ownerDispatchId")
+        retained = placement.get("retained_reason")
+        if retained:
+            facts["retained_reason"] = retained
+            reasons.append("native retention: " + str(retained))
+        if not evidence["settled"]:
+            reasons.append("worker Dispatch is active or unsettled")
+        if placement.get("native_role") in ("coordinator", "setup"):
+            reasons.append("native resource belongs to a coordinator or setup worker")
+        if (resource is not None and (not isinstance(resource, dict)
+                or resource.get("ownerDispatchId") != binding.get("dispatchId")
+                or resource.get("worktreeId") != binding.get("worktreeId")
+                or resource.get("terminalHandle") != binding.get("terminalHandle"))
+                or owner not in (None, binding.get("dispatchId"))):
+            reasons.append("worker resource is reused or belongs to another native binding")
+        # Older supported worker-show replies omit terminalResource after release. Their exact-bound
+        # projection.resource must positively say released twice, with exited liveness and the exact
+        # worker terminal; an absent resource, ownership field or terminal never supplies that proof.
+        released = (resource.get("ownershipState") == resource.get("releaseState") == "released"
+                    if isinstance(resource, dict) else resource is None
+                    and release.get("state") == release.get("releaseState") == "released")
+        if (not released or release.get("state") not in (None, "released")
+                or release.get("releaseState") not in (None, "released")):
+            reasons.append("worker resource is not natively released")
+        if ((placement.get("native_liveness") or {}).get("verdict") != "exited"
+                or terminal.get("connected") is True):
+            reasons.append("worker process is live or its exit is unverified")
+    except (PodError, AttributeError, KeyError, TypeError):
+        reasons.append("worker native settlement or release is unavailable")
+    return facts, reasons
 
 
 def _disposable(path: str) -> bool:
@@ -235,7 +367,7 @@ def _successor_paths(project: Path, state: dict) -> tuple[str | None, set[str] |
     return state["continued_by"]["objective"], None
 
 
-def plan(project: Path, objective: str, *, expect: object = None, archives: object = None,
+def plan(project: Path, objective: str, *, expect: object = None, archives: object = None, worker: object = None,
          orca_reader=read_command, native_port=None) -> dict:
     """Observe only resources named by this objective; return guarded argv, never execute it.
 
@@ -249,6 +381,10 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     if state is None or not isinstance(state.get("checkpoint"), dict):
         raise PodError("cleanup_unavailable", "Objective checkpoint is unavailable")
     checkpoint = state["checkpoint"]
+    selected, reuse_reason = _selected_worker(state, worker)
+    port = native_port or OrcaPort(project)
+    worker_facts, worker_holds = (_worker_facts(selected, state, port, reuse_reason)
+                                  if selected else (None, []))
     try:
         journal = _read_journal(_record_path(project, objective))
     except PodError:
@@ -264,26 +400,38 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         if not all(isinstance(row[key], str) and len(row[key]) <= 4096 for key in row):
             raise PodError("invalid_cleanup_archives", "Archive path, ref and tip are bounded text")
         archive_by_ref[(row["ref"], row["tip"])] = _archive_verified(project, row)
-    worktrees = _worktrees(project)
-    by_path = {row.get("worktree"): row for row in worktrees if isinstance(row.get("worktree"), str)}
-    checkouts: dict[str, list[str]] = {}
-    for row in worktrees:
-        if isinstance(row.get("branch"), str) and isinstance(row.get("worktree"), str):
-            checkouts.setdefault(row["branch"], []).append(row["worktree"])
-    main_path = next((row.get("worktree") for row in worktrees if row.get("worktree")), None)
     paths = set()
     expected_branches: dict[str, set[str]] = {}
     bound = checkpoint.get("worktree")
-    if isinstance(bound, dict) and isinstance(bound.get("path"), str):
+    if selected is None and isinstance(bound, dict) and isinstance(bound.get("path"), str):
         paths.add(bound["path"])
         if isinstance(bound.get("branch"), str):
             expected_branches.setdefault(bound["path"], set()).add(bound["branch"])
     for admission in state["admissions"].values():
+        if selected is not None and admission is not selected:
+            continue
         placement = (admission.get("recovery") or {}).get("placement_binding")
         if isinstance(placement, dict) and isinstance(placement.get("path"), str):
             paths.add(placement["path"])
             if isinstance(placement.get("branch"), str):
                 expected_branches.setdefault(placement["path"], set()).add(placement["branch"])
+    if selected is not None:
+        if len(paths) != 1:
+            raise PodError("cleanup_worker_unavailable", "Worker has no exact recorded placement binding")
+        if isinstance(bound, dict) and bound.get("path") in paths:
+            worker_holds.append("selected worker uses the objective integration worktree")
+        for admission in state["admissions"].values():
+            if admission is selected:
+                continue
+            placement = (admission.get("recovery") or {}).get("placement_binding") or {}
+            if placement.get("path") in paths:
+                worker_holds.append("worktree is also bound to admission " + admission["admission_id"])
+    if len(paths) > MAX_RESOURCES:
+        raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
+    selected_branches = {"refs/heads/" + branch for branches in expected_branches.values() for branch in branches}
+    journal_branches = {"refs/heads/" + branch["branch"] for unit in journal["units"].values()
+                        if isinstance(branch := unit.get("branch"), dict) and isinstance(branch.get("branch"), str)}
+    by_path, checkouts, main_path = _worktrees(project, paths, selected_branches | journal_branches)
     governance = checkpoint.get("governance") or {}
     target_ref = governance.get("base_ref")
     target = resolve_commit(project, target_ref) if isinstance(target_ref, str) else None
@@ -301,7 +449,6 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     if delivered.get("candidate"):
         merged.add(delivered["candidate"])
     resources, covered_branches = [], set()
-    port = native_port or OrcaPort(project)
     successor, successor_paths = _successor_paths(project, state)
     for path_text in sorted(paths):
         path = Path(path_text)
@@ -340,6 +487,8 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                     reasons.append("repository stash is present")
             elif is_ancestor(project, tip, target) is not True and tip not in merged:
                 classification, reasons = "unique", ["branch has commits outside the observed target"]
+        if worker_holds:
+            classification, reasons = "protected", reasons + worker_holds
         ref = branch_ref if isinstance(branch_ref, str) else None
         archive_verified = bool(ref and tip and archive_by_ref.get((ref, tip)))
         archive_argv = (["git", "bundle", "create", "<dir>/" + (branch or "worktree").replace("/", "_") +
@@ -348,7 +497,8 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                      or classification == "unique" and archive_verified and not dirty and not stash_present)
         resources.append(_resource("worktree", path_text,
                                    {"path": path_text, "branch": branch_ref, "tip": tip,
-                                    "terminals": terminals, "shared_with": shared}, classification, reasons,
+                                    "terminals": terminals, "shared_with": shared,
+                                    **({"worker": worker_facts} if selected is not None else {})}, classification, reasons,
                                    delete_argv=["orca", "worktree", "rm", "--worktree", "path:" + path_text,
                                                 "--json"] if deletable else None,
                                    archive_argv=archive_argv, archive_verified=archive_verified))
@@ -358,7 +508,9 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     for unit in journal["units"].values():
         branch = unit.get("branch")
         if isinstance(branch, dict) and isinstance(branch.get("branch"), str):
-            local_branches.add("refs/heads/" + branch["branch"])
+            ref = "refs/heads/" + branch["branch"]
+            if selected is None or ref in selected_branches:
+                local_branches.add(ref)
     for ref in sorted(local_branches):
         branch = ref.removeprefix("refs/heads/")
         tip = resolve_commit(project, ref)
@@ -379,6 +531,9 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
             classification, reasons = "unique", ["branch has unique work or a repository stash"]
         elif is_ancestor(project, tip, target) is not True and tip not in merged:
             classification, reasons = "unique", ["branch has commits outside the observed target"]
+        if selected is not None:
+            reasons += sorted({reason for row in associated if row["delete_argv"] is None
+                               for reason in row["reasons"]})
         verified = bool(tip and archive_by_ref.get((ref, tip)))
         removed_with_worktree = bool(associated and any(row["delete_argv"] for row in associated))
         deletable = (classification == "integrated" or classification == "unique" and verified
@@ -405,7 +560,9 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         # name alone proves nothing about who created the remote branch.
         for key in unit.get("published", {}):
             if isinstance(key, str) and key.startswith(remote + "/"):
-                remote_names.add((remote, key[len(remote) + 1:]))
+                branch_name = key[len(remote) + 1:]
+                if selected is None or "refs/heads/" + branch_name in selected_branches:
+                    remote_names.add((remote, branch_name))
     for remote, branch in sorted(remote_names):
         ref = "refs/heads/" + branch
         output = _git(project, ["ls-remote", remote, ref]) if _BRANCH.fullmatch(branch) else None
@@ -421,6 +578,11 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
             classification, reasons = "unique", ["remote tip has unique commits"]
         archive_ref = "refs/remotes/" + remote + "/" + branch
         verified = bool(tip and archive_by_ref.get((archive_ref, tip)))
+        if selected is not None:
+            held = [row for row in resources if row["kind"] == "worktree" and row["delete_argv"] is None]
+            if held:
+                classification = "protected"
+                reasons += sorted({reason for row in held for reason in row["reasons"]})
         resources.append(_resource("remote_branch", remote + "/" + branch,
                                    {"remote": remote, "ref": ref, "tip": tip}, classification, reasons,
                                    delete_argv=(["git", "push", "--force-with-lease=" + ref + ":" + tip,
@@ -452,6 +614,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         notes.append("Older record closed by evidence, read through its documented fields only: its target and "
                      "delivery are not documented, so resources that depend on them stay protected.")
     return {"schema": "pod-cleanup-plan/v1", "objective": objective, "closure_basis": basis,
+            **({"worker": worker_facts} if selected is not None else {}),
             "record_class": "older" if older is not None else "current",
             "standing_authorization": cleanup_projection(state, resources),
             "target": observed_target,

@@ -612,10 +612,10 @@ def _op_record_compaction(request: dict) -> dict:
 
 
 def _op_cleanup_plan(request: dict) -> dict:
-    exact(request, {"project", "objective", "expect", "archives"}, {"project", "objective"}, name="request")
+    exact(request, {"project", "objective", "expect", "archives", "worker"}, {"project", "objective"}, name="request")
     from .cleanup import plan
     return plan(Path(request["project"]), request["objective"],
-                expect=request.get("expect"), archives=request.get("archives"))
+                expect=request.get("expect"), archives=request.get("archives"), worker=request.get("worker"))
 
 
 def _op_map(request: dict) -> dict:

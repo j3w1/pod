@@ -6,6 +6,12 @@ The sweep closes every proved delivered objective whose coordinator is gone, tai
 
 `internal cleanup-plan` is read-only and objective-scoped: it shows integrated, merged remote head, unique/protected resources, dirty data, stashes, other worktrees, refs and terminals. For an older record closed by evidence it reads `record_class: older` and keeps protected every resource that depends on a field older records do not document.
 
+One plan is bounded to 96 objective resources; unrelated repository worktrees do not consume that bound. Shared-branch checks still observe every checkout, however large the inventory.
+
+After recording a worker or reviewer report and explicitly releasing it through Orca, request its cleanup while the objective remains open: include `worker: {"admission": "EXACT_ADMISSION"}` or `worker: {"dispatch": "EXACT_DISPATCH"}` in the cleanup-plan input with `project` and `objective`. The result names only that placement, its local branch and matching Governor-published remote branches. Native readback must prove the exact assignment, terminal identity, settlement, release and process exit; missing or contradictory facts hold cleanup. Another admission's placement and the objective integration worktree also stay protected. This is a lifecycle-triggered request, never a bulk or automatic cleanup pass. On CE Dev, command execution follows the host's Cleanup Analyst authority.
+
+For immediate next-round reuse, add the exact nonempty `reuse_reason` (up to 512 characters) inside `worker`, and save the returned plan as evidence. It records the reason and holds every selected resource. Native retention reasons and known reuse are also reported as holds. No Pod lifecycle record is created by this read. Worker identity, report/release observations and reuse reason participate in `expect`; keep the same selection and reason when rechecking.
+
 Obtain one batched confirmation for the exact deletion classes; an applicable exact-scope instruction counts. Retain unique work, verify an archive bundle before deleting refs, or obtain separate discard consent.
 
 While yolo is active, the cleanup plan's `standing_authorization` fields `covers` and `asks` are the applicable exact-scope instruction. Covered classes need no further owner confirmation; asks still require it. Use the fresh plan for the actual resources, preserving the same guards below.
