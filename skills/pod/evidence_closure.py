@@ -223,23 +223,30 @@ def _documented(raw: dict, *, current: bool) -> dict:
                      "reported": bool(row["state"] == "bound" and isinstance(report, dict)
                                       and report.get("status") == "validated_observation")}
         runs.append(row["run_id"])
-    source = checkpoint.get("objective_source")
-    if source in (None, "direct_objective"):
-        issue = None
-    elif isinstance(source, dict):
-        from .github import parse_issue_locator
-        try:
-            issue = parse_issue_locator(source.get("locator"))
-        except PodError as exc:
-            raise bad("objective source") from exc
-    else:
-        raise bad("objective source")
+    issue = _record_issue(raw)
     worktree = checkpoint.get("worktree")
     return {"owner": owner, "objective": checkpoint.get("objective"), "runs": sorted(set(runs)),
             "admissions": rows, "issue": issue,
             "worktree": worktree.get("path") if isinstance(worktree, dict) and isinstance(worktree.get("path"), str)
             else None,
             "native_refs": [dict(ref) for ref in refs][:MAX_LISTED]}
+
+
+def _record_issue(raw: dict) -> dict | None:
+    """The documented issue binding alone, so a malformed work field cannot hide a recovery's membership."""
+    checkpoint = raw.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        raise PodError("record_unreadable", "The record's documented checkpoint is malformed")
+    source = checkpoint.get("objective_source")
+    if source in (None, "direct_objective"):
+        return None
+    if isinstance(source, dict):
+        from .github import parse_issue_locator
+        try:
+            return parse_issue_locator(source.get("locator"))
+        except PodError as exc:
+            raise PodError("record_unreadable", "The record's documented objective source is malformed") from exc
+    raise PodError("record_unreadable", "The record's documented objective source is malformed")
 
 
 def _read_record(root: Path) -> tuple[dict, bytes]:
@@ -470,6 +477,8 @@ def _checks(project: Path, objective: str, root: Path, raw: dict, kind: str, doc
     proof.facts.update(runs=runs, dispatches_settled=_work(doc, dispatches, proof, port=port))
     state = raw if kind == "current" else None
     members = _members(project, objective, raw, kind, doc, proof, records)
+    if members is None:
+        return  # An unreadable or over-bound membership cannot prove a partial delivery.
     proof.facts["predecessor_runs"] = _predecessor_work(project, members, proof, records, port=port)
     _source(members, doc, state, proof, remote)
     _delivery(project, members, proof, remote)
@@ -564,13 +573,18 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *
             runs[-1]["holder_known"] = False
             add("unverified", "workers_unverified", "Orca's reply for a recorded Run does not say who "
                 "coordinates it, so a holder cannot be ruled out.")
-        elif holder not in (None, owner) and not _gone(terminal_identity(holder)):
+        elif holder is not None and (holder != owner or whose is not None) \
+                and not _gone(terminal_identity(holder)):
             # A live (or unproven) holder: its own records referencing this Run must all be finished.
+            # A claim ended the original owner's authority over this predecessor only. It does not settle any
+            # other objective that terminal records on the Run, even when the holder handle did not change.
+            claimed_owner = holder == owner and whose is not None
             found, unreadable = records()
-            mine = [row for row in found if row["raw"].get("owner") == holder and run in _record_runs(row["raw"])]
-            if not mine or unreadable or not all(_settled_record(project, row) for row in mine):
+            mine = [row for row in found if row["raw"].get("owner") == holder and run in _record_runs(row["raw"])
+                    and not (claimed_owner and row["objective"] == whose)]
+            if (not mine and not claimed_owner) or unreadable or not all(_settled_record(project, row) for row in mine):
                 held.append(run)
-            else:
+            elif mine:
                 runs[-1].update(rebound="rebound_settled",
                                 settled_with=sorted(row["objective"] for row in mine)[:MAX_LISTED])
         try:
@@ -615,8 +629,8 @@ def _work(doc: dict, dispatches: dict | None, proof: _Proof, *, port, whose: str
 def _member_work(project: Path, row: dict, proof: _Proof, records, *, port) -> dict:
     """One continued predecessor's own Runs and native work, read now with the objective's own checks (R110's
     holder rule with R146's rebinding, generation recorded and never blocking, complete worker lists, settled
-    Dispatches, start requests): what its closure entry records. Its claim ended its coordinator's authority, so
-    the recorded owner may still be named as its Runs' holder."""
+    Dispatches, start requests): what its closure entry records. The claim ended its coordinator's authority over
+    this predecessor only; any other open objective that owner holds on the Run still blocks closure."""
     runs, dispatches = _runs(project, row["doc"], row["doc"]["owner"], proof, records, whose=row["objective"])
     return {"objective": row["objective"], "runs": runs,
             "dispatches_settled": _work(row["doc"], dispatches, proof, port=port, whose=row["objective"])}
@@ -761,7 +775,8 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
     """The delivery chain: the objective, its continued predecessors (R146's walk, at most eight) and, for every
     member, this repository's records that share one of that member's recorded Runs and bind that member's source
     issue: a recovery of a predecessor's Run belongs to the delivery as much as one of the objective's own. Every
-    member is classified before it is used; a chain Pod cannot read whole adds the condition that names why."""
+    member is identified by its readable Run and source before its other documented fields are validated. An
+    identifiable but unreadable member stays in the chain and holds proof, never disappearing from it."""
     from .ledger import objective_root
     members = {objective: {"objective": objective, "root": objective_root(project, objective), "raw": raw,
                            "kind": kind, "doc": doc, "relation": "objective"}}
@@ -773,7 +788,7 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
         proof.add(*problem)
     # Each member's own Runs and issue, recovery members included, until no member adds another or the bound is
     # crossed; the bound then refuses below, never a part of the chain.
-    pending, read = list(members.values()), {}
+    pending, read, invalid = list(members.values()), {}, False
     while pending and len(members) <= MAX_MEMBERS:
         base = pending.pop(0)
         issue, shared = base["doc"]["issue"], set(base["doc"]["runs"])
@@ -785,7 +800,8 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
                 continue
             if row["objective"] not in read:
                 try:
-                    read[row["objective"]] = _documented(row["raw"], current=False)
+                    read[row["objective"]] = {"issue": _record_issue(row["raw"]),
+                                              "runs": _record_runs(row["raw"])}
                 except PodError:
                     read[row["objective"]] = None
             other = read[row["objective"]]
@@ -794,13 +810,22 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
             if (other["issue"] is not None and other["issue"]["locator"].casefold() == issue["locator"].casefold()
                     and set(other["runs"]) & shared):
                 peer = _record_class(row["raw"])
+                detail = None
                 if peer == "unknown":
                     proof.add("unverified", "schema_unknown", f"Recovery objective {row['objective']}, which shares "
                               f"a Run and source with {base['objective']}, uses a schema this Pod does not know.")
+                    invalid = True
                 elif peer not in SUPPORTED:
+                    detail = "does not validate under its schema."
+                else:
+                    try:
+                        other = _documented(row["raw"], current=peer == "current")
+                    except PodError:
+                        detail = "has an unreadable documented field."
+                if detail is not None:
                     proof.add("unverified", "record_unreadable", f"Recovery objective {row['objective']}, which "
-                              f"shares a Run and source with {base['objective']}, does not validate under its "
-                              "schema.")
+                              f"shares a Run and source with {base['objective']}, {detail}")
+                    invalid = True
                 members[row["objective"]] = {**row, "kind": peer, "doc": other, "relation": "recovery"}
                 pending.append(members[row["objective"]])
     rows = list(members.values())
@@ -808,6 +833,9 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
                              "phase": _phase(row["root"], row["raw"])} for row in rows][:MAX_MEMBERS]
     if len(rows) > MAX_MEMBERS:
         proof.add("not_proved", "scope_too_large", f"The delivery chain has more than {MAX_MEMBERS} objectives.")
+        return None
+    if invalid:
+        proof.facts["chain_complete"] = False
         return None
     return rows
 

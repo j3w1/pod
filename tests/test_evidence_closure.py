@@ -952,6 +952,117 @@ class ChainTests(ClosureCase):
     def test_a_recovery_of_a_predecessors_run_holds_a_claim_only_successors_chain_until_it_merges(self):
         self.recovery_of_the_predecessors_run(bound=False)
 
+    def test_a_recovery_member_with_malformed_work_facts_holds_the_whole_chain(self):
+        """F11: readable Run and source identify membership before a synthetic damaged admission is validated.
+        Repair restores the open-PR refusal; merge permits proof. Malformed unrelated records stay outside it."""
+        self.shipped(unknown_start=False)
+        self.recovery(live=False, pr=8)
+        self.remote.pulls[8] = {"state": "OPEN"}
+        control = prove(self.project, "objective")
+        self.assertEqual((control["status"], [row["code"] for row in control["conditions"]]),
+                         ("not_proved", ["pr_not_merged"]))
+        damaged = {"broken": {"schema": STATE_SCHEMAS["admission"], "state": "bound", "run_id": "run",
+                              "request_uuid": None, "native_binding": None}}
+        admissions = read(self.project, "recovery")["admissions"]
+        self.rewrite("recovery", admissions=damaged)
+        self.claimed_direct()
+        self.run_holders["run-s"] = "next"
+        self.terminals["next"] = "stale"
+        before = self.everything()
+        proof = prove(self.project, "successor")
+        held = close_by_evidence(self.project, "successor", caller="sweep")
+        for result in (proof, held):
+            self.assertEqual((result["status"], [row["code"] for row in result["conditions"]]),
+                             ("unverified", ["record_unreadable"]), result)
+            self.assertIn("Recovery objective recovery", result["conditions"][0]["message"])
+            self.assertEqual(_questions(result), [])
+        self.assertEqual({row["objective"]: row["relation"] for row in proof["facts"]["chain"]},
+                         {"successor": "objective", "objective": "predecessor", "recovery": "recovery"})
+        self.assertEqual(self.everything(), before)
+        self.assertIsNone(self.closure("successor"))
+        self.assertIsNone(self.closure())
+        # Readable work facts again: the recovery's still-open delivery must still be merged.
+        self.rewrite("recovery", admissions=admissions)
+        before = self.everything()
+        for result in (prove(self.project, "successor"), close_by_evidence(self.project, "successor", caller="sweep")):
+            self.assertEqual((result["status"], [row["code"] for row in result["conditions"]]),
+                             ("not_proved", ["pr_not_merged"]), result)
+        self.assertEqual(self.everything(), before)
+        # Sharing just the issue or just the Run does not identify a recovery member, damaged or otherwise.
+        self.other("another-run", "elsewhere", run_id="unrelated-run", pr=9)
+        self.rewrite("another-run", admissions={"broken": {**damaged["broken"], "run_id": "unrelated-run"}})
+        self.other("another-source", "elsewhere", run_id="run", pr=9, source=False)
+        self.rewrite("another-source", admissions=damaged)
+        self.remote.pulls[9] = {"state": "OPEN"}
+        self.run_holders["run"] = "recovery"
+        self.remote.pulls[8] = dict(MERGED)
+        proof = prove(self.project, "successor")
+        self.assertEqual(proof["status"], "proved", proof)
+        self.assertEqual([row["pr"] for row in proof["facts"]["delivery"]], [7, 8])
+        self.assertEqual({row["objective"] for row in proof["facts"]["chain"]},
+                         {"successor", "objective", "recovery"})
+        before = self.everything()
+        result = close_by_evidence(self.project, "successor", caller="sweep")
+        self.assertEqual((result["status"], result["predecessors"]), ("closed", ["objective"]))
+        self.assertEqual({name: data for name, data in self.everything().items() if name in before}, before)
+        self.assertEqual([row["pr"] for row in self.closure("successor")["delivery"]], [7, 8])
+        self.assertIsNone(self.closure("another-run"))
+        self.assertIsNone(self.closure("another-source"))
+
+    def original_owners_open_recovery(self, *, retry):
+        """F9-R: a claim ends the owner's predecessor authority, not its later open recovery on the same Run."""
+        if retry:
+            self.interrupted()
+        else:
+            self.shipped(unknown_start=False)
+            self.claimed_direct()
+        self.run_holders["run-s"] = "next"
+        self.terminals["next"] = "stale"
+        if not retry:
+            self.terminals["owner"] = "live"
+            # The frozen predecessor alone does not restore the original owner's authority after a claim.
+            control = prove(self.project, "successor")
+            self.assertEqual(control["status"], "proved", control)
+        self.other("same-owner-recovery", "owner", run_id="run")
+        self.run_holders["run"] = "owner"
+        self.generations["run"] = 3
+        self.native_calls.clear()
+        before = self.everything()
+        results = ([] if retry else [prove(self.project, "successor")])
+        results.append(close_by_evidence(self.project, "successor", caller="sweep"))
+        for result in results:
+            self.assertEqual((result["status"], [row["code"] for row in result.get("conditions", [])]),
+                             ("not_proved", ["run_held"]), result)
+            self.assertIn("Predecessor objective objective: ", result["conditions"][0]["message"])
+            self.assertNotIn("predecessors", result)
+            self.assertEqual(_questions(result), [])
+        if retry:
+            self.assertEqual(results[-1]["closure"]["relation"], "tail")
+        self.assertIn(["terminal", "show", "--terminal", "owner", "--json"], self.native_calls)
+        self.assertEqual(self.everything(), before)
+        self.assertIsNone(self.closure())
+        self.assertIsNone(self.closure("same-owner-recovery"))
+        # A settled recovery permits closure; its original owner can remain live and the claimed record frozen.
+        self.rewrite("same-owner-recovery", closure=lambda raw: raw["checkpoint"].update(closure={
+            "seq": raw["checkpoint"]["seq"], "revision": raw["checkpoint"]["revision"], "report": {}}))
+        before = self.everything()
+        result = close_by_evidence(self.project, "successor", caller="sweep")
+        self.assertEqual((result["status"], result["predecessors"]),
+                         ("chain_completed" if retry else "closed", ["objective"]))
+        self.assertEqual((self.closure()["runs"], self.closure()["dispatches_settled"]),
+                         ([{"run": "run", "generation": 3, "holder": "owner", "rebound": "rebound_settled",
+                            "settled_with": ["same-owner-recovery"]}], 1))
+        self.assertEqual({name: data for name, data in self.everything().items() if name in before}, before)
+        after = self.everything()
+        self.assertEqual(close_by_evidence(self.project, "successor", caller="sweep")["status"], "replayed")
+        self.assertEqual(self.everything(), after)
+
+    def test_an_original_owners_open_recovery_holds_the_predecessors_closure(self):
+        self.original_owners_open_recovery(retry=False)
+
+    def test_an_original_owners_open_recovery_holds_an_interrupted_closure_retry(self):
+        self.original_owners_open_recovery(retry=True)
+
     def test_a_live_recovery_on_a_predecessors_run_holds_its_chain_and_a_settled_one_closes_it(self):
         """F9: each record the closure writes an entry for has its own Runs and work proved fresh, and its entry
         records the facts read: a resumed live recovery coordinator of an open objective on the predecessor's Run
