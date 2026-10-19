@@ -837,6 +837,7 @@ class CleanupWorkerTests(KernelCase):
 
     def test_missing_earlier_native_resource_after_reuse_stays_held(self):
         final = self.final_reused_round()
+        self.resource_case = "released"
         selector = {"admission": final["admission_id"]}
         first = self.observed(worker=selector)
         show = self.port.show_worker
@@ -855,6 +856,7 @@ class CleanupWorkerTests(KernelCase):
         with patch.object(self.port, "show_worker", side_effect=unavailable):
             result = self.observed(worker=selector)
             self.assert_held("other admission", result)
+            self.assert_held("earlier worker resource transfer has not been proved", result)
             with self.assertRaises(PodError) as changed:
                 self.observed(worker=selector, expect=first["expect"])
             self.assertEqual(changed.exception.code, "cleanup_changed")
