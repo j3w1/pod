@@ -481,7 +481,7 @@ def terminal_identity(handle: str) -> dict:
         code = (exc.detail or {}).get("native_code")
         return {"handle": handle, "runtime": None, "state": "lost" if code in
                 ("terminal_handle_stale", "terminal_not_found", "terminal_handle_gone") else "unreadable",
-                "code": code or exc.code, "exited": False}
+                "code": code or exc.code, "exited": False, "cause": None}
     row = shown["result"].get("terminal")
     live = (isinstance(row, dict) and row.get("handle") == handle
             and row.get("connected") is True and row.get("writable") is True
@@ -493,4 +493,5 @@ def terminal_identity(handle: str) -> dict:
               and row.get("connected") is False and row.get("writable") is False
               and isinstance(cause, dict) and cause.get("kind") in EXIT_KINDS)
     return {"handle": handle, "runtime": shown["runtime"],
-            "state": "live" if live else "unreadable", "code": None, "exited": exited}
+            "state": "live" if live else "unreadable", "code": None, "exited": exited,
+            "cause": cause["kind"] if exited else None}

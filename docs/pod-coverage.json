@@ -6114,6 +6114,180 @@
         "tests.test_standing_authorization.StandingCompatibilityTests.test_e3_never_yolo_close_reopen_close_keeps_0180_readability_and_defer_text"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A442",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.DeliveryClosesTests.test_delivered_not_closed_names_the_coordinator_even_with_an_owner_or_user_wait"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A443",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_closing_checkpoint_after_its_merge_needs_no_owner_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A444",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_closed_tab"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A445",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_an_exited_coordinator",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_signaled_coordinator"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A446",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_restart_with_a_stale_handle",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_restart_with_a_gone_handle"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A447",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.PreservedResultsTests.test_pending_rows_are_read_back_and_the_rest_preserved_without_writing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A448",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.UndeliveredTests.test_unticked_pods_and_an_open_issue_stay_open_until_the_issue_closes_completed",
+        "tests.test_evidence_closure.UndeliveredTests.test_a_delivery_pull_request_that_is_not_merged_stays_open",
+        "tests.test_evidence_closure.UndeliveredTests.test_no_recorded_delivery_pull_request_stays_open"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A449",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.UndeliveredTests.test_a_live_coordinator_is_never_closed_by_evidence",
+        "tests.test_evidence_closure.UndeliveredTests.test_a_live_dispatch_stays_open_and_unreadable_workers_read_unverified",
+        "tests.test_evidence_closure.UndeliveredTests.test_a_start_request_orca_still_holds_pending_stays_open"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A450",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_an_older_schema_record",
+        "tests.test_evidence_closure.UndeliveredTests.test_an_unknown_schema_is_never_closed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A451",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_run_rebound_to_a_closed_recovery",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_run_rebound_to_a_recovery_under_retirement",
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_run_held_by_a_live_open_recovery"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A452",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together",
+        "tests.test_evidence_closure.ChainTests.test_run_sharing_recovery_objectives_contribute_their_pull_requests"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A453",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.RetirementProofTests.test_detection_names_a_delivered_objective_outside_the_owner_question",
+        "tests.test_evidence_closure.RetirementProofTests.test_proof_delivery_closes_by_evidence_and_refuses_the_rest_as_lead_tasks",
+        "tests.test_evidence_closure.RetirementProofTests.test_a_user_direct_decision_still_works"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A454",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.SweepTests.test_after_closure_every_write_path_refuses_objective_closed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A455",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.SweepTests.test_two_repositories_close_every_proved_objective_and_a_second_run_writes_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A456",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.SweepTests.test_the_sweep_needs_no_terminal_or_run_binding_and_mutates_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A457",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_evidence_closure.DeliveryClosesTests.test_a_superseded_earlier_head_validation_is_preserved_at_closure",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_merged_head_unreadable_commits_and_unproved_delivery_still_hold_the_closure",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_a_settling_readback_and_other_unsettled_kinds_still_hold_the_closure"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

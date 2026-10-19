@@ -892,8 +892,9 @@ class ReadinessWordingTests(TabCase):
         self.assertTrue(self.status()["readiness"]["summary"].startswith(
             "Waiting on the owner: choose a channel (O1)"))
         self.write([{key: value for key, value in row.items() if key != "external"} for row in self.finished_rows()])
-        self.assertTrue(self.status()["readiness"]["summary"].startswith(
-            "Delivered but finalizing: Pod still needs closure; not safe to close the coordinator. Worker tab"))
+        summary = self.status()["readiness"]["summary"]
+        self.assertTrue(summary.startswith("Delivered, not closed: the coordinator records closure now"), summary)
+        self.assertIn("not safe to close the coordinator. Worker tab", summary)
 
     def test_closed_external_summary_keeps_gate_and_party_detail(self):
         frozen, admission = self.worker(); self.tab_case = "not_materialized"
