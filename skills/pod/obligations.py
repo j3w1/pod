@@ -765,7 +765,8 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
             if "question" in authority:
                 source["question"] = authority["question"]
             ob["source"] = owner_decision(source, kind="question" if "question" in authority else "revision")
-        _introduce(ob, prior_map is None, user, observed, sources, criteria)
+        _introduce(ob, prior_map is None, user, observed, sources, criteria,
+                   issue_revision=ctx.get("issue_revision") is not None)
     for ob in rows.values():
         if "parent" in ob:
             parent = rows.get(ob["parent"])
@@ -820,7 +821,14 @@ def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: fr
                 raise refuse("obligation_invalid", "withdrawal_unauthorized", "withdrawal is terminal",
                              obligation=ob["id"])
         elif ob["state"] == "withdrawn":
-            ob["withdrawal"] = _withdrawal(ob, user, authority)
+            revision = ctx.get("issue_revision")
+            if (revision is not None and ob["id"] in revision.withdrawn_ids
+                    and ob["withdrawal"].get("by") == "issue_revision"):
+                record = _exact(ob["withdrawal"], {"by", "reason"}, {"by", "reason"}, "issue revision withdrawal")
+                _text(record["reason"], "withdrawal reason", limit=1024)
+                ob["withdrawal"] = {**record, "decision": seq}
+            else:
+                ob["withdrawal"] = _withdrawal(ob, user, authority)
         if ob["id"] in rebind and ob["provenance"] == "project_policy" and ob.get("source", {}).get("gone"):
             raise refuse("obligation_unaccounted", "evidence_invalidated",
                          "evidence for a policy whose cited text is gone cannot be rebound", obligation=ob["id"])
@@ -922,7 +930,15 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     closed = bool(prior_map and prior_map.get("closure"))
     authority_kind = "revision"
     raw_authority = value.get("revision_authority")
-    if isinstance(raw_authority, dict) and "question" in raw_authority:
+    from .issue_revision import requested, Revision, refuse as issue_refuse
+    issue = requested(raw_authority)
+    if issue:
+        revision_capability = ctx.get("issue_revision")
+        if (not isinstance(revision_capability, Revision) or ctx.get("operation") != "checkpoint"
+                or raw_authority != revision_capability.authority):
+            raise issue_refuse("checkpoint_only")
+        authority_kind = "issue_revision"
+    elif isinstance(raw_authority, dict) and "question" in raw_authority:
         reference = raw_authority["question"]
         questions = ctx.get("recorded_questions", [])
         if not isinstance(questions, list) or not any(
@@ -941,8 +957,8 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         if changes and all(isinstance(row.get("id"), str) and row["id"] in prior_rows and row.get("state") == "withdrawn"
                            and definition_id(row) == definition_id(prior_rows[row["id"]]) for row in changes):
             authority_kind = "withdrawal"
-    authority = _authority(raw_authority, kind=authority_kind)
-    user = authority is not None
+    authority = deepcopy(raw_authority) if issue else _authority(raw_authority, kind=authority_kind)
+    user = authority is not None and not issue
     reopen = value.get("reopen") is True
     if reopen and authority is not None:
         owner_decision(authority, kind="question" if authority_kind == "question" else "reopen")
@@ -971,7 +987,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     if refresh and prior_map is None:
         raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed", record='obligation map')
     ctx = {**ctx, "governance_refresh": refresh, "revision_authority": authority, "authority_kind": authority_kind}
-    revision = (prior_map["revision"] + (1 if user or refresh else 0)) if prior_map else 1
+    revision = (prior_map["revision"] + (1 if user or refresh or issue else 0)) if prior_map else 1
 
     observed, governance, sources, gov, rebind = _write_governance(prior_map, value, ctx, user, refresh)
 
@@ -1130,11 +1146,11 @@ def _user_instruction(source: dict, obligation: str) -> None:
 
 
 def _introduce(ob: dict, intake: bool, user: bool, observed: dict | None, sources: list[dict],
-               criteria: list[str]) -> None:
+               criteria: list[str], *, issue_revision: bool = False) -> None:
     provenance, kind = ob["provenance"], ob["kind"]
     if provenance == "objective":
         source = _objective_source(ob.get("source"), ob["id"])
-        if kind not in ("criterion", "delivery") or not intake:
+        if kind not in ("criterion", "delivery") or not (intake or issue_revision and kind == "criterion"):
             raise refuse("obligation_invalid", "provenance_unauthorized",
                          "objective provenance enters criteria and delivery obligations at intake",
                          obligation=ob["id"])
@@ -1171,6 +1187,8 @@ def _ancestry(rows: dict[str, dict]) -> None:
 @input_record("withdrawal")
 def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
     record = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"), "withdrawal", obligation=ob["id"])
+    if "decision" in record:
+        raise refuse("obligation_invalid", "withdrawal_unauthorized", "issue revision decision references are kernel-owned", obligation=ob["id"])
     _text(record["reason"], "reason", limit=bound("withdrawal", "reason"), obligation=ob["id"])
     by = record["by"]
     allowed = (by == "user_direct" and user
@@ -1641,6 +1659,10 @@ def validate_map_record(state: dict) -> None:
         if not isinstance(decisions, list):
             raise refuse("obligation_invalid", "malformed", "revision decisions are a list", record="revision decisions")
         for row in decisions:
+            if row.get("operation") == "issue_revision":
+                from .issue_revision import validate_decision
+                validate_decision(row, state)
+                continue
             _exact(row, DECISION_FIELDS | {"seq", "question", "kind"}, {"seq", "provenance", "instruction", "kind"}, "revision decision")
             if type(row["seq"]) is not int or not 1 <= row["seq"] <= value["seq"]:
                 raise refuse("obligation_invalid", "malformed", "revision decision names its accepted sequence", record="revision decision")
@@ -1784,13 +1806,22 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
             if cited != source:
                 raise refuse("obligation_invalid", "cite_not_base", "persisted citation and withdrawal match their bound source text", obligation=ob["id"])
         else:
-            _introduce(ob, ob["introduced_seq"] == 1, ob["provenance"] == "user_direct", None, [], list(ctx.get("criteria", [])))
+            from .issue_revision import introduced
+            _introduce(ob, ob["introduced_seq"] == 1, ob["provenance"] == "user_direct", None, [], list(ctx.get("criteria", [])),
+                       issue_revision=introduced(state, ob))
         if ob["state"] == "withdrawn":
             withdrawal = ob["withdrawal"]
-            instruction = withdrawal.get("instruction") if isinstance(withdrawal, dict) else None
-            authority = _authority({"provenance": "user_direct", "instruction": instruction, **channel_fields(withdrawal)}, kind="withdrawal", stored=True) if isinstance(withdrawal, dict) and withdrawal.get("by") == "user_direct" else None
-            if _withdrawal(ob, authority is not None, authority) != withdrawal:
-                raise refuse("obligation_invalid", "withdrawal_unauthorized", "persisted withdrawal retains its complete authority record", obligation=ob["id"])
+            if withdrawal.get("by") == "issue_revision":
+                _exact(withdrawal, {"by", "reason", "decision"}, {"by", "reason", "decision"}, "issue revision withdrawal")
+                _text(withdrawal["reason"], "withdrawal reason", limit=1024)
+                if not any(row.get("operation") == "issue_revision" and row["seq"] == withdrawal["decision"]
+                           and ob["id"] in row["retired"] for row in state.get("revision_decisions", [])):
+                    raise refuse("obligation_invalid", "withdrawal_unauthorized", "withdrawal needs its exact issue revision", obligation=ob["id"])
+            else:
+                instruction = withdrawal.get("instruction") if isinstance(withdrawal, dict) else None
+                authority = _authority({"provenance": "user_direct", "instruction": instruction, **channel_fields(withdrawal)}, kind="withdrawal", stored=True) if isinstance(withdrawal, dict) and withdrawal.get("by") == "user_direct" else None
+                if _withdrawal(ob, authority is not None, authority) != withdrawal:
+                    raise refuse("obligation_invalid", "withdrawal_unauthorized", "persisted withdrawal retains its complete authority record", obligation=ob["id"])
         unknown = validate_receipts(ob, ctx, seq=state["seq"])
         if unknown and unverifiable is not None:
             unverifiable.append(ob["id"])
@@ -2172,6 +2203,8 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
         result["interim_report"] = state["quiescence"]["interim_report"]
     elif status == "open" and result["unfinished"]:
         result["interim_report"] = "incomplete — " + str(len(result["unfinished"])) + " obligation(s) unfinished"
+    if any(row.get("operation") == "issue_revision" for row in state.get("revision_decisions", [])):
+        result["decision_channels"] = 4
     return result
 
 

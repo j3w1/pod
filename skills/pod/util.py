@@ -164,7 +164,9 @@ def protect_decision_record(value: dict) -> None:
     from .standing import SCHEMA as STANDING_SCHEMA, STATUS_SCHEMA as STANDING_STATUS_SCHEMA
     def representation(item):
         if isinstance(item, dict):
-            own = (3 if item.get("schema") in (STANDING_SCHEMA, STANDING_STATUS_SCHEMA)
+            own = (4 if item.get("operation") == "issue_revision" and "relay_verification" in item
+                   or item.get("decision_channels") == 4
+                   else 3 if item.get("schema") in (STANDING_SCHEMA, STANDING_STATUS_SCHEMA)
                    or item.get("schema") == "pod-authorization/v1" and "standing" in item
                    or item.get("decision_channels") == 3
                    else 2 if "relay_verification" in item or item.get("decision_channels") == 2

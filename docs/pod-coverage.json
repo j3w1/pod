@@ -6671,6 +6671,85 @@
         "tests.test_cleanup_target.DeliveredTargetTests.test_unreadable_ancestry_of_the_delivery_result_reads_moved_and_protects"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A486",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_verified_exact_source_criteria_revision_uses_current_map_and_native_binding",
+        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_prior_observation_allows_equal_source_digests_for_material_reconciliation",
+        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_delivery_only_source_observation_does_not_need_verifier",
+        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_changed_requirement_uses_fresh_id_and_leaves_own_tick_due_for_untick"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A487",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_unconfigured_denied_unsupported_and_partial_verifier_leave_no_effect",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_each_exact_map_native_and_digest_field_mismatch",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_caller_cannot_inject_evidence_or_other_decision_kinds",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_arbitrary_checks_unmapped_duplicate_and_nonmaterial_revision_refuse",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_new_criteria_cannot_inherit_proof_and_user_or_policy_injection_refuses",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_unknown_incarnation_and_changed_current_owner_or_run_fail_closed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A488",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_five_to_eight_keeps_prior_definitions_failed_unknown_and_tick_authorship",
+        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_existing_native_attempt_and_unresolved_result_facts_are_unchanged",
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_later_revision_and_immutable_history_retain_all_prior_verifier_and_tick_facts"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A489",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_invalid_map_is_validated_before_receipt_consumption",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_stop_or_epoch_refusal_on_consumption_recheck_keeps_every_byte",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_native_or_source_change_inside_verifier_callback_is_rechecked",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_interrupted_consume_recovers_exact_transition_only_and_replay_refuses",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_concurrent_same_transition_accepts_once",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_capacity_failure_does_not_consume_or_publish",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_policy_or_command_change_inside_final_verifier_callback_refuses",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_command_change_inside_final_verifier_callback_refuses",
+        "tests.test_issue_revision.IssueRevisionAtomicityTests.test_accepted_key_cannot_authorize_another_material_revision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A490",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "pty_subprocess"
+      ],
+      "offline_test": [
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_real_bounded_subprocess_transport_is_synthetic_only",
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_genuine_previous_reader_refuses_new_context_without_rewrite",
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_canonical_non_ascii_digest_vector_includes_amendments",
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_persisted_evidence_corruption_fails_on_read_and_public_projections_are_read_only",
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_report_and_admission_maps_explicitly_refuse_the_operation",
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_plain_relay_revision_refuses_but_owner_typed_revision_stays_supported"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }

@@ -181,6 +181,8 @@ def mapping(map_state: dict | None) -> dict[int, list[dict]]:
     from .github import pod_ref_number
     result = {}
     for criterion in (map_state or {}).get("obligations", []):
+        if criterion.get("withdrawal", {}).get("by") == "issue_revision":
+            continue  # The withdrawn definition remains in revision history, never a current mapping.
         number = pod_ref_number(criterion.get("source", {}).get("ref")) if criterion["kind"] == "criterion" else None
         if number is not None:
             result.setdefault(number, []).append(criterion)

@@ -352,7 +352,8 @@ default exclusion: `deploy`, `paid_resources`, `secrets`, `unique_deletion` and
 `scope_growth`, each explicitly, under the same exact binding. It never confirms
 Password Manager Defaults, authorizes DRAINED/REPLACE/reboots, bypasses secret
 handlers or disables gates. Widening never bypasses the scope binding or suspension.
-Every other kind
+R149 adds a distinct host-verified issue-source criteria revision; it grants no
+general revision or delivery authority. Every other kind
 requires session too, including owner handoff R105, runtime continuity R98,
 direct-user route/delegation constraints, general revisions/reopen without a recorded-question answer,
 user-cleared route failures and Governor efficiency exceptions. Such a relay refuses
@@ -382,7 +383,9 @@ records, claims, closures and retirements retain their original meaning. Verifie
 authorization records and contexts containing them use `decision_channels: 2`;
 genuine 0.17.0 readers refuse them. A context that holds a `standing_authorization`
 record, and a Governor journal holding a row whose authorization carries `standing`
-(R137), use `decision_channels: 3`; genuine 0.18.0 readers refuse them. Other
+(R137), use `decision_channels: 3`; genuine 0.18.0 readers refuse them. R149's issue
+revision evidence and contexts/reports containing it use `decision_channels: 4`,
+which preceding helpers refuse. Other
 channel-bearing records retain `1` and existing records read unchanged, without
 conversion.
 

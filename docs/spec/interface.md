@@ -84,6 +84,8 @@ Type: B,H · Scenarios: [A102](#a102), [A103](#a103), [A203](#a203), [A253](#a25
 
 Bind issue identity, canonical locator, body digest and relevant amendment references into checkpoints, packets and final verification without copying the issue body into state. Recheck at intake, continuation, affected admission and final verification. Body change requires reconciliation; metadata alone does not, except that a title gaining an EEL/SEAL marker stops execution like the body marker, and every caller surfaces the role refusal itself. Forward Governor decisions/execution recheck the checkpoint source before native continuity or remote effects; role changes, body/amendment drift and inaccessible reads hold forward work. Cancellation, outcome recording and provider readback retain their supported paths. Closure alone does not block already authorized Governor work: reconcile closed-issue intent at intake, and rebind reconciled body/amendment changes through the existing checkpoint. Amendments are not checked for markers. Preserve unaffected proof and never replace an admitted uncertain native request with a revised packet. R131 adds the sole automatic body rebind: a tick's matching intended readback and receipt atomically update the checkpoint digest without a map transition or evidence invalidation. Other body edits still reconcile through a checkpoint, whose line-fact refresh is best effort. Ticks never use the Governor's closed-source exemption: CLOSED stays blocked, even after reconciliation/rebind, until an outside reopen. Every issue_reconciliation_required includes the recheck reason. Reserved or unresolved admissions keep their original packet and defer a tick with pod_tick_admission_pending until settlement; an in-flight tick intent defers new admission with pod_tick_pending.
 
+R149 adds verified issue-derived criteria reconciliation to the same checkpoint path; source observation alone still grants no revision authority.
+
 ### R69 — Keep the public product independent of
 
 Type: B,H · Scenarios: [A111](#a111), [A112](#a112)
@@ -692,6 +694,61 @@ or different decision-time digest refuses `relay_verifier_mismatch` naming
 bound to the current public digest. Only an otherwise authentic, fully verified,
 exact-bound future activation records a permanent refused-key marker in the
 existing receipt store (R136), leaving context and journal unchanged.
+
+#### Issue revision requests
+
+R149 adds `action: issue_revision` on the same bounded verifier transport. Common
+request fields are unchanged, with `candidate: null`, `pr: null` and `target` from
+the existing governance base remote's single GitHub URL. The one additional
+`issue_revision` object has exactly these fields:
+
+| Field | Exact object |
+| --- | --- |
+| `source` | `repository`, positive integer `number`, canonical `locator`, `previous_digest`, `proposed_digest`. The source identity matches both the existing/proposed binding and `target.repository`. Digests are SHA-256 of the full respective `pod-issue-source/v1` objects, including amendments, using `util.digest`: sorted JSON keys, compact comma/colon separators, `ensure_ascii=False`, UTF-8 and no trailing newline. Equal digests retain distinct previous/proposed roles. |
+| `map` | `seq`, `revision` (positive integers naming the current pre-write map), and `policy_revision` (the current effective policy). |
+| `coordinator` | `handle`, `incarnation`, `run`, `runtime`, `generation`. These come from fresh terminal-show `incarnationId`, authoritative current Run ownership/generation and the objective's existing native references. Unknown incarnation refuses; no caller value or fallback supplies identity. |
+
+The verdict repeats the exact request and adds the existing `verified`,
+`owner_source`, `decided_at`, `single_use` fields. Only an exact positive verdict
+confirms the operation. The host must look up the stored original approval and
+independently prove the actual approved source revision, including a trusted
+earlier baseline after prior observation when necessary; current mutable source,
+caller prose, an echoed request, transport delivery or an acknowledgment is not
+authentication. Host Stop, administration epoch, cancellation and source approval
+remain host responsibilities, not wall-clock freshness checks in Pod. Missing
+host support refuses through the existing verifier codes.
+
+The Pod-local input discriminator is `revision_authority.operation:
+issue_revision`. Input carries `provenance`, `channel`, bounded `instruction` and
+only `relay.reference`; kernel verdicts and bindings are stored-only. The installed
+issue-intake reference gives the one supported checkpoint procedure. Report and
+admission maps refuse `issue_revision_refused` with `checkpoint_only` before their
+preparation or mutations. Other shape, mapping, policy and scope holds use
+`issue_revision_refused` with a named reason; native/source/sequence failures may
+retain their existing refusal codes.
+
+Accepted `revision_decisions` rows use `kind` and `operation` equal to
+`issue_revision`, the accepted `seq`, original provenance/instruction/channel,
+verifier-derived `relay`, complete `relay_verification`, proposed `source`, complete
+unique `criteria` mapping (`id`, `ref`, `check`), and `retired` IDs. `previous`
+contains the actual previous `source`, `criteria`, full `obligations` and
+`pod_ticks` (or null), preserving definitions, proof and authorship facts without
+copying a full source body. A withdrawal has `by: issue_revision`, `reason` and a
+kernel-assigned `decision` sequence. Current PoD mapping excludes these withdrawn
+definitions; history still exposes them. Map output adds complete
+`revision_decisions` and `decision_channels: 4` once this history exists; status and
+reports retain the same complete decision evidence. Stored evidence is validated
+on read without invoking the command; unsupported preceding helpers refuse the
+new discriminator.
+
+Validation and capacity planning precede key consumption. This action's existing
+`pod-relay-use/v1` receipt additionally records the normalized accepted transition
+digest, so an interrupted receipt can complete only the identical transition on
+the unchanged prior context. The source, current map/policy/native binding and
+same host verdict are rechecked before consumption. An accepted key cannot add
+another row; a failed preflight writes no receipt. Host authentication, installed
+producer availability and live proof remain separate from synthetic subprocess
+tests.
 
 ### Recorded-question status contract
 

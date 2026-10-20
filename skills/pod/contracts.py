@@ -146,7 +146,8 @@ TABLE = {
                         "rationale": text(), "revisit_when": text(), "inputs": _ANY}, ("class", "referent")),
     "external": definition({"party": choice(PARTIES), "need": text(), "unblocks_when": text()},
                            ("party", "need", "unblocks_when")),
-    "withdrawal": definition({"by": choice(("user_direct", "project_policy", "coordinator")), "reason": text(1024),
+    "withdrawal": definition({"by": choice(("user_direct", "project_policy", "coordinator", "issue_revision")), "reason": text(1024),
+                              "decision": {"type": "integer", "minimum": 1, "stored_only": True},
                               "instruction": _ANY, "channel": choice(("session", "relayed")), "relay": {"type": "object"}},
                              ("by", "reason")),
     "evidence": definition({"schema": choice(("pod-evidence/v1",)),
@@ -208,6 +209,7 @@ TABLE["governance"] = definition({"base_ref": {**text(256), "nullable": True},
                                               "items": choice(GOVERNANCE_PATHS)},
                                   "base": _ANY}, ("base_ref",))
 TABLE["revision authority"] = definition({"provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
+                                          "operation": {**choice(("issue_revision",)), "form": "selects the checkpoint-only issue revision authority record"},
                                           "question": text(), "channel": choice(("session", "relayed")),
                                           "relay": {"type": "object"}}, ("provenance", "instruction"))
 TABLE["disposition"] = definition({"admission": {"type": "text"}, "integrated_into": text(128),
@@ -239,6 +241,11 @@ TABLE["decision_relay"] = definition({key: text(512) for key in ("reference", "o
                                      ("reference", "owner_source"))
 TABLE["authorization relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
                                           ("reference",))
+TABLE["issue revision relay"] = definition({"reference": text(512)}, ("reference",))
+TABLE["issue revision authority"] = definition({"operation": choice(("issue_revision",)),
+    "provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
+    "channel": choice(("relayed",)), "relay": record("issue revision relay")},
+    ("operation", "provenance", "instruction", "channel", "relay"))
 STANDING_SCOPES = ("publish", "merge", "release", "install", "cleanup", "deploy")
 STANDING_EXCLUSIONS = ("deploy", "paid_resources", "secrets", "unique_deletion", "scope_growth")
 TABLE["standing decision"] = definition({

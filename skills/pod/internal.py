@@ -190,6 +190,8 @@ def _prepare_report(request, state, admission, shown, *, closing):
 
 def _op_report(request: dict) -> dict:
     exact(request, fields("report request"), required("report request"), name="request")
+    from .issue_revision import refuse_alternate
+    refuse_alternate(request.get("map"))
     if not isinstance(request["packet"], dict):
         raise PodError("invalid_packet", "Report needs a frozen packet")
     from .ledger import read
@@ -546,6 +548,8 @@ def _op_governor_status(request: dict) -> dict:
 @input_record("admission")
 def _op_admission(request: dict) -> dict:
     exact(request, fields("admission"), required("admission"), name="request")
+    from .issue_revision import refuse_alternate
+    refuse_alternate(request.get("map"))
     from .ledger import read
     from .handoff import refuse_nonowner
     state = read(Path(request["project"]), request["objective"])
