@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.cleanup import plan
+from pod import cleanup_archives
 from pod.errors import PodError
 from pod.github import repository_context
 from pod.github import repository_reads
@@ -103,6 +104,80 @@ class CleanupPlanTests(KernelCase):
             self.observed(expect=first["expect"])
         self.assertEqual(changed.exception.code, "cleanup_changed")
         self.assertIn("worktree:" + str(self.child), changed.exception.detail["changed"])
+
+    def independent_root(self):
+        return git(self.project, "commit-tree", self.base + "^{tree}", "-m", "independent retained history")
+
+    def test_fetched_root_on_surviving_remote_ref_does_not_make_integrated_work_unique(self):
+        oid = self.independent_root()
+        git(self.child, "fetch", "-q", str(self.project), oid + ":refs/remotes/peer/other")
+        result = self.observed()
+        worktree = self.resource(result, "worktree")
+        facts = worktree["identity"]["git"]
+        self.assertEqual(worktree["class"], "integrated")
+        self.assertIsNotNone(worktree["delete_argv"])
+        self.assertEqual(facts["additional_roots"], [])
+        self.assertIn(oid, facts["observed_roots"].values())
+        self.assertEqual(facts["surviving_refs"]["refs/remotes/peer/other"], oid)
+        self.assertNotIn(oid, facts["required_objects"])
+        bundle = self.root / "branch.bundle"
+        git(self.project, "bundle", "create", str(bundle), "refs/heads/objective")
+        archived = self.resource(self.observed(archives=[{
+            "path": str(bundle), "ref": "refs/heads/objective", "tip": self.base}]), "worktree")
+        self.assertTrue(archived["archive_verified"], archived["archives"])
+
+    def test_head_reflog_root_on_surviving_ref_needs_no_extra_preservation(self):
+        oid = self.independent_root()
+        git(self.child, "checkout", "-q", "--detach", oid)
+        git(self.child, "checkout", "-q", "objective")
+        git(self.project, "update-ref", "refs/remotes/peer/other", oid)
+        result = self.observed()
+        worktree = self.resource(result, "worktree")
+        self.assertEqual(worktree["class"], "integrated")
+        self.assertIsNotNone(worktree["delete_argv"])
+        self.assertNotIn(oid, worktree["identity"]["git"]["required_objects"])
+        git(self.project, "update-ref", "-d", "refs/remotes/peer/other")
+        with self.assertRaises(PodError) as changed:
+            self.observed(expect=result["expect"])
+        self.assertEqual(changed.exception.code, "cleanup_changed")
+        current = self.resource(self.observed(), "worktree")
+        self.assertEqual(current["class"], "unique")
+        self.assertIn(oid, current["identity"]["git"]["required_objects"])
+        self.assertIsNone(current["delete_argv"])
+
+    def test_removed_private_names_require_preservation_even_if_the_bytes_survive(self):
+        oid = self.independent_root()
+        git(self.child, "update-ref", "refs/worktree/private", oid)
+        git(self.project, "update-ref", "refs/remotes/peer/other", oid)
+        worktree = self.resource(self.observed(), "worktree")
+        facts = worktree["identity"]["git"]
+        self.assertEqual(worktree["class"], "unique")
+        self.assertIsNone(worktree["delete_argv"])
+        self.assertIn("refs/worktree/private", facts["additional_roots"])
+        self.assertIn(oid, facts["required_objects"])
+        self.assertNotIn("refs/worktree/private", facts["surviving_refs"])
+        self.assertNotIn("refs/heads/objective", facts["surviving_refs"])
+
+    def test_removed_private_refs_do_not_prove_survival_of_reflog_only_material(self):
+        oid = self.independent_root()
+        git(self.child, "checkout", "-q", "--detach", oid)
+        git(self.child, "checkout", "-q", "objective")
+        git(self.child, "update-ref", "refs/worktree/only-holder", oid)
+        facts = self.resource(self.observed(), "worktree")["identity"]["git"]
+        self.assertIn("reflog:" + oid, facts["additional_roots"])
+        self.assertIn(oid, facts["required_objects"])
+
+    def test_unavailable_surviving_reference_inventory_holds_the_resource(self):
+        original = cleanup_archives._run
+        def run(root, argv, **kwargs):
+            if argv == ["for-each-ref", "--format=%(refname) %(objectname) %(symref)"]:
+                raise cleanup_archives.Unavailable("Surviving reference observation is incomplete")
+            return original(root, argv, **kwargs)
+        with patch.object(cleanup_archives, "_run", side_effect=run):
+            worktree = self.resource(self.observed(), "worktree")
+        self.assertEqual(worktree["class"], "protected")
+        self.assertIsNone(worktree["delete_argv"])
+        self.assertIn("Surviving reference", " ".join(worktree["reasons"]))
 
     def test_verified_archive_allows_a_guarded_unique_worktree_command(self):
         (self.child / "README.md").write_text("unique commit\n")

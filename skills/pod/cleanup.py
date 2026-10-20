@@ -464,13 +464,15 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     if "common_dir" in repository:
         excluded.append(Path(repository["common_dir"]["path"]))
     excluded += [Path(facts["git_dir"]["path"]) for facts in git_resources.values() if "git_dir" in facts]
-    archive_by_ref = {}
+    archive_by_basis = {}
 
     def archive_facts(ref, facts):
-        if ref not in archive_by_ref:
-            archive_by_ref[ref] = [cleanup_archives.verify(project, row, facts, excluded)
-                                   for row in archive_rows if row["ref"] == ref]
-        return archive_by_ref[ref]
+        # A worktree and its branch share a ref, not a preservation obligation.
+        key = ref, digest(facts)
+        if key not in archive_by_basis:
+            archive_by_basis[key] = [cleanup_archives.verify(project, row, facts, excluded)
+                                     for row in archive_rows if row["ref"] == ref]
+        return archive_by_basis[key]
     governance = checkpoint.get("governance") or {}
     target_ref = governance.get("base_ref")
     target = resolve_commit(project, target_ref) if isinstance(target_ref, str) else None
@@ -538,7 +540,6 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
             classification, reasons = "protected", reasons + worker_holds
         ref = branch_ref if isinstance(branch_ref, str) else None
         observed_archives = archive_facts(ref, git_facts)
-        archive_verified = any(row["verified"] for row in observed_archives)
         archive_complete = any(row["verified"] and row["covers_resource"] for row in observed_archives)
         archive_argv = (["git", "bundle", "create", "<dir>/" + (branch or "worktree").replace("/", "_") +
                          ".bundle", ref] if classification == "unique" and ref else None)
@@ -550,7 +551,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                                     **({"worker": worker_facts} if selected is not None else {})}, classification, reasons,
                                    delete_argv=["orca", "worktree", "rm", "--worktree", "path:" + path_text,
                                                 "--json"] if deletable else None,
-                                   archive_argv=archive_argv, archive_verified=archive_verified,
+                                   archive_argv=archive_argv, archive_verified=archive_complete,
                                    archive_observations=observed_archives))
     for ref in sorted(local_branches):
         branch = ref.removeprefix("refs/heads/")
@@ -640,7 +641,9 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
              else "coordinator" if checkpoint.get("closure") else None)
     notes = ["Read-only plan; owner consent precedes commands.",
              "Orca worktree removal also removes a merged local branch.",
-             "Verify each unique-work archive before removing its original ref."]
+             "Verify each unique-work archive before removing its original ref.",
+             "archive_argv creates branch-only evidence; additional recovery roots require a complete "
+             "recovery bundle and expanded archive input."]
     if older is not None:
         notes.append("Older record closed by evidence, read through its documented fields only: its target and "
                      "delivery are not documented, so resources that depend on them stay protected.")

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -131,7 +133,7 @@ class ArchiveBranchTests(unittest.TestCase):
     def test_invalid_expanded_map_digest_and_bounds_refuse(self):
         row = _archive(self.bundle, self.ref, self.tip)
         for update in ({"sha256": "x" * 64}, {"recovery_refs": {}},
-                       {"recovery_refs": {f"refs/recovery/{i}": self.tip for i in range(97)}}):
+                       {"recovery_refs": {f"refs/recovery/{i}": self.tip for i in range(4097)}}):
             with self.subTest(update=update), self.assertRaises(PodError) as refused:
                 self.observed({**row, **update})
             self.assertEqual(refused.exception.code, "invalid_cleanup_archives")
@@ -163,9 +165,28 @@ class ArchiveBranchTests(unittest.TestCase):
 
     def test_compressed_pack_does_not_bypass_restored_object_byte_bound(self):
         self.bundle.write_bytes(self.bundles["compressed"])
-        with patch.object(cleanup_archives, "MAX_BUNDLE", self.bundle.stat().st_size):
+        with patch.object(cleanup_archives, "MAX_RESTORED_BYTES", 32767):
             result = self.rejected()
-        self.assertIn("Restored object bytes exceed", " ".join(result["holds"]))
+        self.assertIn("content bounds", " ".join(result["holds"]))
+
+    def test_compressed_input_cap_is_independent_of_restored_content_limits(self):
+        with patch.object(cleanup_archives, "MAX_BUNDLE", self.bundle.stat().st_size - 1):
+            found = self.rejected()
+        self.assertIn("Archive file is oversized", " ".join(found["holds"]))
+
+    def test_compressed_pack_per_object_and_pre_restore_count_bounds_refuse(self):
+        self.bundle.write_bytes(self.bundles["compressed"])
+        with patch.object(cleanup_archives, "MAX_OBJECT_BYTES", 32767):
+            self.assertIn("content bounds", " ".join(self.rejected()["holds"]))
+        header, pack = self.bundles["alias"].split(b"\n\n", 1)
+        count = (cleanup_archives.MAX_RESTORED_OBJECTS + 1).to_bytes(4, "big")
+        self.bundle.write_bytes(header + b"\n\n" + pack[:8] + count + pack[12:])
+        original = cleanup_archives._run
+        def run(root, argv, **kwargs):
+            self.assertNotEqual(argv[:2], ["bundle", "unbundle"])
+            return original(root, argv, **kwargs)
+        with patch.object(cleanup_archives, "_run", side_effect=run):
+            self.assertIn("pack object count", " ".join(self.rejected()["holds"]))
 
     def test_incomplete_extra_and_wrong_recovery_maps_fail_closed(self):
         row = _archive(self.bundle, self.ref, self.tip)
@@ -220,6 +241,113 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertTrue(current["archive_verified"])
         self.assertEqual(current["archives"][0]["sha256"], first["resources"][-1]["archives"][0]["sha256"])
         self.assert_changed(first["expect"])
+
+    def test_recycled_ancestor_inode_with_retained_leaf_identity_invalidates_expect(self):
+        ancestor = self.directory / "ancestor"
+        retained = ancestor / "retained"
+        retained.mkdir(parents=True)
+        self.bundle.rename(retained / self.bundle.name)
+        self.bundle = retained / self.bundle.name
+        first = self.observed()
+        previous, leaf = ancestor.stat(), self.bundle.stat()
+        parked = self.directory / "parked"
+        retained.rename(parked)
+        ancestor.rmdir()
+        ancestor.mkdir()
+        parked.rename(retained)
+        self.assertNotEqual(ancestor.stat().st_ctime_ns, previous.st_ctime_ns)
+        self.assertEqual(cleanup_archives._identity(self.bundle.stat()), cleanup_archives._identity(leaf))
+        original = os.fstat
+        def recycled(descriptor):
+            observed = original(descriptor)
+            if os.readlink(f"/proc/self/fd/{descriptor}") == str(ancestor):
+                fields = {key: getattr(observed, key) for key in dir(observed) if key.startswith("st_")}
+                fields["st_ino"] = previous.st_ino
+                return SimpleNamespace(**fields)
+            return observed
+        # Only inode reuse is modeled; birth/ctime and the retained leaf are real.
+        with patch.object(cleanup_archives.os, "fstat", side_effect=recycled):
+            self.assertTrue(self.worktree(self.observed())["archive_verified"])
+            self.assert_changed(first["expect"])
+
+    def test_unknown_directory_incarnation_cannot_supply_a_preservation_proof(self):
+        row = _archive(self.bundle, self.ref, self.tip)
+        with patch.object(cleanup_archives, "_incarnation",
+                          side_effect=cleanup_archives.Unavailable("Directory incarnation is unavailable")):
+            found = self.rejected(row)
+        self.assertIn("incarnation", " ".join(found["holds"]))
+
+    def test_consolidated_stale_source_label_keeps_exact_alias_and_all_extra_advertisements(self):
+        header, pack = self.bundles["alias"].split(b"\n\n", 1)
+        self.bundle.write_bytes(header + f"\n{self.case.base} {self.ref}\n\n".encode() + pack)
+        result = self.observed()
+        worktree = self.worktree(result)
+        self.assertTrue(worktree["archive_verified"], worktree["archives"])
+        self.assertEqual(worktree["archives"][0]["recovery_refs"],
+                         {self.ref: self.case.base, self.alias: self.tip})
+        self.assertEqual(len(result["resources"]), 2)
+        self.assertIn(worktree["id"], result["standing_authorization"]["asks"])
+
+    def test_synthetic_sensitive_metadata_never_enters_output_or_a_disk_spool(self):
+        marker = b"synthetic-nonsecret-credential-fixture"
+        config = self.case.project / ".git" / "config"
+        log = self.admin / "logs" / "HEAD"
+        self.addCleanup(config.write_bytes, config.read_bytes())
+        self.addCleanup(log.write_bytes, log.read_bytes())
+        plans.git(self.case.project, "config", "credential.fixture", marker.decode())
+        with log.open("ab") as stream:
+            stream.write(f"{self.tip} {self.tip} Fixture <fixture@example.invalid> 1 +0000\t".encode()
+                         + marker + b"\n")
+        commit = plans.git(self.case.project, "commit-tree", self.tip + "^{tree}", "-m", marker.decode())
+        spools, inspections = [], []
+        original_file, original_run = cleanup_archives.tempfile.TemporaryFile, cleanup_archives._run
+        @contextmanager
+        def spool(*args, **kwargs):
+            with original_file(*args, **kwargs) as stream:
+                try:
+                    yield stream
+                finally:
+                    stream.seek(0)
+                    value = stream.read()
+                    spools.append(value.encode() if isinstance(value, str) else value)
+        def run(root, argv, **kwargs):
+            value = original_run(root, argv, **kwargs)
+            inspections.append((list(argv), kwargs.get("hash_output", False)))
+            self.assertNotIn(marker, value)
+            return value
+        with patch.object(cleanup_archives.tempfile, "TemporaryFile", side_effect=spool), \
+                patch.object(cleanup_archives, "_run", side_effect=run):
+            facts = cleanup_archives._commits(self.case.project, {commit})
+            result = self.observed()
+        self.assertEqual(facts[commit]["tree"], plans.git(self.case.project, "rev-parse", self.tip + "^{tree}"))
+        self.assertTrue(self.worktree(result)["archive_verified"], self.worktree(result)["archives"])
+        self.assertNotIn(marker.decode(), repr(result))
+        self.assertTrue(spools)  # The separate worktree inventory spool was actually inspected.
+        self.assertTrue(all(marker not in value for value in spools))
+        config_reads = [(argv, hashed) for argv, hashed in inspections if argv[0] == "config"]
+        self.assertTrue(config_reads)
+        self.assertTrue(all(hashed or "--get-regexp" in argv for argv, hashed in config_reads))
+        self.assertTrue(all(argv[:2] != ["cat-file", "--batch"] for argv, _ in inspections))
+
+    def test_arbitrary_synthetic_config_value_change_invalidates_expect(self):
+        config = self.case.project / ".git" / "config"
+        self.addCleanup(config.write_bytes, config.read_bytes())
+        plans.git(self.case.project, "config", "credential.fixture", "synthetic-before")
+        first = self.observed()
+        plans.git(self.case.project, "config", "credential.fixture", "synthetic-after")
+        self.assert_changed(first["expect"])
+
+    def test_bounded_capture_discards_sensitive_error_and_oversized_output(self):
+        config = self.case.project / ".git" / "config"
+        self.addCleanup(config.write_bytes, config.read_bytes())
+        plans.git(self.case.project, "config", "credential.fixture", "synthetic-nonsecret-value")
+        with patch.object(cleanup_archives, "MAX_OUTPUT", 8), self.assertRaises(cleanup_archives.Unavailable) as exc:
+            cleanup_archives._run(self.case.project, ["config", "--get", "credential.fixture"])
+        self.assertIn("output bound", str(exc.exception))
+        self.assertNotIn("synthetic", str(exc.exception))
+        with self.assertRaises(cleanup_archives.Unavailable) as exc:
+            cleanup_archives._run(self.case.project, ["config", "--type=bool", "--get", "credential.fixture"])
+        self.assertNotIn("synthetic", str(exc.exception))
 
     def test_symlink_file_and_parent_and_hardlink_are_refused(self):
         real = self.directory / "real.bundle"
@@ -297,9 +425,29 @@ class ArchiveBranchTests(unittest.TestCase):
         self.bundle.write_bytes(self.bundles["branch_only"])
         branch_only = _archive(self.bundle, self.ref, self.tip, expanded=False)
         row = self.worktree(self.observed(branch_only))
-        self.assertTrue(row["archive_verified"])
+        self.assertTrue(row["archives"][0]["verified"])
+        self.assertFalse(row["archive_verified"])
         self.assertFalse(row["archives"][0]["covers_resource"])
         self.assertIsNone(row["delete_argv"])
+
+    def test_branch_and_worktree_cache_bind_their_independent_material_bases(self):
+        log = self.admin / "logs" / "HEAD"
+        original = log.read_bytes()
+        self.addCleanup(log.write_bytes, original)
+        older = plans.git(self.case.project, "commit-tree", self.tip + "^{tree}", "-m", "private old HEAD")
+        plans.git(self.case.child, "checkout", "-q", "--detach", older)
+        plans.git(self.case.child, "checkout", "-q", "objective")
+        self.bundle.write_bytes(self.bundles["branch_only"])
+        row = _archive(self.bundle, self.ref, self.tip, expanded=False)
+        result = self.observed(row)
+        worktree, branch = self.worktree(result), self.case.resource(result, "local_branch")
+        self.assertIsNot(worktree["archives"], branch["archives"])
+        self.assertFalse(worktree["archive_verified"])
+        self.assertTrue(branch["archive_verified"], branch["archives"])
+        self.assertTrue(branch["archives"][0]["covers_resource"])
+        self.assertEqual((worktree["class"], branch["class"]), ("unique", "unique"))
+        self.assertIsNone(branch["delete_argv"])
+        self.assertIsNone(worktree["delete_argv"])
 
     def test_private_ref_appearance_and_unsupported_root_change_expect_and_hold(self):
         first = self.observed()
@@ -442,7 +590,8 @@ class ArchiveRootTests(unittest.TestCase):
     def test_branch_only_branch_proof_never_becomes_full_root_preservation(self):
         self.bundle.write_bytes(self.bundles["branch"])
         row = self.worktree(self.observed(expanded=False))
-        self.assertTrue(row["archive_verified"], row["archives"])
+        self.assertTrue(row["archives"][0]["verified"], row["archives"])
+        self.assertFalse(row["archive_verified"])
         self.assertFalse(row["archives"][0]["covers_resource"])
         self.assertIsNone(row["delete_argv"])
 
@@ -507,6 +656,187 @@ class ArchiveObjectFormatTests(unittest.TestCase):
         self.assertEqual(len(self.tip), 64)
         self.assertTrue(worktree["archive_verified"], worktree["archives"])
         self.assertEqual(worktree["identity"]["git"]["repository"]["object_format"], "sha256")
+
+
+class ArchiveConsolidatedTests(unittest.TestCase):
+    """Real complete maps, including every distinct target, built once in Git."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.case = plans.CleanupPlanTests()
+        cls.addClassCleanup(cls.case.doCleanups)
+        cls.case.setUp()
+        case = cls.case
+        cls.ref, cls.tip = "refs/heads/objective", case.base
+        targets = [cls.tip]
+        for index in range(1024):
+            targets.append(_git_input(case.project, ["hash-object", "-w", "--stdin"],
+                                      f"consolidated unrelated recovery object {index}\n".encode()))
+        refs = {f"refs/recovery/entry-{index:04}": targets[index % len(targets)] for index in range(4096)}
+        _git_input(case.project, ["update-ref", "--stdin"],
+                   "".join(f"create {ref} {oid}\n" for ref, oid in refs.items()).encode())
+        cls.bundles = {}
+        for count in (165, 4096):
+            file = case.root / f"consolidated-{count}.bundle"
+            plans.git(case.project, "bundle", "create", str(file), *list(refs)[:count])
+            cls.bundles[count] = file.read_bytes()
+        cls.repository = cleanup_archives.repository_observation(case.project)
+        cls.resource = cleanup_archives.reference_observation(case.project, cls.ref, cls.tip, cls.repository)
+        cls.excluded = [case.child, case.project / ".git"]
+
+    def setUp(self):
+        directory = self.case.root / self._testMethodName
+        directory.mkdir()
+        self.bundle = directory / "saved.bundle"
+        self.bundle.write_bytes(self.bundles[165])
+
+    def verify(self, row=None):
+        return cleanup_archives.verify(self.case.project, row or _archive(self.bundle, self.ref, self.tip),
+                                       self.resource, self.excluded)
+
+    def test_complete_165_ref_consolidated_archive_verifies_every_distinct_target(self):
+        result = self.case.observed(archives=[_archive(self.bundle, self.ref, self.tip)])
+        worktree = self.case.resource(result, "worktree")
+        found = worktree["archives"][0]
+        self.assertTrue(worktree["archive_verified"], found)
+        self.assertEqual(len(found["recovery_refs"]), 165)
+        self.assertEqual(found["recovery_types"], {name: "commit" if oid == self.tip else "blob"
+                                                  for name, oid in found["recovery_refs"].items()})
+        self.assertEqual(len(result["resources"]), 2)
+        self.assertEqual(worktree["class"], "integrated")
+        self.assertEqual(worktree["identity"]["git"]["additional_roots"], [])
+
+    def test_complete_4096_ref_boundary_verifies_without_increasing_resource_scope(self):
+        self.bundle.write_bytes(self.bundles[4096])
+        row = _archive(self.bundle, self.ref, self.tip)
+        self.assertEqual(len(cleanup_archives.archive_rows([row])[0]["recovery_refs"]), 4096)
+        self.assertGreater(len(set(row["recovery_refs"].values())), cleanup_archives.MAX_OBJECTS)
+        found = self.verify(row)
+        self.assertTrue(found["verified"] and found["covers_resource"], found)
+        self.assertEqual(len(found["recovery_types"]), 4096)
+        self.assertEqual(found["recovery_refs"], row["recovery_refs"])
+
+    def test_consolidated_subset_or_extra_expected_map_cannot_hide_an_advertisement(self):
+        row = _archive(self.bundle, self.ref, self.tip)
+        subset, extra = dict(row["recovery_refs"]), dict(row["recovery_refs"])
+        subset.pop(next(reversed(subset)))
+        extra["refs/recovery/not-advertised"] = self.tip
+        for refs in (subset, extra):
+            with self.subTest(refs=len(refs)):
+                found = self.verify({**row, "recovery_refs": refs})
+                self.assertFalse(found["verified"])
+                self.assertEqual(found["recovery_refs"], row["recovery_refs"])
+
+    def test_consolidated_malformed_or_stale_last_target_cannot_escape_validation(self):
+        row = _archive(self.bundle, self.ref, self.tip)
+        name = next(reversed(row["recovery_refs"]))
+        for oid in ("not-an-oid", self.tip):
+            changed = {**row, "recovery_refs": {**row["recovery_refs"], name: oid}}
+            with self.subTest(oid=oid):
+                if oid == "not-an-oid":
+                    with self.assertRaises(PodError):
+                        cleanup_archives.archive_rows([changed])
+                else:
+                    self.assertFalse(self.verify(changed)["verified"])
+
+    def test_missing_last_consolidated_advertised_target_cannot_escape_restoration(self):
+        header, pack = self.bundles[165].split(b"\n\n", 1)
+        lines = header.split(b"\n")
+        _, name = lines[-1].split(b" ")
+        lines[-1] = b"f" * len(self.tip) + b" " + name
+        self.bundle.write_bytes(b"\n".join(lines) + b"\n\n" + pack)
+        found = self.verify()
+        self.assertFalse(found["verified"])
+        self.assertIn("missing", " ".join(found["holds"]))
+
+    def test_actual_4097_advertisements_refuse_independently_of_the_input_map(self):
+        header, pack = self.bundles[4096].split(b"\n\n", 1)
+        self.bundle.write_bytes(header + f"\n{self.tip} refs/recovery/over-bound\n\n".encode() + pack)
+        found = self.verify(_archive(self.bundle, self.ref, self.tip, expanded=False))
+        self.assertFalse(found["verified"])
+        self.assertIn("over their bound", " ".join(found["holds"]))
+
+
+class ArchiveContentScaleTests(unittest.TestCase):
+    """Shared full-history fixtures cover large aggregate, single-object and object-count inputs."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.case = plans.CleanupPlanTests()
+        cls.addClassCleanup(cls.case.doCleanups)
+        cls.case.setUp()
+        case = cls.case
+        cls.archives = {}
+        # Versions of a large generated text object model the high compression and
+        # aggregate size of complete histories, rather than a tiny mocked inventory.
+        parent = case.base
+        block = b"generated history content\n" * 4096
+        for index in range(40):
+            content = (f"version {index}\n".encode() + block * 164)[:16 * 1024 * 1024]
+            blob = _git_input(case.project, ["hash-object", "-w", "--stdin"], content)
+            tree = _git_input(case.project, ["mktree"], f"100644 blob {blob}\thistory.txt\n".encode())
+            parent = plans.git(case.project, "commit-tree", tree, "-p", parent, "-m", f"history {index}")
+        large = _git_input(case.project, ["hash-object", "-w", "--stdin"], b"x" * (130 * 1024 * 1024))
+        large_tree = _git_input(case.project, ["mktree"], f"100644 blob {large}\tlarge.txt\n".encode())
+        large_commit = plans.git(case.project, "commit-tree", large_tree, "-p", case.base, "-m", "large branch-only object")
+        for name, history in (("aggregate", parent), ("large", large_commit)):
+            tip = plans.git(case.project, "commit-tree", case.base + "^{tree}", "-p", history, "-m", name)
+            ref = "refs/heads/" + name
+            plans.git(case.project, "update-ref", ref, tip)
+            bundle = case.root / (name + ".bundle")
+            plans.git(case.project, "bundle", "create", str(bundle), ref)
+            cls.archives[name] = bundle, ref, tip
+        imported = bytearray()
+        for index in range(40_000):
+            value = f"history object {index}\n".encode()
+            imported.extend(f"blob\nmark :{index + 1}\ndata {len(value)}\n".encode() + value)
+        imported.extend(b"commit refs/heads/many\ncommitter Fixture <fixture@example.invalid> 1 +0000\ndata 5\nmany\n")
+        imported.extend(f"from {case.base}\n".encode())
+        imported.extend("".join(f"M 100644 :{index + 1} object-{index}\n" for index in range(40_000)).encode())
+        imported.extend(b"\ndone\n")
+        _git_input(case.project, ["fast-import", "--quiet", "--done"], bytes(imported))
+        many_tip = plans.git(case.project, "rev-parse", "refs/heads/many")
+        many_bundle = case.root / "many.bundle"
+        plans.git(case.project, "bundle", "create", str(many_bundle), "refs/heads/many")
+        cls.archives["many"] = many_bundle, "refs/heads/many", many_tip
+        repository = cleanup_archives.repository_observation(case.project)
+        cls.results = {}
+        # Full decompression/fsck is shared setup, not repeated by each assertion
+        # method. Each lane can build this disposable fixture independently.
+        for name, (bundle, ref, tip) in cls.archives.items():
+            facts = cleanup_archives.reference_observation(case.project, ref, tip, repository)
+            for expanded in (False, True):
+                cls.results[name, expanded] = cleanup_archives.verify(
+                    case.project, _archive(bundle, ref, tip, expanded=expanded), facts,
+                    [case.child, case.project / ".git"])
+
+    def assert_verified(self, name, expanded):
+        found = self.results[name, expanded]
+        self.assertTrue(found["verified"] and found["covers_resource"], found)
+        self.assertLess(self.archives[name][0].stat().st_size, cleanup_archives.MAX_BUNDLE)
+        return found["restored_objects"]
+
+    def test_aggregate_full_history_expanded_restores_more_than_current_target_histories(self):
+        inventory = self.assert_verified("aggregate", True)
+        self.assertGreater(inventory["bytes"], 640 * 1024 * 1024)
+
+    def test_aggregate_full_history_legacy_keeps_its_narrow_valid_proof(self):
+        inventory = self.assert_verified("aggregate", False)
+        self.assertEqual(inventory, self.results["aggregate", True]["restored_objects"])
+
+    def test_large_130_mib_legacy_object_is_not_limited_by_compressed_input_size(self):
+        self.assertGreater(self.assert_verified("large", False)["bytes"], 130 * 1024 * 1024)
+
+    def test_large_130_mib_expanded_object_is_not_limited_by_compressed_input_size(self):
+        self.assertGreater(self.assert_verified("large", True)["bytes"], 130 * 1024 * 1024)
+
+    def test_many_object_expanded_inventory_has_headroom_without_a_larger_output_budget(self):
+        inventory = self.assert_verified("many", True)
+        self.assertGreater(inventory["objects"], 40_000)
+
+    def test_many_object_legacy_archive_still_proves_complete_branch_history(self):
+        inventory = self.assert_verified("many", False)
+        self.assertEqual(inventory, self.results["many", True]["restored_objects"])
 
 
 if __name__ == "__main__":
