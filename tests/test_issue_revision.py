@@ -532,7 +532,8 @@ class IssueRevisionLegacyTests(IssueRevisionCase):
             source.extractall(cls.bundle, filter="data")
 
     def previous_record(self, *, delegated=False, unticked=False, unproved=False,
-                        nested=False, long=False, conflicting=False):
+                        nested=False, long=False, conflicting=False,
+                        observe_before_proof=False, observe_with_proof=False):
         from pod.github import repository_context
         from tests.issue_revision_previous_writer import BASELINE
         destination = self.root / "earlier"; destination.mkdir()
@@ -541,7 +542,9 @@ class IssueRevisionLegacyTests(IssueRevisionCase):
                                     str(destination), *(["delegated"] if delegated else []),
                                     *(["unticked"] if unticked else []), *(["unproved"] if unproved else []),
                                     *(["nested"] if nested else []), *(["long"] if long else []),
-                                    *(["conflicting"] if conflicting else [])], cwd=repository,
+                                    *(["conflicting"] if conflicting else []),
+                                    *(["observe-before-proof"] if observe_before_proof else []),
+                                    *(["observe-with-proof"] if observe_with_proof else [])], cwd=repository,
             env={**os.environ, "PYTHONPATH": os.pathsep.join((str(self.bundle / "skills"), str(repository)))},
             text=True, capture_output=True, timeout=10)
         self.assertEqual(completed.returncode, 0, completed.stderr)

@@ -50,6 +50,16 @@ def main():
             admission = case.start("existing-task", frozen)["admission"]
             if not unproved:
                 case.settle(admission)
+        accepting_source = {}
+        if "observe-before-proof" in sys.argv[2:] or "observe-with-proof" in sys.argv[2:]:
+            assert not delegated and not unproved
+            case.issue.body = case.issue.body.replace("alpha", "beta")
+            proof_bodies.append(case.issue.body)
+            changed_source = issue_intake(case.project, case.locator, port=case.issue)["source"]
+            if "observe-before-proof" in sys.argv[2:]:
+                case.write(case.stored(), objective_source=changed_source, criteria=[f"PoD#{n}" for n in range(1, 6)])
+            else:
+                accepting_source = {"objective_source": changed_source}
         if not unproved:
             rows = case.stored()
             for row in rows:
@@ -68,7 +78,7 @@ def main():
                     "admission": admission["admission_id"], "integrated_into": case.candidate,
                     "attestation": "Generic no-change result checked"}])
             else:
-                case.write(rows, criteria=[f"PoD#{n}" for n in range(1, 6)])
+                case.write(rows, criteria=[f"PoD#{n}" for n in range(1, 6)], **accepting_source)
             if "unticked" not in sys.argv[2:]:
                 case.tick()
         if "conflicting" in sys.argv[2:]:

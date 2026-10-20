@@ -742,7 +742,9 @@ The kernel uses immutable per-definition scope facts, actual introducing
 checkpoint/revision snapshots with exact sequence/ref/definition membership, or
 the first following native reservation's retained source/definition conjunction.
 For selected current-definition PASS receipts, each immutable `accepted_seq`
-must resolve the source in that same accepted map: an actual same-sequence current
+must resolve the source in that same accepted map, independently of a matching
+requirement-scope cache. First-acceptance scope facts supply that proof-time
+identity; older missing facts use an actual same-sequence current
 checkpoint or retained snapshot, a matching tick request source with immutable
 criterion/ref/definition membership, or a reservation checkpoint at
 `admitted_seq - 1` with matching served definition. Tick checkbox rebinds preserve
@@ -752,6 +754,14 @@ proof. Complete old/new blocks use the same parser; missing or conflicting
 selected scope/amendment facts cannot establish current proof. Fresh current
 approval can instead admit an explicit factual-unknown remap awaiting proof,
 retaining the original evidence and precise missing fact.
+
+For genuine preceding records without requirement-scope facts, a checkpoint
+that first observes a changed body and first accepts PASS declares that observed
+scope at the receipt's `accepted_seq`. This approved convention for earlier records does not
+recover the original introduction's scope, earlier approval or a source read
+time. Current transition approval remains necessary. A retained earlier
+requirement scope in a newer record must still agree with every selected proof's
+scope; that convention cannot override that known earlier fact.
 
 The existing `issue-intake` read optionally adds `issue_revision_criteria` with
 `status`, `reason` and at most 64 `{ref, check, block_sha256}` rows. It derives
@@ -779,15 +789,28 @@ new discriminator.
 
 Optional `pod_ticks.facts.blocks` holds ordered complete-block SHA-256 values
 alongside each number's checkbox observations. Optional `criterion_scopes` maps
-criterion IDs to `definition`, `source_digest`, `amendments_digest` and
-`block_sha256`, all lowercase SHA-256 values. These kernel facts bind newly
-accepted definitions to the matching source observation, independently of the
-criterion's check wording. Source-only observations never overwrite an existing
-definition's earlier scope or fill its missing identity from a new body. Missing
-prior identity refuses with the criterion, definition and precise unavailable
-fact. Both optional structures are retained in the existing tick snapshots and
-history; no full body or separate source store is introduced. Earlier readers
-reject unsupported fields before they can reuse proof under older semantics.
+criterion IDs to a required `definition` and, when known, the complete group
+`source_digest`, `amendments_digest`, `block_sha256`, all lowercase SHA-256 values.
+A definition-only entry records unknown requirement scope at acceptance;
+later observation or a returning definition hash cannot fill it from an older
+introduction. Physical scope is established only by initial intake, verified
+issue reconciliation or an accepted session-owner change to the semantic check.
+Coordinator-only changes such as `proof_scope` carry earlier physical scope
+through the new logical definition, or keep it unknown. Merely including session
+authority with a metadata-only change does not reconcile the source.
+
+Each entry may also retain `proofs`, bounded by the existing receipt limit. Its
+keys are `util.digest` of `{accepted_seq, evidence}`, omitting only evidence's
+separately rebindable `governance` stamp; values are the four-hash scope at actual
+first acceptance. Checkpoint, report and admission map writes record these facts
+only when their bound source has a unique observed complete block. Later writes,
+source observations and reused references never backfill or replace old proof
+facts. They survive semantic definition changes; reselecting an earlier receipt
+requires its actual proof scope to match the accepted requirement scope, including
+when a former definition hash returns. Missing/conflicting selected scope holds
+reconciliation or needs a factual-unknown remap. Both optional structures remain
+in existing tick snapshots/history; no body or separate store is introduced.
+Earlier readers reject unsupported fields before reusing proof under old semantics.
 
 New revision rows additionally retain `scope_facts`: `previous` lists each prior
 live source criterion's ID/definition, `known` or `unknown` status, reason and

@@ -1935,6 +1935,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
+        from .pod_ticks import bind_criterion_scopes
+        bind_criterion_scopes(state, checkpoint_value)
         _write(path, state, native=native)
         return {**row, "existing": False}
 
@@ -2152,6 +2154,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
             raise
         state["checkpoint"] = {**state["checkpoint"], **new_map}
+        from .pod_ticks import bind_criterion_scopes
+        bind_criterion_scopes(state, map_state)
         if observation.get("status") == "validated_observation" and report_value.get("outcome") == "succeeded":
             for prior in state["admissions"].values():
                 if prior["admission_id"] == admission_id or prior["runtime"] != row["runtime"]:

@@ -33,6 +33,25 @@ def validate_scope(value: object) -> dict:
     return scope
 
 
+def requirement_scope(entry: dict) -> dict | None:
+    """A definition-only entry records unknown scope, unlike an absent earlier cache."""
+    return {key: entry[key] for key in SCOPE_FIELDS} if SCOPE_FIELDS <= entry.keys() else None
+
+
+def selected_pass_receipts(row: dict) -> list[dict]:
+    return [receipt for receipt in row.get("receipts", [])
+            if receipt["evidence"] in row.get("evidence", [])
+            and receipt["evidence"].get("status") == "PASS"
+            and receipt["evidence"].get("definition") == row["definition"]]
+
+
+def proof_identity(receipt: dict) -> str:
+    # Governance can be explicitly rebound; receipt content and its first
+    # acceptance sequence cannot. A reused reference retains this identity.
+    return digest({"accepted_seq": receipt.get("accepted_seq"),
+                   "evidence": {key: value for key, value in receipt["evidence"].items() if key != "governance"}})
+
+
 def _hash(body: str) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
@@ -96,9 +115,19 @@ def validate(value: object) -> None:
     if not isinstance(scopes, dict) or len(scopes) > 96:
         raise PodError("state_unsupported", "PoD criterion source identities are malformed")
     for key, scope in scopes.items():
-        from .obligations import _ident
+        from .obligations import _ident, MAX_EVIDENCE
         _ident(key, "criterion")
-        validate_scope(scope)
+        exact(scope, SCOPE_FIELDS | {"proofs"}, {"definition"}, name="criterion source facts")
+        if not isinstance(scope["definition"], str) or not _SHA.fullmatch(scope["definition"]):
+            raise PodError("state_unsupported", "PoD criterion definition is malformed")
+        if set(scope) & (SCOPE_FIELDS - {"definition"}):
+            validate_scope({key: value for key, value in scope.items() if key != "proofs"})
+        proofs = scope.get("proofs", {})
+        if (not isinstance(proofs, dict) or len(proofs) > MAX_EVIDENCE
+                or any(not isinstance(key, str) or not _SHA.fullmatch(key) for key in proofs)):
+            raise PodError("state_unsupported", "PoD proof source identities are malformed")
+        for proof in proofs.values():
+            validate_scope(proof)
     for key, request in row["requests"].items():
         required = {"id", "pod", "seq", "source", "direction", "before", "intended", "phase", "result", "readback", "block"}
         exact(request, required | {"intent_at"}, required, name="PoD tick request")
@@ -184,35 +213,84 @@ def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None
                          if lines.get(key) and all(lines[key])}
 
 
-def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None = None) -> None:
-    """Bind only newly accepted definitions to an already observed complete source.
+def _bind_proof_scopes(entry: dict, row: dict, earlier: dict, observed: dict | None, seq: int) -> None:
+    """Retain actual scope only at first acceptance, never on reference reuse."""
+    if observed is None:
+        return
+    old = {receipt["evidence"]["reference"]: receipt for receipt in earlier.get("receipts", [])}
+    for receipt in selected_pass_receipts(row):
+        if (receipt.get("accepted_seq") == seq
+                and old.get(receipt["evidence"]["reference"], {}).get("accepted_seq") is None):
+            entry.setdefault("proofs", {}).setdefault(proof_identity(receipt), deepcopy(observed))
 
-    An ordinary later observation never supplies an existing definition's missing
-    earlier identity, even when its check happens to equal the current header.
+
+def _validate_reselected_proof(entry: dict, row: dict, earlier: dict) -> None:
+    """A returning logical hash cannot make an earlier receipt new proof."""
+    from .obligations import refuse
+    selected = ({proof_identity(receipt) for receipt in selected_pass_receipts(earlier)}
+                if earlier.get("state") == "satisfied" else set())
+    old = {proof_identity(receipt) for receipt in earlier.get("receipts", [])
+           if receipt.get("accepted_seq") is not None}
+    for receipt in selected_pass_receipts(row):
+        key = proof_identity(receipt)
+        if row["state"] != "satisfied" or key not in old or key in selected:
+            continue
+        scope = requirement_scope(entry)
+        proof = entry.get("proofs", {}).get(key)
+        if scope is None or proof is None or any(scope[field] != proof[field]
+                                                for field in ("definition", "block_sha256", "amendments_digest")):
+            raise refuse("obligation_unaccounted", "evidence_invalidated",
+                         "the reselected receipt lacks unchanged accepted requirement and proof-time scope",
+                         obligation=row["id"], next_action="record fresh proof for the accepted requirement scope")
+
+
+def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None = None) -> None:
+    """Keep requirement acceptance and first proof acceptance as separate facts.
+
+    Metadata-only definition changes carry prior physical scope. A validated
+    session-owner check revision may accept new scope; ordinary observation may
+    not. An unknown new definition cannot resurrect an older hash's source.
     """
     from .github import pod_ref_number
     checkpoint = state["checkpoint"]
     source = checkpoint.get("objective_source")
     ledger = state.get("pod_ticks", {})
     facts = ledger.get("facts") or {}
-    if verified is not None:
-        for key, scope in verified.items():
-            old = ledger.get("criterion_scopes", {}).get(key, {})
-            if old.get("definition") != scope["definition"]:
-                ledger.setdefault("criterion_scopes", {})[key] = deepcopy(scope)
-    if source is None or facts.get("source") != digest(source):
+    if source is None:
         return
     before = {row["id"]: row for row in previous.get("obligations", [])}
+    decisions = checkpoint.get("revision_decisions", [])
+    decision = decisions[-1] if decisions else {}
+    owner_revision = (decision.get("seq") == checkpoint["seq"]
+                      and decision.get("kind") in ("revision", "question")
+                      and decision.get("channel", "session") == "session")
     for row in checkpoint.get("obligations", []):
-        if (row["kind"] != "criterion" or row["provenance"] != "objective" or row["state"] == "withdrawn"
-                or before.get(row["id"], {}).get("definition") == row["definition"]):
+        if row["kind"] != "criterion" or row["provenance"] != "objective" or row["state"] == "withdrawn":
             continue
+        earlier = before.get(row["id"], {})
+        entry = ledger.get("criterion_scopes", {}).get(row["id"], {})
         number = pod_ref_number(row.get("source", {}).get("ref"))
         blocks = facts.get("blocks", {}).get(str(number), [])
-        if len(blocks) == 1:
-            ledger.setdefault("criterion_scopes", {})[row["id"]] = {
-                "definition": row["definition"], "source_digest": digest(source),
+        observed = None
+        if (facts.get("source") == digest(source) and len(blocks) == 1
+                and row.get("source", {}).get("ref") in checkpoint.get("criteria", [])):
+            observed = {"definition": row["definition"], "source_digest": digest(source),
                 "amendments_digest": digest(source["amendments"]), "block_sha256": blocks[0]}
+        approved = (verified or {}).get(row["id"])
+        changed = earlier.get("definition") != row["definition"]
+        if approved is not None and entry.get("definition") != row["definition"]:
+            entry = {**deepcopy(approved), **({"proofs": entry["proofs"]} if "proofs" in entry else {})}
+        elif changed:
+            semantic = owner_revision and row.get("check") != earlier.get("check")
+            initial = not previous.get("obligations")
+            old_scope = requirement_scope(entry) if entry.get("definition") == earlier.get("definition") else None
+            scope = observed if initial or semantic else old_scope
+            entry = {**(deepcopy(scope) if scope is not None else {}), "definition": row["definition"],
+                     **({"proofs": entry["proofs"]} if "proofs" in entry else {})}
+        if entry:
+            _validate_reselected_proof(entry, row, earlier)
+            _bind_proof_scopes(entry, row, earlier, observed, checkpoint["seq"])
+            ledger.setdefault("criterion_scopes", {})[row["id"]] = entry
 
 
 def refresh(state: dict, project: Path, source: dict) -> None:

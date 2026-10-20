@@ -185,15 +185,13 @@ def body_data(value: object) -> dict[str, str]:
 def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
     """Resolve each selected proof at its actual map sequence, or genuine introduction."""
     from .github import pod_blocks, pod_ref_number, validate_issue_binding
+    from .pod_ticks import proof_identity, requirement_scope, selected_pass_receipts
     prior = state["checkpoint"]
     rows = [row for row in prior["obligations"] if row["kind"] == "criterion"
             and row["provenance"] == "objective" and row["state"] != "withdrawn"]
     associations = {}
     for row in rows:
-        selected = [receipt for receipt in row.get("receipts", [])
-                    if receipt["evidence"] in row.get("evidence", [])
-                    and receipt["evidence"].get("status") == "PASS"
-                    and receipt["evidence"].get("definition") == row["definition"]]
+        selected = selected_pass_receipts(row)
         associations[row["id"]] = [{"seq": receipt.get("accepted_seq"), "receipt": receipt, "sources": {}}
                                    for receipt in selected] or [{"seq": row["introduced_seq"], "receipt": None, "sources": {}}]
     def add(slot, source):
@@ -255,20 +253,29 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
         fact = {"id": row["id"], "definition": row["definition"], "status": "unknown",
                 "reason": "prior_source_association_unavailable", "scope": None}
         local = state.get("pod_ticks", {}).get("criterion_scopes", {}).get(row["id"], {})
-        if local.get("definition") == row["definition"]:
-            resolved[row["id"]] = {**fact, "status": "known", "reason": None, "scope": deepcopy(local)}
-            continue
         candidates = []
+        if local.get("definition") == row["definition"]:
+            scope = requirement_scope(local)
+            if scope is None:
+                resolved[row["id"]] = fact
+                continue  # Unknown at actual acceptance; no original-hash resurrection.
+            candidates.append(scope)
+            if associations[row["id"]][0]["receipt"] is None:
+                resolved[row["id"]] = {**fact, "status": "known", "reason": None, "scope": deepcopy(scope)}
+                continue
         reason = fact["reason"]
         for slot in associations[row["id"]]:
+            proof = local.get("proofs", {}).get(proof_identity(slot["receipt"])) if slot["receipt"] else None
+            if proof is not None:
+                candidates.append(proof)
             sources = slot["sources"]
-            if not sources:
+            if not sources and proof is None:
                 break
-            if len({digest(source["amendments"]) for source in sources.values()}) != 1:
+            if sources and len({digest(source["amendments"]) for source in sources.values()}) != 1:
                 reason = "prior_source_scope_ambiguous"
                 break
             available = [(key, source) for key, source in sorted(sources.items()) if source["body_sha256"] in parsed]
-            if not available:
+            if not available and proof is None:
                 reason = "historical_body_unavailable"
                 break
             for source_digest, source in available:
