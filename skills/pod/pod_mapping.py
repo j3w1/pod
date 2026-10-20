@@ -280,7 +280,7 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
     """Only a genuine current R149 mapping can supersede withdrawn originals."""
     from .github import pod_ref_number
     from .issue_revision import Revision, validate_decision
-    from .obligations import definition_id
+    from .obligations import _authority, definition_id
     capability = ctx.get("issue_revision")
     same_write = isinstance(capability, Revision)
     if same_write:
@@ -304,15 +304,37 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
             or ctx.get("criteria") != [item["ref"] for item in approved]):
         return set()
     selected = {item["id"] for item in approved}
-    # Later metadata can change a live definition without undoing recorded
-    # supersession. Its check/source still match; this grants no passing proof.
+    accepted = {row["id"]: row for row in (prior or {}).get("obligations", [])}
+    authority = ctx.get("revision_authority")
+    session_write = (not same_write and ctx.get("operation") == "checkpoint"
+                     and seq == prior["seq"] + 1 and ctx.get("authority_kind") in ("revision", "question")
+                     and isinstance(authority, dict) and authority.get("channel") == "session"
+                     and _authority(authority, kind=ctx["authority_kind"]) == authority)
+    owner_revision = next((row for row in reversed((prior or {}).get("revision_decisions", []))
+                           if row.get("kind") in ("revision", "question")
+                           and row.get("channel", "session") == "session"
+                           and decision["seq"] < row["seq"] <= prior["seq"]), None)
+    if owner_revision is not None:
+        from .util import owner_decision
+        owner_decision(owner_revision, kind=owner_revision["kind"], stored=True)
+    # Historical retirement follows the actual accepted definition and its
+    # separate owner authority. It grants neither a new check nor passing proof.
     for item in approved:
         row = rows.get(item["id"])
         if (row is None or (row["kind"], row["provenance"]) != ("criterion", "objective")
-                or row["source"] != {"ref": item["ref"]} or row["check"] != item["check"]
-                or (same_write and row.get("definition") != item.get("definition"))
+                or row["source"] != {"ref": item["ref"]}
+                or (same_write and (row["check"] != item["check"]
+                                    or row.get("definition") != item.get("definition")))
                 or row["definition"] != definition_id(row)):
             return set()
+        if not same_write:
+            earlier = accepted.get(item["id"])
+            if (earlier is None or (earlier["kind"], earlier["provenance"], earlier["source"])
+                    != ("criterion", "objective", {"ref": item["ref"]})
+                    or earlier["definition"] != definition_id(earlier)
+                    or earlier["check"] != item["check"] and owner_revision is None
+                    or row["check"] != earlier["check"] and not session_write):
+                return set()
     mapped = {}
     for row in rows.values():
         number = pod_ref_number(effective_ref(row, ctx))

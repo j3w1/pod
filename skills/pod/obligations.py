@@ -1815,7 +1815,8 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
             _introduce(ob, ob["introduced_seq"] == 1, ob["provenance"] == "user_direct", None, [], list(ctx.get("criteria", [])),
                        issue_revision=introduced(state, ob))
         if ob["state"] == "withdrawn":
-            withdrawal = ob["withdrawal"]
+            withdrawal = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"),
+                                "withdrawal", obligation=ob["id"])
             if withdrawal.get("by") == "issue_revision":
                 _exact(withdrawal, {"by", "reason", "decision"}, {"by", "reason", "decision"}, "issue revision withdrawal")
                 _text(withdrawal["reason"], "withdrawal reason", limit=1024)

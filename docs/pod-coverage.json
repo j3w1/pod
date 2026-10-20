@@ -2988,7 +2988,10 @@
         "tests.test_owner_handoff.ContinuityRuntimeShapeTableTests.test_from_runtime_shapes_refuse_before_fingerprint_collection",
         "tests.test_owner_handoff.ContinuityRuntimeShapeTableTests.test_to_runtime_shapes_refuse_before_fingerprint_collection",
         "tests.test_owner_handoff.ContinuityRuntimeShapeTableTests.test_history_row_shapes_refuse_before_fingerprint_collection",
-        "tests.test_owner_handoff.SplitTableTests.test_split_tables_run_every_original_row_once"
+        "tests.test_owner_handoff.SplitTableTests.test_split_tables_run_every_original_row_once",
+        "tests.test_persisted_withdrawals.PersistedWithdrawalTests.test_nonobject_withdrawal_siblings_refuse_without_effects",
+        "tests.test_persisted_withdrawals.PersistedWithdrawalTests.test_malformed_object_withdrawals_keep_named_refusals",
+        "tests.test_persisted_withdrawals.WithdrawalStatusTests.test_nonobject_peer_withdrawals_hold_public_status_and_handoff"
       ],
       "status": "NOT_RUN"
     },
@@ -5241,11 +5244,22 @@
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_denied_or_mismatched_verdict_cannot_supersede_repaired_row",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_unverified_revision_and_caller_history_cannot_create_supersession",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_wrong_current_criteria_cannot_borrow_accepted_mapping",
-        "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_changed_live_definition_cannot_borrow_accepted_mapping",
+        "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_changed_live_definition_without_owner_authority_is_refused",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_synthetic_fake_capability_and_stale_mapping_supply_no_exception",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_genuine_stale_capability_cannot_authorize_a_later_mapping",
         "tests.test_issue_mapping_supersession.SupersessionTests.test_r6_proof_scope_metadata_preserves_supersession_and_acceptance_lineage",
-        "tests.test_issue_mapping_supersession.SupersessionTests.test_prior_owner_withdrawal_keeps_its_provenance_under_verified_supersession"
+        "tests.test_issue_mapping_supersession.SupersessionTests.test_prior_owner_withdrawal_keeps_its_provenance_under_verified_supersession",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_ordinary_canonical_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_repaired_original_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_verified_canonical_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_repaired_verified_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_session_revision_survives_admission_report_and_later_checkpoint",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_session_revision_closes_with_fresh_proof_and_readable_history",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_session_revision_followed_by_withdrawal_keeps_retired_history",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_returning_check_hash_cannot_resurrect_proof_from_changed_scope",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_unobserved_session_scope_stays_unknown_through_later_writes",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_historical_session_authority_cannot_license_a_new_check",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_historical_semantic_lineage_needs_accepted_row_and_session_decision"
       ],
       "status": "NOT_RUN"
     },
@@ -6957,7 +6971,7 @@
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_denied_or_mismatched_verdict_cannot_supersede_repaired_row",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_unverified_revision_and_caller_history_cannot_create_supersession",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_wrong_current_criteria_cannot_borrow_accepted_mapping",
-        "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_changed_live_definition_cannot_borrow_accepted_mapping",
+        "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_changed_live_definition_without_owner_authority_is_refused",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_synthetic_fake_capability_and_stale_mapping_supply_no_exception",
         "tests.test_issue_mapping_supersession.SupersessionRefusalTests.test_genuine_stale_capability_cannot_authorize_a_later_mapping"
       ],
@@ -7062,7 +7076,18 @@
         "tests.test_issue_mapping_supersession.SupersessionTests.test_later_report_map_keeps_approved_supersession",
         "tests.test_issue_mapping_supersession.SupersessionTests.test_closing_write_and_reader_agree_on_approved_supersession",
         "tests.test_issue_mapping_supersession.SupersessionTests.test_r6_proof_scope_metadata_preserves_supersession_and_acceptance_lineage",
-        "tests.test_issue_mapping_supersession.SupersessionTests.test_prior_owner_withdrawal_keeps_its_provenance_under_verified_supersession"
+        "tests.test_issue_mapping_supersession.SupersessionTests.test_prior_owner_withdrawal_keeps_its_provenance_under_verified_supersession",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_ordinary_canonical_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_repaired_original_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_verified_canonical_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_repaired_verified_session_revision_sibling",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_session_revision_survives_admission_report_and_later_checkpoint",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_session_revision_closes_with_fresh_proof_and_readable_history",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_session_revision_followed_by_withdrawal_keeps_retired_history",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_returning_check_hash_cannot_resurrect_proof_from_changed_scope",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_unobserved_session_scope_stays_unknown_through_later_writes",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_historical_session_authority_cannot_license_a_new_check",
+        "tests.test_issue_mapping_supersession.OwnerSessionSupersessionTests.test_historical_semantic_lineage_needs_accepted_row_and_session_decision"
       ],
       "status": "NOT_RUN"
     },

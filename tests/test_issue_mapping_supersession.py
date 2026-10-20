@@ -7,6 +7,7 @@ from pod.github import issue_intake, pod_blocks
 from pod.issue_revision import source_check
 from pod.ledger import kernel_context, read
 from pod.obligations import definition_id, validate_closed_snapshot
+from pod.pod_ticks import requirement_epoch, requirement_scope
 from pod.pod_mapping import superseded_originals
 from tests.test_issue_revision import IssueRevisionCase
 from tests.test_pod_mapping_repair import RepairCase
@@ -208,12 +209,16 @@ class SupersessionRefusalTests(SupersessionCase):
             with self.subTest(criteria=criteria):
                 self.held("original_criteria_required", self.write, criteria=criteria)
 
-    def test_changed_live_definition_cannot_borrow_accepted_mapping(self):
+    def test_changed_live_definition_without_owner_authority_is_refused(self):
         self.supersede()
         rows = self.stored()
         rows[1]["check"] += " Changed semantic check."
-        self.held("original_criteria_required", self.write, rows, revision_authority={
-            "provenance": "user_direct", "instruction": "Change the live check"})
+        before, calls = self.saved(), len(self.requests)
+        error = self.failure("obligation_invalid", self.write, rows)
+        self.assertEqual(error.detail["detail"], "redefinition_unauthorized")
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(len(self.requests), calls)
+        self.assertEqual((self.port.starts, self.issue.writes, self.remote.calls), ([], [], []))
 
     def test_synthetic_fake_capability_and_stale_mapping_supply_no_exception(self):
         self.bind_original()
@@ -256,3 +261,214 @@ class SupersessionRefusalTests(SupersessionCase):
     def supersede_on_existing_repair(self):
         self.revise(self.remapping())
         self.criteria = ["PoD#1", "PoD#2"]
+
+
+OWNER = {"provenance": "user_direct", "channel": "session", "instruction": "Revise the acceptance check"}
+
+
+class OwnerSessionSupersessionTests(SupersessionCase):
+    """One production sibling matrix, with independent authority and recording ports."""
+
+    def semantic_sibling(self, kind):
+        if kind in ("canonical", "verified-canonical"):
+            self.criteria = ["PoD#1"]
+            self.begin()
+            if kind == "verified-canonical":
+                self.revise(self.proposal())
+                self.criteria = ["PoD#1", "PoD#2"]
+            index = 0
+        else:
+            if kind == "repaired":
+                self.bind_original()
+                self.repair()
+                index = 0
+            else:
+                self.supersede()
+                index = 1
+        before = deepcopy(read(self.project, "objective"))
+        calls = len(self.requests)
+        for explicit_channel in (False, True):
+            rows = self.stored()
+            rows[index]["check"] += " Owner requires additional diagnostics."
+            authority = dict(OWNER)
+            if not explicit_channel:
+                authority.pop("channel")
+            self.write(rows, revision_authority=authority)
+            accepted = read(self.project, "objective")
+            row = accepted["checkpoint"]["obligations"][index]
+            self.assertEqual(row["check"], rows[index]["check"])
+            self.assertEqual(row["definition"], definition_id(row))
+            self.assertEqual(row["receipts"], [])
+            self.assertEqual(accepted["checkpoint"]["revision_decisions"][-1]["channel"], "session")
+            entry = accepted["pod_ticks"]["criterion_scopes"][row["id"]]
+            self.assertEqual(requirement_epoch(entry, row, accepted["checkpoint"]), accepted["checkpoint"]["seq"])
+        accepted = deepcopy(read(self.project, "objective"))
+        self.write()
+        self.issue.body += "\n\n## Delivery\nRecord ordinary delivery bookkeeping.\n"
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write(objective_source=source)
+        self.write()
+        after = read(self.project, "objective")
+        self.assertEqual(after["checkpoint"]["obligations"], accepted["checkpoint"]["obligations"])
+        self.assertEqual(after["checkpoint"]["revision_decisions"], accepted["checkpoint"]["revision_decisions"])
+        self.assertEqual(after["pod_ticks"]["criterion_scopes"], accepted["pod_ticks"]["criterion_scopes"])
+        if kind == "repaired":
+            self.assertTrue(after["checkpoint"]["obligations"][0]["pod_mapping"]["invalidated"])
+        if kind == "repaired-verified":
+            self.assertEqual(after["checkpoint"]["obligations"][0], before["checkpoint"]["obligations"][0])
+        self.assertFalse(any(line["proven"] for line in self.ticks()["lines"]))
+        self.assertEqual(len(self.requests), calls)
+        self.assertEqual((self.port.starts, self.issue.writes, self.remote.calls), ([], [], []))
+
+    def test_ordinary_canonical_session_revision_sibling(self):
+        self.semantic_sibling("canonical")
+
+    def test_repaired_original_session_revision_sibling(self):
+        self.semantic_sibling("repaired")
+
+    def test_verified_canonical_session_revision_sibling(self):
+        self.semantic_sibling("verified-canonical")
+
+    def test_repaired_verified_session_revision_sibling(self):
+        self.semantic_sibling("repaired-verified")
+
+    def change_replacement(self):
+        rows = self.stored()
+        rows[1]["check"] += " Owner requires additional diagnostics."
+        self.write(rows, revision_authority=OWNER)
+        return deepcopy(read(self.project, "objective"))
+
+    def test_session_revision_survives_admission_report_and_later_checkpoint(self):
+        self.supersede()
+        accepted = self.change_replacement()
+        calls = len(self.requests)
+        frozen = self.packet(["R1"], criteria=self.criteria)
+        admission = self.start("owner-revised", frozen,
+            accompanying={"seq": accepted["checkpoint"]["seq"] + 1})["admission"]
+        self.port.workers[admission["native_binding"]["dispatchId"]]["outcome"] = "succeeded"
+        rows = self.stored()
+        rows[1]["executor"] = "coordinator"
+        self.report(admission, frozen, map={
+            "seq": read(self.project, "objective")["checkpoint"]["seq"] + 1, "obligations": rows})
+        self.write()
+        after = read(self.project, "objective")
+        self.assertEqual(after["checkpoint"]["obligations"][0], accepted["checkpoint"]["obligations"][0])
+        self.assertEqual(after["checkpoint"]["obligations"][1]["check"], accepted["checkpoint"]["obligations"][1]["check"])
+        self.assertEqual(after["checkpoint"]["revision_decisions"], accepted["checkpoint"]["revision_decisions"])
+        self.assertEqual(len(self.requests), calls)
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_session_revision_closes_with_fresh_proof_and_readable_history(self):
+        self.supersede(old_proof=True)
+        accepted = self.change_replacement()
+        calls = len(self.requests)
+        self.prove_live()
+        self.tick(1)
+        self.tick(2)
+        self.write(close=True)
+        state = read(self.project, "objective")
+        self.assertEqual(validate_closed_snapshot(state["checkpoint"],
+            kernel_context(self.project, "objective", state, None)), ())
+        self.assertEqual(state["checkpoint"]["obligations"][0], accepted["checkpoint"]["obligations"][0])
+        self.assertEqual(state["checkpoint"]["revision_decisions"], accepted["checkpoint"]["revision_decisions"])
+        self.assertTrue(all(line["proven"] for line in self.ticks()["lines"]))
+        self.assertEqual(len(self.requests), calls)
+
+    def test_session_revision_followed_by_withdrawal_keeps_retired_history(self):
+        self.supersede()
+        rows = self.stored()
+        rows[1].pop("executor")
+        rows[1].update(check="Owner withdraws the revised replacement", state="withdrawn",
+                       withdrawal={"by": "user_direct", "reason": "Owner removed this result"})
+        rows[2].pop("wait")
+        rows[2].update(state="active", executor="coordinator")
+        self.write(rows, revision_authority=OWNER)
+        accepted = deepcopy(read(self.project, "objective"))
+        self.write()
+        self.prove_live()
+        self.tick(2)
+        self.write(close=True)
+        state = read(self.project, "objective")
+        self.assertEqual(validate_closed_snapshot(state["checkpoint"],
+            kernel_context(self.project, "objective", state, None)), ())
+        self.assertEqual(state["checkpoint"]["obligations"][:2], accepted["checkpoint"]["obligations"][:2])
+
+    def test_returning_check_hash_cannot_resurrect_proof_from_changed_scope(self):
+        self.supersede()
+        self.prove_live()
+        original = deepcopy(self.stored()[1])
+        self.issue.body = self.issue.body.replace("Check unchanged.", "Check changed physical scope.")
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write(objective_source=source)
+        rows = self.stored()
+        rows[1].pop("evidence")
+        rows[1].update(check="Owner requires revised diagnostics", state="active", executor="coordinator")
+        self.write(rows, revision_authority=OWNER)
+        rows = self.stored()
+        rows[1].pop("executor")
+        rows[1].update(check=original["check"], state="satisfied", evidence=[
+            {key: value for key, value in item.items() if key != "governance"} for item in original["evidence"]])
+        before, calls = self.saved(), len(self.requests)
+        error = self.failure("obligation_unaccounted", self.write, rows, revision_authority=OWNER)
+        self.assertEqual(error.detail["detail"], "evidence_invalidated")
+        self.assertEqual(self.saved(), before)
+        rows[1]["evidence"][0]["reference"] = "fresh-revised-scope-proof"
+        self.write(rows, revision_authority=OWNER)
+        after = self.stored()[1]
+        self.assertEqual(after["definition"], original["definition"])
+        self.assertEqual(after["receipts"][0], original["receipts"][0])
+        self.assertEqual(len(self.requests), calls)
+
+    def test_unobserved_session_scope_stays_unknown_through_later_writes(self):
+        self.supersede()
+        self.issue.body += "\n\n## Delivery\nUnobserved metadata.\n"
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        with patch("pod.pod_ticks.refresh"):
+            self.write(objective_source=source)
+        accepted = self.change_replacement()
+        entry = accepted["pod_ticks"]["criterion_scopes"]["R1"]
+        self.assertIsNone(requirement_scope(entry))
+        self.assertEqual(entry["acceptance"]["seq"], accepted["checkpoint"]["seq"])
+        self.write()
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["criterion_scopes"]["R1"], entry)
+        self.assertFalse(self.line()["proven"])
+
+    def test_historical_session_authority_cannot_license_a_new_check(self):
+        self.supersede()
+        self.change_replacement()
+        rows = self.stored()
+        rows[1]["check"] += " Unauthorized further change."
+        before, calls = self.saved(), len(self.requests)
+        error = self.failure("obligation_invalid", self.write, rows)
+        self.assertEqual(error.detail["detail"], "redefinition_unauthorized")
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(len(self.requests), calls)
+
+    def test_historical_semantic_lineage_needs_accepted_row_and_session_decision(self):
+        self.supersede()
+        self.change_replacement()
+        state = deepcopy(read(self.project, "objective"))
+        prior = state["checkpoint"]
+        rows = deepcopy({row["id"]: row for row in prior["obligations"]})
+        ctx = kernel_context(self.project, "objective", state, None)
+        self.assertEqual(superseded_originals(prior, rows, ctx), {"O1"})
+        before = self.saved()
+        for kind in ("current-check", "missing-session", "non-session", "retired-withdrawal", "source", "criteria"):
+            with self.subTest(kind=kind):
+                p, r, c = deepcopy((prior, rows, ctx))
+                if kind == "current-check":
+                    r["R1"]["check"] += " Synthetic unaccepted check."
+                    r["R1"]["definition"] = definition_id(r["R1"])
+                elif kind == "missing-session":
+                    p["revision_decisions"].pop()
+                elif kind == "non-session":
+                    p["revision_decisions"][-1]["channel"] = "relayed"
+                elif kind == "retired-withdrawal":
+                    r["O1"]["withdrawal"]["decision"] += 1
+                elif kind == "source":
+                    r["R1"]["source"] = {"ref": "PoD#99"}
+                    r["R1"]["definition"] = definition_id(r["R1"])
+                else:
+                    c["criteria"] = list(reversed(c["criteria"]))
+                self.assertEqual(superseded_originals(p, r, c), set())
+        self.assertEqual(self.saved(), before)
