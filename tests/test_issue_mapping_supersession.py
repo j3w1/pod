@@ -453,7 +453,7 @@ class OwnerSessionSupersessionTests(SupersessionCase):
         ctx = kernel_context(self.project, "objective", state, None)
         self.assertEqual(superseded_originals(prior, rows, ctx), {"O1"})
         before = self.saved()
-        for kind in ("current-check", "missing-session", "non-session", "retired-withdrawal", "source", "criteria"):
+        for kind in ("current-check", "missing-session", "non-session", "withdrawal-decision", "source", "criteria"):
             with self.subTest(kind=kind):
                 p, r, c = deepcopy((prior, rows, ctx))
                 if kind == "current-check":
@@ -463,7 +463,7 @@ class OwnerSessionSupersessionTests(SupersessionCase):
                     p["revision_decisions"].pop()
                 elif kind == "non-session":
                     p["revision_decisions"][-1]["channel"] = "relayed"
-                elif kind == "retired-withdrawal":
+                elif kind == "withdrawal-decision":
                     r["O1"]["withdrawal"]["decision"] += 1
                 elif kind == "source":
                     r["R1"]["source"] = {"ref": "PoD#99"}
