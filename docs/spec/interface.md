@@ -745,7 +745,7 @@ For selected current-definition PASS receipts, each immutable `accepted_seq`
 must resolve the source in that same accepted map, independently of a matching
 requirement-scope cache. First-acceptance scope facts supply that proof-time
 identity; older missing facts use an actual same-sequence current
-checkpoint or retained snapshot, a matching tick request source with immutable
+checkpoint or retained snapshot, a matching live or snapshotted tick request source with immutable
 criterion/ref/definition membership, or a reservation checkpoint at
 `admitted_seq - 1` with matching served definition. Tick checkbox rebinds preserve
 map sequence and physical scope; ordinary source observations advance sequence.

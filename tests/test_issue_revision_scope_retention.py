@@ -281,6 +281,24 @@ finally:
         self.assertEqual(self.state()["admissions"], before["admissions"])
         self.assertEqual(self.scope()["acceptance"], before["pod_ticks"]["criterion_scopes"]["O1"]["acceptance"])
 
+    def test_genuine_history_retains_proof_source_after_live_tick_request_is_replaced(self):
+        self.previous_accepted()
+        original = deepcopy(self.row())
+        earlier_request = deepcopy(self.state()["pod_ticks"]["requests"]["1"])
+        self.observe(self.issue.body.replace("- [x]", "- [ ]", 1))
+        self.tick()
+        latest = self.state()["pod_ticks"]["requests"]["1"]
+        self.assertGreater(latest["seq"], earlier_request["seq"])
+        self.assertNotEqual(latest["source"], earlier_request["source"])
+        self.verdict_changes = {"single_use": "earlier-tick-snapshot-keep"}
+        self.revise(self.add_pod(3))
+        self.assertEqual(self.row(), original)
+        proof = self.scope()["proofs"][proof_identity(original["receipts"][0])]
+        self.assertEqual(proof["source_digest"], digest(earlier_request["source"]))
+        self.assertEqual(self.state()["pod_ticks"]["requests"]["1"], latest)
+        line = self.line()
+        self.assertEqual((line["proven"], line["authorship"], line["due"]), (True, "own", False))
+
     def test_genuine_known_history_cannot_certify_a_different_selected_receipt(self):
         self.previous_accepted()
         beta = self.issue.body.replace("alpha", "beta")

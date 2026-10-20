@@ -254,7 +254,12 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
                 for slot in slots(row):
                     if type(slot["seq"]) is int and admission.get("admitted_seq") == slot["seq"] + 1:
                         add(slot, checkpoint.get("objective_source"))
-    for request in state.get("pod_ticks", {}).get("requests", {}).values():
+    requests = [(request, None) for request in state.get("pod_ticks", {}).get("requests", {}).values()]
+    for decision in prior.get("revision_decisions", []):
+        if decision.get("operation") == OPERATION:
+            previous = decision["previous"]
+            requests.extend((request, previous) for request in (previous.get("pod_ticks") or {}).get("requests", {}).values())
+    for request, previous in requests:
         for row in rows:
             for slot in associations[row["id"]]:
                 # The receipt proves this definition belonged to the same map.
@@ -263,6 +268,13 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
                 if (slot["receipt"] is not None and type(slot["seq"]) is int
                         and row["introduced_seq"] <= slot["seq"] == request["seq"]
                         and slot["receipt"]["evidence"].get("criterion") == row["id"]):
+                    if previous is not None:
+                        recorded = next((ob for ob in previous["obligations"] if ob["id"] == row["id"]), {})
+                        if (recorded.get("source") != row.get("source")
+                                or row.get("source", {}).get("ref") not in previous["criteria"]
+                                or not any(proof_identity(receipt) == proof_identity(slot["receipt"])
+                                           for receipt in recorded.get("receipts", []))):
+                            continue
                     add(slot, request["source"])
     # A known accepted reconciliation certifies only the requirement lineage and
     # exact selected receipts in its previous snapshot. Its common block hash

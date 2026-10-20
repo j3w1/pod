@@ -6912,6 +6912,7 @@
         "tests.test_issue_revision_scope_retention.PreviousAcceptedRetentionTests.test_genuine_accepted_history_recovers_proof_and_own_tick_without_data",
         "tests.test_issue_revision_scope_retention.PreviousAcceptedRetentionTests.test_genuine_accepted_history_prevents_identical_source_retirement",
         "tests.test_issue_revision_scope_retention.PreviousAcceptedRetentionTests.test_genuine_accepted_history_keeps_running_first_admission",
+        "tests.test_issue_revision_scope_retention.PreviousAcceptedRetentionTests.test_genuine_history_retains_proof_source_after_live_tick_request_is_replaced",
         "tests.test_issue_revision_scope_retention.PreviousAcceptedRetentionTests.test_genuine_known_history_cannot_certify_a_different_selected_receipt",
         "tests.test_issue_revision_scope_retention.PreviousAcceptedRetentionTests.test_genuine_accepted_requirement_survives_metadata_definition_change",
         "tests.test_issue_revision_scope_retention.PreviousAcceptedRetentionTests.test_returning_semantic_epoch_cannot_borrow_genuine_known_history"
