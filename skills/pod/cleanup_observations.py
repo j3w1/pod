@@ -263,8 +263,7 @@ def storage_once(project: Path, name: str, repository: dict) -> tuple[dict, dict
         elif current["symref"] or (current["oid"] != packed):
             raise archives.Unavailable("Logical and packed reference identities differ")
         if contents["reflog"] is not None:
-            reflog_pairs(contents["reflog"], repository["object_format"],
-                         limit=2048 if name == "refs/stash" else archives.MAX_RESOURCE_REFLOG_ENTRIES)
+            reflog_pairs(contents["reflog"], repository["object_format"])
         result["status"] = "observed"
     except (archives.Unavailable, OSError, KeyError, ValueError, UnicodeError):
         result["reasons"].append("storage_unavailable")

@@ -204,7 +204,9 @@ entries, independently of the 96 resource/ref count. Raw metadata bytes, distinc
 required roots/objects, private ref and administrative-name counts, incarnation and
 time limits still apply. Repeated entries do not create provenance. Unknown
 `REBASE_HEAD`, `AUTO_MERGE` and other unsupported administrative roots still hold.
-The stash retaining-log and snapshot limits keep their own existing domain.
+Selected reference-storage logs, including the stash retaining log, keep their
+existing 2048-entry limit; 2049 entries hold. The stash snapshot limit remains
+independent.
 
 ## Archives and consumer handoff
 

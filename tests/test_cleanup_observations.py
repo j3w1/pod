@@ -235,6 +235,35 @@ class SelectedObservationTests(unittest.TestCase):
             output.write(f"{self.source.case.base} {self.source.case.base} Fixture <fixture@example.invalid> 1 +0000\tsynthetic\n".encode())
         self.assert_changed(first)
 
+    def test_selected_branch_log_keeps_its_original_2048_entry_limit(self):
+        log = self.source.common / "logs" / self.source.ref
+        self.preserve(log)
+        entry = log.read_bytes().splitlines(keepends=True)[-1]
+        for count, status in ((2048, "observed"), (2049, "unavailable")):
+            with self.subTest(entries=count):
+                log.write_bytes(entry * count)
+                row = self.source.row()
+                self.assertEqual(row["identity"]["ref_storage"]["status"], status)
+                self.assertEqual(row["identity"]["current"]["status"],
+                                 "present" if status == "observed" else "unavailable")
+                self.assertIsNone(row["delete_argv"])
+                if status == "unavailable":
+                    self.assertIn("resource_identity_unavailable", row["reasons"])
+
+    def test_stash_storage_log_keeps_its_independent_2048_entry_limit(self):
+        log = self.source.common / "logs" / "refs/stash"
+        self.preserve(log)
+        entry = log.read_bytes().splitlines(keepends=True)[-1]
+        repository = archives.repository_observation(self.source.case.project)
+        for count, status in ((2048, "observed"), (2049, "unavailable")):
+            with self.subTest(entries=count):
+                raw = entry * count
+                log.write_bytes(raw)
+                stored = observations.ref_storage(self.source.case.project, "refs/stash", repository)
+                self.assertEqual(stored["status"], status)
+                self.assertEqual(stored["reflog"]["sha256"], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(stored["freshness"]["stable"], status == "observed")
+
     def test_recycled_ref_ancestor_inode_with_retained_leaf_invalidates_old_expect(self):
         source, case = self.source, self.source.case
         ref = "refs/heads/ancestor/retained/selected"

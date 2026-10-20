@@ -6722,6 +6722,8 @@
         "tests.test_cleanup_plan.CleanupReflogScaleTests.test_4096_private_entries_do_not_grant_private_name_preservation",
         "tests.test_cleanup_plan.CleanupReflogScaleTests.test_4097_head_entries_stay_held",
         "tests.test_cleanup_plan.CleanupReflogScaleTests.test_unknown_auto_merge_is_still_held",
+        "tests.test_cleanup_observations.SelectedObservationTests.test_selected_branch_log_keeps_its_original_2048_entry_limit",
+        "tests.test_cleanup_observations.SelectedObservationTests.test_stash_storage_log_keeps_its_independent_2048_entry_limit",
         "tests.test_cleanup_archives.ArchiveConsolidatedTests.test_actual_4097_advertisements_refuse_independently_of_the_input_map",
         "tests.test_cleanup_archives.ArchiveConsolidatedTests.test_consolidated_malformed_or_stale_last_target_cannot_escape_validation",
         "tests.test_cleanup_archives.ArchiveBranchTests.test_recycled_ancestor_inode_with_retained_leaf_identity_invalidates_expect",
