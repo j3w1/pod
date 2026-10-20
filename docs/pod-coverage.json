@@ -6677,7 +6677,8 @@
         "tests.test_cleanup_target.DeliveredTargetTests.test_the_delivered_target_classifies_the_delivered_worktree_integrated",
         "tests.test_cleanup_target.DeliveredTargetTests.test_a_later_merge_that_advances_the_target_keeps_the_delivery_and_its_guarded_commands",
         "tests.test_cleanup_target.DeliveredTargetTests.test_a_target_that_no_longer_contains_the_delivery_result_protects_every_dependent_resource",
-        "tests.test_cleanup_target.DeliveredTargetTests.test_unreadable_ancestry_of_the_delivery_result_reads_moved_and_protects"
+        "tests.test_cleanup_target.DeliveredTargetTests.test_unreadable_ancestry_of_the_delivery_result_reads_moved_and_protects",
+        "tests.test_cleanup_target.DeliveredTargetTests.test_an_advanced_target_invalidates_the_old_expect"
       ],
       "status": "NOT_RUN"
     },
