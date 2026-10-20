@@ -130,6 +130,7 @@ TABLE = {
         **{key: _ANY for key in ("plan_revision", "policy_revision", "assignments", "questions",
                                   "verification_gaps", "next_safe_action", "route_decisions", "objective", "blocker", "remaining_gates")},
         "objective_source": {"type": "object", "form": "bound issue source"},
+        "issue_revision_data": record("issue revision data"),
         "native_refs": items(32, {"type": "object", "form": "runId and runtime text"}),
         "worktree": record("worktree_binding"), "verification": record("verification"), "display": record("display"),
     }, ("schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs", "assignments",
@@ -161,7 +162,8 @@ TABLE = {
                         "rationale": text(), "revisit_when": text(), "inputs": _ANY}, ("class", "referent")),
     "external": definition({"party": choice(PARTIES), "need": text(), "unblocks_when": text()},
                            ("party", "need", "unblocks_when")),
-    "withdrawal": definition({"by": choice(("user_direct", "project_policy", "coordinator")), "reason": text(1024),
+    "withdrawal": definition({"by": choice(("user_direct", "project_policy", "coordinator", "issue_revision")), "reason": text(1024),
+                              "decision": {"type": "integer", "minimum": 1, "stored_only": True},
                               "instruction": _ANY, "channel": choice(("session", "relayed")), "relay": {"type": "object"}},
                              ("by", "reason")),
     "evidence": definition({"schema": choice(("pod-evidence/v1",)),
@@ -226,6 +228,7 @@ TABLE["governance"] = definition({"base_ref": {**text(256), "nullable": True},
                                               "items": choice(GOVERNANCE_PATHS)},
                                   "base": _ANY}, ("base_ref",))
 TABLE["revision authority"] = definition({"provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
+                                          "operation": {**choice(("issue_revision",)), "form": "selects the checkpoint-only issue revision authority record"},
                                           "question": text(), "channel": choice(("session", "relayed")),
                                           "relay": {"type": "object"}}, ("provenance", "instruction"))
 TABLE["disposition"] = definition({"admission": {"type": "text"}, "integrated_into": text(128),
@@ -257,6 +260,11 @@ TABLE["decision_relay"] = definition({key: text(512) for key in ("reference", "o
                                      ("reference", "owner_source"))
 TABLE["authorization relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
                                           ("reference",))
+TABLE["issue revision relay"] = definition({"reference": text(512)}, ("reference",))
+TABLE["issue revision authority"] = definition({"operation": choice(("issue_revision",)),
+    "provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
+    "channel": choice(("relayed",)), "relay": record("issue revision relay")},
+    ("operation", "provenance", "instruction", "channel", "relay"))
 STANDING_SCOPES = ("publish", "merge", "release", "install", "cleanup", "deploy")
 STANDING_EXCLUSIONS = ("deploy", "paid_resources", "secrets", "unique_deletion", "scope_growth")
 TABLE["standing decision"] = definition({
@@ -270,6 +278,14 @@ TABLE["responder answer"] = definition({
     "question": text(512), "text": text(4096),
     "relay": {"type": "object", "fields": {"reference": text(512)}},
 }, ("question", "text", "relay"))
+TABLE["issue revision data"] = definition({
+    "historical_bodies": items(64, record("issue body data")),
+}, ("historical_bodies",), max_bytes=128 * 1024)
+TABLE["issue body data"] = definition({
+    "body_sha256": _DIGEST,
+    "body": {"type": "text", "max_length": 512 * 1024, "max_bytes": 512 * 1024,
+             "form": "exact UTF-8 body DATA, never authority"},
+}, ("body_sha256", "body"))
 TABLE["standing decision"]["stored_max_bytes"] = 4 * 1024
 TABLE["responder answer"]["stored_max_bytes"] = 8 * 1024
 TABLE["standing authorization"] = definition({

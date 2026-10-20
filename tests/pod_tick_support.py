@@ -78,9 +78,9 @@ class TickCase(ProductionCase):
             row.update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "scope removed"})
             fields["revision_authority"] = {"provenance": "user_direct", "instruction": "drop PoD#1"}
         elif remove_mapping:
-            # D2/D7 are forward-compatible table cases. Today's kernel never
-            # drops criteria or changes their source. Replace only the mapping
-            # lookup, preserving the real decision/protocol/record/closure code.
+            # Synthetic D2/D7 table controls replace only the mapping lookup.
+            # Separate issue-revision/observation cases reach mapping loss
+            # through supported entries while retaining every criterion row.
             replacement = patch("pod.pod_ticks.mapping", return_value={})
             replacement.start(); self.addCleanup(replacement.stop)
             return

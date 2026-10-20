@@ -90,6 +90,38 @@ def flip_pod_checkbox(body: str, offset: int, ticked: bool) -> str:
     return body[:offset] + target + body[offset + 1:]
 
 
+def pod_blocks(body: str) -> dict[int, list[dict]]:
+    """Complete physical list-item scope for recognized PoDs, without their checkbox.
+
+    Indented continuations/nested lists, internal blank lines and lazy paragraph
+    continuations belong to the item. A sibling block or an unindented paragraph
+    after a blank line ends it. Only the final line terminator is excluded.
+    """
+    physical = body.split("\n")
+    positions, offset = {}, 0
+    for index, raw in enumerate(physical):
+        positions[offset + 3] = index
+        offset += len(raw) + 1
+    boundary = re.compile(r"(?:#{1,6}(?:[ \t]|$)|(?:[-+*]|[0-9]+[.)])[ \t]+|>|(?:[-*_][ \t]*){3,}$)")
+    found = {}
+    for number, occurrences in pod_lines(body).items():
+        for occurrence in occurrences:
+            first = positions[occurrence["offset"]]
+            last, blank = first + 1, False
+            for index in range(first + 1, len(physical)):
+                line = physical[index].removesuffix("\r")
+                if not line.strip(" \t"):
+                    blank = True
+                    continue
+                if not line.startswith((" ", "\t")) and (blank or boundary.match(line) or _FENCE.fullmatch(line)):
+                    break
+                last, blank = index + 1, False
+            text = "\n".join(physical[first:last])[6:].removesuffix("\r")
+            found.setdefault(number, []).append({**occurrence, "text": text,
+                "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+    return found
+
+
 def _name(value: object) -> bool:
     return isinstance(value, str) and _NAME.fullmatch(value) is not None and ".." not in value
 

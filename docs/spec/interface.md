@@ -84,6 +84,8 @@ Type: B,H · Scenarios: [A102](#a102), [A103](#a103), [A203](#a203), [A253](#a25
 
 Bind issue identity, canonical locator, body digest and relevant amendment references into checkpoints, packets and final verification without copying the issue body into state. Recheck at intake, continuation, affected admission and final verification. Body change requires reconciliation; metadata alone does not, except that a title gaining an EEL/SEAL marker stops execution like the body marker, and every caller surfaces the role refusal itself. Forward Governor decisions/execution recheck the checkpoint source before native continuity or remote effects; role changes, body/amendment drift and inaccessible reads hold forward work. Cancellation, outcome recording and provider readback retain their supported paths. Closure alone does not block already authorized Governor work: reconcile closed-issue intent at intake, and rebind reconciled body/amendment changes through the existing checkpoint. Amendments are not checked for markers. Preserve unaffected proof and never replace an admitted uncertain native request with a revised packet. R131 adds the sole automatic body rebind: a tick's matching intended readback and receipt atomically update the checkpoint digest without a map transition or evidence invalidation. Other body edits still reconcile through a checkpoint, whose line-fact refresh is best effort. Ticks never use the Governor's closed-source exemption: CLOSED stays blocked, even after reconciliation/rebind, until an outside reopen. Every issue_reconciliation_required includes the recheck reason. Reserved or unresolved admissions keep their original packet and defer a tick with pod_tick_admission_pending until settlement; an in-flight tick intent defers new admission with pod_tick_pending.
 
+R149 adds verified issue-derived criteria reconciliation to the same checkpoint path; source observation alone still grants no revision authority.
+
 ### R69 — Keep the public product independent of
 
 Type: B,H · Scenarios: [A111](#a111), [A112](#a112)
@@ -230,19 +232,21 @@ After plan approval, use the PES template to draft only ready PESs with target, 
 
 Type: B,H · Scenarios: [A381](#a381), [A382](#a382), [A383](#a383), [A384](#a384), [A385](#a385)
 
-Only the objective's own bound PES issue is in scope. The one bounded document-recognition exception to R62 is an unindented body line beginning exactly `- [ ] **PoD#N`, `- [x] **PoD#N` or `- [X] **PoD#N`, with N of one to nine decimal digits followed by a nondigit or end of text. LF and CRLF are recognized; quoted, indented and fenced-code lines are excluded. CommonMark backtick/tilde fences use at most three leading spaces and a same-character closer at least as long; an unclosed fence excludes the rest. No other PES prose is parsed.
+Only the objective's own bound PES issue is in scope. The one bounded document-recognition exception to R62 is an unindented body line beginning exactly `- [ ] **PoD#N`, `- [x] **PoD#N` or `- [X] **PoD#N`, with N of one to nine decimal digits followed by a nondigit or end of text. LF and CRLF are recognized; quoted, indented and fenced-code lines are excluded. CommonMark backtick/tilde fences use at most three leading spaces and a same-character closer at least as long; an unclosed fence excludes the rest. R149 additionally binds the complete physical list-item block for criteria reconciliation; tick recognition remains this line rule.
 
 A live criterion maps to N through its effective reference: its original canonical source.ref, or its current kernel-owned pod_mapping association. Exact `PoD#1` maps to 1, never 10. Withdrawn criteria, including superseded criteria retained as withdrawn, have no live mapping; their original rows, receipts and own tick/untick history remain. Coverage retains immutable original references and recognizes a current derived reference through this same predicate. Intake, status, report tick readback, tick/untick and closure use it. Proven means a nonempty mapping in which every criterion is satisfied and evidence_valid against the current facts and bound governance is true, exactly as closure requires. Withdrawal is not satisfaction. Unmapped lines are never proven or due to tick; missing or duplicated lines are never written.
 
 An ordinary checkpoint may request `mapping_repair: {original_body, targets}`, where original_body is at most 512 KiB of UTF-8 DATA and targets maps 1–64 existing criterion IDs to exact `PoD#N` references. Its next map seq is required. No digest, approval, verifier, source binding or proof assertion is accepted in this request. The actual preceding kernel checkpoint or the earliest qualified accepted native admission's recovery.checkpoint_binding establishes the original complete issue binding independently of the DATA. Admission facts must join the same objective, native Run/Task, accepted sequence at or after criterion introduction, original criteria and served definition where applicable. An unserved target requires unchanged map revision 1; criteria membership alone cannot establish its check across a revision. Unavailable, ambiguous or conflicting accepted history holds; never choose whichever packet makes the caller body hash pass. SHA256 of the raw DATA must equal that original binding's body_sha256; repository, issue, locator and the complete amendment list must separately match the current binding. A fresh issue-port read must match the current binding and pass its normal source checks.
 
-The supported repair changes only the ASCII space in an explicit, recognized, outside-fence, column-zero checkbox label `- [ ] **PoD N:` (also x/X) to `PoD#N:`. The immutable source.ref must begin `PoD N:` with the same textual number. Old and current complete bodies must be byte-identical after only these label changes, including checkbox state, line endings and every other byte. Each target needs one old and one current recognized line and one live mapping. Arbitrary aliases, inferred numbers, changed checks/meaning, duplicate targets and caller-created or changed associations refuse atomically. Only exact stored association restatement is accepted; omission carries it forward. Annotated maps retain original objective/annotated references in core criteria; canonical-only core normalization holds `original_criteria_required` during repair, later writes and closure, preserving agreement with the closing reader. Report and admission maps cannot invoke repair. IDs, checks, definitions, source.ref, provenance, receipts, attempts and native references remain unchanged, and no raw body is retained.
+The supported repair changes only the ASCII space in an explicit, recognized, outside-fence, column-zero checkbox label `- [ ] **PoD N:` (also x/X) to `PoD#N:`. The immutable source.ref must begin `PoD N:` with the same textual number. Old and current complete bodies must be byte-identical after only these label changes, including checkbox state, line endings and every other byte. Each target needs one old and one current recognized line and one live mapping. Arbitrary aliases, inferred numbers, changed checks/meaning, duplicate targets and caller-created or changed associations refuse atomically. Only exact stored association restatement is accepted; omission carries it forward. Annotated maps retain original objective/annotated references in core criteria; canonical-only core normalization holds `original_criteria_required` during ordinary repair, later writes and closure. Report and admission maps cannot invoke repair. IDs, checks, definitions, source.ref, provenance, receipts, attempts and native references remain unchanged, and no raw body is retained.
+
+Only a kernel-approved R149 mapping may supersede withdrawn prior objective references. The same-write validated Revision capability must agree with the exact current criteria, live mapping and selected identities, logical checks, definitions and original references. Recorded supersession uses the latest accepted validated R149 decision and the actual accepted replacement rows. Their checks retain that approval or a later recorded owner revision under [R120](delivery.md#r120--record-every-owner-decisions-channel); a new check change still needs the separately validated current authority allowed by R120. Historical retirement neither grants new authority/proof nor vetoes that independent authority. Current criteria, live mapping, selected identities and original references still match the approved mapping. Later R6 proof-scope metadata may change a current definition fingerprint without changing recorded supersession or granting current proof. Each superseded row retains its original identity/definition/source in the approved previous snapshot and either its prior withdrawal or that decision's exact retirement. Merely withdrawn, live, wrong-mapping and unverified rows receive no exception. The writer and closed-snapshot reader share this predicate, preserving every old row, association, receipt and snapshot; replacement criteria need fresh proof. Later ordinary same-issue metadata observations retain this recorded supersession without another approval or any new proof.
 
 Mapping is not proof or consent and creates no native or Governor effect. Its extra verification read cannot observe or activate standing consent; ordinary introducing/rebinding checkpoint hooks retain their existing behavior. Retained ordinary PASS without genuine proof-time issue binding holds `proof_binding_unavailable`, including when evidence is omitted or the row is made unsatisfied; the preceding mechanism cannot supply that binding from an acceptance sequence alone. A repair cannot satisfy a row. New evidence on a continuously current association still passes the existing unchanged definition/source/candidate/governance predicates. The association requires current recorded bound-source facts; missing facts or an unavailable required amendment read hold proof without inventing divergence. Actual amendment-change observations come from the existing recheck result, including when CLOSED wins refusal ordering. CLOSED-only or role-only authority holds preserve unchanged source/proof currency separately. Observed definition, non-checkbox scope, issue or amendment divergence permanently invalidates the derived association, including an observed drift followed by exact restoration. Pre-association proof cannot be reselected to escape a hold. Existing confirmed own checkbox writes alone carry its source forward through the existing tick protocol; ambiguous authorship grants no proof, and that same request's later held success may resolve its temporary currency hold. No requirement or receipt is rewritten to resolve a hold.
 
 The checkpoint introducing criteria, and a checkpoint rebinding objective_source, reads the live source once through the issue port and reports unmapped lines, multiply mapped lines, duplicate numbers and criteria naming missing lines, without refusing. Failed reads and body/binding digest mismatches report not_read, never fabricate facts. Facts from this checkpoint read are recorded only for the matching bound digest; no issue body is stored. A positively observed issue or amendment divergence still reaches mapping retirement, including when a later required amendment read fails; the accepted map retires it after exact prior metadata validation, and a refused map writes nothing. Unavailable required issue or amendment data before send or during readback temporarily holds derived proof and a new satisfied closure, preserving the association and receipts until a genuine complete recheck recovers currency. A blocked tick does not supply that missing source proof. Missing or stale line facts conservatively make each proven mapped line possibly due and each own tick with lost proof possibly due to untick, until a tick request reads the current line. A direct objective is not_applicable.
 
-An own tick with an empty mapping makes an untick due; an unticked empty mapping never does. Kind, provenance and original source remain immutable and obligations are never dropped. Withdrawal or derived association invalidation can remove the last live mapping through ordinary entry points. R10 D2/D7 also retain their mapping-only synthetic controls without claiming an operation that deletes original rows.
+An own tick with an empty mapping makes an untick due; an unticked empty mapping never does. Kind, provenance and original source remain immutable and obligations are never dropped. Withdrawal or derived association invalidation can remove the last live mapping through ordinary entry points. R149 can retire a source mapping while retaining its obligation history. A later ordinary source observation can reintroduce that PoD line without reintroducing its mapping, reaching R10 D2/D7 through supported entry points. D7 requires surviving own authorship: an observed missing or unticked line ends it, while an unavailable refresh cannot infer that observation. Ticks by other actors remain untouched. Earlier controls that inject the mapping lookup remain synthetic table controls, separate from the real revision/observation regressions.
 
 ### R131 — Write and recover one PoD checkbox with honest authorship
 
@@ -286,7 +290,7 @@ The final report lists every PoD's tick state against its criteria, every tick w
 
 Type: B,I · Scenarios: [A411](#a411), [A412](#a412)
 
-The root VERSION and its bundle link remain the sole version source. Bundle pod_ticks.py and references/pod-ticks.md. Under R71 the reference is triggered for ticking, a due tick/untick, readback confirmation or closing an issue-bound objective, and supplies the protocol, closing-refusal steps, honest authorship, final-report limitations and residual race. SKILL.md names the final-report requirement; README has a short implemented-behavior mention. No word caps apply. Existing contexts lacking pod_ticks, tick requests lacking the optional intent time, and all earlier closures read without conversion; no existing schema changes, parallel body store, Governor row or Orca write are introduced. Offline tests replace only the remote/native ports, except the explicitly labelled D2/D7 mapping controls. Milestone gates, hosted CI, preceding-mechanism independent audit, owner acceptance, install and controlled disposable native trials remain separate evidence; missing live/provider evidence stays NOT_RUN.
+The root VERSION and its bundle link remain the sole version source. Bundle pod_ticks.py and references/pod-ticks.md. Under R71 the reference is triggered for ticking, a due tick/untick, readback confirmation or closing an issue-bound objective, and supplies the protocol, closing-refusal steps, honest authorship, final-report limitations and residual race. SKILL.md names the final-report requirement; README has a short implemented-behavior mention. No word caps apply. Existing contexts lacking pod_ticks, tick requests lacking the optional intent time, and all earlier closures read without conversion. Schema versions stay unchanged; optional complete-block/source-definition facts fail closed in preceding readers. No parallel body store, Governor row or Orca write is introduced. Offline tests replace only the remote/native ports, except separately labelled synthetic mapping-lookup controls. Milestone gates, hosted CI, preceding-mechanism independent audit, owner acceptance, install and controlled disposable native trials remain separate evidence; missing live/provider evidence stays NOT_RUN.
 
 ### R135 — Expose only recorded checkpoint question facts
 
@@ -448,7 +452,7 @@ byte-identical. No new personal or project config key exists.
 - <a id="a382"></a>**A382** — A nonempty mapping needs every live criterion satisfied with current evidence; both mapped criteria must pass and withdrawn criteria remain unproven. Repair grants no satisfaction, consent, authorship or native effect; unavailable proof-time binding, including Alpha/Beta-PASS/Alpha restoration and omitted retained receipts, holds without rewriting proof.
 - <a id="a383"></a>**A383** — A failed or digest-mismatched introducing/rebinding read reports not_read without recording unbound facts; absent/stale facts keep proven canonical lines possibly due. Unavailable required issue/amendment data at refresh, pre-send or readback holds derived proof and new satisfied closure without permanent invalidation or receipt changes; restored access alone does not recover proof, and a genuine complete recheck does. Canonical blocked-tick closure and separate CLOSED/role-only authority holds retain their rules. Repair requires genuine original/native joins and a matching real current read; unavailable, stale, foreign, ambiguous or conflicting history cannot be supplied or selected by caller DATA.
 - <a id="a384"></a>**A384** — A direct objective is not applicable; an unticked unmapped line is never due, and missing/duplicated lines are never written (A1, C2/C3, D1). Repair rejects changed body/check/checkbox/meaning, aliases, unrecognized labels, caller metadata/authority, non-checkpoint entry and stale/replayed seq atomically, including sibling failure.
-- <a id="a385"></a>**A385** — One effective predicate drives coverage, intake/status/report/tick/untick/closure. Withdrawn/superseded canonical and derived rows cannot duplicate a live target; original history remains. Scope divergence/restoration cannot resurrect association or stale proof, including an accepted introducing/rebinding refresh, retained earlier drift facts, and positive body/amendment observations before a later unavailable amendment. Exact prior metadata restatement remains valid for that retirement; a sibling refusal remains atomic. Ordinary and mapping-only synthetic D2/D7 controls leave unticked unmapped lines never due and require own ticks to untick.
+- <a id="a385"></a>**A385** — One effective predicate drives coverage, intake/status/report/tick/untick/closure. Withdrawn/superseded canonical and derived rows cannot duplicate a live target; original history remains. Scope divergence/restoration cannot resurrect association or stale proof, including an accepted introducing/rebinding refresh, retained earlier drift facts, and positive body/amendment observations before a later unavailable amendment. Exact prior metadata restatement remains valid for that retirement; a sibling refusal remains atomic. Ordinary and mapping-only synthetic D2/D7 controls leave unticked unmapped lines never due and require own ticks to untick. Real R149 revision/observation paths also reintroduce a PoD line without its superseded mapping; D7 requires surviving own authorship, and other actors' ticks remain untouched. A repaired original reference can be superseded by an exact verified R149 remap, then retained through checkpoint/report/admission and closure without requiring its superseded original in current criteria. Separately validated R120 semantic revisions, including recorded question answers with their accepted channels, and later metadata retain this retirement across those same boundaries, including readable closure and revised-then-withdrawn replacements; fresh proof and semantic epochs still apply. Ordinary normalization, absent independent authority, stale/fake capability and identity/mapping disagreement still hold atomically.
 - <a id="a386"></a>**A386** — Objectives in the closed, `retired` or continued state refuse existing codes without writes; repository mismatch reads no issue; only the exact bound-issue PATCH shape is allowed, under standing tick authority (A2/A3).
 - <a id="a387"></a>**A387** — Immediate recheck keeps outside body/amendment and EEL/SEAL title/body holds, with their reasons, plus unreadable-source holds (B2/B5).
 - <a id="a388"></a>**A388** — CLOSED wins over body drift, stays blocked after reconciliation/rebind, and resumes only after an outside OPEN read passes the bound-source check (B3/B4).
@@ -698,6 +702,170 @@ or different decision-time digest refuses `relay_verifier_mismatch` naming
 bound to the current public digest. Only an otherwise authentic, fully verified,
 exact-bound future activation records a permanent refused-key marker in the
 existing receipt store (R136), leaving context and journal unchanged.
+
+#### Issue revision requests
+
+R149 adds `action: issue_revision` on the same bounded verifier transport. Common
+request fields are unchanged, with `candidate: null`, `pr: null` and `target` from
+the existing governance base remote's single GitHub URL. The one additional
+`issue_revision` object has exactly these fields:
+
+| Field | Exact object |
+| --- | --- |
+| `source` | `repository`, positive integer `number`, canonical `locator`, `previous_digest`, `proposed_digest`. The source identity matches both the existing/proposed binding and `target.repository`. Digests are SHA-256 of the full respective `pod-issue-source/v1` objects, including amendments, using `util.digest`: sorted JSON keys, compact comma/colon separators, `ensure_ascii=False`, UTF-8 and no trailing newline. Equal digests retain distinct previous/proposed roles. |
+| `map` | `seq`, `revision` (positive integers naming the current pre-write map), and `policy_revision` (the current effective policy). |
+| `coordinator` | `handle`, `incarnation`, `run`, `runtime`, `generation`. These come from fresh terminal-show `incarnationId`, authoritative current Run ownership/generation and the objective's existing native references. Unknown incarnation refuses; no caller value or fallback supplies identity. |
+
+The verdict repeats the exact request and adds the existing `verified`,
+`owner_source`, `decided_at`, `single_use` fields. Only an exact positive verdict
+confirms the operation. The host independently authenticates a new explicit
+owner decision approving the exact current transition, or the original actual
+source approval with its trusted earlier baseline when reusing that approval.
+Neither route invents earlier source-content identity or read time. Current
+mutable source, caller prose, an echoed request, transport delivery or an
+acknowledgment is not authentication. Host Stop, administration epoch,
+cancellation and source approval remain host responsibilities, not wall-clock
+freshness checks in Pod. Missing host support refuses through existing codes.
+
+The Pod-local input discriminator is `revision_authority.operation:
+issue_revision`. Input carries `provenance`, `channel`, bounded `instruction` and
+only `relay.reference`; kernel verdicts and bindings are stored-only. The installed
+issue-intake reference gives the one supported checkpoint procedure. Report and
+admission maps refuse `issue_revision_refused` with `checkpoint_only` before their
+preparation or mutations. Other shape, mapping, policy and scope holds use
+`issue_revision_refused` with a named reason; native/source/sequence failures may
+retain their existing refusal codes.
+
+Optional checkpoint-only `issue_revision_data` contains exactly
+`historical_bodies`, a list of at most 64 unique `{body_sha256, body}` records.
+The key is lowercase SHA-256 and must match the complete raw UTF-8 body before
+parsing, and a genuine kernel-selected retained source binding. Each body retains
+the existing 512 KiB source cap; aggregate DATA and the complete CLI input retain
+the 128 KiB ceiling, including JSON escaping and map overhead. Duplicate,
+unreferenced, malformed, mismatched and oversized DATA refuse before effects.
+No caller ID, definition, association, trust, approval or read time is accepted.
+Bodies remain transient; they never enter a verifier request or stored context.
+
+The kernel uses immutable per-definition scope facts, actual introducing
+checkpoint/revision snapshots with exact sequence/ref/definition membership, or
+the first following native reservation's retained source/definition conjunction.
+For selected current-definition PASS receipts, each immutable `accepted_seq`
+must resolve the source in that same accepted map, independently of a matching
+requirement-scope cache. First-acceptance scope facts supply that proof-time
+identity; older missing facts use an actual same-sequence current
+checkpoint or retained snapshot, a matching live or snapshotted tick request source with immutable
+criterion/ref/definition membership, or a reservation checkpoint at
+`admitted_seq - 1` with matching served definition. Tick checkbox rebinds preserve
+map sequence and physical scope; ordinary source observations advance sequence.
+Later snapshots/admissions and reused references cannot backdate an earlier
+proof. Complete old/new blocks use the same parser; missing or conflicting
+selected scope/amendment facts cannot establish current proof. Fresh current
+approval can instead admit an explicit factual-unknown remap awaiting proof,
+retaining the original evidence and precise missing fact.
+
+For genuine preceding records without requirement-scope facts, first PASS
+declares the source scope of its actual accepted map sequence, whether that body
+was observed in the same write or a separate earlier write. This approved
+convention binds declared scope at the receipt's `accepted_seq`; it does not
+recover the original introduction's scope, earlier approval or a source read
+time. Current transition approval remains necessary. A retained earlier
+requirement scope in a newer record must still agree with every selected proof's
+scope; that convention cannot override that known earlier fact.
+
+The existing `issue-intake` read optionally adds `issue_revision_criteria` with
+`status`, `reason` and at most 64 `{ref, check, block_sha256}` rows. It derives
+canonical bounded checks from the already-read body using the same parser as the
+checkpoint. No unique complete mapping gives `unavailable`, reason
+`source_pod_mapping`, and an empty list, preserving overall intake behavior.
+This is current-body DATA, not old-source association, proof or approval, and
+performs no additional fetch or write. Runtime check text/fingerprint authoring
+is owned by the installed intake procedure.
+
+Accepted `revision_decisions` rows use `kind` and `operation` equal to
+`issue_revision`, the accepted `seq`, original provenance/instruction/channel,
+verifier-derived `relay`, complete `relay_verification`, proposed `source`, complete
+unique `criteria` mapping (`id`, `ref`, `check`, with a derived `definition` on
+scope-bearing rows), and `retired` IDs. `previous`
+contains the actual previous `source`, `criteria`, full `obligations` and
+`pod_ticks` (or null), preserving definitions, proof and authorship facts without
+copying a full source body. A withdrawal has `by: issue_revision`, `reason` and a
+kernel-assigned `decision` sequence. R130 defines which withdrawn source
+definitions the current approved mapping supersedes; history exposes every one. Map output adds complete
+`revision_decisions` and `decision_channels: 4` once this history exists; status and
+reports retain the same complete decision evidence. Stored evidence is validated
+on read without invoking the command; unsupported preceding helpers refuse the
+new discriminator.
+
+Optional `pod_ticks.facts.blocks` holds ordered complete-block SHA-256 values
+alongside each number's checkbox observations. Optional `criterion_scopes` maps
+criterion IDs to a required `definition` and, when known, the complete group
+`source_digest`, `amendments_digest`, `block_sha256`, all lowercase SHA-256 values.
+An entry may retain `acceptance` with exactly `seq`, `source_digest`,
+`body_sha256` and `amendments_digest`: a positive integer sequence and three
+lowercase SHA-256 values. It records the actual requirement acceptance and its
+known source identity even when the complete block could not be read. Exact
+hash-matching BODY DATA can later supply that block without moving the acceptance
+event. A pre-extension definition-only marker can use a genuine introduction or
+first-following-admission conjunction only when no intervening R120 owner revision
+could have established another semantic epoch. Otherwise unknown stays unknown;
+later observation or a returning definition hash cannot borrow an older
+introduction. Physical scope is established only by initial intake, verified
+issue reconciliation or an accepted R120 owner change to the semantic check.
+Coordinator-only changes such as `proof_scope` carry earlier physical scope and
+acceptance through the new logical definition, or keep the missing facts unknown.
+Verified unchanged keeps retain that lineage. Merely including owner
+authority with a metadata-only change does not reconcile the source.
+
+Recovery persists the actual requirement scope and each selected receipt's own
+scope in these existing entries, including a same-definition unreadable marker,
+without advancing acceptance or receipt sequences. Later omission of transient
+DATA does not erase known facts or make an unchanged retirement material. An
+already accepted revision's known previous fact can hydrate an incomplete cache
+only for its kept definition and the same retained acceptance lineage; the
+existing metadata-only carry requires the same semantic check and exact
+retained acceptance identity. Each selected proof must match the snapshot's
+exact immutable proof identity; its
+source comes from its own accepted-sequence binding and the retained
+`data_digests` used in that recovery, or its keyed proof cache. The aggregate
+requirement source and proposed source cannot supply another proof's identity.
+All qualifying cached and retained scope witnesses must agree; conflicting
+facts remain ambiguous. A new semantic acceptance or returning definition hash
+cannot borrow a fact from another acceptance lineage.
+
+Each entry may also retain `proofs`, bounded by the existing receipt limit. Its
+keys are `util.digest` of `{accepted_seq, evidence}`, omitting only evidence's
+separately rebindable `governance` stamp; values are the four-hash scope at actual
+first acceptance. Checkpoint, report and admission map writes record these facts
+when their bound source has a unique observed complete block, or retain the
+verified earlier recovery described above. Later source observations and
+reused references never backfill or replace old proof facts. They survive
+semantic definition changes. Ordinary re-selection within
+the actual accepted requirement lineage (`accepted_seq >= acceptance.seq`) keeps
+existing checkpoint, report and admission bookkeeping behavior, even when source
+facts are missing or an unreconciled different source was observed. A receipt
+predating that semantic acceptance needs matching known requirement/proof scope,
+including when a former definition hash returns; unavailable facts refuse.
+Entries without acceptance metadata use retained R120 owner revision sequences as
+conservative boundaries without inventing source associations. Missing/conflicting selected scope holds
+reconciliation or needs a factual-unknown remap. Both optional structures remain
+in existing tick snapshots/history; no body or separate store is introduced.
+Earlier readers reject unsupported fields before reusing proof under old semantics.
+
+New revision rows additionally retain `scope_facts`: `previous` lists each prior
+live source criterion's ID/definition, `known` or `unknown` status, reason and
+scope (null when unknown); `current` maps current criterion IDs to their compact
+scope; `data_digests` is the sorted unique full-body DATA hash list. Scope has
+exactly the four hash fields of `criterion_scopes`. Unknown previous currency
+requires retirement with fresh proof pending; it cannot remain a passing live
+mapping. These kernel facts and DATA digests participate in the normalized
+transition receipt and remain in full map/status/report/history projections.
+
+This action's existing `pod-relay-use/v1` receipt has a `transition` digest over
+the original logical context, accepted checkpoint and resulting tick state, in
+addition to the verdict's authorization digest. R149 requires validation before
+consumption and exact recovery; the installed issue-intake procedure owns its
+runtime steps and holds. Host authentication, installed producer availability
+and live proof remain separate from synthetic subprocess tests.
 
 ### Recorded-question status contract
 

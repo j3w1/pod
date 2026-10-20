@@ -65,10 +65,10 @@ class SkillValidationTests(unittest.TestCase):
                 "## Roles", "## Else"), "Use when"),
             ("version-before-body", "VERSION", lambda text: "v0.4.0\n", "MAJOR.MINOR.PATCH"),
             ("missing-link", "SKILL.md", lambda text: text.replace(
-                "- Issue intake: [intake](references/issue-intake.md).", ""), "exactly once"),
+                "- Issue intake or reconciliation of issue-derived criteria: [intake](references/issue-intake.md).", ""), "exactly once"),
             ("duplicate-link", "SKILL.md", lambda text: text + (
                 "\n- Extra intake: [intake](references/issue-intake.md).\n"), "exactly once"),
-            ("untriggered-link", "SKILL.md", lambda text: text.replace("- Issue intake:", "-"), "read-when trigger"),
+            ("untriggered-link", "SKILL.md", lambda text: text.replace("- Issue intake or reconciliation of issue-derived criteria:", "-"), "read-when trigger"),
             ("cross-link", "references/cleanup.md", lambda text: text + (
                 "\nSee [planning](planning.md).\n"), "must not link another reference"),
         )
@@ -117,7 +117,7 @@ class SkillValidationTests(unittest.TestCase):
             ("sections", "## Roles", "## Else", "five router sections"),
             ("duplicate-link", "- PES authoring/revision:", "- Duplicate: [intake](references/issue-intake.md).\n- PES authoring/revision:", "exactly once"),
             ("missing-trigger", "- PES authoring/revision:", "-", "read-when trigger"),
-            ("duplicate-trigger", "- PES authoring/revision:", "- Issue intake:", "read-when trigger"),
+            ("duplicate-trigger", "- PES authoring/revision:", "- Issue intake or reconciliation of issue-derived criteria:", "read-when trigger"),
         )
         with fixture() as root:
             for name, old, new, message in cases:

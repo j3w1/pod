@@ -1356,6 +1356,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   issue_port=None, accompanying: dict | None = None,
                   retry_of: str | None = None, retry_after: str | None = None) -> dict:
     """Packet, recovery, issue, placement, serialized boundary, then one native start."""
+    from .issue_revision import refuse_alternate
+    refuse_alternate(accompanying)
     from .records import packet
     bounded_text(owner, name="owner")
     native_port = port or OrcaPort(project)

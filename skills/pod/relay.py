@@ -1,4 +1,4 @@
-"""Host verification and durable single-use receipts for publish/merge consent."""
+"""Host verification and durable single-use receipts for bounded relayed decisions."""
 
 from __future__ import annotations
 
@@ -104,21 +104,24 @@ def validate_verdict(value: object) -> dict:
     """Validate stored evidence too, without invoking the host on read-only paths."""
     try:
         action = value.get("action") if isinstance(value, dict) else None
-        extra = {action} if action in ("standing", "answer") else set()
+        extra = {action} if action in ("standing", "answer", "issue_revision") else set()
         verdict_fields = (VERDICT_FIELDS - {"owner_source"} | {"responder_source"}
                           if action == "answer" else VERDICT_FIELDS) | extra
         verdict = exact(value, verdict_fields, verdict_fields, name="relay verdict")
         if verdict["schema"] != SCHEMA or type(verdict["verified"]) is not bool:
             raise ValueError("verdict")
-        if verdict["action"] not in ("publish", "merge", "standing", "answer"):
+        if verdict["action"] not in ("publish", "merge", "standing", "answer", "issue_revision"):
             raise ValueError("action")
         source = "responder_source" if action == "answer" else "owner_source"
         for key, limit in (("reference", 512), ("objective", 256), (source, 512), ("single_use", 512)):
             bounded_text(verdict[key], name=key, limit=limit).encode("utf-8")
-        if action in ("standing", "answer"):
+        if action in ("standing", "answer", "issue_revision"):
             if verdict["candidate"] is not None or verdict["pr"] is not None:
                 raise ValueError("candidate/pr")
-            if action == "standing":
+            if action == "issue_revision":
+                from .issue_revision import validate_binding
+                validate_binding(verdict["issue_revision"], verdict["target"])
+            elif action == "standing":
                 from .contracts import STANDING_EXCLUSIONS, STANDING_SCOPES
                 standing = exact(verdict["standing"], {"operation", "scope", "widening", "expires_at", "scope_digest"},
                                  {"operation", "scope", "widening", "expires_at"}, name="relay standing")
@@ -179,7 +182,7 @@ def verify(command: list[str] | None, request: dict) -> dict:
     verdict = validate_verdict(value)
     if not verdict["verified"]:
         raise refusal("relay_verifier_denied")
-    binding_fields = BINDING_FIELDS | ({request["action"]} if request["action"] in ("standing", "answer") else set())
+    binding_fields = BINDING_FIELDS | ({request["action"]} if request["action"] in ("standing", "answer", "issue_revision") else set())
     mismatches = sorted(key for key in binding_fields if verdict.get(key) != request[key])
     if request["action"] in ("standing", "answer") and "target" in mismatches:
         mismatches.remove("target")
@@ -191,11 +194,16 @@ def verify(command: list[str] | None, request: dict) -> dict:
     return verdict
 
 
-def check_use(project: Path, verdict: dict, *, consume: bool = False, refuse: bool = False) -> None:
+def check_use(project: Path, verdict: dict, *, consume: bool = False, refuse: bool = False,
+              transition: str | None = None) -> None:
     """One non-evicting receipt per key across all objectives, independent of journal retention."""
     from .ledger import _lock, state_root
     path = state_root(project) / ".relay-authorizations" / (digest(verdict["single_use"]) + ".json")
     receipt = {"schema": "pod-relay-use/v1", "authorization": digest(verdict)}
+    if transition is not None:
+        if not isinstance(transition, str) or not re.fullmatch(r"[0-9a-f]{64}", transition):
+            raise refusal("relay_verifier_malformed")
+        receipt["transition"] = transition
     with _lock(path):
         if path.exists() or path.is_symlink():
             if bounded_json(path, limit=1024) != receipt or refuse:

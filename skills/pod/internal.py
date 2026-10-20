@@ -190,6 +190,8 @@ def _prepare_report(request, state, admission, shown, *, closing):
 
 def _op_report(request: dict) -> dict:
     exact(request, fields("report request"), required("report request"), name="request")
+    from .issue_revision import refuse_alternate
+    refuse_alternate(request.get("map"))
     if not isinstance(request["packet"], dict):
         raise PodError("invalid_packet", "Report needs a frozen packet")
     from .ledger import read
@@ -267,8 +269,12 @@ def _op_verify_sources(request: dict) -> dict:
 def _op_issue_intake(request: dict) -> dict:
     exact(request, {"project", "locator", "amendments"}, {"project", "locator"}, name="request")
     from .github import issue_intake
-    return issue_intake(Path(request["project"]), request["locator"],
-                        amendments=request.get("amendments"))
+    result = issue_intake(Path(request["project"]), request["locator"],
+                          amendments=request.get("amendments"))
+    from .issue_revision import criteria_view
+    if result.get("source") is not None:
+        result["issue_revision_criteria"] = criteria_view(result["body"])
+    return result
 
 
 def _op_issue_recheck(request: dict) -> dict:
@@ -546,6 +552,8 @@ def _op_governor_status(request: dict) -> dict:
 @input_record("admission")
 def _op_admission(request: dict) -> dict:
     exact(request, fields("admission"), required("admission"), name="request")
+    from .issue_revision import refuse_alternate
+    refuse_alternate(request.get("map"))
     from .ledger import read
     from .handoff import refuse_nonowner
     state = read(Path(request["project"]), request["objective"])

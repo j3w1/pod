@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
@@ -218,7 +219,7 @@ def _validate_context(value: object) -> dict:
     if "pod_ticks" in state:
         from .pod_ticks import validate
         validate(state["pod_ticks"])
-    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2, 3)):
+    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2, 3, 4)):
         raise PodError("state_unsupported", "Decision channel representation is unsupported")
     from .succession import validate_link
     for name in _SUCCESSION_FIELDS & set(state):
@@ -235,6 +236,22 @@ def _validate_context(value: object) -> dict:
     if not isinstance(state["admissions"], dict):
         raise PodError("state_unsupported", "Admissions are malformed")
     checkpoint_value = state.get("checkpoint")
+    if isinstance(checkpoint_value, dict):
+        if "issue_revision_data" in checkpoint_value:
+            raise PodError("state_unsupported", "Transient issue body DATA cannot be stored in a checkpoint")
+        from .issue_revision import requested, validate_decision
+        if not isinstance(checkpoint_value.get("revision_decisions", []), list):
+            raise PodError("state_unsupported", "Revision decision history is malformed")
+        revisions = [row for row in checkpoint_value.get("revision_decisions", []) if requested(row)]
+        if revisions and state.get("decision_channels") != 4:
+            raise PodError("state_unsupported", "Issue revision evidence requires its decision channel marker")
+        if state.get("decision_channels") == 4 and not revisions:
+            raise PodError("state_unsupported", "Issue revision history is missing")
+        for row in revisions:
+            validate_decision(row, checkpoint_value)
+        if state.get("decision_channels") == 4:
+            from .obligations import validate_map_record
+            validate_map_record(checkpoint_value)
     continuity = checkpoint_value.get("continuity") if isinstance(checkpoint_value, dict) else None
     if continuity is not None:
         _validate_continuity(continuity)
@@ -274,7 +291,7 @@ def read(project: Path, objective: str) -> dict | None:
     return _read(path) if _record_exists(path) else None
 
 
-def _write(path: Path, value: dict, *, native: dict | None = None, protected=()) -> None:
+def _write(path: Path, value: dict, *, native: dict | None = None, protected=(), before_publish=None) -> None:
     from .succession import refuse_continued
     # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
     # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
@@ -286,6 +303,8 @@ def _write(path: Path, value: dict, *, native: dict | None = None, protected=())
     value["revision"] += 1
     _validate_context(value)
     record, chunks = prepare_context(path, value, native=native, protected=protected)
+    if before_publish is not None:
+        before_publish()
     publish_context(path, record, chunks)
 
 
@@ -1172,6 +1191,8 @@ def map_read(project: Path, objective: str) -> dict:
             **{key: state["checkpoint"].get(key) for key in
                ("criteria", "plan_revision", "objective_source", "worktree", "policy_revision")},
             "governance": map_state["governance"], "delivery": map_state.get("delivery"),
+            **({"revision_decisions": map_state["revision_decisions"], "decision_channels": 4}
+               if any(row.get("operation") == "issue_revision" for row in map_state.get("revision_decisions", [])) else {}),
             "closure": map_state.get("closure"), "obligations": restatable_rows(map_state),
             "acceptances": {ob["id"]: ob["acceptances"] for ob in map_state["obligations"]
                             if ob.get("acceptances")},
@@ -1332,7 +1353,7 @@ def _closure_preservation(project: Path, objective: str, state: dict, ctx: dict)
 
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
-                               native: dict) -> tuple[dict, dict | None]:
+                               native: dict, issue_revision=None) -> tuple[dict, dict | None]:
     from .obligations import accept_write, disposition, refuse
     prior_map = map_of(state)
     map_state: dict = {}
@@ -1453,6 +1474,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             ctx["governance_kept"] = kept
         ctx["derived_adoption"] = derived_adoption
         ctx["recorded_questions"] = previous.get("questions", [])
+        if issue_revision is not None:
+            ctx["issue_revision"] = issue_revision
         if dispositions:
             if prior_map is None:
                 raise refuse("obligation_unaccounted", "disposition_invalid",
@@ -1508,12 +1531,27 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
     from .obligations import report_projection
     if not isinstance(value, dict) or value.get("schema") != CHECKPOINT_SCHEMA:
         raise PodError("invalid_checkpoint", f"Checkpoint needs {CHECKPOINT_SCHEMA} and current native runtime readback")
+    from .issue_revision import requested, refuse as issue_refuse
+    if "issue_revision_data" in value:
+        if not requested(value.get("revision_authority")):
+            raise issue_refuse("data_requires_issue_revision")
+        if not isinstance(value["issue_revision_data"], dict):
+            raise issue_refuse("malformed_body_data")
+        try:
+            data_size = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            raise issue_refuse("malformed_body_data") from None
+        if data_size > MAX_RECORD:
+            raise issue_refuse("data_input_too_large")
+    if requested(value.get("revision_authority")) and "dispositions" in value:
+        raise issue_refuse("combined_operation")
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
         previous = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
         try:
             core, proposed, dispositions = _checkpoint_input(project, objective, owner, value, native, previous)
+            revision_data = core.pop("issue_revision_data", None)
             if "display" in core:
                 from .display import validate_record
                 validate_record(core["display"], state["admissions"])
@@ -1526,9 +1564,13 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             raise PodError("coordinator_conflict", "Caller is not the recorded owner; another coordinator owns this objective")
         recorded_refs = {(row["runId"], row["runtime"]) for row in previous.get("native_refs", [])
                          if isinstance(row, dict)}
+        from .issue_revision import Revision
+        issue_requested = requested(proposed.get("revision_authority"))
         authority = require_authority(project, objective, owner=owner, state=state,
                                       expected_runtime=native["runtime"],
-                                      persist_rebind=not (isinstance(proposed, dict) and proposed.get("close") is True))
+                                      persist_rebind=not (issue_requested or isinstance(proposed, dict) and proposed.get("close") is True))
+        if issue_requested and authority.get("continuity") is not None:
+            raise issue_refuse("native_continuity_requires_separate_checkpoint")
         if native["runtime"] != authority["runtime"]:
             raise PodError("native_authority_unverified", "Checkpoint runtime differs from current Run")
         supplied = core["native_refs"]
@@ -1546,6 +1588,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if "verification" not in core and "verification" in previous:
             # Like the map, the verification context carries forward until it is restated.
             core["verification"] = previous["verification"]
+        issue_revision = Revision(project, objective, owner, state, core, proposed, data=revision_data) if issue_requested else None
+        if issue_revision is not None:
+            proposed = {**proposed, "revision_authority": issue_revision.authority}
         from .pod_ticks import refresh as refresh_ticks
         prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
         raw_obligations = proposed.get("obligations")
@@ -1553,11 +1598,11 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             isinstance(row, dict) and row.get("kind") == "criterion" and row.get("id") not in prior_criteria
             for row in raw_obligations)
         rebound = core.get("objective_source") != previous.get("objective_source")
-        if core.get("objective_source") is not None and (introducing or rebound):
+        if core.get("objective_source") is not None and (introducing or rebound or issue_requested):
             refresh_ticks(state, project, core["objective_source"])
         try:
             map_state, ctx = _checkpoint_map_transition(
-                project, objective, state, authority, core, previous, proposed, dispositions, native)
+                project, objective, state, authority, core, previous, proposed, dispositions, native, issue_revision)
         except PodError as exc:
             _map_refusal_context(exc, state)
             from .worker_tabs import rows as tab_rows
@@ -1577,7 +1622,10 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                "pod_version": identity["version"],
                                "bundle_digest": identity["bundle_digest"],
                                **({"continuity": continuity} if continuity else {})}
-        _write(path, state, native=authority.get("native"))
+        from .pod_ticks import bind_criterion_scopes
+        bind_criterion_scopes(state, previous, verified=(issue_revision.scope_bindings if issue_revision else None))
+        _write(path, state, native=authority.get("native"),
+               before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None)
         if isinstance(proposed, dict) and proposed.get("close") is True:
             _record_continuity_event(authority.get("continuity"))
         result = dict(state)
@@ -1590,7 +1638,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         result["worker_tabs"] = tab_rows(state, placements, outstanding=(ctx or {}).get("outstanding", []))
         from .pod_ticks import intake as tick_intake, projection as tick_projection
         result["pod_ticks"] = tick_projection(state, map_state, ctx or {}, project=project, objective=objective)
-        if introducing or rebound:
+        if introducing or rebound or issue_requested:
             result["pod_tick_intake"] = tick_intake(state, map_state)
         if map_state:
             result["report"] = report_projection(state["checkpoint"], ctx, standing_normal=True)
@@ -1840,6 +1888,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
     admission row, so a map can never name an admission that was not recorded.
     """
     from .selection import failure_active
+    from .issue_revision import refuse_alternate
+    refuse_alternate(accompanying)
     moment = now or datetime.now(timezone.utc)
     path = _path(project, objective)
     with _lock(path):
@@ -1986,6 +2036,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
+        from .pod_ticks import bind_criterion_scopes
+        bind_criterion_scopes(state, checkpoint_value)
         _write(path, state, native=native)
         return {**row, "existing": False}
 
@@ -2085,6 +2137,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
     triage; nothing in the report changes a criterion, gate or authorization.
     """
     from .obligations import accept_write, refuse, report_projection, triage
+    from .issue_revision import refuse_alternate
+    refuse_alternate(accompanying)
     path = _path(project, objective)
     with _lock(path):
         state = _read(path)
@@ -2201,6 +2255,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
             raise
         state["checkpoint"] = {**state["checkpoint"], **new_map}
+        from .pod_ticks import bind_criterion_scopes
+        bind_criterion_scopes(state, map_state)
         if observation.get("status") == "validated_observation" and report_value.get("outcome") == "succeeded":
             for prior in state["admissions"].values():
                 if prior["admission_id"] == admission_id or prior["runtime"] != row["runtime"]:

@@ -49,7 +49,7 @@ Every map-bearing write, including full checkpoint/report and admission maps, ca
 
 Read a reference when the current action, or a necessary prerequisite of it, needs it. Never preload the reference directory, and never read a reference merely because it is linked. Read an authoring template only to author or revise that kind of document. Reload guidance when it is lost, changed or insufficient. Trivial work reads none.
 
-- Issue intake: [intake](references/issue-intake.md).
+- Issue intake or reconciliation of issue-derived criteria: [intake](references/issue-intake.md).
 - Ticking, a due tick or untick, confirming its readback, or closing an issue-bound objective: [PoD ticks](references/pod-ticks.md).
 - SEAL link or SEAL delivery planning: [delivery planning](references/seal-delivery.md).
 - SEAL authoring/revision: [template](references/seal-template.md).
