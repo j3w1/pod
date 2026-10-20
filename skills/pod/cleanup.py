@@ -5,10 +5,9 @@ from __future__ import annotations
 from io import StringIO
 from pathlib import Path
 import re
-import subprocess
-import tempfile
 
 from .errors import PodError
+from . import cleanup_archives
 from .gitio import OBJECT_ID, is_ancestor, read as git_read, resolve_commit, worktree_inventory, worktree_rows
 from .governor import _read_journal, _record_path
 from .ledger import read
@@ -321,50 +320,13 @@ def _target_branches(target_ref: object) -> set[str]:
     return {"refs/heads/" + "/".join(parts[index:]) for index in range(1, len(parts))}
 
 
-def _archive_verified(project: Path, value: dict) -> bool:
-    path = Path(value["path"])
-    try:
-        readable = (path.is_absolute() and not path.is_symlink() and path.is_file()
-                    and path.stat().st_size <= 128 * 1024 * 1024)
-    except OSError:
-        readable = False
-    if not readable:
-        return False
-    ref, tip = value["ref"], value["tip"]
-    named = (ref.removeprefix("refs/heads/") if isinstance(ref, str) and ref.startswith("refs/heads/")
-             else ref.removeprefix("refs/remotes/") if isinstance(ref, str) and ref.startswith("refs/remotes/")
-             else "")
-    if (not named or not _BRANCH.fullmatch(named)
-            or not isinstance(tip, str) or not OBJECT_ID.fullmatch(tip)):
-        return False
-    def run(argv: list[str], *, cwd: Path) -> subprocess.CompletedProcess | None:
-        try:
-            return subprocess.run(["git", "--no-optional-locks", *argv], cwd=cwd, stdin=subprocess.DEVNULL,
-                                  capture_output=True, text=True, timeout=30, check=False)
-        except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
-            return None
-    verified = run(["bundle", "verify", str(path)], cwd=project)
-    listed = run(["bundle", "list-heads", str(path)], cwd=project)
-    if (verified is None or verified.returncode or listed is None or listed.returncode
-            or len(listed.stdout) > MAX_GIT_OUTPUT
-            or not any(line.split() == [tip, ref] for line in listed.stdout.splitlines())):
-        return False
-    with tempfile.TemporaryDirectory(prefix="pod-cleanup-") as temporary:
-        restored = Path(temporary) / "restored.git"
-        cloned = run(["clone", "--bare", "-q", str(path), str(restored)], cwd=project)
-        if cloned is None or cloned.returncode:
-            return False
-        found = run(["-C", str(restored), "rev-parse", "--verify", ref + "^{commit}"], cwd=project)
-        return found is not None and found.returncode == 0 and found.stdout.strip() == tip
-
-
 def _resource(kind: str, name: str, identity: dict, classification: str, reasons: list[str],
               *, delete_argv: list[str] | None = None, archive_argv: list[str] | None = None,
-              archive_verified: bool = False) -> dict:
+              archive_verified: bool = False, archive_observations: list[dict] | None = None) -> dict:
     return {"id": kind + ":" + name, "kind": kind, "class": classification,
             "reasons": sorted(set(reasons)), "identity": identity,
             "delete_argv": delete_argv, "archive_argv": archive_argv,
-            "archive_verified": archive_verified}
+            "archive_verified": archive_verified, "archives": archive_observations or []}
 
 
 def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple[str, dict]:
@@ -449,15 +411,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         if older is None:
             raise
         journal = {"actions": [], "units": {}}  # An older journal this Pod cannot validate names no resource.
-    archive_rows = [] if archives is None else archives
-    if not isinstance(archive_rows, list) or len(archive_rows) > MAX_RESOURCES:
-        raise PodError("invalid_cleanup_archives", "Archives are a bounded list")
-    archive_by_ref = {}
-    for item in archive_rows:
-        row = exact(item, {"path", "ref", "tip"}, {"path", "ref", "tip"}, name="cleanup_archive")
-        if not all(isinstance(row[key], str) and len(row[key]) <= 4096 for key in row):
-            raise PodError("invalid_cleanup_archives", "Archive path, ref and tip are bounded text")
-        archive_by_ref[(row["ref"], row["tip"])] = _archive_verified(project, row)
+    archive_rows = cleanup_archives.archive_rows(archives)
     paths = set()
     expected_branches: dict[str, set[str]] = {}
     bound = checkpoint.get("worktree")
@@ -497,6 +451,26 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                                                worker=selected is not None)
     if len(paths) + len(local_branches) + len(remote_names) > MAX_RESOURCES:
         raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
+    repository = cleanup_archives.repository_observation(project)
+    git_resources = {}
+    for path_text in sorted(paths):
+        row = by_path.get(path_text) or {}
+        ref = row.get("branch")
+        tip = resolve_commit(project, ref) if isinstance(ref, str) else None
+        git_resources[path_text] = cleanup_archives.resource_observation(Path(path_text), ref, tip, repository)
+    # Keep recovery evidence outside every selected checkout/admin, including a shared admin root.
+    # This scope does not purport to bound an external consumer's cache or other native effects.
+    excluded = [Path(path) for path in paths]
+    if "common_dir" in repository:
+        excluded.append(Path(repository["common_dir"]["path"]))
+    excluded += [Path(facts["git_dir"]["path"]) for facts in git_resources.values() if "git_dir" in facts]
+    archive_by_ref = {}
+
+    def archive_facts(ref, facts):
+        if ref not in archive_by_ref:
+            archive_by_ref[ref] = [cleanup_archives.verify(project, row, facts, excluded)
+                                   for row in archive_rows if row["ref"] == ref]
+        return archive_by_ref[ref]
     governance = checkpoint.get("governance") or {}
     target_ref = governance.get("base_ref")
     target = resolve_commit(project, target_ref) if isinstance(target_ref, str) else None
@@ -527,6 +501,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         branch = branch_ref.removeprefix("refs/heads/") if isinstance(branch_ref, str) else None
         tip = resolve_commit(project, branch_ref) if isinstance(branch_ref, str) else None
         shared = sorted(other for other in checkouts.get(branch_ref, []) if other != path_text)
+        git_facts = git_resources[path_text]
         reasons, classification = [], "integrated"
         if not path.is_absolute() or path.is_symlink() or row is None or not path.is_dir():
             classification, reasons = "protected", ["worktree binding is unavailable or foreign"]
@@ -540,6 +515,8 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
             classification, reasons = "protected", ["the branch is also checked out in another worktree"]
         elif moved or target is None or tip is None:
             classification, reasons = "protected", ["target or branch identity is unavailable"]
+        elif not git_facts["complete"]:
+            classification, reasons = "protected", git_facts["holds"]
         else:
             terminals, unknown_terminal = _terminal_facts(path, state["admissions"],
                                                             orca_reader=orca_reader, native_port=port)
@@ -555,21 +532,26 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                     reasons.append("repository stash is present")
             elif is_ancestor(project, tip, target) is not True and tip not in merged:
                 classification, reasons = "unique", ["branch has commits outside the observed target"]
+            elif git_facts["additional_roots"]:
+                classification, reasons = "unique", ["worktree has additional local recovery roots"]
         if worker_holds:
             classification, reasons = "protected", reasons + worker_holds
         ref = branch_ref if isinstance(branch_ref, str) else None
-        archive_verified = bool(ref and tip and archive_by_ref.get((ref, tip)))
+        observed_archives = archive_facts(ref, git_facts)
+        archive_verified = any(row["verified"] for row in observed_archives)
+        archive_complete = any(row["verified"] and row["covers_resource"] for row in observed_archives)
         archive_argv = (["git", "bundle", "create", "<dir>/" + (branch or "worktree").replace("/", "_") +
                          ".bundle", ref] if classification == "unique" and ref else None)
         deletable = (classification == "integrated"
-                     or classification == "unique" and archive_verified and not dirty and not stash_present)
+                     or classification == "unique" and archive_complete and not dirty and not stash_present)
         resources.append(_resource("worktree", path_text,
                                    {"path": path_text, "branch": branch_ref, "tip": tip,
-                                    "terminals": terminals, "shared_with": shared,
+                                    "terminals": terminals, "shared_with": shared, "git": git_facts,
                                     **({"worker": worker_facts} if selected is not None else {})}, classification, reasons,
                                    delete_argv=["orca", "worktree", "rm", "--worktree", "path:" + path_text,
                                                 "--json"] if deletable else None,
-                                   archive_argv=archive_argv, archive_verified=archive_verified))
+                                   archive_argv=archive_argv, archive_verified=archive_verified,
+                                   archive_observations=observed_archives))
     for ref in sorted(local_branches):
         branch = ref.removeprefix("refs/heads/")
         tip = resolve_commit(project, ref)
@@ -593,11 +575,14 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         if selected is not None:
             reasons += sorted({reason for row in associated if row["delete_argv"] is None
                                for reason in row["reasons"]})
-        verified = bool(tip and archive_by_ref.get((ref, tip)))
+        git_facts = cleanup_archives.reference_observation(project, ref, tip, repository)
+        observed_archives = archive_facts(ref, git_facts)
+        verified = any(row["verified"] and row["covers_resource"] for row in observed_archives)
         removed_with_worktree = bool(associated and any(row["delete_argv"] for row in associated))
         deletable = (classification == "integrated" or classification == "unique" and verified
                      and not associated and not stash_present)
-        resources.append(_resource("local_branch", ref, {"ref": ref, "tip": tip, "checked_out": checked_out},
+        resources.append(_resource("local_branch", ref, {"ref": ref, "tip": tip, "checked_out": checked_out,
+                                                        "git": git_facts},
                                    classification,
                                    reasons + (["Orca also removes the merged local branch"]
                                               if removed_with_worktree else []),
@@ -606,7 +591,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                                    archive_argv=(["git", "bundle", "create", "<dir>/" +
                                                   branch.replace("/", "_") + ".bundle", ref]
                                                  if classification == "unique" else None),
-                                   archive_verified=verified))
+                                   archive_verified=verified, archive_observations=observed_archives))
     for remote, branch in sorted(remote_names):
         ref = "refs/heads/" + branch
         output = _git(project, ["ls-remote", remote, ref]) if _BRANCH.fullmatch(branch) else None
@@ -621,14 +606,16 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         elif tip not in merged and is_ancestor(project, tip, target) is not True:
             classification, reasons = "unique", ["remote tip has unique commits"]
         archive_ref = "refs/remotes/" + remote + "/" + branch
-        verified = bool(tip and archive_by_ref.get((archive_ref, tip)))
+        git_facts = cleanup_archives.reference_observation(project, archive_ref, tip, repository)
+        observed_archives = archive_facts(archive_ref, git_facts)
+        verified = any(row["verified"] and row["covers_resource"] for row in observed_archives)
         if selected is not None:
             held = [row for row in resources if row["kind"] == "worktree" and row["delete_argv"] is None]
             if held:
                 classification = "protected"
                 reasons += sorted({reason for row in held for reason in row["reasons"]})
         resources.append(_resource("remote_branch", remote + "/" + branch,
-                                   {"remote": remote, "ref": ref, "tip": tip}, classification, reasons,
+                                   {"remote": remote, "ref": ref, "tip": tip, "git": git_facts}, classification, reasons,
                                    delete_argv=(["git", "push", "--force-with-lease=" + ref + ":" + tip,
                                                 remote, ":" + ref]
                                                 if classification == "merged_remote_head"
@@ -637,7 +624,7 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
                                                   remote + "_" + branch.replace("/", "_") + ".bundle",
                                                   archive_ref]
                                                  if classification == "unique" else None),
-                                   archive_verified=verified))
+                                   archive_verified=verified, archive_observations=observed_archives))
     if len(resources) > MAX_RESOURCES:
         raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     resources.sort(key=lambda row: row["id"])

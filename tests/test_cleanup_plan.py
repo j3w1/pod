@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import subprocess
 from copy import deepcopy
+import hashlib
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -450,6 +452,8 @@ class CleanupWorkerTests(KernelCase):
         cls.journal_path = _record_path(cls.fixture_case.project, "objective")
         cls.journal_bytes = cls.journal_path.read_bytes()
         cls.native_workers = deepcopy(cls.fixture_case.port.workers)
+        admin = Path(git(cls.fixture_case.child, "rev-parse", "--absolute-git-dir"))
+        cls.head_reflog = (admin / "logs" / "HEAD").read_bytes()
 
     def setUp(self):
         fixture = self.fixture_case
@@ -471,6 +475,10 @@ class CleanupWorkerTests(KernelCase):
                 (self.child / name).unlink(missing_ok=True)
         else:
             git(self.project, "worktree", "add", "-q", str(self.child), "worker")
+        # A reset does not remove independent older roots from a previous method's private reflog.
+        admin = Path(git(self.child, "rev-parse", "--absolute-git-dir"))
+        (admin / "logs" / "HEAD").write_bytes(self.head_reflog)
+        (admin / "ORIG_HEAD").unlink(missing_ok=True)
         git(self.project, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/target")
         git(self.root / "origin.git", "update-ref", "refs/heads/worker", self.base)
         git(self.project, "update-ref", "refs/remotes/origin/worker", self.base)
@@ -683,6 +691,25 @@ class CleanupWorkerTests(KernelCase):
         archive.write_text("corrupt archive\n")
         self.assert_held("outside the observed target", self.observed(
             archives=[{"path": str(archive), "ref": "refs/heads/worker", "tip": tip}]))
+
+    def test_expanded_archive_does_not_clear_worker_release_or_report_holds(self):
+        ref = "refs/heads/worker"
+        archive = self.root / "worker-expanded.bundle"
+        git(self.project, "bundle", "create", str(archive), ref)
+        rows = [{"path": str(archive), "ref": ref, "tip": self.base,
+                 "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                 "recovery_refs": {ref: self.base}}]
+        self.resource_case = "unreleased"
+        result = self.observed(archives=rows)
+        self.assertTrue(self.resource(result, "worktree")["archive_verified"])
+        self.assert_held("not natively released", result)
+        self.resource_case = "released"
+        state = read(self.project, "objective")
+        state["admissions"][self.admission["admission_id"]]["report"] = None
+        with patch("pod.cleanup.read", return_value=state):
+            result = self.observed(archives=rows)
+        self.assertTrue(self.resource(result, "worktree")["archive_verified"])
+        self.assert_held("worker report has not been recorded", result)
 
     def test_changed_release_report_or_remote_tip_invalidates_expect(self):
         first = self.observed()
