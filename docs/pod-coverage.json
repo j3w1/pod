@@ -225,7 +225,23 @@
       "required_evidence": [
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_has_exact_parent_fresh_route_terminal_and_immutable_history",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_must_be_an_owned_admission_on_the_same_task_and_run",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_needs_positive_exit_despite_settled_dispatch",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_needs_terminal_failed_or_stopped_outcome",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_resource_unknown_pending_and_failed_release_hold",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_obeys_current_exact_pin_and_records_fresh_selection",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_obeys_recorded_direct_user_constraints",
+        "tests.test_native_retry.RetryAdmissionTests.test_safety_failure_history_blocks_an_alternative_retry",
+        "tests.test_native_retry.RetryAdmissionTests.test_availability_failure_can_select_another_current_route_after_exit",
+        "tests.test_native_retry.RetryAdmissionTests.test_authentication_refusal_blocks_same_task_across_routes_until_explicit_clear",
+        "tests.test_native_retry.RetryAdmissionTests.test_authentication_retry_after_expiry_uses_existing_failure_policy",
+        "tests.test_native_retry.RetryAdmissionTests.test_permission_refusal_stays_unresolved_and_cannot_select_a_new_route",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_may_have_reused_an_earlier_terminal_with_a_different_origin",
+        "tests.test_native_retry.RetryAdmissionTests.test_same_coordinator_run_may_serve_another_explicit_objective",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_rechecks_native_authority_and_authorized_placement"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -533,7 +549,8 @@
         "tests.test_operations.AdmissionTests.test_observation_limit_blocks_before_another_native_effect",
         "tests.test_operations.AdmissionTests.test_large_error_keeps_uuid_with_compact_diagnostic_and_exact_evidence",
         "tests.test_operations.AdmissionTests.test_native_contact_loss_cannot_prevent_recording_returned_start_facts",
-        "tests.test_operations.AdmissionTests.test_archive_write_failure_keeps_uuid_and_reports_missing_evidence"
+        "tests.test_operations.AdmissionTests.test_archive_write_failure_keeps_uuid_and_reports_missing_evidence",
+        "tests.test_native_retry.RetryAdmissionTests.test_completed_wrong_parent_receipt_is_archived_and_sticky_on_absent_recovery"
       ],
       "status": "NOT_RUN"
     },
@@ -852,7 +869,24 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_no_uuid_recovery_binds_one_exact_existing_worker_without_relaunch",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_no_uuid_recovery_binds_one_exact_existing_worker_without_relaunch",
+        "tests.test_native_retry.RetryAdmissionTests.test_completed_request_recovery_binds_exact_child_without_another_start",
+        "tests.test_native_retry.RetryAdmissionTests.test_pending_joins_same_uuid_parent_and_original_route_after_preferences_change",
+        "tests.test_native_retry.RetryAdmissionTests.test_absent_request_adopts_child_and_never_the_original_parent",
+        "tests.test_native_retry.RetryAdmissionTests.test_no_uuid_recovery_filters_all_historical_attempts_by_exact_parent",
+        "tests.test_native_retry.RetryAdmissionTests.test_no_uuid_wrong_parent_candidate_is_sticky_on_incomplete_readback",
+        "tests.test_native_retry.RetryAdmissionTests.test_pending_wrong_parent_receipt_persists_without_a_duplicate_worker",
+        "tests.test_native_retry.RetryAdmissionTests.test_identical_request_recovers_and_changed_packet_or_placement_cannot_replace_it",
+        "tests.test_native_retry.RetryAdmissionTests.test_wrong_parent_without_uuid_is_held_before_any_later_adoption",
+        "tests.test_native_retry.RetryAdmissionTests.test_native_retry_cannot_adopt_the_released_parent_terminal",
+        "tests.test_native_retry.RetryAdmissionTests.test_malformed_inventory_prevents_unique_retry_adoption",
+        "tests.test_native_retry.RetryAdmissionTests.test_direct_retry_checks_the_actual_child_placement_before_binding",
+        "tests.test_native_retry.RetryAdmissionTests.test_completed_retry_checks_the_actual_child_placement_before_binding",
+        "tests.test_native_retry.RetryAdmissionTests.test_absent_retry_checks_the_actual_child_placement_before_adoption",
+        "tests.test_native_retry.RetryAdmissionTests.test_no_uuid_retry_checks_placement_and_preserves_a_known_mismatch",
+        "tests.test_native_retry.RetryAdmissionTests.test_unknown_actual_child_placement_holds_without_adoption"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -861,7 +895,11 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_refusal_classifier_rejects_runtime_envelope_and_effect_contradictions",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_refusal_classifier_rejects_runtime_envelope_and_effect_contradictions",
+        "tests.test_native_retry.RetryAdmissionTests.test_native_circuit_breaker_refusal_is_preserved_and_never_bypassed",
+        "tests.test_native_retry.RetryAdmissionTests.test_native_task_startability_is_not_inferred_from_failed_dispatch"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1248,7 +1286,9 @@
         "tests.test_operations.AdmissionTests.test_reuse_different_worktree_keeps_unknown",
         "tests.test_operations.AdmissionTests.test_reuse_known_conflicting_native_value_is_mismatch",
         "tests.test_operations.AdmissionTests.test_report_consumes_inherited_reuse_without_route_mismatch",
-        "tests.test_governor.DecisionTests.test_inherited_reuse_route_does_not_defer_but_unknown_route_does"
+        "tests.test_governor.DecisionTests.test_inherited_reuse_route_does_not_defer_but_unknown_route_does",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_has_exact_parent_fresh_route_terminal_and_immutable_history",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_preserves_result_disposition_obligation"
       ],
       "status": "NOT_RUN"
     },
