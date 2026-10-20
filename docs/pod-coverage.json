@@ -225,7 +225,30 @@
       "required_evidence": [
         "live_native"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_has_exact_parent_fresh_route_terminal_and_immutable_history",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_must_be_an_owned_admission_on_the_same_task_and_run",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_needs_positive_exit_despite_settled_dispatch",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_needs_terminal_failed_or_stopped_outcome",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_resource_unknown_pending_and_failed_release_hold",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_obeys_current_exact_pin_and_records_fresh_selection",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_obeys_recorded_direct_user_constraints",
+        "tests.test_native_retry.RetryAdmissionTests.test_safety_failure_history_blocks_an_alternative_retry",
+        "tests.test_native_retry.RetryAdmissionTests.test_availability_failure_can_select_another_current_route_after_exit",
+        "tests.test_native_retry.RetryAdmissionTests.test_authentication_refusal_blocks_same_task_across_routes_until_explicit_clear",
+        "tests.test_native_retry.RetryAdmissionTests.test_authentication_retry_after_expiry_uses_existing_failure_policy",
+        "tests.test_native_retry.RetryAdmissionTests.test_permission_refusal_stays_unresolved_and_cannot_select_a_new_route",
+        "tests.test_native_retry.RetryAdmissionTests.test_parent_may_have_reused_an_earlier_terminal_with_a_different_origin",
+        "tests.test_native_retry.RetryAdmissionTests.test_same_coordinator_run_may_serve_another_explicit_objective",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_rechecks_native_authority_and_authorized_placement",
+        "tests.test_retry_no_start.NoStartTests.test_settled_cancelled_native_dispatch_remains_ineligible",
+        "tests.test_retry_review.RetryReviewTests.test_fresh_review_retry_qualifies_only_its_own_completed_verdict",
+        "tests.test_retry_review.RetryReviewTests.test_retry_requires_positive_exit_and_known_released_resources",
+        "tests.test_retry_review.RetryReviewTests.test_retry_rejects_wrong_role_serves_and_foreign_parent",
+        "tests.test_retry_review.RetryReviewTests.test_retry_uses_current_route_eligibility_and_pin",
+        "tests.test_retry_review.RetryReviewTests.test_current_user_constraint_still_holds_a_reviewer_retry",
+        "tests.test_retry_review.RetryReviewTests.test_rate_limit_holds_until_a_recorded_reset_without_rewriting_the_report"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -533,7 +556,25 @@
         "tests.test_operations.AdmissionTests.test_observation_limit_blocks_before_another_native_effect",
         "tests.test_operations.AdmissionTests.test_large_error_keeps_uuid_with_compact_diagnostic_and_exact_evidence",
         "tests.test_operations.AdmissionTests.test_native_contact_loss_cannot_prevent_recording_returned_start_facts",
-        "tests.test_operations.AdmissionTests.test_archive_write_failure_keeps_uuid_and_reports_missing_evidence"
+        "tests.test_operations.AdmissionTests.test_archive_write_failure_keeps_uuid_and_reports_missing_evidence",
+        "tests.test_native_retry.RetryAdmissionTests.test_completed_wrong_parent_receipt_is_archived_and_sticky_on_absent_recovery",
+        "tests.test_retry_no_start.NoStartTests.test_transient_parent_read_is_proven_no_start_then_recovers",
+        "tests.test_retry_no_start.NoStartTests.test_parent_liveness_flip_is_proven_no_start_then_recovers",
+        "tests.test_retry_no_start.NoStartTests.test_reservation_crash_gap_never_becomes_no_start_proof",
+        "tests.test_retry_no_start.NoStartTests.test_unknown_after_effect_retains_reservation_then_adopts_exact_attempt",
+        "tests.test_retry_no_start.NoStartTests.test_missing_and_corrupt_no_start_proof_never_authorize_a_start",
+        "tests.test_retry_continuity.RetryContinuityTests.test_caught_pre_start_proof_survives_proven_runtime_rebind",
+        "tests.test_retry_authority.RetryAuthorityTests.test_foreign_coordinator_cannot_publish_deferral",
+        "tests.test_retry_authority.RetryAuthorityTests.test_generation_change_during_real_native_join_cannot_publish_deferral",
+        "tests.test_retry_authority.RetryAuthorityTests.test_missing_current_run_holds_until_native_identity_returns",
+        "tests.test_retry_authority.RetryAuthorityTests.test_unreadable_current_authority_preserves_only_control_flow",
+        "tests.test_retry_authority.RetryAuthorityTests.test_old_invocation_cannot_publish_after_actual_owner_runtime_rebind",
+        "tests.test_retry_authority.RetryAuthorityTests.test_changed_runtime_needs_real_continuity_before_later_classification",
+        "tests.test_retry_authority.RetryAuthorityTests.test_missing_or_corrupt_persisted_proof_cannot_release_reservation",
+        "tests.test_retry_authority.RetryAuthorityTests.test_persisted_proof_requires_exact_admission_run_task_and_parent",
+        "tests.test_retry_authority.RetryAuthorityTests.test_corrupt_pending_index_holds_until_original_bytes_return",
+        "tests.test_retry_authority.RetryAuthorityTests.test_crash_during_parent_read_has_no_affirmative_no_start",
+        "tests.test_retry_authority.RetryAuthorityTests.test_unknown_effect_never_uses_no_start_classification"
       ],
       "status": "NOT_RUN"
     },
@@ -852,7 +893,34 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_no_uuid_recovery_binds_one_exact_existing_worker_without_relaunch",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_no_uuid_recovery_binds_one_exact_existing_worker_without_relaunch",
+        "tests.test_native_retry.RetryAdmissionTests.test_completed_request_recovery_binds_exact_child_without_another_start",
+        "tests.test_native_retry.RetryAdmissionTests.test_pending_joins_same_uuid_parent_and_original_route_after_preferences_change",
+        "tests.test_native_retry.RetryAdmissionTests.test_absent_request_adopts_child_and_never_the_original_parent",
+        "tests.test_native_retry.RetryAdmissionTests.test_no_uuid_recovery_filters_all_historical_attempts_by_exact_parent",
+        "tests.test_native_retry.RetryAdmissionTests.test_no_uuid_wrong_parent_candidate_is_sticky_on_incomplete_readback",
+        "tests.test_native_retry.RetryAdmissionTests.test_pending_wrong_parent_receipt_persists_without_a_duplicate_worker",
+        "tests.test_native_retry.RetryAdmissionTests.test_identical_request_recovers_and_changed_packet_or_placement_cannot_replace_it",
+        "tests.test_native_retry.RetryAdmissionTests.test_wrong_parent_without_uuid_is_held_before_any_later_adoption",
+        "tests.test_native_retry.RetryAdmissionTests.test_native_retry_cannot_adopt_the_released_parent_terminal",
+        "tests.test_native_retry.RetryAdmissionTests.test_malformed_inventory_prevents_unique_retry_adoption",
+        "tests.test_native_retry.RetryAdmissionTests.test_direct_retry_checks_the_actual_child_placement_before_binding",
+        "tests.test_native_retry.RetryAdmissionTests.test_completed_retry_checks_the_actual_child_placement_before_binding",
+        "tests.test_native_retry.RetryAdmissionTests.test_absent_retry_checks_the_actual_child_placement_before_adoption",
+        "tests.test_native_retry.RetryAdmissionTests.test_no_uuid_retry_checks_placement_and_preserves_a_known_mismatch",
+        "tests.test_native_retry.RetryAdmissionTests.test_unknown_actual_child_placement_holds_without_adoption",
+        "tests.test_retry_no_start.NoStartTests.test_started_child_binds_while_parent_release_is_unknown",
+        "tests.test_retry_no_start.NoStartTests.test_post_start_adoption_does_not_recheck_parent_release",
+        "tests.test_retry_no_start.NoStartTests.test_unrelated_inventory_conflict_is_ambiguous_and_can_be_reconciled",
+        "tests.test_retry_no_start.NoStartTests.test_fresh_pending_replay_joins_original_uuid_and_parent",
+        "tests.test_retry_no_start.NoStartTests.test_fresh_completed_receipt_is_recorded_without_start",
+        "tests.test_retry_no_start.NoStartTests.test_fresh_absent_adoption_keeps_history",
+        "tests.test_retry_continuity.RetryContinuityTests.test_original_blocked_refusal_survives_proven_runtime_rebind",
+        "tests.test_retry_no_start.NoStartTests.test_no_start_predecessor_cannot_be_borrowed_by_another_parent",
+        "tests.test_retry_authority.RetryAuthorityTests.test_restored_authority_classifies_persisted_no_start_and_successor_once",
+        "tests.test_retry_authority.RetryAuthorityTests.test_identical_admission_after_restoration_classifies_only_its_original_row"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -861,7 +929,37 @@
         "unit",
         "live_native"
       ],
-      "offline_test": "tests.test_operations.AdmissionTests.test_refusal_classifier_rejects_runtime_envelope_and_effect_contradictions",
+      "offline_test": [
+        "tests.test_operations.AdmissionTests.test_refusal_classifier_rejects_runtime_envelope_and_effect_contradictions",
+        "tests.test_native_retry.RetryAdmissionTests.test_native_circuit_breaker_refusal_is_preserved_and_never_bypassed",
+        "tests.test_native_retry.RetryAdmissionTests.test_native_task_startability_is_not_inferred_from_failed_dispatch",
+        "tests.test_retry_no_start.NoStartTests.test_blocked_refusal_allows_one_explicit_revalidated_successor",
+        "tests.test_retry_no_start.NoStartTests.test_concurrent_identical_successors_share_one_reservation_and_start",
+        "tests.test_retry_no_start.NoStartTests.test_repeated_no_starts_keep_exact_genuine_native_parent",
+        "tests.test_retry_no_start.NoStartTests.test_fresh_intent_cannot_replace_original_or_successor_packet",
+        "tests.test_retry_no_start.NoStartTests.test_fresh_intent_rechecks_preferences_and_actual_placement",
+        "tests.test_retry_no_start.NoStartTests.test_internal_contract_reaches_explicit_fresh_intent",
+        "tests.test_retry_no_start.RefusalGuardTests.test_terminal_and_running_status",
+        "tests.test_retry_no_start.RefusalGuardTests.test_missing_and_ready_status",
+        "tests.test_retry_no_start.RefusalGuardTests.test_permission_and_safety_reasons",
+        "tests.test_retry_no_start.RefusalGuardTests.test_auth_and_unknown_reasons",
+        "tests.test_retry_no_start.RefusalGuardTests.test_other_run_and_task",
+        "tests.test_retry_no_start.RefusalGuardTests.test_foreign_parent_and_invalid_run",
+        "tests.test_retry_no_start.RefusalGuardTests.test_permission_and_auth_refusals",
+        "tests.test_retry_no_start.RefusalGuardTests.test_safety_and_runtime_refusals",
+        "tests.test_retry_no_start.RefusalGuardTests.test_other_effect_free_refusals",
+        "tests.test_retry_no_start.NoStartTests.test_optional_native_ids_use_exact_recorded_invocation",
+        "tests.test_retry_no_start.NoStartTests.test_missing_ids_without_invocation_provenance_stay_held",
+        "tests.test_retry_no_start.NoStartTests.test_authoritative_no_uuid_refusal_uses_positive_invocation_evidence",
+        "tests.test_retry_no_start.NoStartTests.test_fresh_intent_obeys_current_pin",
+        "tests.test_retry_no_start.NoStartTests.test_fresh_intent_obeys_recorded_user_constraint",
+        "tests.test_retry_no_start.NoStartTests.test_authentication_after_no_start_holds_fresh_intent_across_routes",
+        "tests.test_retry_no_start.NoStartTests.test_safety_after_no_start_holds_fresh_intent_across_routes",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_permission_refusal_remains_held",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_authentication_refusal_remains_held",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_safety_refusal_remains_held",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_unknown_or_circuit_refusal_remains_held"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -1248,7 +1346,9 @@
         "tests.test_operations.AdmissionTests.test_reuse_different_worktree_keeps_unknown",
         "tests.test_operations.AdmissionTests.test_reuse_known_conflicting_native_value_is_mismatch",
         "tests.test_operations.AdmissionTests.test_report_consumes_inherited_reuse_without_route_mismatch",
-        "tests.test_governor.DecisionTests.test_inherited_reuse_route_does_not_defer_but_unknown_route_does"
+        "tests.test_governor.DecisionTests.test_inherited_reuse_route_does_not_defer_but_unknown_route_does",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_has_exact_parent_fresh_route_terminal_and_immutable_history",
+        "tests.test_native_retry.RetryAdmissionTests.test_retry_preserves_result_disposition_obligation"
       ],
       "status": "NOT_RUN"
     },
@@ -1556,7 +1656,10 @@
       "offline_test": [
         "tests.test_obligations.AssuranceTests.test_label_needs_bound_non_withdrawn_assurance",
         "tests.test_kernel_boundaries.CapacityAndReviewTests.test_review_report_is_immutable_and_a_fresh_settled_attempt_can_qualify",
-        "tests.test_review_scope_reconciliation.ScopeReconciliationTests.test_first_scope_mismatch_requires_reconciliation_and_withholds_binding"
+        "tests.test_review_scope_reconciliation.ScopeReconciliationTests.test_first_scope_mismatch_requires_reconciliation_and_withholds_binding",
+        "tests.test_retry_review.RetryReviewTests.test_fresh_review_retry_qualifies_only_its_own_completed_verdict",
+        "tests.test_retry_review.RetryReviewTests.test_old_blocked_report_and_incomplete_proof_cannot_be_promoted",
+        "tests.test_retry_review.RetryReviewTests.test_retry_report_rejects_old_packet_dispatch_and_candidate"
       ],
       "status": "NOT_RUN"
     },
