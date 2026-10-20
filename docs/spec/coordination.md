@@ -278,8 +278,10 @@ completion records `resolved_seq` from its accepted proof or authorized withdraw
 Review proof covering that correction must be admitted and reported after
 resolution. Missing required ordering evidence fails closed; timestamps cannot
 supply it. Genuinely unaffected assurances retain explicit REUSE. Findings retain
-all entries within the 32-entry bound and refuse `finding_limit` on overflow
-instead of evicting history. A completed review may still require code corrections.
+all entries under [R87](assurance.md#r87--an-assurance-obligation-records-scope-question),
+which defines separate retained-history, per-request and original-attempt bounds;
+overflow refuses `finding_limit` instead of evicting history. A completed review
+may still require code corrections.
 The private `brief` operation takes optional candidate/verification and, with project, derives current policy/source facts. It validates intake on the same facts as checkpoint and names missing candidate for satisfied rows while remaining a read-only draft operation; runtime admission still requires a validated checkpoint.
 
 Private boundary errors include `map_stale` for a stale checkpoint sequence,
