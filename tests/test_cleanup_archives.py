@@ -5,10 +5,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -16,6 +18,7 @@ from unittest.mock import patch
 from pod import cleanup_archives
 from pod.errors import PodError
 from tests import test_cleanup_plan as plans
+from tests.common import fixture
 
 
 def _git_input(path, argv, data):
@@ -83,10 +86,11 @@ class ArchiveBranchTests(unittest.TestCase):
         return result["archives"][0]
 
     def assert_changed(self, expect, row=None):
-        with self.assertRaises(PodError) as changed:
+        with plans.current_resources() as captured, self.assertRaises(PodError) as changed:
             self.observed(row, expect=expect)
         self.assertEqual(changed.exception.code, "cleanup_changed")
         self.assertIn("worktree:" + str(self.case.child), changed.exception.detail["changed"])
+        return next(resource for resource in captured if resource["kind"] == "worktree")
 
     def test_exact_alias_recovers_current_source_and_preserves_unique_authority(self):
         before = plans.git(self.case.project, "show-ref")
@@ -209,8 +213,7 @@ class ArchiveBranchTests(unittest.TestCase):
         first = self.observed()
         self.bundle.write_bytes(self.bundles["branch_only"])
         current = _archive(self.bundle, self.ref, self.tip)
-        self.assertTrue(self.worktree(self.observed(current))["archive_verified"])
-        self.assert_changed(first["expect"], current)
+        self.assertTrue(self.assert_changed(first["expect"], current)["archive_verified"])
 
     def test_changed_supplied_tip_or_map_invalidates_expect(self):
         first = self.observed()
@@ -237,10 +240,9 @@ class ArchiveBranchTests(unittest.TestCase):
         self.directory.rename(old)
         self.directory.mkdir()
         shutil.copyfile(old / self.bundle.name, self.bundle)
-        current = self.worktree(self.observed())
+        current = self.assert_changed(first["expect"])
         self.assertTrue(current["archive_verified"])
         self.assertEqual(current["archives"][0]["sha256"], first["resources"][-1]["archives"][0]["sha256"])
-        self.assert_changed(first["expect"])
 
     def test_recycled_ancestor_inode_with_retained_leaf_identity_invalidates_expect(self):
         ancestor = self.directory / "ancestor"
@@ -267,8 +269,7 @@ class ArchiveBranchTests(unittest.TestCase):
             return observed
         # Only inode reuse is modeled; birth/ctime and the retained leaf are real.
         with patch.object(cleanup_archives.os, "fstat", side_effect=recycled):
-            self.assertTrue(self.worktree(self.observed())["archive_verified"])
-            self.assert_changed(first["expect"])
+            self.assertTrue(self.assert_changed(first["expect"])["archive_verified"])
 
     def test_unknown_directory_incarnation_cannot_supply_a_preservation_proof(self):
         row = _archive(self.bundle, self.ref, self.tip)
@@ -395,6 +396,8 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertTrue(row["archive_verified"])
         self.assertIsNone(row["delete_argv"])
         file.unlink()
+
+    def test_ignored_data_stays_held_with_valid_archive(self):
         exclude = self.case.project / ".git" / "info" / "exclude"
         original = exclude.read_bytes()
         exclude.write_text("*.scratch\n")
@@ -406,6 +409,8 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertTrue(row["archive_verified"])
         self.assertIsNone(row["delete_argv"])
         self.assertIn("valuable.scratch", " ".join(row["reasons"]))
+
+    def test_foreign_native_holder_stays_held_with_valid_archive(self):
         self.case.terminals = [{"handle": "foreign", "worktreePath": str(self.case.child)}]
         row = self.worktree(self.observed())
         self.assertTrue(row["archive_verified"])
@@ -454,6 +459,8 @@ class ArchiveBranchTests(unittest.TestCase):
         plans.git(self.case.child, "update-ref", "refs/worktree/private", self.tip)
         self.addCleanup(plans.git, self.case.child, "update-ref", "-d", "refs/worktree/private")
         self.assert_changed(first["expect"])
+
+    def test_unsupported_admin_root_holds_with_a_valid_archive(self):
         unsupported = self.admin / "unknown-root"
         unsupported.write_text(self.tip + "\n")
         self.addCleanup(unsupported.unlink)
@@ -580,12 +587,12 @@ class ArchiveRootTests(unittest.TestCase):
         self.preserve_stash_metadata()
         first = self.observed()
         plans.git(self.case.project, "stash", "drop", "-q", "stash@{0}")
-        row = self.worktree(self.observed())
-        self.assertTrue(row["archive_verified"], row["archives"])
-        self.assertIsNone(row["delete_argv"])
-        with self.assertRaises(PodError) as changed:
+        with plans.current_resources() as captured, self.assertRaises(PodError) as changed:
             self.observed(expect=first["expect"])
         self.assertEqual(changed.exception.code, "cleanup_changed")
+        row = self.worktree({"resources": captured})
+        self.assertTrue(row["archive_verified"], row["archives"])
+        self.assertIsNone(row["delete_argv"])
 
     def test_branch_only_branch_proof_never_becomes_full_root_preservation(self):
         self.bundle.write_bytes(self.bundles["branch"])
@@ -627,6 +634,8 @@ class ArchiveRootTests(unittest.TestCase):
         self.assertTrue(row["archive_verified"])
         self.assertEqual(row["class"], "protected")
         self.assertIsNone(row["delete_argv"])
+
+    def test_foreign_live_holder_remains_held_with_full_stash_recovery(self):
         self.case.terminals = [{"handle": "live-foreign", "worktreePath": str(self.case.child)}]
         row = self.worktree(self.observed())
         self.assertTrue(row["archive_verified"])
@@ -755,6 +764,62 @@ class ArchiveConsolidatedTests(unittest.TestCase):
         found = self.verify(_archive(self.bundle, self.ref, self.tip, expanded=False))
         self.assertFalse(found["verified"])
         self.assertIn("over their bound", " ".join(found["holds"]))
+
+
+class ArchiveInheritedLimitTests(unittest.TestCase):
+    """Actual Popen limits change only inside disposable parent and adapter processes."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = fixture()
+        cls.root = cls.fixture.__enter__()
+        cls.addClassCleanup(cls.fixture.__exit__, None, None, None)
+        adapter = cls.root / "git"
+        adapter.write_text("#!" + sys.executable + "\nimport json,resource\nprint(json.dumps(["
+                           "resource.getrlimit(resource.RLIMIT_AS),resource.getrlimit(resource.RLIMIT_FSIZE)]))\n")
+        adapter.chmod(0o700)
+
+    def observed(self, limits):
+        script = """import json,resource,sys
+from pathlib import Path
+from pod import cleanup_archives
+limits=json.loads(sys.argv[2])
+for kind, values in zip((resource.RLIMIT_AS,resource.RLIMIT_FSIZE),limits):
+    resource.setrlimit(kind,tuple(values))
+before=[resource.getrlimit(resource.RLIMIT_AS),resource.getrlimit(resource.RLIMIT_FSIZE)]
+child=json.loads(cleanup_archives._run(Path(sys.argv[1]),['--version']))
+print(json.dumps({'before':before,'child':child}))
+"""
+        result = subprocess.run([sys.executable, "-c", script, str(self.root), json.dumps(limits)],
+                                env={**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]},
+                                capture_output=True, text=True, check=True, timeout=30)
+        return json.loads(result.stdout)
+
+    def test_finite_inherited_soft_and_hard_limits_are_never_raised(self):
+        mib = 1024 * 1024
+        result = self.observed([[256 * mib, 512 * mib], [mib, 16 * mib]])
+        self.assertEqual(result["child"], result["before"])
+
+    def test_infinite_inherited_limits_use_ordinary_bounds_without_changing_hard_limits(self):
+        import resource
+        unlimited = resource.RLIM_INFINITY
+        result = self.observed([[unlimited, unlimited], [unlimited, unlimited]])
+        self.assertEqual(result["child"], [[cleanup_archives.MAX_GIT_MEMORY, unlimited],
+                                          [cleanup_archives.MAX_BUNDLE, unlimited]])
+
+    def test_finite_soft_limits_survive_infinite_hard_limits(self):
+        import resource
+        mib, unlimited = 1024 * 1024, resource.RLIM_INFINITY
+        result = self.observed([[256 * mib, unlimited], [mib, unlimited]])
+        self.assertEqual(result["child"], result["before"])
+
+    def test_finite_bounds_and_equal_tighter_hard_limits_are_respected(self):
+        mib = 1024 * 1024
+        result = self.observed([[512 * mib, 512 * mib], [16 * mib, 16 * mib]])
+        self.assertEqual(result["child"], result["before"])
+        result = self.observed([[3 * 1024 * mib, 3 * 1024 * mib], [256 * mib, 256 * mib]])
+        self.assertEqual(result["child"], [[cleanup_archives.MAX_GIT_MEMORY, 3 * 1024 * mib],
+                                          [cleanup_archives.MAX_BUNDLE, 256 * mib]])
 
 
 class ArchiveContentScaleTests(unittest.TestCase):

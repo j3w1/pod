@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -21,6 +22,18 @@ from pod.ledger import read
 from pod.operations import guarded_start, OrcaPort
 from tests.kernel_support import KernelCase, git
 from tests.common import receipt
+
+
+@contextmanager
+def current_resources():
+    """Inspect the actual current rows passed to the unchanged expect validator."""
+    resources = []
+    original = plan.__globals__["_expect_change"]
+    def inspect(expect, rows, target):
+        resources[:] = rows
+        return original(expect, rows, target)
+    with patch("pod.cleanup._expect_change", side_effect=inspect):
+        yield resources
 
 
 class CleanupPlanTests(KernelCase):
@@ -49,6 +62,12 @@ class CleanupPlanTests(KernelCase):
 
     def resource(self, result, kind):
         return next(row for row in result["resources"] if row["kind"] == kind)
+
+    def changed(self, expect, **kwargs):
+        with current_resources() as resources, self.assertRaises(PodError) as error:
+            self.observed(expect=expect, **kwargs)
+        self.assertEqual(error.exception.code, "cleanup_changed")
+        return {"resources": resources}
 
     def test_clean_integrated_worktree_and_branch_have_guarded_commands_without_writes(self):
         state_path = objective_root(self.project, "objective") / "context.json"
@@ -137,10 +156,7 @@ class CleanupPlanTests(KernelCase):
         self.assertIsNotNone(worktree["delete_argv"])
         self.assertNotIn(oid, worktree["identity"]["git"]["required_objects"])
         git(self.project, "update-ref", "-d", "refs/remotes/peer/other")
-        with self.assertRaises(PodError) as changed:
-            self.observed(expect=result["expect"])
-        self.assertEqual(changed.exception.code, "cleanup_changed")
-        current = self.resource(self.observed(), "worktree")
+        current = self.resource(self.changed(result["expect"]), "worktree")
         self.assertEqual(current["class"], "unique")
         self.assertIn(oid, current["identity"]["git"]["required_objects"])
         self.assertIsNone(current["delete_argv"])
@@ -235,6 +251,8 @@ class CleanupPlanTests(KernelCase):
         with self.assertRaises(PodError) as changed:
             self.observed(expect=first["expect"])
         self.assertIn("remote_branch:origin/objective", changed.exception.detail["changed"])
+
+    def test_main_checkout_is_protected(self):
         main_context = repository_context(self.project)
         self.write(self.stored(), worktree={"repository": main_context["repository"],
                                             "repo_key": main_context["repo_key"],
@@ -479,10 +497,7 @@ class CleanupScaleTests(unittest.TestCase):
         first = case.observed()
         self.addCleanup(git, foreign, "checkout", "-q", "unrelated-149")
         git(foreign, "checkout", "-q", "--ignore-other-worktrees", "objective")
-        with self.assertRaises(PodError) as changed:
-            case.observed(expect=first["expect"])
-        self.assertEqual(changed.exception.code, "cleanup_changed")
-        result = case.observed()
+        result = case.changed(first["expect"])
         worktree = case.resource(result, "worktree")
         self.assertEqual(worktree["identity"]["shared_with"], [str(foreign)])
         self.assertEqual((worktree["class"], worktree["delete_argv"]), ("protected", None))
@@ -639,6 +654,7 @@ class CleanupWorkerTests(KernelCase):
 
     orca_read = CleanupPlanTests.orca_read
     resource = CleanupPlanTests.resource
+    changed = CleanupPlanTests.changed
 
     def observed(self, worker=None, **kwargs):
         with repository_reads():
@@ -692,10 +708,12 @@ class CleanupWorkerTests(KernelCase):
         retained = self.observed(worker=worker)
         self.assertEqual(retained["worker"]["reuse_reason"], reason)
         self.assert_held("reused next round: " + reason, retained)
-        for old, selected in ((first, worker), (retained, {**worker, "reuse_reason": "a different next round"})):
-            with self.subTest(selector=selected), self.assertRaises(PodError) as changed:
-                self.observed(worker=selected, expect=old["expect"])
-            self.assertEqual(changed.exception.code, "cleanup_changed")
+        self.changed(first["expect"], worker=worker)
+
+    def test_different_recorded_reuse_reason_changes_expect(self):
+        worker = {"admission": self.admission["admission_id"], "reuse_reason": "initial next round"}
+        retained = self.observed(worker=worker)
+        self.changed(retained["expect"], worker={**worker, "reuse_reason": "a different next round"})
 
     def test_native_retention_and_reuse_keep_the_exact_reason(self):
         self.resource_case = "retained"
@@ -710,8 +728,13 @@ class CleanupWorkerTests(KernelCase):
         self.port.workers[self.dispatch]["outcome"] = "in_progress"
         self.assert_held("worker Dispatch is active or unsettled")
         self.port.workers[self.dispatch]["outcome"] = "succeeded"
-        for case, reason in (("unreleased", "not natively released"), ("live", "exit is unverified"),
-                             ("unknown_release", "not natively released"),
+        for case, reason in (("unreleased", "not natively released"), ("live", "exit is unverified")):
+            with self.subTest(case=case):
+                self.resource_case = case
+                self.assert_held(reason)
+
+    def test_unknown_release_and_changed_runtime_keep_worker_resources_held(self):
+        for case, reason in (("unknown_release", "not natively released"),
                              ("wrong_runtime", "native settlement or release is unavailable")):
             with self.subTest(case=case):
                 self.resource_case = case
@@ -749,6 +772,8 @@ class CleanupWorkerTests(KernelCase):
                 (self.child / filename).write_text("keep this data\n")
                 self.assert_held(filename)
                 (self.child / filename).unlink()
+
+    def test_stash_and_foreign_terminal_keep_all_worker_resources(self):
         (self.child / "README.md").write_text("stashed data\n")
         git(self.child, "stash", "push", "-qm", "retain")
         self.assert_held("stash")
@@ -831,7 +856,15 @@ class CleanupWorkerTests(KernelCase):
 
     def test_incomplete_resource_and_wrong_worker_terminal_never_prove_release(self):
         shown = self.shown(self.dispatch)
-        for key in ("ownerDispatchId", "worktreeId", "terminalHandle", "ownershipState", "releaseState"):
+        for key in ("ownerDispatchId", "worktreeId", "terminalHandle"):
+            incomplete = deepcopy(shown)
+            incomplete["result"]["terminalResource"].pop(key)
+            with self.subTest(missing=key), patch.object(self.port, "show_worker", return_value=incomplete):
+                self.assertTrue(all(row["delete_argv"] is None for row in self.observed()["resources"]))
+
+    def test_incomplete_release_fields_and_wrong_worker_terminal_never_prove_release(self):
+        shown = self.shown(self.dispatch)
+        for key in ("ownershipState", "releaseState"):
             incomplete = deepcopy(shown)
             incomplete["result"]["terminalResource"].pop(key)
             with self.subTest(missing=key), patch.object(self.port, "show_worker", return_value=incomplete):
@@ -844,8 +877,16 @@ class CleanupWorkerTests(KernelCase):
         shown = self.shown(self.dispatch)
         binding = self.admission["native_binding"]
         terminal = {"handle": binding["terminalHandle"], "worktreeId": binding["worktreeId"], "connected": False}
-        for fields in ({"connected": True}, {"connected": None}, {"handle": "other-terminal"},
-                       {"worktreeId": "other-worktree"}):
+        for fields in ({"connected": True}, {"connected": None}):
+            shown["result"]["terminal"] = {**terminal, **fields}
+            with self.subTest(fields=fields), patch.object(self.port, "show_worker", return_value=shown):
+                self.assert_held("terminal readback is connected, incomplete or belongs to another binding")
+
+    def test_foreign_terminal_handle_or_worktree_holds_release(self):
+        shown = self.shown(self.dispatch)
+        binding = self.admission["native_binding"]
+        terminal = {"handle": binding["terminalHandle"], "worktreeId": binding["worktreeId"], "connected": False}
+        for fields in ({"handle": "other-terminal"}, {"worktreeId": "other-worktree"}):
             shown["result"]["terminal"] = {**terminal, **fields}
             with self.subTest(fields=fields), patch.object(self.port, "show_worker", return_value=shown):
                 self.assert_held("terminal readback is connected, incomplete or belongs to another binding")
@@ -892,11 +933,8 @@ class CleanupWorkerTests(KernelCase):
 
     def test_final_reused_round_can_remove_the_reported_released_placement(self):
         reason = "immediate next round on the correction's frozen candidate"
-        self.assert_held("reused next round: " + reason, self.observed(worker={
-            "admission": self.admission["admission_id"], "reuse_reason": reason}))
         final = self.final_reused_round()
         selector = {"admission": final["admission_id"]}
-        self.assert_held("worker resource is not natively released", self.observed(worker=selector))
         self.resource_case = "released"
         first = self.observed(worker=selector)
         self.assertEqual(first["worker"]["placement_history"][0]["proof"], "transferred_to_selected")
@@ -908,6 +946,13 @@ class CleanupWorkerTests(KernelCase):
         self.assertEqual(git(self.project, "ls-remote", "origin", "refs/heads/worker"), "")
         self.assertIsNone(read(self.project, "objective")["checkpoint"].get("closure"))
 
+    def test_reuse_reason_and_unreleased_final_round_stay_held(self):
+        reason = "immediate next round on the correction's frozen candidate"
+        self.assert_held("reused next round: " + reason, self.observed(worker={
+            "admission": self.admission["admission_id"], "reuse_reason": reason}))
+        final = self.final_reused_round()
+        self.assert_held("worker resource is not natively released", self.observed(worker={"admission": final["admission_id"]}))
+
     def test_reuse_history_active_unknown_or_foreign_ownership_holds_and_changes_expect(self):
         final = self.final_reused_round()
         self.resource_case = "released"
@@ -918,6 +963,11 @@ class CleanupWorkerTests(KernelCase):
         with self.assertRaises(PodError) as changed:
             self.observed(worker=selector, expect=first["expect"])
         self.assertEqual(changed.exception.code, "cleanup_changed")
+
+    def test_reuse_history_foreign_ownership_holds(self):
+        final = self.final_reused_round()
+        self.resource_case = "released"
+        selector = {"dispatch": final["native_binding"]["dispatchId"]}
         self.port.workers[self.dispatch]["outcome"] = "succeeded"
         self.resource_owners[self.dispatch] = "foreign-dispatch"
         self.assert_held("other admission", self.observed(worker=selector))

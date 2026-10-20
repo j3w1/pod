@@ -8,7 +8,7 @@ import re
 
 from .errors import PodError
 from . import cleanup_archives
-from .gitio import OBJECT_ID, is_ancestor, read as git_read, resolve_commit, worktree_inventory, worktree_rows
+from .gitio import OBJECT_ID, is_ancestor, resolve_commit, worktree_inventory, worktree_rows
 from .governor import _read_journal, _record_path
 from .ledger import read
 from .orca import read_command
@@ -20,10 +20,10 @@ _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 
 
 def _git(project: Path, argv: list[str]) -> str | None:
-    result = git_read(project, argv)
-    if result is None or result.returncode != 0 or len(result.stdout) > MAX_GIT_OUTPUT:
+    try:
+        return cleanup_archives._text(project, argv)
+    except cleanup_archives.Unavailable:
         return None
-    return result.stdout
 
 
 def _worktrees(project: Path) -> list[dict]:
@@ -133,11 +133,15 @@ def _worker_facts(admission: dict, state: dict, port, reuse_reason: str | None, 
         shown = port.show_worker(binding.get("dispatchId"))
         evidence = _assignment_evidence(shown, admission)
         placement = evidence["placement"]
+        liveness = placement.get("native_liveness") or {}
+        safe_liveness = {"verdict": liveness.get("verdict")}
+        if isinstance(liveness.get("reason"), str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", liveness["reason"]):
+            safe_liveness["reason"] = liveness["reason"]
         facts.update(settled=evidence["settled"],
                      release=placement.get("native_release"),
                      ownership=placement.get("terminal_ownership"),
                      terminal=placement.get("terminal_readback"),
-                     liveness=placement.get("native_liveness"))
+                     liveness=safe_liveness, liveness_sha256=digest(liveness))
         ownership = placement.get("terminal_ownership") or {}
         release = placement.get("native_release") or {}
         terminal = placement.get("terminal_readback") or {}
@@ -384,13 +388,29 @@ def _successor_paths(project: Path, state: dict) -> tuple[str | None, set[str] |
     return state["continued_by"]["objective"], None
 
 
-def plan(project: Path, objective: str, *, expect: object = None, archives: object = None, worker: object = None,
-         orca_reader=read_command, native_port=None) -> dict:
+def plan(project: Path, objective: str | None = None, *, expect: object = None, archives: object = None,
+         worker: object = None, observe: object = None, orca_reader=read_command, native_port=None) -> dict:
     """Observe only resources named by this objective; return guarded argv, never execute it.
 
     An older record closed by evidence is read through the evidence path's documented fields before the validating
     reader (R94, R146); what it does not document reads as unknown, so its resources stay protected. An older record
     without that closure keeps the ordinary reader's refusal."""
+    try:
+        cleanup_archives._inspection_environment()
+    except cleanup_archives.Unavailable as exc:
+        raise PodError("cleanup_unavailable", "Git inspection context is unsupported") from exc
+    if observe is not None:
+        from .cleanup_observations import selected_plan
+        return selected_plan(project, objective, observe, expect=expect, archive_input=archives, worker=worker,
+                             orca_reader=orca_reader, native_port=native_port)
+    bounded_text(objective, name="objective", limit=256)
+    return _objective_plan(project, objective, expect=expect, archives=archives, worker=worker,
+                           orca_reader=orca_reader, native_port=native_port, stash_observations=True)
+
+
+def _objective_plan(project: Path, objective: str, *, expect=None, archives=None, worker=None,
+                    orca_reader=read_command, native_port=None, stash_observations: bool) -> dict:
+    """One admission implementation shared by ordinary and selected read-only projections."""
     from .evidence_closure import closed_older_state
     from .operations import OrcaPort
     older = closed_older_state(project, objective)
@@ -449,6 +469,9 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
     checkout_refs = {row["branch"] for row in by_path.values() if isinstance(row.get("branch"), str)}
     local_branches, remote_names = _branch_refs(journal, checkout_refs, selected_branches,
                                                worker=selected is not None)
+    # Recorded names remain observations when a checkout disappears; absence is
+    # neither completed removal nor permission to delete its remaining ref.
+    local_branches.update(selected_branches)
     if len(paths) + len(local_branches) + len(remote_names) > MAX_RESOURCES:
         raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     repository = cleanup_archives.repository_observation(project)
@@ -630,6 +653,14 @@ def plan(project: Path, objective: str, *, expect: object = None, archives: obje
         raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     resources.sort(key=lambda row: row["id"])
     observed_target = {"ref": target_ref, "commit": target, "moved_after_delivery": moved}
+    if stash_observations:
+        from . import cleanup_stashes
+        snapshot = cleanup_stashes.snapshot(project, repository)
+        observations = cleanup_stashes.observe_many(project, resources, repository, snapshot, orca_reader=orca_reader)
+        for row, observation in zip(resources, observations):
+            tip = row["identity"].get("tip")
+            integrated = bool(tip and target and (tip in merged or is_ancestor(project, tip, target) is True))
+            cleanup_stashes.apply(row, observation, branch_integrated=integrated)
     plan_hash, fingerprints = _expect_change(expect, resources, observed_target)
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]

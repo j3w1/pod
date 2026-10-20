@@ -76,14 +76,23 @@ def _git_limits():
     # index-pack can inflate deltas before their final sizes are inventoried.
     # Bound that process, and every pack/index it could write, before starting it.
     for kind, limit in ((resource.RLIMIT_AS, MAX_GIT_MEMORY), (resource.RLIMIT_FSIZE, MAX_BUNDLE)):
-        _, hard = resource.getrlimit(kind)
-        resource.setrlimit(kind, (min(limit, hard) if hard != resource.RLIM_INFINITY else limit, hard))
+        soft, hard = resource.getrlimit(kind)
+        finite = [value for value in (limit, soft, hard) if value != resource.RLIM_INFINITY]
+        resource.setrlimit(kind, (min(finite), hard))
+
+
+def _inspection_environment():
+    if any(key.startswith("GIT_TRACE") and key != "GIT_TRACE2_PARENT_SID" and value not in ("", "0")
+           for key, value in os.environ.items()):
+        raise Unavailable("Git tracing is unsupported for private metadata inspection")
 
 
 def _run(root: Path, argv: list[str], *, data: bytes | None = None, isolated: bool = False,
-         hash_output: bool = False, missing: bool = False) -> bytes:
+         hash_output: bool = False, missing: bool = False, deadline: float | None = None) -> bytes:
     if data is not None and len(data) > MAX_OUTPUT:
         raise Unavailable("Git archive inspection exceeded its input bound")
+    if not isolated:
+        _inspection_environment()
     # Refuse ambient object/repository overrides at the source, and never inherit them in restoration.
     env = dict(os.environ)
     if isolated:
@@ -91,17 +100,20 @@ def _run(root: Path, argv: list[str], *, data: bytes | None = None, isolated: bo
         env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                    GIT_TERMINAL_PROMPT="0")
     env["GIT_NO_LAZY_FETCH"] = "1"
+    deadline = min(time.monotonic() + 30, deadline) if deadline is not None else time.monotonic() + 30
+    if deadline <= time.monotonic():
+        raise Unavailable("Git archive inspection exceeded its time bound")
     try:
         # Neither effective config nor commit/reflog metadata may enter a disk
         # spool. Drain bounded pipes concurrently; digest-only reads retain no raw output.
         with subprocess.Popen(
                 ["git", "--no-optional-locks", "--no-replace-objects", "-c", "maintenance.auto=false",
-                 "-c", "gc.auto=0", "-c", "pack.threads=1", "-c", "core.hooksPath=" + os.devnull,
+                 "-c", "gc.auto=0", "-c", "pack.threads=1", "-c", "core.fsmonitor=false",
+                 "-c", "core.hooksPath=" + os.devnull,
                  "-C", str(root), *argv], stdin=subprocess.DEVNULL if data is None else subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=_git_limits) as process:
             try:
                 output, hashed, sizes, cursor = bytearray(), hashlib.sha256(), [0, 0], 0
-                deadline = time.monotonic() + 30
                 with selectors.DefaultSelector() as selector:
                     selector.register(process.stdout, selectors.EVENT_READ, 0)
                     selector.register(process.stderr, selectors.EVENT_READ, 1)
@@ -284,10 +296,10 @@ def _types(root: Path, oids: set[str], *, isolated: bool = False,
     return found
 
 
-def _commits(root: Path, oids: set[str]) -> dict:
+def _commits(root: Path, oids: set[str], *, limit: int = MAX_OBJECTS) -> dict:
     if not oids:
         return {}
-    if len(oids) > MAX_OBJECTS:
+    if len(oids) > limit:
         raise Unavailable("Required commit metadata exceeds its bound")
     output = _text(root, ["show", "--no-patch", "--no-notes", "--no-show-signature",
                           "--format=%H %T %P", *sorted(oids), "--"])
@@ -410,10 +422,15 @@ def repository_observation(project: Path) -> dict:
                 raise Unavailable("Alternate, graft or shallow storage is unsupported for archival")
         if _text(project, ["for-each-ref", "--format=%(refname)", "refs/replace/"]).strip():
             raise Unavailable("Replacement refs are unsupported for archival")
+        result["storage_complete"] = True
         stashes = _text(project, ["stash", "list", "--format=%H"]).splitlines()
         if len(stashes) > MAX_REFS:
             raise Unavailable("Stash roots exceed the archive observation bound")
-        result["stash_roots"] = [_oid(value) for value in stashes]
+        from .cleanup_stashes import retaining_roots
+        roots = retaining_roots(project, result)
+        if any(_oid(value) not in roots for value in stashes):
+            raise Unavailable("Stash list and retaining roots disagree")
+        result["stash_roots"] = roots
         result["complete"] = True
     except Unavailable as exc:
         result["holds"].append(str(exc))
@@ -426,10 +443,10 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
               "source_tip": tip, "private_refs": {}, "reflogs": {}, "required_objects": {}}
     try:
         result["directory"] = _directory(path)
-        directories = _text(path, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"]).splitlines()
-        if len(directories) != 2:
+        directories = _text(path, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"]).splitlines()
+        if len(directories) != 3 or directories[2] != str(path):
             raise Unavailable("Resource administrative directories are unavailable")
-        admin, common = map(Path, directories)
+        admin, common = map(Path, directories[:2])
         result.update(git_dir=_directory(admin), common_dir=_directory(common))
         if not repository["complete"] or str(common) != repository["common_dir"]["path"]:
             raise Unavailable("Resource repository identity or storage is uncertain")
@@ -586,6 +603,9 @@ def _outside(path: Path, excluded: list[Path]) -> dict:
             applicable = [(mount, device, root) for mount, device, root in mounts
                           if candidate.is_relative_to(mount)]
             mount, device, root = max(applicable, key=lambda row: len(row[0].parts))
+            if len({(other_device, str(other_root)) for other_mount, other_device, other_root in applicable
+                    if other_mount == mount}) != 1:
+                raise Unavailable("Archive placement has ambiguous overmounted aliases")
             return device, root / candidate.relative_to(mount)
         device, physical = location(path)
         for boundary in excluded:
@@ -668,7 +688,7 @@ def verify(project: Path, row: dict, resource: dict, excluded: list[Path]) -> di
                 result["verified"] = True
                 if expanded:
                     result["covers_resource"] = True
-                elif not resource["private_refs"] and not resource["repository"]["stash_roots"]:
+                elif not resource["private_refs"] and not any(name.startswith("stash:") for name in resource["roots"]):
                     result["covers_resource"] = not _uncovered(
                         restored, set(resource["required_objects"]), {tip}, isolated=True)
                 if not result["covers_resource"]:

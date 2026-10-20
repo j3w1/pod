@@ -622,10 +622,23 @@ def _op_record_compaction(request: dict) -> dict:
 
 
 def _op_cleanup_plan(request: dict) -> dict:
-    exact(request, {"project", "objective", "expect", "archives", "worker"}, {"project", "objective"}, name="request")
+    exact(request, {"project", "objective", "expect", "archives", "worker", "observe"},
+          {"project"} if isinstance(request, dict) and "observe" in request else {"project", "objective"}, name="request")
+    from .util import bounded_text
+    if "objective" in request:
+        bounded_text(request["objective"], name="objective", limit=256)
+    if "observe" in request:
+        from .cleanup_observations import selector
+        selector(request["observe"])
+        if "objective" not in request and "worker" in request:
+            raise PodError("invalid_cleanup_observe", "Project-only observation cannot select a worker")
     from .cleanup import plan
-    return plan(Path(request["project"]), request["objective"],
-                expect=request.get("expect"), archives=request.get("archives"), worker=request.get("worker"))
+    result = plan(Path(request["project"]), request.get("objective"),
+                  expect=request.get("expect"), archives=request.get("archives"), worker=request.get("worker"),
+                  observe=request.get("observe"))
+    if len(json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True).encode()) > 2_000_000:
+        raise PodError("cleanup_unavailable", "Cleanup observation exceeds its output bound")
+    return result
 
 
 def _op_map(request: dict) -> dict:
