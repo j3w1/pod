@@ -346,7 +346,7 @@ class IssueRevisionCorrectionTests(IssueRevisionCase):
         rows[-1].update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "current criterion withdrawn"})
         self.write(rows, criteria=["PoD#1", "PoD#2"], revision_authority={
             "provenance": "user_direct", "instruction": "Withdraw the current criterion"})
-        self.assertEqual([row["id"] for row in self.line(2)["criteria"]], ["R2"])
+        self.assertEqual(self.line(2)["criteria"], [])
         self.assertFalse(self.line(2)["proven"])
         self.assertEqual(self.line(2)["direction"], "untick")
         self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"][1], withdrawn)

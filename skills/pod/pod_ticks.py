@@ -114,11 +114,17 @@ def validate(value: object) -> None:
             raise PodError("state_unsupported", "PoD tick authorship is malformed")
     facts = row["facts"]
     if facts is not None:
-        exact(facts, {"source", "body_sha256", "lines", "blocks"}, {"source", "body_sha256", "lines"}, name="PoD line facts")
+        exact(facts, {"source", "body_sha256", "lines", "blocks", "mapping_scope_sha256", "mapping_source_current"},
+              {"source", "body_sha256", "lines"}, name="PoD line facts")
         if (not isinstance(facts["source"], str) or not _SHA.fullmatch(facts["source"])
                 or not isinstance(facts["body_sha256"], str) or not _SHA.fullmatch(facts["body_sha256"])
                 or not isinstance(facts["lines"], dict)):
             raise PodError("state_unsupported", "PoD line facts are malformed")
+        if "mapping_scope_sha256" in facts and (not isinstance(facts["mapping_scope_sha256"], str)
+                                                or not _SHA.fullmatch(facts["mapping_scope_sha256"])):
+            raise PodError("state_unsupported", "PoD mapping observation is malformed")
+        if "mapping_source_current" in facts and type(facts["mapping_source_current"]) is not bool:
+            raise PodError("state_unsupported", "PoD mapping source observation is malformed")
         for key, states in facts["lines"].items():
             if (not _NUMBER.fullmatch(key) or not isinstance(states, list) or not states
                     or any(type(state) is not bool for state in states)):
@@ -221,12 +227,18 @@ def _validate_block(block: dict) -> None:
         raise PodError("state_unsupported", "PoD block is malformed")
 
 
-def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None) -> None:
+def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None,
+           mapping_check: dict | None = None, observe_mapping: bool = True) -> None:
     from .github import pod_lines, pod_blocks
+    from .pod_mapping import observe, read_current, scope_hash
+    if context is not None and observe_mapping:
+        observe(context, ledger, source, body, mapping_check=mapping_check)
     lines = {str(number): [line["ticked"] for line in rows] for number, rows in pod_lines(body).items()}
     ledger["facts"] = {"source": digest(source), "body_sha256": _hash(body), "lines": lines,
                        "blocks": {str(number): [block["sha256"] for block in blocks]
                                   for number, blocks in pod_blocks(body).items()}}
+    ledger["facts"]["mapping_scope_sha256"] = scope_hash(body)
+    ledger["facts"]["mapping_source_current"] = read_current(source, body, mapping_check)
     ledger["read"] = {"status": "read", "reason": None}
     if context is not None:
         from .standing import observe
@@ -329,32 +341,40 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
 
 def refresh(state: dict, project: Path, source: dict) -> None:
     """Introducing/rebinding checkpoint: one best-effort read, never a refusal."""
-    from .github import issue_recheck_live
+    from .github import GhPort, issue_recheck_live
+    from .pod_mapping import observe
     ledger = state.setdefault("pod_ticks", empty())
     if ledger["last_rebind"] != digest(source):
         ledger["last_rebind"] = None
+    derived = any("pod_mapping" in row for row in (state.get("checkpoint") or {}).get("obligations", []))
+    reader = _ReadbackPort(GhPort(project), source)
     try:
-        result, live = issue_recheck_live(project, source)
+        result, live = issue_recheck_live(project, source, port=reader)
         if live is None or _hash(live["body"]) != source["body_sha256"]:
             ledger["read"] = {"status": "not_read", "reason": result.get("reason") or "body_digest_mismatch"}
         else:
-            _facts(ledger, source, live["body"], context=state)
+            # The map writer validates exact caller restatement before retiring
+            # associations; standing and bound checkbox observations stay here.
+            diverged = observe(state, ledger, source, live["body"], mapping_check=result, apply=False)
+            _facts(ledger, source, live["body"], context=state, mapping_check=result, observe_mapping=False)
+            if diverged:
+                ledger["read"]["reason"] = ("issue_amendment_changed" if result.get("amendment_changed")
+                                             else "issue_body_changed")
     except PodError as exc:
-        ledger["read"] = {"status": "not_read", "reason": exc.code}
+        reason = ("issue_body_changed" if derived and reader.live is not None
+                  and _hash(reader.live["body"]) != source["body_sha256"] else
+                  "issue_amendment_changed" if derived and reader.mapping_check is not None else exc.code)
+        ledger["read"] = {"status": "not_read", "reason": reason}
 
 
-def mapping(map_state: dict | None) -> dict[int, list[dict]]:
+def mapping(map_state: dict | None, *, source: dict | None = None, facts: dict | None = None,
+            read: dict | None = None) -> dict[int, list[dict]]:
     from .github import pod_ref_number
-    revisions = [row for row in (map_state or {}).get("revision_decisions", [])
-                 if row.get("operation") == "issue_revision"]
-    approved = {row["id"] for row in revisions[-1]["criteria"]} if revisions else None
+    from .pod_mapping import effective_ref
+    ctx = {"pod_mapping_source": source, "pod_mapping_facts": facts, "pod_mapping_read": read or {}}
     result = {}
     for criterion in (map_state or {}).get("obligations", []):
-        if (criterion.get("kind") == "criterion" and criterion.get("provenance") == "objective"
-                and criterion.get("state") == "withdrawn" and approved is not None
-                and criterion["id"] not in approved):
-            continue  # An approved current mapping supersedes history without rewriting its withdrawal.
-        number = pod_ref_number(criterion.get("source", {}).get("ref")) if criterion["kind"] == "criterion" else None
+        number = pod_ref_number(effective_ref(criterion, ctx))
         if number is not None:
             result.setdefault(number, []).append(criterion)
     return result
@@ -368,7 +388,7 @@ def intake(state: dict, map_state: dict | None = None) -> dict:
     facts = ledger["facts"]
     if facts is None or facts["source"] != digest(source) or ledger["read"]["status"] != "read":
         return {"status": "not_read", "reason": ledger["read"]["reason"]}
-    mapped = mapping(map_state or state["checkpoint"])
+    mapped = mapping(map_state or state["checkpoint"], source=source, facts=facts, read=ledger["read"])
     lines = {int(key): rows for key, rows in facts["lines"].items()}
     return {"status": "read", "unmapped": sorted(set(lines) - set(mapped)),
             "multiply_mapped": sorted(number for number, rows in mapped.items() if number in lines and len(rows) > 1),
@@ -390,7 +410,7 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
     facts = ledger["facts"]
     fresh = facts is not None and facts["source"] == digest(source)
     lines = (facts or {}).get("lines", {})
-    mapped = mapping(map_state)
+    mapped = mapping(map_state, source=source, facts=facts, read=ledger["read"])
     terminal = bool(state.get("continued_by") or state.get("historical_retirement") or (map_state or {}).get("closure"))
     closed_blocks = {row["pod"]: row for row in ledger["closure_blocked"]} if terminal else {}
     gov = bound_governance_digest(map_state) if map_state and map_state.get("obligations") is not None else ""
@@ -531,15 +551,23 @@ def _source_check(result: dict) -> None:
 
 class _ReadbackPort:
     """Keep the issue observation even when the recheck refuses its role or amendment."""
-    def __init__(self, port):
-        self.port, self.live = port, None
+    def __init__(self, port, source):
+        self.port, self.source, self.live = port, source, None
+        self.mapping_check = None
 
     def issue(self, **arguments):
         self.live = self.port.issue(**arguments)
         return self.live
 
     def amendment(self, **arguments):
-        return self.port.amendment(**arguments)
+        from .github import _validate_amendment_observation
+        row = _validate_amendment_observation(self.port.amendment(**arguments), **arguments)
+        if len(row["body"].encode()) <= 128 * 1024 and any(
+                bound["locator"].casefold() == row["url"].casefold()
+                and bound["sha256"] != _hash(row["body"]) for bound in self.source["amendments"]):
+            # A later unavailable sibling cannot erase an already validated edit.
+            self.mapping_check = {"amendment_changed": True}
+        return row
 
 
 def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
@@ -582,9 +610,10 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
     current = projection(state, store.map_of(state), ctx, project=project, objective=objective)
     row = next((row for row in current["lines"] if row["pod"] == pod), None)
     request["direction"] = (row or {}).get("direction") or "tick"
-    live = None
+    live, checked = None, None
+    reader = _ReadbackPort(port, source)
     try:
-        checked, live = issue_recheck_live(project, source, port=port)
+        checked, live = issue_recheck_live(project, source, port=reader)
         _source_check(checked)
     except PodError as exc:
         request["block"] = _block(exc, row="A3" if exc.code == "repository_mismatch" else
@@ -604,11 +633,25 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
             ticks = recorded.setdefault("pod_ticks", empty())
             if ticks["requests"].get(key) != prior_request:
                 raise _pending_error(ticks["requests"].get(key), "PoD request changed during the immediate read")
+            mapping_changed = False
+            if recorded["checkpoint"].get("objective_source") == source:
+                from .pod_mapping import observe
+                if reader.live is not None:
+                    mapping_changed = observe(recorded, ticks, source, reader.live["body"],
+                                              mapping_check=checked or reader.mapping_check)
+                if (checked is None and (reader.live is None or source["amendments"])
+                        and any("pod_mapping" in item for item in recorded["checkpoint"].get("obligations", []))):
+                    unread = {"status": "not_read", "reason": exc.code}
+                    mapping_changed = mapping_changed or ticks["read"] != unread
+                    ticks["read"] = unread
             if row is not None or live is not None and pod in pod_lines(live["body"]):
                 ticks["requests"][key] = deepcopy(request)
                 if live is not None:
                     _facts(ticks, {**source, "body_sha256": _hash(live["body"])}, live["body"],
-                           context=recorded if _hash(live["body"]) == source["body_sha256"] else None)
+                           context=recorded if _hash(live["body"]) == source["body_sha256"] else None,
+                           mapping_check=checked)
+                mapping_changed = True
+            if mapping_changed:
                 store._write(path, recorded)
         ctx = store.kernel_context(project, objective, recorded, None)
         exc.detail = {**(exc.detail or {}), "pod": pod, "direction": request["direction"],
@@ -634,7 +677,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                             "code": "line_missing", "reason": "line_missing", "row": "C2",
                             "readback": {"body_sha256": _hash(body), "state": live["state"], "ticked": None},
                             "pod_ticks": projection(state, store.map_of(state), ctx, project=project, objective=objective)})
-        _facts(ledger, source, body, context=state)
+        _facts(ledger, source, body, context=state, mapping_check=checked)
         ctx = store.kernel_context(project, objective, state, None)
         view = projection(state, store.map_of(state), ctx, project=project, objective=objective)
         row = next((row for row in view["lines"] if row["pod"] == pod), None)
@@ -707,7 +750,7 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
     accepted = result["result"] == "accepted"
     expected = {**source, "body_sha256": request["intended"]} if not held_refusal else source
     failure, checked = None, None
-    reader = _ReadbackPort(port)
+    reader = _ReadbackPort(port, expected)
     try:
         checked, _ = issue_recheck_live(project, expected, port=reader)
     except PodError as exc:
@@ -778,11 +821,14 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             from .standing import carry_tick
             carry_tick(state, source)
         if live is not None:
-            _facts(ledger, state["checkpoint"]["objective_source"], live["body"], context=state)
+            _facts(ledger, state["checkpoint"]["objective_source"], live["body"], context=state,
+                   mapping_check=checked or reader.mapping_check)
             # Drift observations are stale facts: never pretend that their body
             # is the checkpoint binding, even though status retains the readback.
             if now != state["checkpoint"]["objective_source"]["body_sha256"]:
                 ledger["facts"]["source"] = digest({**source, "body_sha256": now})
+        if live is None and any("pod_mapping" in row for row in state["checkpoint"].get("obligations", [])):
+            ledger["read"] = {"status": "not_read", "reason": failure.code}
         if rebind and request["direction"] == "tick":
             ledger["authors"][key] = "own" if accepted else "ambiguous"
         ledger["requests"][key] = request

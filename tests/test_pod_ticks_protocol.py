@@ -58,7 +58,7 @@ class ProtocolTests(TickCase):
         self.bind(); self.prove(); self.tick(); self.lapse(withdraw=True)
         self.tick()
         self.assertFalse(self.line()["ticked"])
-        self.assertEqual(self.line()["criteria"][0]["state"], "withdrawn")
+        self.assertEqual(self.line()["criteria"], [])
 
     def test_candidate_movement_makes_own_untick_due_D6(self):
         self.bind(); self.prove(); self.tick()

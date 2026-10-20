@@ -409,6 +409,9 @@ def _structure(raw: Any) -> dict:
         raise refuse("obligation_invalid", "malformed", "evidence is a bounded list", obligation=ob["id"])
     if "acceptances" in ob:
         ob["acceptances"] = _acceptance_records(ob["acceptances"], obligation=ob["id"])
+    if "pod_mapping" in ob:
+        from .pod_mapping import validate
+        validate(ob)
     return ob
 
 
@@ -801,6 +804,8 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
                                  "an overlapping assurance on the same candidate names the risk it adds",
                                  obligation=ob["id"], overlaps=other["id"])
 
+    from .pod_mapping import write as write_mapping
+    write_mapping(prior_map, value, rows, ctx, seq)
     return raw_obligations, prior_rows, rows, criteria
 
 
@@ -1013,7 +1018,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         prior_map, value, ctx, seq, user, triaged, refresh, observed, sources, gov, proposals)
 
     # Coverage: every original criterion has an objective obligation (R39).
-    covered = _covered(rows)
+    covered = _covered(rows, ctx)
     for criterion in criteria:
         if criterion not in covered:
             raise refuse("obligation_unaccounted", "criterion_uncovered",
@@ -1889,7 +1894,7 @@ def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
     rows = _persisted_rows(state, ctx, unverifiable=unverifiable)
     criteria = set(ctx.get("criteria", []))
     original = {ob["source"]["ref"] for ob in rows.values() if ob["provenance"] == "objective"}
-    if not original <= criteria or not criteria <= _covered(rows):
+    if not original <= criteria or not criteria <= _covered(rows, ctx):
         raise refuse("obligation_invalid", "malformed", "closure retains every original criterion and covers its recorded criteria", record="closure")
     _account(state, rows, state["seq"], ctx, bound_governance_digest(state))
     _waits(state, rows, ctx)
@@ -1924,9 +1929,11 @@ def brief_map(criteria: list[str], value: Any, ctx: dict) -> dict:
     return {"draft": True, "persisted": False, "criteria_covered": list(criteria), **draft}
 
 
-def _covered(rows: dict[str, dict]) -> set[str]:
-    return {ob["source"].get("ref") for ob in rows.values()
-            if ob["provenance"] in ("objective", "user_direct") and isinstance(ob.get("source"), dict)}
+def _covered(rows: dict[str, dict], ctx: dict | None = None) -> set[str]:
+    from .pod_mapping import effective_ref
+    original = {ob["source"].get("ref") for ob in rows.values()
+                if ob["provenance"] in ("objective", "user_direct") and isinstance(ob.get("source"), dict)}
+    return original | {ref for ob in rows.values() if (ref := effective_ref(ob, ctx)) is not None}
 
 
 # --------------------------------------------------------------------------- admission

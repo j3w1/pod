@@ -21,7 +21,7 @@ BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "ca
                   "display.py", "errors.py", "evidence_closure.py", "github.py", "gitio.py", "handoff.py", "history.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py", "listing.py",
                   "issue_revision.py", "obligations.py", "observations.py", "operations.py", "orca.py", "placement.py", "readiness.py", "records.py",
                   "relay.py", "retirement.py", "routes.py", "selection.py", "sources.py", "succession.py",
-                  "pod_ticks.py", "skill_validation.py", "standing.py", "status.py", "term.py", "tui.py", "tui_render.py",
+                  "pod_mapping.py", "pod_ticks.py", "skill_validation.py", "standing.py", "status.py", "term.py", "tui.py", "tui_render.py",
                   "tui_state.py", "traces.py", "util.py", "worker_tabs.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))
 IGNORED_DIRS = frozenset({"__pycache__"})

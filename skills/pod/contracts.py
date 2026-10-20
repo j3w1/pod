@@ -81,9 +81,23 @@ _MAP_FIELDS = {
     "dispositions": items(16, record("disposition")), "delivery": {"type": "object"},
     "update": {"type": "object", "max_items": 96, "form": "obligation ids mapped to field updates; state changes clear conflicting state fields"},
     "reuse": {"type": "object"}, "acceptances": items(16, record("acceptance request")),
+    "mapping_repair": record("mapping repair"),
 }
 
 TABLE = {
+    "mapping repair": definition({
+        "original_body": {"type": "text", "max_length": 524288, "max_bytes": 524288, "encoding": "UTF-8", "nul": False},
+        "targets": {"type": "object", "min_items": 1, "max_items": 64,
+                    "keys": ident(), "values": {"type": "text", "pattern": r"PoD#[0-9]{1,9}\Z"}},
+    }, ("original_body", "targets"), only="ordinary checkpoint; body is DATA, never authority"),
+    "pod mapping": definition({
+        "ref": {"type": "text", "pattern": r"PoD#[0-9]{1,9}\Z"},
+        **{key: {"type": "object", "form": "complete bound issue source"}
+           for key in ("original_source", "accepted_source", "current_source")},
+        "scope_sha256": _DIGEST, "accepted_seq": {"type": "integer", "minimum": 1},
+        "invalidated": {"type": "boolean"},
+    }, ("ref", "original_source", "accepted_source", "current_source", "scope_sha256", "accepted_seq", "invalidated"),
+       stored_only=True),
     "pod-tick": definition({"project": text(4096), "objective": text(4096), "owner": text(4096),
                              "pod": {"type": "integer", "minimum": 0, "maximum": 999999999}},
                             ("project", "objective", "owner", "pod")),
@@ -138,6 +152,7 @@ TABLE = {
         "adopts": ident(), "reuse": _ANY, "findings": _ANY, "finding": _ANY,
         "definition": _ANY, "receipts": _ANY, "proof_scope": items(64, _PATH),
         "acceptances": {**items(16, record("acceptance")), "stored_only": True},
+        "pod_mapping": {**record("pod mapping"), "stored_only": True},
     }, ("id", "kind", "provenance")),
     "boundary": definition({"paths": items(64, {**text(), "form": "repo-relative prefix, no backslash or parent traversal"}),
                             "surfaces": items(32, ident(SURFACE))}),
