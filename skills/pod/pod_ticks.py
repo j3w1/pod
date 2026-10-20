@@ -24,6 +24,7 @@ INTENT_MARGIN_S = 5
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _NUMBER = re.compile(r"(?:0|[1-9][0-9]{0,8})\Z")
 SCOPE_FIELDS = {"definition", "source_digest", "amendments_digest", "block_sha256"}
+ACCEPTANCE_FIELDS = {"seq", "source_digest", "body_sha256", "amendments_digest"}
 
 
 def validate_scope(value: object) -> dict:
@@ -34,8 +35,25 @@ def validate_scope(value: object) -> dict:
 
 
 def requirement_scope(entry: dict) -> dict | None:
-    """A definition-only entry records unknown scope, unlike an absent earlier cache."""
+    """A retained acceptance can be known even while its block is unavailable."""
     return {key: entry[key] for key in SCOPE_FIELDS} if SCOPE_FIELDS <= entry.keys() else None
+
+
+def requirement_epoch(entry: dict, row: dict, checkpoint: dict) -> int:
+    """Use the actual acceptance, never a later source observation, as lineage."""
+    if "acceptance" in entry:
+        return entry["acceptance"]["seq"]
+    # Earlier entries have no per-criterion event. A retained session revision
+    # is a conservative boundary, not evidence of a new source association.
+    return max([row["introduced_seq"], *(decision["seq"]
+        for decision in checkpoint.get("revision_decisions", [])
+        if decision.get("kind") in ("revision", "question")
+        and decision.get("channel", "session") == "session")])
+
+
+def _acceptance(source: dict, seq: int) -> dict:
+    return {"seq": seq, "source_digest": digest(source), "body_sha256": source["body_sha256"],
+            "amendments_digest": digest(source["amendments"])}
 
 
 def selected_pass_receipts(row: dict) -> list[dict]:
@@ -117,11 +135,17 @@ def validate(value: object) -> None:
     for key, scope in scopes.items():
         from .obligations import _ident, MAX_EVIDENCE
         _ident(key, "criterion")
-        exact(scope, SCOPE_FIELDS | {"proofs"}, {"definition"}, name="criterion source facts")
+        exact(scope, SCOPE_FIELDS | {"proofs", "acceptance"}, {"definition"}, name="criterion source facts")
         if not isinstance(scope["definition"], str) or not _SHA.fullmatch(scope["definition"]):
             raise PodError("state_unsupported", "PoD criterion definition is malformed")
         if set(scope) & (SCOPE_FIELDS - {"definition"}):
-            validate_scope({key: value for key, value in scope.items() if key != "proofs"})
+            validate_scope({key: scope[key] for key in SCOPE_FIELDS if key in scope})
+        if "acceptance" in scope:
+            accepted = exact(scope["acceptance"], ACCEPTANCE_FIELDS, ACCEPTANCE_FIELDS, name="criterion acceptance")
+            if (type(accepted["seq"]) is not int or accepted["seq"] < 1
+                    or any(not isinstance(accepted[key], str) or not _SHA.fullmatch(accepted[key])
+                           for key in ACCEPTANCE_FIELDS - {"seq"})):
+                raise PodError("state_unsupported", "PoD requirement acceptance is malformed")
         proofs = scope.get("proofs", {})
         if (not isinstance(proofs, dict) or len(proofs) > MAX_EVIDENCE
                 or any(not isinstance(key, str) or not _SHA.fullmatch(key) for key in proofs)):
@@ -224,8 +248,8 @@ def _bind_proof_scopes(entry: dict, row: dict, earlier: dict, observed: dict | N
             entry.setdefault("proofs", {}).setdefault(proof_identity(receipt), deepcopy(observed))
 
 
-def _validate_reselected_proof(entry: dict, row: dict, earlier: dict) -> None:
-    """A returning logical hash cannot make an earlier receipt new proof."""
+def _validate_reselected_proof(entry: dict, row: dict, earlier: dict, checkpoint: dict) -> None:
+    """Ordinary selection stays ordinary; pre-epoch proof needs matching scope."""
     from .obligations import refuse
     selected = ({proof_identity(receipt) for receipt in selected_pass_receipts(earlier)}
                 if earlier.get("state") == "satisfied" else set())
@@ -234,6 +258,8 @@ def _validate_reselected_proof(entry: dict, row: dict, earlier: dict) -> None:
     for receipt in selected_pass_receipts(row):
         key = proof_identity(receipt)
         if row["state"] != "satisfied" or key not in old or key in selected:
+            continue
+        if receipt["accepted_seq"] >= requirement_epoch(entry, row, checkpoint):
             continue
         scope = requirement_scope(entry)
         proof = entry.get("proofs", {}).get(key)
@@ -279,16 +305,20 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
         approved = (verified or {}).get(row["id"])
         changed = earlier.get("definition") != row["definition"]
         if approved is not None and entry.get("definition") != row["definition"]:
-            entry = {**deepcopy(approved), **({"proofs": entry["proofs"]} if "proofs" in entry else {})}
+            entry = {**deepcopy(approved), "acceptance": _acceptance(source, checkpoint["seq"]),
+                     **({"proofs": entry["proofs"]} if "proofs" in entry else {})}
         elif changed:
             semantic = owner_revision and row.get("check") != earlier.get("check")
             initial = not previous.get("obligations")
             old_scope = requirement_scope(entry) if entry.get("definition") == earlier.get("definition") else None
             scope = observed if initial or semantic else old_scope
+            acceptance = (_acceptance(source, checkpoint["seq"]) if initial or semantic
+                          else entry.get("acceptance") if entry.get("definition") == earlier.get("definition") else None)
             entry = {**(deepcopy(scope) if scope is not None else {}), "definition": row["definition"],
+                     **({"acceptance": deepcopy(acceptance)} if acceptance is not None else {}),
                      **({"proofs": entry["proofs"]} if "proofs" in entry else {})}
         if entry:
-            _validate_reselected_proof(entry, row, earlier)
+            _validate_reselected_proof(entry, row, earlier, checkpoint)
             _bind_proof_scopes(entry, row, earlier, observed, checkpoint["seq"])
             ledger.setdefault("criterion_scopes", {})[row["id"]] = entry
 

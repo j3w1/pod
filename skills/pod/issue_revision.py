@@ -190,14 +190,34 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
     rows = [row for row in prior["obligations"] if row["kind"] == "criterion"
             and row["provenance"] == "objective" and row["state"] != "withdrawn"]
     associations = {}
+    requirements = {}
     for row in rows:
         selected = selected_pass_receipts(row)
         associations[row["id"]] = [{"seq": receipt.get("accepted_seq"), "receipt": receipt, "sources": {}}
                                    for receipt in selected] or [{"seq": row["introduced_seq"], "receipt": None, "sources": {}}]
+        local = state.get("pod_ticks", {}).get("criterion_scopes", {}).get(row["id"], {})
+        if local.get("definition") != row["definition"] or requirement_scope(local) is not None:
+            continue
+        accepted = local.get("acceptance")
+        # A pre-extension marker can recover only a positively retained initial
+        # conjunction. A later owner decision may have accepted another epoch,
+        # even if the logical hash has since returned to its original value.
+        if accepted is not None or not any(
+                decision.get("kind") in ("revision", "question")
+                and decision.get("seq", 0) > row["introduced_seq"]
+                for decision in prior.get("revision_decisions", [])):
+            requirements[row["id"]] = {"seq": accepted["seq"] if accepted else row["introduced_seq"],
+                                       "receipt": None, "sources": {}, "acceptance": accepted}
+    def slots(row):
+        requirement = requirements.get(row["id"])
+        return associations[row["id"]] + ([requirement] if requirement is not None else [])
     def add(slot, source):
         if source is None:
             return
         validate_issue_binding(source)
+        accepted = slot.get("acceptance")
+        if accepted is not None and digest(source) != accepted["source_digest"]:
+            return
         if all(source[key] == proposed_source[key] for key in ("repository", "number", "locator")):
             slot["sources"][digest(source)] = source
     def snapshot(value, seq):
@@ -207,7 +227,7 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
             if (recorded.get("definition") != row["definition"] or recorded.get("source") != row.get("source")
                     or row.get("source", {}).get("ref") not in value.get("criteria", [])):
                 continue
-            for slot in associations[row["id"]]:
+            for slot in slots(row):
                 if slot["seq"] != seq:
                     continue
                 receipt = slot["receipt"]
@@ -230,7 +250,7 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
             if (definitions.get(row["id"]) == row["definition"]
                     and row["id"] in admission.get("serves", [])
                     and row.get("source", {}).get("ref") in checkpoint.get("criteria", [])):
-                for slot in associations[row["id"]]:
+                for slot in slots(row):
                     if type(slot["seq"]) is int and admission.get("admitted_seq") == slot["seq"] + 1:
                         add(slot, checkpoint.get("objective_source"))
     for request in state.get("pod_ticks", {}).get("requests", {}).values():
@@ -245,6 +265,10 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
                     add(slot, request["source"])
     referenced = {source["body_sha256"] for slots in associations.values()
                   for slot in slots for source in slot["sources"].values()}
+    referenced.update(source["body_sha256"] for slot in requirements.values()
+                      for source in slot["sources"].values())
+    referenced.update(slot["acceptance"]["body_sha256"] for slot in requirements.values()
+                      if slot["acceptance"] is not None)
     if set(bodies) - referenced:
         raise refuse("body_data_unreferenced")
     parsed = {key: pod_blocks(body) for key, body in bodies.items()}
@@ -257,8 +281,26 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
         if local.get("definition") == row["definition"]:
             scope = requirement_scope(local)
             if scope is None:
-                resolved[row["id"]] = fact
-                continue  # Unknown at actual acceptance; no original-hash resurrection.
+                requirement = requirements.get(row["id"], {})
+                accepted = requirement.get("acceptance")
+                bindings = ([accepted] if accepted is not None else [
+                    {"source_digest": key, "body_sha256": source["body_sha256"],
+                     "amendments_digest": digest(source["amendments"])}
+                    for key, source in requirement.get("sources", {}).items()])
+                recovered = []
+                for binding in bindings:
+                    blocks = parsed.get(binding["body_sha256"], {}).get(
+                        pod_ref_number(row.get("source", {}).get("ref")), [])
+                    if len(blocks) != 1:
+                        break
+                    recovered.append({"definition": row["definition"], "source_digest": binding["source_digest"],
+                                      "amendments_digest": binding["amendments_digest"], "block_sha256": blocks[0]["sha256"]})
+                else:
+                    if len({(item["block_sha256"], item["amendments_digest"]) for item in recovered}) == 1:
+                        scope = recovered[0]
+                if scope is None:
+                    resolved[row["id"]] = fact
+                    continue  # No late-source or original-hash resurrection.
             candidates.append(scope)
             if associations[row["id"]][0]["receipt"] is None:
                 resolved[row["id"]] = {**fact, "status": "known", "reason": None, "scope": deepcopy(scope)}

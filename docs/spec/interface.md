@@ -755,9 +755,10 @@ selected scope/amendment facts cannot establish current proof. Fresh current
 approval can instead admit an explicit factual-unknown remap awaiting proof,
 retaining the original evidence and precise missing fact.
 
-For genuine preceding records without requirement-scope facts, a checkpoint
-that first observes a changed body and first accepts PASS declares that observed
-scope at the receipt's `accepted_seq`. This approved convention for earlier records does not
+For genuine preceding records without requirement-scope facts, first PASS
+declares the source scope of its actual accepted map sequence, whether that body
+was observed in the same write or a separate earlier write. This approved
+convention binds declared scope at the receipt's `accepted_seq`; it does not
 recover the original introduction's scope, earlier approval or a source read
 time. Current transition approval remains necessary. A retained earlier
 requirement scope in a newer record must still agree with every selected proof's
@@ -791,12 +792,20 @@ Optional `pod_ticks.facts.blocks` holds ordered complete-block SHA-256 values
 alongside each number's checkbox observations. Optional `criterion_scopes` maps
 criterion IDs to a required `definition` and, when known, the complete group
 `source_digest`, `amendments_digest`, `block_sha256`, all lowercase SHA-256 values.
-A definition-only entry records unknown requirement scope at acceptance;
-later observation or a returning definition hash cannot fill it from an older
+An entry may retain `acceptance` with exactly `seq`, `source_digest`,
+`body_sha256` and `amendments_digest`: a positive integer sequence and three
+lowercase SHA-256 values. It records the actual requirement acceptance and its
+known source identity even when the complete block could not be read. Exact
+hash-matching BODY DATA can later supply that block without moving the acceptance
+event. A pre-extension definition-only marker can use a genuine introduction or
+first-following-admission conjunction only when no intervening session revision
+could have established another semantic epoch. Otherwise unknown stays unknown;
+later observation or a returning definition hash cannot borrow an older
 introduction. Physical scope is established only by initial intake, verified
 issue reconciliation or an accepted session-owner change to the semantic check.
-Coordinator-only changes such as `proof_scope` carry earlier physical scope
-through the new logical definition, or keep it unknown. Merely including session
+Coordinator-only changes such as `proof_scope` carry earlier physical scope and
+acceptance through the new logical definition, or keep the missing facts unknown.
+Verified unchanged keeps retain that lineage. Merely including session
 authority with a metadata-only change does not reconcile the source.
 
 Each entry may also retain `proofs`, bounded by the existing receipt limit. Its
@@ -805,9 +814,14 @@ separately rebindable `governance` stamp; values are the four-hash scope at actu
 first acceptance. Checkpoint, report and admission map writes record these facts
 only when their bound source has a unique observed complete block. Later writes,
 source observations and reused references never backfill or replace old proof
-facts. They survive semantic definition changes; reselecting an earlier receipt
-requires its actual proof scope to match the accepted requirement scope, including
-when a former definition hash returns. Missing/conflicting selected scope holds
+facts. They survive semantic definition changes. Ordinary re-selection within
+the actual accepted requirement lineage (`accepted_seq >= acceptance.seq`) keeps
+existing checkpoint, report and admission bookkeeping behavior, even when source
+facts are missing or an unreconciled different source was observed. A receipt
+predating that semantic acceptance needs matching known requirement/proof scope,
+including when a former definition hash returns; unavailable facts refuse.
+Entries without acceptance metadata use retained session revision sequences as
+conservative boundaries without inventing source associations. Missing/conflicting selected scope holds
 reconciliation or needs a factual-unknown remap. Both optional structures remain
 in existing tick snapshots/history; no body or separate store is introduced.
 Earlier readers reject unsupported fields before reusing proof under old semantics.
