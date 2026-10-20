@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.ledger import objective_root, read, state_root
-from pod.operations import _retry_after, guarded_start
+from pod.operations import _retry_after, guarded_start, recover_admission
 from tests import test_retry_no_start as no_start
 from tests import test_runtime_continuity as continuity
 from tests.kernel_support import REQUEST
@@ -127,6 +127,16 @@ class RetryContinuityTests(RetryFixtureCase):
                 self.retry(parent)
         previous = next(row for row in read(self.project, 'objective')['admissions'].values()
                         if row.get('retry_of') == parent['admission_id'])
+        # The same unavailable parent also prevents the real authority join. Its
+        # reservation stays held until contact returns and recovery classifies the
+        # persisted control-flow evidence without starting another native attempt.
+        self.assertEqual(previous['state'], 'reserved')
+        self.assertNotIn('no_start', previous['recovery'])
+        recovered = recover_admission(self.project, 'objective', owner='owner',
+                                      admission_id=previous['admission_id'], worktree='current', port=self.port)
+        self.assertEqual(recovered['status'], 'deferred')
+        self.assertEqual(len(self.port.starts), 1)
+        previous = recovered['admission']
         path = objective_root(self.project, 'objective') / 'no-start' / (previous['recovery']['no_start'] + '.json')
         proof = path.read_bytes()
         self.change_runtime()

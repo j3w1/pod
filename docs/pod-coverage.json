@@ -563,7 +563,18 @@
         "tests.test_retry_no_start.NoStartTests.test_reservation_crash_gap_never_becomes_no_start_proof",
         "tests.test_retry_no_start.NoStartTests.test_unknown_after_effect_retains_reservation_then_adopts_exact_attempt",
         "tests.test_retry_no_start.NoStartTests.test_missing_and_corrupt_no_start_proof_never_authorize_a_start",
-        "tests.test_retry_continuity.RetryContinuityTests.test_caught_pre_start_proof_survives_proven_runtime_rebind"
+        "tests.test_retry_continuity.RetryContinuityTests.test_caught_pre_start_proof_survives_proven_runtime_rebind",
+        "tests.test_retry_authority.RetryAuthorityTests.test_foreign_coordinator_cannot_publish_deferral",
+        "tests.test_retry_authority.RetryAuthorityTests.test_generation_change_during_real_native_join_cannot_publish_deferral",
+        "tests.test_retry_authority.RetryAuthorityTests.test_missing_current_run_holds_until_native_identity_returns",
+        "tests.test_retry_authority.RetryAuthorityTests.test_unreadable_current_authority_preserves_only_control_flow",
+        "tests.test_retry_authority.RetryAuthorityTests.test_old_invocation_cannot_publish_after_actual_owner_runtime_rebind",
+        "tests.test_retry_authority.RetryAuthorityTests.test_changed_runtime_needs_real_continuity_before_later_classification",
+        "tests.test_retry_authority.RetryAuthorityTests.test_missing_or_corrupt_persisted_proof_cannot_release_reservation",
+        "tests.test_retry_authority.RetryAuthorityTests.test_persisted_proof_requires_exact_admission_run_task_and_parent",
+        "tests.test_retry_authority.RetryAuthorityTests.test_corrupt_pending_index_holds_until_original_bytes_return",
+        "tests.test_retry_authority.RetryAuthorityTests.test_crash_during_parent_read_has_no_affirmative_no_start",
+        "tests.test_retry_authority.RetryAuthorityTests.test_unknown_effect_never_uses_no_start_classification"
       ],
       "status": "NOT_RUN"
     },
@@ -906,7 +917,9 @@
         "tests.test_retry_no_start.NoStartTests.test_fresh_completed_receipt_is_recorded_without_start",
         "tests.test_retry_no_start.NoStartTests.test_fresh_absent_adoption_keeps_history",
         "tests.test_retry_continuity.RetryContinuityTests.test_original_blocked_refusal_survives_proven_runtime_rebind",
-        "tests.test_retry_no_start.NoStartTests.test_no_start_predecessor_cannot_be_borrowed_by_another_parent"
+        "tests.test_retry_no_start.NoStartTests.test_no_start_predecessor_cannot_be_borrowed_by_another_parent",
+        "tests.test_retry_authority.RetryAuthorityTests.test_restored_authority_classifies_persisted_no_start_and_successor_once",
+        "tests.test_retry_authority.RetryAuthorityTests.test_identical_admission_after_restoration_classifies_only_its_original_row"
       ],
       "status": "NOT_RUN"
     },
@@ -941,7 +954,11 @@
         "tests.test_retry_no_start.NoStartTests.test_fresh_intent_obeys_current_pin",
         "tests.test_retry_no_start.NoStartTests.test_fresh_intent_obeys_recorded_user_constraint",
         "tests.test_retry_no_start.NoStartTests.test_authentication_after_no_start_holds_fresh_intent_across_routes",
-        "tests.test_retry_no_start.NoStartTests.test_safety_after_no_start_holds_fresh_intent_across_routes"
+        "tests.test_retry_no_start.NoStartTests.test_safety_after_no_start_holds_fresh_intent_across_routes",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_permission_refusal_remains_held",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_authentication_refusal_remains_held",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_safety_refusal_remains_held",
+        "tests.test_retry_authority.RetryAuthorityTests.test_pre_start_unknown_or_circuit_refusal_remains_held"
       ],
       "status": "NOT_RUN"
     },
