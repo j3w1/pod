@@ -986,7 +986,7 @@ def _retry_after(project: Path, state: dict, parent: dict | None, previous_id: s
                                for key, field in (("runId", "run_id"), ("taskId", "task_id")))
                        and _preflight_refusal_classification(receipt, {**previous, "runtime": observed_runtime},
                                request_uuid=previous["request_uuid"]) == "authoritative"
-                       and data.get("status") == "blocked" and data.get("reason") in (None, "")
+                       and data.get("status") in ("blocked", "ready") and data.get("reason") in (None, "")
                        and all(data.get(key) in (None, proof[field]) for key, field in
                                (("runId", "run_id"), ("taskId", "task_id"), ("retryOf", "retry_of_dispatch_id")))
                        and (invocation_bound or all(data.get(key) == proof[field] for key, field in
