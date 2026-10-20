@@ -90,6 +90,32 @@ class SidecarTests(unittest.TestCase):
         self.assertEqual(after["receipts"][:2], ob["receipts"][:2])
         self.assertEqual(hydrate(record, chunks.__getitem__), state)
 
+    def test_only_old_unselected_accepted_pass_reuse_receipts_move(self):
+        state = deepcopy(self.state)
+        receipt = {"evidence": {"reference": "old-log", "candidate": "superseded", "status": "PASS",
+                                "result": "synthetic check result; " * 40},
+                   "accepted_seq": 3, "reuse": {"from": "superseded", "to": "later", "delta": ["src/new.py"]}}
+        receipts = [deepcopy(receipt) for _ in range(7)]
+        for index, row in enumerate(receipts):
+            row["evidence"]["reference"] = f"log-{index}"
+        receipts[1]["evidence"]["candidate"] = state["checkpoint"]["candidate"]
+        receipts[3]["evidence"]["status"] = "FAILED"
+        receipts[4]["evidence"]["status"] = "UNKNOWN"
+        receipts[5].pop("accepted_seq")
+        receipts[6]["evidence"].pop("candidate")
+        ob = {"id": "ordinary", "kind": "criterion", "receipts": receipts,
+              "evidence": [deepcopy(receipts[2]["evidence"])]}
+        state["checkpoint"]["obligations"].append(ob)
+        record, chunks = compact(state)
+        after = record["checkpoint"]["obligations"][-1]["receipts"]
+        self.assertTrue(is_reference(after[0]))
+        self.assertEqual(after[1:], receipts[1:])
+        self.assertEqual(hydrate(record, chunks.__getitem__), state)
+        for options in ({"protected_candidates": ["superseded"]}, {"protect_receipts": True}):
+            with self.subTest(options=options):
+                protected, _ = compact(state, **options)
+                self.assertEqual(protected["checkpoint"]["obligations"][-1]["receipts"], receipts)
+
     def test_unknown_route_and_failed_receipts_stay_inline(self):
         state = deepcopy(self.state)
         state["admissions"]["attempt-048"]["route_decision"]["effective_unknown"] = True

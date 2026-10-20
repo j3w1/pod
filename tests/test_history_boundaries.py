@@ -3,6 +3,8 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import tempfile
+import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
@@ -17,6 +19,172 @@ from tests.history_support import synthetic_state, size
 from tests.kernel_support import KernelCase
 from tests.issue41_support import ProductionCase
 from tests.test_runtime_continuity import ContinuityCase
+
+
+class ReusedReceiptCapacityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_history_regressions import previous_history_bundle
+        from tests.test_obligations import ctx, ob, proof, intake
+        from pod.obligations import accept_write
+        from pod.ledger import _empty
+
+        previous = tempfile.TemporaryDirectory(prefix="receipt-previous-")
+        cls.addClassCleanup(previous.cleanup)
+        cls.previous_bundle = previous_history_bundle(previous.name)
+
+        def context(candidate):
+            return ctx(candidate=candidate, git_delta=lambda source, target: ["src/new.py"])
+
+        state = accept_write(None, intake(*(ob(f"S{i}", boundary={"paths": ["docs"]})
+                                           for i in range(32))), context("candidate-0"))
+        # Accepted production-kernel transitions, never a captured private record.
+        # Build the expensive, valid history once; no clock or budget changes.
+        for number in range(7):
+            candidate = f"candidate-{number}"
+            rows = deepcopy(state["obligations"])
+            for row in rows[1:]:
+                row.pop("wait", None)
+                row.pop("reuse", None)
+                evidence = {**proof(row["id"], candidate, definition=row,
+                                    reference=f"log-{number}-{row['id']}", check="check " * 80,
+                                    sources=[{"path": "docs/contract.md", "state": "present", "sha256": "a" * 64}]),
+                            "command": "run " * 120, "result": "observed " * 55}
+                row.update(state="satisfied", evidence=[evidence])
+            proposed = accept_write(state, {"obligations": rows}, context(candidate))
+            if number == 6:
+                checkpoint = {"schema": "pod-checkpoint/v3", "candidate": candidate}
+                cls.prior = {**_empty(), "checkpoint": {**state, **checkpoint}}
+                cls.proposed = {**_empty(), "checkpoint": {**proposed, **checkpoint}}
+                cls.context = context(candidate)
+                break
+            rows = deepcopy(proposed["obligations"])
+            for row in rows[1:]:
+                row["reuse"] = {"from": candidate}
+            state = accept_write(proposed, {"obligations": rows}, context(f"candidate-{number + 1}"))
+
+    def arrange(self, directory):
+        path = Path(directory) / "context.json"
+        _write(path, deepcopy(self.prior))
+        return path
+
+    def test_same_valid_logical_write_fits_with_exact_reuse_and_selected_siblings(self):
+        from pod.obligations import validate_map_record
+        validate_map_record(self.proposed["checkpoint"])
+        self.assertLess(size(self.prior), CONTEXT_LIMIT)
+        self.assertGreater(size(self.proposed), CONTEXT_LIMIT)
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.arrange(directory)
+            expected = deepcopy(self.proposed)
+            _write(path, expected)
+            physical = json.loads(path.read_bytes())
+            self.assertLess(path.stat().st_size, CONTEXT_LIMIT)
+            self.assertEqual(_read(path), expected)
+            for logical, stored in zip(expected["checkpoint"]["obligations"][1:],
+                                       physical["checkpoint"]["obligations"][1:]):
+                self.assertTrue(all(is_reference(item) for item in stored["receipts"][:-1]))
+                self.assertEqual(stored["receipts"][-1], logical["receipts"][-1])
+                self.assertEqual(stored["evidence"], logical["evidence"])
+            print("reused_receipt_capacity=" + str({"prior_bytes": size(self.prior),
+                "proposed_bytes": size(self.proposed), "physical_bytes": path.stat().st_size,
+                "limit_bytes": CONTEXT_LIMIT}))
+
+    def test_genuine_prechange_writer_refuses_the_same_valid_logical_write(self):
+        from tests.test_history_regressions import previous_history_call
+        result = previous_history_call(self.previous_bundle, self.proposed, operation="write", prior=self.prior)
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["code"], "record_too_large")
+        self.assertEqual(result["detail"]["limit_bytes"], CONTEXT_LIMIT)
+        self.assertEqual(result["detail"]["current_bytes"], size(self.prior))
+        self.assertTrue(result["unchanged"])
+        print("prechange_receipt_capacity=" + str({"version": result["version"], "code": result["code"],
+                                                   **result["detail"]}))
+
+    def test_genuine_prechange_reader_hydrates_relocated_reuse_without_rewriting(self):
+        from tests.test_history_regressions import previous_history_call
+        record, chunks = compact(self.proposed)
+        context = {key: value for key, value in self.context.items() if not callable(value)}
+        result = previous_history_call(self.previous_bundle, record, chunks=chunks, context=context)
+        self.assertTrue(result["accepted"], result)
+        self.assertEqual(result["state"], self.proposed)
+        self.assertTrue(result["unchanged"])
+
+    def test_protected_join_still_refuses_atomically_without_publishing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.arrange(directory)
+            before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
+            with patch("pod.governor._read_journal", side_effect=PodError("invalid_record", "unreadable")):
+                with self.assertRaises(PodError) as caught:
+                    _write(path, deepcopy(self.proposed))
+            self.assertEqual(caught.exception.code, "record_too_large")
+            self.assertEqual(before, {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()})
+
+    def test_publication_failure_and_retry_keep_prior_context_and_reuse_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.arrange(directory)
+            before = path.read_bytes()
+            with patch("pod.history.atomic_json", side_effect=OSError("synthetic interruption")):
+                with self.assertRaises(OSError):
+                    _write(path, deepcopy(self.proposed))
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(_read(path)["checkpoint"], self.prior["checkpoint"])
+            chunks = {p: p.read_bytes() for p in path.parent.glob("history/sha256/*.json")}
+            self.assertTrue(chunks)
+            expected = deepcopy(self.proposed)
+            _write(path, expected)
+            self.assertEqual(_read(path), expected)
+            self.assertEqual(chunks, {p: p.read_bytes() for p in path.parent.glob("history/sha256/*.json")})
+
+    def test_fresh_selection_and_governor_candidate_are_replanned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.arrange(directory)
+            record, _ = prepare_context(path, self.proposed)
+            self.assertTrue(is_reference(record["checkpoint"]["obligations"][1]["receipts"][0]))
+            changed = deepcopy(self.proposed)
+            obligation = changed["checkpoint"]["obligations"][1]
+            obligation["evidence"] = [deepcopy(obligation["receipts"][0]["evidence"])]
+            record, _ = prepare_context(path, changed)
+            self.assertEqual(record["checkpoint"]["obligations"][1]["receipts"][0], obligation["receipts"][0])
+            for outcome in ("pending", "UNKNOWN", "FAILED"):
+                with self.subTest(outcome=outcome):
+                    journal = {"actions": [{"decision": "ALLOW", "outcome": outcome,
+                                            "action": {"candidate": "candidate-0"}}]}
+                    record, _ = prepare_context(path, self.proposed, journal=journal)
+                    for logical, stored in zip(self.proposed["checkpoint"]["obligations"][1:],
+                                               record["checkpoint"]["obligations"][1:]):
+                        self.assertEqual(stored["receipts"][0], logical["receipts"][0])
+                        self.assertTrue(is_reference(stored["receipts"][1]))
+
+    def broken_history(self, modes):
+        for mode, code in modes:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                path = self.arrange(directory)
+                _write(path, deepcopy(self.proposed))
+                physical = json.loads(path.read_bytes())
+                reference = physical["checkpoint"]["obligations"][1]["receipts"][0][MARKER]
+                chunk = path.parent / "history/sha256" / (reference["parts"][0] + ".json")
+                if mode == "missing":
+                    chunk.unlink()
+                elif mode == "corrupt":
+                    chunk.write_bytes(chunk.read_bytes() + b" ")
+                elif mode == "redirected":
+                    target = path.parent / "redirected.json"
+                    chunk.rename(target)
+                    chunk.symlink_to(target)
+                else:
+                    reference["parts"] = []
+                    path.write_bytes(encoded(physical, compact=True))
+                before = path.read_bytes()
+                with self.assertRaises(PodError) as caught:
+                    _read(path)
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_relocated_reuse_missing_and_corrupt_history_refuses(self):
+        self.broken_history((("missing", "history_missing"), ("corrupt", "history_integrity")))
+
+    def test_relocated_reuse_redirected_and_incomplete_history_refuses(self):
+        self.broken_history((("redirected", "history_unsafe"), ("incomplete", "history_invalid")))
 
 
 class HistoryScanTests(KernelCase):
