@@ -121,7 +121,7 @@ _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "r
                      "native_binding", "recovery", "error", "failures", "created_at", "updated_at",
                      "serves", "role", "boundary", "map_revision", "candidate", "result",
                      "changed_paths", "boundary_exceeded", "disposition", "report", "binding",
-                     "admitted_seq", "display", "retry_of"}
+                     "admitted_seq", "display", "retry_of", "retry_after"}
 
 
 def _consumed_report(row: dict, runtimes: set[str]) -> dict | None:
@@ -155,7 +155,7 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
-    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq", "display", "retry_of"}, name="admission")
+    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq", "display", "retry_of", "retry_after"}, name="admission")
     if value["admission_id"] != key:
         raise PodError("state_unsupported", "Admission identity or schema is unsupported")
     if "admitted_seq" in value and (type(value["admitted_seq"]) is not int or value["admitted_seq"] < 1):
@@ -185,10 +185,16 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
         if (not isinstance(value["retry_of"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["retry_of"])
                 or value["retry_of"] == key or value["reuse_of"] is not None or not _argument(parent)
                 or admission_identity(objective=value["objective"], run_id=value["run_id"],
-                                      task_id=value["task_id"], retry_of_dispatch_id=parent) != key):
+                                      task_id=value["task_id"], retry_of_dispatch_id=parent,
+                                      retry_after=value.get("retry_after")) != key):
             raise PodError("state_unsupported", "Retry parent or attempt identity is malformed")
     elif "retry_of_dispatch_id" in value["recovery"]:
         raise PodError("state_unsupported", "Retry Dispatch has no parent admission")
+    if "retry_after" in value and ("retry_of" not in value
+            or not isinstance(value["retry_after"], str)
+            or not re.fullmatch(r"[a-f0-9]{64}", value["retry_after"])
+            or value["retry_after"] in (key, value["retry_of"])):
+        raise PodError("state_unsupported", "No-start predecessor is malformed")
     if value["state"] in ("bound", "closed") and not binding_valid(value["native_binding"]):
         raise PodError("state_unsupported", "Bound admission lacks exact native identity")
     if value["native_binding"] is not None and not binding_valid(value["native_binding"]):
@@ -1590,11 +1596,14 @@ def _observed_continuity(state: dict, authority: dict, owner: str) -> dict | Non
 
 def admission_identity(*, objective: str, run_id: str, task_id: str,
                        packet_id: str | None = None, plan_revision: str | None = None,
-                       retry_of_dispatch_id: str | None = None) -> str:
+                       retry_of_dispatch_id: str | None = None,
+                       retry_after: str | None = None) -> str:
     """Re-entry identity excludes mutable preference, Governor and version revisions."""
     identity = {"objective": objective, "run": run_id, "task": task_id}
     if retry_of_dispatch_id is not None:
         identity["retry_of"] = retry_of_dispatch_id
+    if retry_after is not None:
+        identity["retry_after"] = retry_after
     return digest(identity)
 
 
@@ -1738,7 +1747,8 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
                     ctx: dict, placement_binding: dict, moment: datetime, native: dict,
                     run_id: str, task_id: str, plan_revision: str, packet_id: str,
                     worktree: str, reuse_of: str | None, accompanying: dict | None,
-                    placement_naming: dict | None = None, retry_of: str | None = None) -> tuple[dict, dict]:
+                    placement_naming: dict | None = None, retry_of: str | None = None,
+                    retry_after: str | None = None) -> tuple[dict, dict]:
     from . import __version__
     from .catalog import route_key
     from .obligations import admit, reserved_admission_shape
@@ -1781,6 +1791,8 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
     if retry_of is not None:
         row["retry_of"] = retry_of
         row["recovery"]["retry_of_dispatch_id"] = state["admissions"][retry_of]["native_binding"]["dispatchId"]
+    if retry_after is not None:
+        row["retry_after"] = retry_after
     return row, new_map
 
 
@@ -1790,7 +1802,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             frozen_packet: dict, expected_runtime: str, placement_binding: dict,
             reuse_of: str | None = None, accompanying: dict | None = None,
             now: datetime | None = None, continuity_port=None,
-            placement_naming: dict | None = None, retry_of: str | None = None) -> dict:
+            placement_naming: dict | None = None, retry_of: str | None = None,
+            retry_after: str | None = None) -> dict:
     """Final serialized admission: preference read is last, before writing the row.
 
     The served obligations become active in the same locked write that persists the
@@ -1812,16 +1825,19 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             raise PodError("retry_reuse_conflict", "retry_of requires a fresh terminal; omit reuse_of")
         parent = (retry_parent(state, objective=objective, owner=owner, run_id=run_id,
                                task_id=task_id, retry_of=retry_of) if retry_of is not None else None)
+        if retry_after is not None:
+            from .operations import _retry_after
+            _retry_after(project, state, parent, retry_after)
         if parent is not None and admission_id != admission_identity(
                 objective=objective, run_id=run_id, task_id=task_id,
-                retry_of_dispatch_id=parent["native_binding"]["dispatchId"]):
+                retry_of_dispatch_id=parent["native_binding"]["dispatchId"], retry_after=retry_after):
             raise PodError("admission_conflict", "Retry identity does not name its exact native parent")
         existing = state["admissions"].get(admission_id)
         if existing is not None:
             if (existing["objective"] != objective or existing["run_id"] != run_id
                     or existing["task_id"] != task_id or existing["packet_id"] != packet_id
                     or existing["plan_revision"] != plan_revision or existing["worktree"] != worktree
-                    or existing.get("retry_of") != retry_of):
+                    or existing.get("retry_of") != retry_of or existing.get("retry_after") != retry_after):
                 raise PodError("admission_conflict", "Admission identity was reused for different work")
             return {**existing, "existing": True}
         if any(row["task_id"] == task_id and row["state"] in ("reserved", "unresolved")
@@ -1936,7 +1952,7 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             project, objective, owner, admission_id, requested, snapshot, state, body,
             checkpoint_value, map_state,
             ctx, placement_binding, moment, native, run_id, task_id, plan_revision, packet_id,
-            worktree, reuse_of, accompanying, placement_naming, retry_of=retry_of)
+            worktree, reuse_of, accompanying, placement_naming, retry_of=retry_of, retry_after=retry_after)
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}

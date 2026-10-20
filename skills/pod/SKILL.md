@@ -56,7 +56,7 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - PES authoring/revision: [template](references/pes-template.md).
 - EEL authoring/revision: [template](references/eel-template.md).
 - Map/worktree/packets or delegation: [planning](references/planning.md).
-- First admission/supervision: [Orca](references/orca-boundary.md).
+- First admission, same-Task retry or supervision: [Orca](references/orca-boundary.md).
 - Starting, claiming, continuing or resuming an objective, admitting a worker, accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
 - Any route choice: [models](references/models.md).
 - Failure/resume/reload, a lost coordinator or stranded delivery: [recovery](references/recovery.md).

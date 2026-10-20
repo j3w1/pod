@@ -167,6 +167,7 @@ TABLE = {
                              "plan_revision": _ANY, "packet": {"type": "object", "form": "frozen packet result"},
                              "worktree": _ANY, "reuse_of": _ANY,
                              "retry_of": {"type": "text", "form": "owned parent admission id; fresh terminal, excludes reuse_of"},
+                             "retry_after": {"type": "text", "form": "deferred proven no-start admission id; explicit fresh intent with the same retry_of"},
                              "map": record("admission map")},
                             ("project", "objective", "owner", "run", "task", "plan_revision", "packet")),
     "admission map": definition({"seq": _MAP_FIELDS["seq"], "obligations": _MAP_FIELDS["obligations"],

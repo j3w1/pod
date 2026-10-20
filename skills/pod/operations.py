@@ -186,7 +186,7 @@ def _check_retry_placement(port: NativePort, binding: dict, admission: dict) -> 
         raise PodError("native_retry_placement_unverified", "Retry worker placement belongs to another runtime; retain the attempt and inspect through Orca")
 
 
-def _retry_parent_current(state: dict, admission: dict, port: NativePort) -> str | None:
+def _retry_parent_link(state: dict, admission: dict) -> str | None:
     if admission.get("retry_of") is None:
         return None
     parent = retry_parent(state, objective=admission["objective"], owner=admission["owner"],
@@ -195,9 +195,19 @@ def _retry_parent_current(state: dict, admission: dict, port: NativePort) -> str
     dispatch = parent["native_binding"]["dispatchId"]
     if dispatch != admission["recovery"].get("retry_of_dispatch_id"):
         raise PodError("native_retry_parent_mismatch", "Recorded retry parent changed; inspect the original admission")
-    evidence = _assignment_evidence(port.show_worker(dispatch), parent)
+    return dispatch
+
+
+def _retry_parent_current(state: dict, admission: dict, port: NativePort) -> str | None:
+    dispatch = _retry_parent_link(state, admission)
+    if dispatch is None:
+        return None
+    parent = state["admissions"][admission["retry_of"]]
+    shown = port.show_worker(dispatch)
+    evidence = _assignment_evidence(shown, parent)
     if evidence["retry_eligible"] is not True:
-        raise PodError("retry_parent_unsettled", "Retry parent no longer proves failed/stopped settlement, exited agent and known resources; inspect its exact native Dispatch")
+        raise PodError("retry_parent_unsettled", "Retry parent no longer proves failed/stopped settlement, exited agent and known resources; inspect its exact native Dispatch",
+                       {"worker_show": shown})
     return dispatch
 
 
@@ -548,7 +558,7 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
             or not isinstance(dispatch, str)):
         raise PodError("native_identity_unverified", "Start receipt identity is incomplete")
     try:
-        _retry_parent_current({"admissions": admissions}, admission, port)
+        _retry_parent_link({"admissions": admissions}, admission)
         if admission.get("retry_of") is not None and "retryOfDispatchId" in receipt:
             _check_retry_dispatch({"id": dispatch, "retryOfDispatchId": receipt["retryOfDispatchId"]}, admission)
         shown = port.show_worker(dispatch)
@@ -633,7 +643,8 @@ def _start_observations(project: Path, objective: str, admission: dict) -> list[
 
 
 def _observe_start(project: Path, objective: str, *, owner: str, admission_id: str,
-                   observation: dict, retry_request: str | None, reference: dict) -> dict:
+                   observation: dict, retry_request: str | None, reference: dict,
+                   invocation: dict | None = None) -> dict:
     # The reservation already authorized this call. Recording its returned facts must
     # survive native contact loss. This cannot change state, routes or effect authority;
     # classification and every subsequent native call still require current authority.
@@ -646,6 +657,8 @@ def _observe_start(project: Path, objective: str, *, owner: str, admission_id: s
         refs = _start_observations(project, objective, row)
         value = {"admission_id": admission_id, "run": row["run_id"], "task": row["task_id"],
                  "runtime": row["runtime"], "retry_request": retry_request, "observation": observation}
+        if invocation is not None:
+            value["invocation"] = invocation
         ref = digest(value)
         if ref in refs:
             return row
@@ -654,6 +667,14 @@ def _observe_start(project: Path, objective: str, *, owner: str, admission_id: s
         path = objective_root(project, objective) / "native-start" / (ref + ".json")
         row["recovery"] = {**row.get("recovery", {}), "start_observations": [*refs, ref]}
         if reference.get("runtime") == row["runtime"]:
+            if (row.get("retry_of") is not None
+                    and reference.get("runId") == row["run_id"] and reference.get("taskId") == row["task_id"]
+                    and _passable(reference.get("dispatchId"))):
+                observed = row["recovery"].get("observed_dispatch_id")
+                if observed not in (None, reference["dispatchId"]):
+                    row["recovery"]["request_conflict"] = "unresolved"
+                else:
+                    row["recovery"]["observed_dispatch_id"] = reference["dispatchId"]
             if row.get("retry_of") is not None:
                 parent = row["recovery"].get("retry_of_dispatch_id")
                 if (reference.get("dispatchId") == parent
@@ -689,6 +710,9 @@ def _start_observed(project: Path, objective: str, *, admission_id: str,
     if len(_start_observations(project, objective, admission)) >= MAX_START_OBSERVATIONS:
         raise PodError("native_evidence_full", "Native start evidence limit reached before execution")
     owner, retry = kwargs["owner"], kwargs.get("retry_request")
+    invocation = ({"run_id": kwargs["run"], "task_id": kwargs["task"],
+                   "retry_of_dispatch_id": kwargs["retry_of"], "runtime": admission["runtime"],
+                   "retry_request": retry} if kwargs.get("retry_of") is not None else None)
     try:
         receipt = port.start_worker(**kwargs)
     except Exception as exc:
@@ -696,7 +720,8 @@ def _start_observed(project: Path, objective: str, *, admission_id: str,
                                                          "response": "unavailable"})
         reference = getattr(exc, "native_reference", {})
         recorded = _observe_start(project, objective, owner=owner, admission_id=admission_id,
-                                  observation=observation, retry_request=retry, reference=reference)
+                                  observation=observation, retry_request=retry, reference=reference,
+                                  invocation=invocation)
         _hold(project, objective, owner=owner, admission_id=admission_id,
               request_uuid=recorded["request_uuid"],
               code=exc.code if isinstance(exc, PodError) else type(exc).__name__,
@@ -705,7 +730,7 @@ def _start_observed(project: Path, objective: str, *, admission_id: str,
     observation = receipt.pop("native_observation", None)
     _observe_start(project, objective, owner=owner, admission_id=admission_id,
                    observation=observation if observation is not None else {"receipt": receipt},
-                   retry_request=retry, reference=receipt)
+                   retry_request=retry, reference=receipt, invocation=invocation)
     return receipt
 
 
@@ -874,6 +899,119 @@ def _error_summary(error: dict) -> dict:
             "message": message[:2048] if isinstance(message, str) else None}
 
 
+def _save_no_start(project: Path, objective: str, admission_id: str, **evidence) -> str:
+    """Archive affirmative no-effect evidence; an empty start journal proves nothing."""
+    row = read(project, objective)["admissions"][admission_id]
+    value = {"admission_id": admission_id, "run_id": row["run_id"], "task_id": row["task_id"],
+             "runtime": row["runtime"], "retry_of_dispatch_id": row["recovery"]["retry_of_dispatch_id"],
+             "start_observations": _start_observations(project, objective, row), **evidence}
+    ref = digest(value)
+    path = objective_root(project, objective) / "no-start" / (ref + ".json")
+    if path.exists() or path.is_symlink():
+        if bounded_json(path, limit=START_OBSERVATION_LIMIT) != value:
+            raise PodError("native_evidence_unavailable", "No-start evidence changed")
+    else:
+        atomic_json(path, value, limit=START_OBSERVATION_LIMIT, compact=True)
+    return ref
+
+
+def _retry_after(project: Path, state: dict, parent: dict | None, previous_id: str) -> dict:
+    """A fresh intent succeeds only a proven no-start on this exact native chain."""
+    previous = state["admissions"].get(previous_id) if isinstance(previous_id, str) else None
+    if (parent is None or not isinstance(previous, dict) or previous["state"] != "deferred"
+            or previous.get("retry_of") != parent["admission_id"]
+            or previous["recovery"].get("retry_of_dispatch_id") != parent["native_binding"]["dispatchId"]
+            or any(previous[key] != parent[key] for key in ("objective", "owner", "run_id", "task_id"))
+            or previous.get("native_binding") is not None or _retry_conflict_code(previous)
+            or _known_request_conflict(previous)):
+        raise PodError("retry_no_start_unverified", "retry_after needs an owned deferred no-start retry with the same retry_of parent; unknown starts keep their reservation and exact request recovery")
+    refs = _start_observations(project, previous["objective"], previous)
+    ref = previous["recovery"].get("no_start")
+    try:
+        if not isinstance(ref, str) or not re.fullmatch(r"[a-f0-9]{64}", ref):
+            raise ValueError("missing no-start proof")
+        proof = bounded_json(objective_root(project, previous["objective"]) / "no-start" / (ref + ".json"),
+                             limit=START_OBSERVATION_LIMIT)
+        if (digest(proof) != ref or proof.get("admission_id") != previous_id
+                or any(proof.get(key) != previous[key] for key in ("run_id", "task_id"))
+                or proof.get("retry_of_dispatch_id") != parent["native_binding"]["dispatchId"]
+                or proof.get("start_observations") != refs):
+            raise ValueError("changed no-start proof")
+        # R98 rewrites admission runtime references, never recorded raw observations.
+        # Accept only the recorded continuity path from the observed runtime.
+        observed_runtime = proof.get("runtime")
+        reached = observed_runtime
+        for entry in (state.get("checkpoint", {}).get("continuity") or {}).get("history", []):
+            if (entry["from_runtime"] == reached
+                    and (entry.get("provenance") != "owner_handoff" or entry.get("state") == "done")):
+                reached = entry["to_runtime"]
+        if not isinstance(observed_runtime, str) or reached != previous["runtime"]:
+            raise ValueError("no recorded runtime continuity for no-start proof")
+    except (OSError, ValueError, PodError) as exc:
+        raise PodError("native_evidence_unavailable", "No-start proof is missing or corrupt; inspect the original admission evidence without another start") from exc
+    allowed = False
+    if proof.get("kind") == "native_refusal":
+        receipt = proof.get("receipt")
+        if isinstance(receipt, dict) and refs:
+            error = receipt.get("error") or {}
+            data = error.get("data") or {}
+            invocation_bound = False
+            for observed_ref in refs:
+                value = bounded_json(objective_root(project, previous["objective"]) / "native-start" /
+                                     (observed_ref + ".json"), limit=START_OBSERVATION_LIMIT)
+                invoked = value.get("invocation")
+                if (isinstance(invoked, dict)
+                        and all(invoked.get(key) == proof[key] for key in
+                                ("run_id", "task_id", "retry_of_dispatch_id", "runtime"))
+                        and invoked.get("retry_request") in (None, previous["request_uuid"])):
+                    invocation_bound = True
+            allowed = (isinstance(data, dict) and error.get("code") == "task_not_startable"
+                       and all(receipt.get(key) in (None, previous[field])
+                               for key, field in (("runId", "run_id"), ("taskId", "task_id")))
+                       and _preflight_refusal_classification(receipt, {**previous, "runtime": observed_runtime},
+                               request_uuid=previous["request_uuid"]) == "authoritative"
+                       and data.get("status") == "blocked" and data.get("reason") in (None, "")
+                       and all(data.get(key) in (None, proof[field]) for key, field in
+                               (("runId", "run_id"), ("taskId", "task_id"), ("retryOf", "retry_of_dispatch_id")))
+                       and (invocation_bound or all(data.get(key) == proof[field] for key, field in
+                               (("runId", "run_id"), ("taskId", "task_id"), ("retryOf", "retry_of_dispatch_id")))))
+    elif proof.get("kind") == "pre_start":
+        allowed = (proof.get("stage") == "retry_parent_recheck" and proof.get("effect") == "not_called"
+                   and not refs and previous["request_uuid"] is None
+                   and (proof.get("error") or {}).get("code") in (
+                       "orca_unavailable", "retry_parent_unsettled", "native_assignment_unverified"))
+    if not allowed:
+        raise PodError("retry_no_start_unverified", "No recoverable no-start prerequisite is proved; circuit-breaker, permission, safety, authentication and unknown refusals stay held with their original next action")
+    return previous
+
+
+def _defer_pre_start(project: Path, objective: str, owner: str, admission_id: str,
+                     runtime: str, exc: PodError) -> None:
+    # This handler surrounds only the parent's read/recheck, before _start_observed.
+    # A crash before this durable proof leaves the reservation unresolved as before.
+    error = {"code": exc.code, "message": str(exc), "detail": exc.detail}
+    proof = _save_no_start(project, objective, admission_id, kind="pre_start",
+                           runtime=runtime, stage="retry_parent_recheck", effect="not_called", error=error,
+                           observed_at=datetime.now(timezone.utc).isoformat())
+    # Like start observations, this already-authorized invocation's own evidence
+    # must survive lost native contact. Fresh effect authority is never granted here.
+    journal = _path(project, objective)
+    with _lock(journal):
+        state = _read(journal)
+        row = state["admissions"].get(admission_id)
+        if (state["owner"] != owner or row is None or row["owner"] != owner
+                or row["state"] not in ("reserved", "unresolved")
+                or row["request_uuid"] is not None or row["native_binding"] is not None
+                or row["recovery"].get("start_observations")):
+            raise PodError("admission_conflict", "Pre-start evidence no longer joins its untouched reservation")
+        row["state"] = "deferred"
+        row["error"] = {"code": exc.code, "detail": _error_summary(error)}
+        row["recovery"] = {**row["recovery"], "no_start": proof,
+                           "next": "Inspect the parent worker-show and correct the read/exit prerequisite; then explicitly admit with the same retry_of and retry_after=" + admission_id}
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write(journal, state)
+
+
 def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: str,
                    receipt: dict, request_uuid: str | None) -> dict:
     error = receipt["error"]
@@ -881,6 +1019,10 @@ def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: s
     next_step = data.get("nextSteps")
     if not isinstance(next_step, str) or not next_step.strip() or len(next_step) > 2048:
         next_step = "explicit new policy admission after correcting the refused preflight condition"
+    admission = read(project, objective)["admissions"][admission_id]
+    proof = (_save_no_start(project, objective, admission_id, kind="native_refusal",
+                            runtime=receipt["runtime"], receipt=receipt)
+             if admission.get("retry_of") is not None else None)
 
     def apply(row: dict) -> None:
         recovery = dict(row.get("recovery", {}))
@@ -893,6 +1035,8 @@ def _defer_refusal(project: Path, objective: str, *, owner: str, admission_id: s
                            "preflight_refusal": "authoritative",
                            "native_start_state": "refused",
                            "next": next_step}
+        if proof is not None:
+            row["recovery"]["no_start"] = proof
     return update_admission(project, objective, owner=owner,
                             admission_id=admission_id, update=apply, expected_runtime=receipt["runtime"])
 
@@ -922,7 +1066,7 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
     state = read(project, objective)
     admission = state["admissions"][admission_id]
     try:
-        _retry_parent_current(state, admission, port)
+        _retry_parent_link(state, admission)
     except PodError as exc:
         return _hold(project, objective, owner=owner, admission_id=admission_id,
                      request_uuid=request_uuid, code=exc.code, detail=str(exc))
@@ -938,6 +1082,8 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
                      detail="Exact Run/Task inventory is incomplete")
     candidates = []
     errors = []
+    own_errors = []
+    observed_dispatch = admission["recovery"].get("observed_dispatch_id")
     known = {row["native_binding"]["dispatchId"] for key, row in state["admissions"].items()
              if key != admission_id and binding_valid(row.get("native_binding"))}
     for row in rows:
@@ -954,10 +1100,12 @@ def _adopt_unique(project: Path, objective: str, *, owner: str, admission_id: st
             candidates.append(dispatch)
         except PodError as exc:
             errors.append(exc.code)
+            if dispatch == observed_dispatch:
+                own_errors.append(exc.code)
     if admission.get("retry_of") is not None and errors:
         code = next((code for code in ("native_retry_parent_mismatch", "native_retry_placement_mismatch",
-                                      "native_retry_placement_unverified") if code in errors),
-                    "native_attempt_ambiguous" if candidates else "native_attempt_absent")
+                                      "native_retry_placement_unverified") if code in own_errors),
+                    "native_attempt_ambiguous")
         return _hold(project, objective, owner=owner, admission_id=admission_id,
                      request_uuid=request_uuid, code=code,
                      detail={"matching": len(candidates), "rejected": errors})
@@ -1125,8 +1273,14 @@ def _launch_reserved(project: Path, objective: str, owner: str, admission_id: st
     if reuse_of:
         prior = read(project, objective)["admissions"][reuse_of]
         terminal = prior["native_binding"]["terminalHandle"]
+    parent = None
+    if admission.get("retry_of") is not None:
+        try:
+            parent = _retry_parent_current(read(project, objective), admission, native_port)
+        except PodError as exc:
+            _defer_pre_start(project, objective, owner, admission_id, admission["runtime"], exc)
+            raise
     try:
-        parent = _retry_parent_current(read(project, objective), admission, native_port)
         receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
                                            run=run, task=task, owner=owner, route=proposed,
                                            worktree=worktree, terminal=terminal,
@@ -1157,7 +1311,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   plan_revision: str, frozen_packet: dict, worktree: str = "current",
                   reuse_of: str | None = None, port: NativePort | None = None,
                   issue_port=None, accompanying: dict | None = None,
-                  retry_of: str | None = None) -> dict:
+                  retry_of: str | None = None, retry_after: str | None = None) -> dict:
     """Packet, recovery, issue, placement, serialized boundary, then one native start."""
     from .records import packet
     bounded_text(owner, name="owner")
@@ -1180,13 +1334,16 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
         raise PodError("retry_reuse_conflict", "retry_of requires a fresh terminal; omit reuse_of")
     parent = (retry_parent(existing_state, objective=objective, owner=owner, run_id=run,
                            task_id=task, retry_of=retry_of) if retry_of is not None else None)
+    if retry_after is not None:
+        _retry_after(project, existing_state, parent, retry_after)
     admission_id = admission_identity(objective=objective, run_id=run, task_id=task,
-                                      retry_of_dispatch_id=parent["native_binding"]["dispatchId"] if parent else None)
+                                      retry_of_dispatch_id=parent["native_binding"]["dispatchId"] if parent else None,
+                                      retry_after=retry_after)
     if isinstance(existing_state, dict) and admission_id in existing_state["admissions"]:
         existing = existing_state["admissions"][admission_id]
         if (existing["packet_id"] != validated["packet_id"]
                 or existing["plan_revision"] != plan_revision or existing["worktree"] != worktree
-                or existing.get("retry_of") != retry_of):
+                or existing.get("retry_of") != retry_of or existing.get("retry_after") != retry_after):
             code = "unresolved_prior_attempt" if existing["state"] in ("reserved", "unresolved") else "admission_conflict"
             raise PodError(code, "A Task's admission cannot be replaced by another packet or placement")
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
@@ -1233,6 +1390,7 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                         packet_id=validated["packet_id"], worktree=worktree,
                         frozen_packet=validated, expected_runtime=capability["runtime"],
                         placement_binding=placement_binding, reuse_of=reuse_of, retry_of=retry_of,
+                        retry_after=retry_after,
                         accompanying=accompanying, continuity_port=native_port,
                         placement_naming=None if placement is None else
                         {"mode": placement.get("display_name_mode"), "main": placement.get("main")})
