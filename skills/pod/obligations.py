@@ -1893,7 +1893,10 @@ def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
     unverifiable = []
     rows = _persisted_rows(state, ctx, unverifiable=unverifiable)
     criteria = set(ctx.get("criteria", []))
-    original = {ob["source"]["ref"] for ob in rows.values() if ob["provenance"] == "objective"}
+    from .pod_mapping import superseded_originals
+    superseded = superseded_originals(state, rows, ctx)
+    original = {ob["source"]["ref"] for ob in rows.values()
+                if ob["provenance"] == "objective" and ob["id"] not in superseded}
     if not original <= criteria or not criteria <= _covered(rows, ctx):
         raise refuse("obligation_invalid", "malformed", "closure retains every original criterion and covers its recorded criteria", record="closure")
     _account(state, rows, state["seq"], ctx, bound_governance_digest(state))

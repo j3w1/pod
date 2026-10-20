@@ -12,7 +12,7 @@ Unavailable, ambiguous or conflicting original bindings hold the repair. Retaine
 
 After repair, an unavailable required issue or amendment read temporarily holds derived proof and any new satisfied closure, including a failure before send. Preserve the association and receipts; restoring access alone does not release this hold. Run a genuine complete recheck through the ordinary tick route to recover currency. A blocked tick does not prove the missing source current. A positively observed issue or amendment change still retires the association when a later amendment read fails, including during an introducing or rebinding checkpoint. That checkpoint records no unbound checkbox facts and a refused map writes nothing. CLOSED-only and role-only authority holds keep their separate rules.
 
-Material issue-source criteria reconciliation uses the distinct host-verified `issue_revision` checkpoint procedure from issue intake.
+Material issue-source criteria reconciliation uses the distinct host-verified `issue_revision` checkpoint procedure from issue intake. Its accepted current mapping can supersede withdrawn prior original references while retaining their full history; ordinary spelling repair or withdrawal cannot normalize those originals, and replacements still need fresh proof.
 
 Checkpoint and report acknowledgements name due ticks and unticks with their exact `pod internal pod-tick` requests. Run those requests as the recorded coordinator. Direction is computed by Pod, never supplied by the caller. Pod removes only its own confirmed ticks after proof is lost, including withdrawal or the loss of the last mapping. It leaves ticks by other actors and ambiguous ticks alone.
 

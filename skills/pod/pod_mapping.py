@@ -276,6 +276,70 @@ def prepare(state: dict, source: dict | None, value: object, body: str) -> dict:
     return result
 
 
+def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int | None = None) -> set[str]:
+    """Only a genuine current R149 mapping can supersede withdrawn originals."""
+    from .github import pod_ref_number
+    from .issue_revision import Revision, validate_decision
+    from .obligations import definition_id
+    capability = ctx.get("issue_revision")
+    same_write = isinstance(capability, Revision)
+    if same_write:
+        if (ctx.get("operation") != "checkpoint" or ctx.get("authority_kind") != "issue_revision"
+                or ctx.get("revision_authority") != capability.authority
+                or capability.original.get("checkpoint") != prior or seq != prior["seq"] + 1):
+            return set()
+        decision = {"seq": seq, "kind": "issue_revision", **capability.authority}
+        checkpoint = {**prior, "seq": seq}
+    else:
+        decisions = [row for row in (prior or {}).get("revision_decisions", [])
+                     if row.get("operation") == "issue_revision"]
+        if not decisions:
+            return set()
+        decision, checkpoint = decisions[-1], prior
+    validate_decision(decision, checkpoint)
+    source = ctx.get("pod_mapping_source")
+    approved = decision["criteria"]
+    if (source is None or any(source[key] != decision["source"][key]
+                              for key in ("repository", "number", "locator"))
+            or ctx.get("criteria") != [item["ref"] for item in approved]):
+        return set()
+    selected = {item["id"] for item in approved}
+    # Later metadata can change a live definition without undoing recorded
+    # supersession. Its check/source still match; this grants no passing proof.
+    for item in approved:
+        row = rows.get(item["id"])
+        if (row is None or (row["kind"], row["provenance"]) != ("criterion", "objective")
+                or row["source"] != {"ref": item["ref"]} or row["check"] != item["check"]
+                or (same_write and row.get("definition") != item.get("definition"))
+                or row["definition"] != definition_id(row)):
+            return set()
+    mapped = {}
+    for row in rows.values():
+        number = pod_ref_number(effective_ref(row, ctx))
+        if number is not None:
+            mapped.setdefault(number, []).append(row["id"])
+    expected = {pod_ref_number(item["ref"]): [item["id"]] for item in approved
+                if rows[item["id"]]["state"] != "withdrawn"}
+    if (mapped != expected or any(row["id"] not in selected for row in rows.values()
+                                  if (row["kind"], row["provenance"]) == ("criterion", "objective")
+                                  and row["state"] != "withdrawn")):
+        return set()
+    previous = {row["id"]: row for row in decision["previous"]["obligations"]}
+    result = set()
+    for key, row in rows.items():
+        old = previous.get(key)
+        if (key in selected or old is None or (row["kind"], row["provenance"], row["state"])
+                != ("criterion", "objective", "withdrawn") or row["source"] != old.get("source")
+                or row.get("definition") != old.get("definition") or row["definition"] != definition_id(row)):
+            continue
+        withdrawal = row.get("withdrawal", {})
+        if (old["state"] == "withdrawn" and withdrawal == old.get("withdrawal")
+                or key in decision["retired"] and withdrawal.get("by") == "issue_revision"
+                and (same_write or withdrawal.get("decision") == decision["seq"])):
+            result.add(key)
+    return result
+
+
 def write(prior: dict | None, value: dict, rows: dict, ctx: dict, seq: int) -> None:
     """Preserve caller-immutable metadata; apply only verified checkpoint facts."""
     from .obligations import definition_id
@@ -324,8 +388,10 @@ def write(prior: dict | None, value: dict, rows: dict, ctx: dict, seq: int) -> N
                        for evidence in row.get("evidence", [])):
                     raise _hold("proof_binding_unavailable", key)
     if any("pod_mapping" in row for row in rows.values()):
+        superseded = superseded_originals(prior, rows, ctx, seq=seq)
         original = {row["source"]["ref"] for row in rows.values()
-                    if row["provenance"] == "objective" or "pod_mapping" in row}
+                    if (row["provenance"] == "objective" or "pod_mapping" in row)
+                    and row["id"] not in superseded}
         if not original <= set(ctx.get("criteria", [])):
             raise _hold("original_criteria_required")
     live = {}
