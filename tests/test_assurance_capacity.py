@@ -281,4 +281,3 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.assertIn("finding history is a bounded list", result["message"])
         self.assertTrue(result["unchanged"])
         self.assertEqual(self.files(), before)
-
