@@ -5118,7 +5118,19 @@
         "tests.test_pod_mapping_repair.MappingProofTests.test_unavailable_mapping_observation_holds_until_real_read_without_inventing_scope",
         "tests.test_pod_mapping_repair.MappingProofTests.test_unavailable_amendment_readback_holds_currency_without_guessing_drift",
         "tests.test_pod_mapping_repair.MappingProofTests.test_closed_only_readback_preserves_current_proof_with_separate_hold",
-        "tests.test_pod_mapping_repair.MappingProofTests.test_role_only_readback_keeps_unchanged_body_proof_and_authority_hold"
+        "tests.test_pod_mapping_repair.MappingProofTests.test_role_only_readback_keeps_unchanged_body_proof_and_authority_hold",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_refresh_unknown_amendment_recovers_only_after_complete_recheck",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_unavailable_pre_send_amendment_holds_proof_and_closure_until_real_recheck",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_wholly_unavailable_pre_send_issue_is_a_recoverable_currency_hold",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_foreign_amendment_response_holds_without_inventing_observed_drift",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_unavailable_readback_issue_holds_proof_and_recovers_without_resending",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_unavailable_source_holds_repaired_siblings_without_rewriting_history",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_pre_send_closed_only_hold_preserves_current_derived_proof",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_pre_send_role_only_hold_preserves_currency_without_new_standing_observation",
+        "tests.test_pod_ticks_mapping.MappingTests.test_unavailable_amendment_keeps_canonical_proof_and_blocked_closure_rules",
+        "tests.test_pod_ticks_mapping.MappingTests.test_unavailable_canonical_readback_preserves_existing_read_record_and_recovers",
+        "tests.test_pod_ticks_mapping.MappingTests.test_canonical_amendment_refresh_preserves_existing_read_record",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_absent_requested_number_cannot_discard_required_source_unavailability"
       ],
       "status": "NOT_RUN"
     },
@@ -5147,7 +5159,8 @@
         "tests.test_pod_mapping_repair.RepairBoundaryTests.test_report_and_admission_map_cannot_invoke_repair",
         "tests.test_pod_mapping_repair.RepairBoundaryTests.test_identical_metadata_restatement_and_omission_carry_forward",
         "tests.test_pod_mapping_repair.RepairBoundaryTests.test_old_metadata_cannot_clear_sticky_invalidation",
-        "tests.test_pod_mapping_repair.RepairBoundaryTests.test_canonical_only_core_restatement_is_refused_during_and_after_repair"
+        "tests.test_pod_mapping_repair.RepairBoundaryTests.test_canonical_only_core_restatement_is_refused_during_and_after_repair",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_refresh_drift_with_invalid_sibling_refuses_atomically"
       ],
       "status": "NOT_RUN"
     },
@@ -5171,7 +5184,16 @@
         "tests.test_pod_mapping_repair.MappingProofTests.test_observed_amendment_edit_before_send_stays_invalid_after_restoration",
         "tests.test_pod_mapping_repair.MappingProofTests.test_observed_amendment_edit_during_send_stays_invalid_after_restoration",
         "tests.test_pod_mapping_repair.MappingProofTests.test_closed_primary_refusal_does_not_hide_observed_amendment_divergence",
-        "tests.test_pod_mapping_repair.RepairBoundaryTests.test_supported_original_criteria_close_and_closing_reader_agree"
+        "tests.test_pod_mapping_repair.RepairBoundaryTests.test_supported_original_criteria_close_and_closing_reader_agree",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_introducing_refresh_drift_retires_mapping_before_exact_restoration",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_retained_earlier_reader_drift_cannot_be_overwritten_by_restored_refresh",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_refresh_body_drift_survives_unavailable_amendment",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_refresh_observed_amendment_drift_accepts_exact_metadata_restatement",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_refresh_partial_amendment_drift_survives_unavailable_sibling",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_pre_send_observed_body_drift_survives_unavailable_amendment",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_pre_send_partial_amendment_drift_survives_unavailable_sibling",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_readback_partial_amendment_drift_survives_unavailable_sibling",
+        "tests.test_pod_mapping_repair.MappingCurrencyTests.test_absent_requested_number_cannot_discard_observed_source_drift"
       ],
       "status": "NOT_RUN"
     },

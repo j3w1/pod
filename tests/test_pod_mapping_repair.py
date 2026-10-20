@@ -499,6 +499,321 @@ class MappingProofTests(RepairCase):
         self.assertFalse(self.stored()[0]["pod_mapping"]["invalidated"])
 
 
+class MappingCurrencyTests(RepairCase):
+    def introducing_refresh(self, *, invalid_sibling=False):
+        rows = self.stored()
+        rows[0].pop("evidence", None)
+        rows[0].update(state="active", executor="coordinator")
+        rows.append(self.criterion("waiting", id="O2", provenance="user_direct",
+                    source={"ref": "extra criterion", "instruction": "Add a fixture criterion"},
+                    wait={"class": "dependency", "referent": "O1"},
+                    **({"check": ""} if invalid_sibling else {})))
+        return self.write(rows, criteria=[*self.criteria, "extra criterion"],
+                          revision_authority={"provenance": "user_direct", "instruction": "Add a fixture criterion"})
+
+    def unavailable_amendment(self, **arguments):
+        raise PodError("issue_access_unavailable", "Required fixture amendment is unreadable")
+
+    def assert_original_history(self, original):
+        row = self.stored()[0]
+        for key in ("id", "kind", "provenance", "source", "check", "introduced_seq", "definition", "receipts"):
+            self.assertEqual(row[key], original[key], key)
+        for key, value in original["pod_mapping"].items():
+            if key != "invalidated":
+                self.assertEqual(row["pod_mapping"][key], value, key)
+
+    def test_introducing_refresh_drift_retires_mapping_before_exact_restoration(self):
+        self.bind_original(); self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        facts = deepcopy(read(self.project, "objective")["pod_ticks"]["facts"])
+        canonical = self.issue.body
+        self.issue.body = canonical.replace("unchanged", "Different requirement")
+        self.introducing_refresh()
+        state = read(self.project, "objective")
+        self.assertEqual(state["pod_ticks"]["read"], {"status": "not_read", "reason": "issue_body_changed"})
+        self.assertEqual(state["pod_ticks"]["facts"], facts)
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+        self.issue.body = canonical
+        self.failure("unmapped", self.tick)
+        rows = self.stored(); rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=original["evidence"])
+        rows[1].pop("wait"); rows[1].update(state="active", executor="coordinator")
+        self.held("mapping_invalidated", self.write, rows, criteria=[*self.criteria, "extra criterion"])
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.issue.writes, [])
+
+    def test_refresh_drift_with_invalid_sibling_refuses_atomically(self):
+        self.bind_original(); self.repair(); self.prove()
+        before = self.saved()
+        canonical = self.issue.body
+        self.issue.body = canonical.replace("unchanged", "Different requirement")
+        self.failure("obligation_invalid", self.introducing_refresh, invalid_sibling=True)
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.issue.writes, [])
+        self.issue.body = canonical
+        self.tick()
+        self.assertTrue(self.line()["proven"])
+        self.assertFalse(self.stored()[0]["pod_mapping"]["invalidated"])
+
+    def test_retained_earlier_reader_drift_cannot_be_overwritten_by_restored_refresh(self):
+        """Synthetic retained compact facts from the earlier pre-send reader."""
+        from hashlib import sha256
+        from pod.pod_ticks import _facts
+        self.bind_original(); self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        changed = self.issue.body + "\nPreviously observed outside edit"
+        def earlier_reader(state):
+            source = {**state["checkpoint"]["objective_source"], "body_sha256": sha256(changed.encode()).hexdigest()}
+            _facts(state["pod_ticks"], source, changed)
+        self.synthetic_admission_damage(earlier_reader)
+        self.introducing_refresh()
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+        self.assertEqual(self.issue.writes, [])
+
+    def test_refresh_body_drift_survives_unavailable_amendment(self):
+        self.bind_original(amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        facts = deepcopy(read(self.project, "objective")["pod_ticks"]["facts"])
+        self.issue.body += "\nChanged requirement"
+        with patch.object(self.issue, "amendment", side_effect=self.unavailable_amendment):
+            self.introducing_refresh()
+        state = read(self.project, "objective")
+        self.assertEqual(state["pod_ticks"]["read"]["reason"], "issue_body_changed")
+        self.assertEqual(state["pod_ticks"]["facts"], facts)
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+
+    def test_refresh_observed_amendment_drift_accepts_exact_metadata_restatement(self):
+        self.bind_original(amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        self.issue.amendments[3] = "Changed fixture decision"
+        self.introducing_refresh()
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.issue.writes, [])
+
+    def test_refresh_partial_amendment_drift_survives_unavailable_sibling(self):
+        self.bind_original(amendments=[self.locator + f"#issuecomment-{number}" for number in (3, 4)])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        facts = deepcopy(read(self.project, "objective")["pod_ticks"]["facts"])
+        amendment = self.issue.amendment
+        def partial(**arguments):
+            return amendment(**arguments) if arguments["comment"] == 3 else self.unavailable_amendment(**arguments)
+        self.issue.amendments[3] = "Changed fixture decision"
+        with patch.object(self.issue, "amendment", side_effect=partial):
+            self.introducing_refresh()
+        state = read(self.project, "objective")
+        self.assertEqual(state["pod_ticks"]["read"]["reason"], "issue_amendment_changed")
+        self.assertEqual(state["pod_ticks"]["facts"], facts)
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+
+    def test_refresh_unknown_amendment_recovers_only_after_complete_recheck(self):
+        self.bind_original(amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        facts = deepcopy(read(self.project, "objective")["pod_ticks"]["facts"])
+        with patch.object(self.issue, "amendment", side_effect=self.unavailable_amendment):
+            self.introducing_refresh()
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["facts"], facts)
+        self.assertFalse(self.stored()[0]["pod_mapping"]["invalidated"])
+        rows = self.stored(); rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=original["evidence"])
+        rows[1].pop("wait"); rows[1].update(state="active", executor="coordinator")
+        self.held("mapping_binding_unavailable", self.write, rows, criteria=[*self.criteria, "extra criterion"])
+        self.tick()
+        self.write(rows, criteria=[*self.criteria, "extra criterion"])
+        self.assertTrue(self.line()["proven"])
+        self.assert_original_history(original)
+        self.assertEqual(self.issue.writes, [])
+
+    def test_unavailable_pre_send_amendment_holds_proof_and_closure_until_real_recheck(self):
+        self.bind_original(amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        facts = deepcopy(read(self.project, "objective")["pod_ticks"]["facts"])
+        with patch.object(self.issue, "amendment", side_effect=self.unavailable_amendment):
+            error = self.failure("issue_access_unavailable", self.tick)
+            self.assertEqual(error.detail["blocked"]["row"], "B5")
+            self.assertFalse(self.line()["proven"])
+            self.assertEqual(read(self.project, "objective")["pod_ticks"]["facts"], facts)
+            self.assertEqual(self.stored()[0], original)
+            self.held("mapping_binding_unavailable", self.write, close=True)
+        self.assertFalse(self.line()["proven"])  # Restored access alone is not an observation.
+        self.assertEqual(self.issue.writes, [])
+        self.tick()
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(self.line()["authorship"], "own")
+        self.assertEqual(self.stored()[0]["receipts"], original["receipts"])
+        self.assertFalse(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.write(close=True)
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_wholly_unavailable_pre_send_issue_is_a_recoverable_currency_hold(self):
+        self.bind_original(); self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        self.issue.unreadable = True
+        self.failure("issue_access_unavailable", self.tick)
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.stored()[0], original)
+        self.held("mapping_binding_unavailable", self.write, close=True)
+        self.tick()
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(self.stored()[0]["receipts"], original["receipts"])
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_pre_send_observed_body_drift_survives_unavailable_amendment(self):
+        self.bind_original(amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        canonical = self.issue.body
+        self.issue.body += "\nChanged requirement"
+        with patch.object(self.issue, "amendment", side_effect=self.unavailable_amendment):
+            self.failure("issue_access_unavailable", self.tick)
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+        self.issue.body = canonical
+        self.failure("unmapped", self.tick)
+        self.held("mapping_invalidated", self.write)
+        self.assertEqual(self.issue.writes, [])
+
+    def test_pre_send_partial_amendment_drift_survives_unavailable_sibling(self):
+        self.bind_original(amendments=[self.locator + f"#issuecomment-{number}" for number in (3, 4)])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        amendment = self.issue.amendment
+        def partial(**arguments):
+            return amendment(**arguments) if arguments["comment"] == 3 else self.unavailable_amendment(**arguments)
+        self.issue.amendments[3] = "Changed fixture decision"
+        with patch.object(self.issue, "amendment", side_effect=partial):
+            self.failure("issue_access_unavailable", self.tick)
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.issue.writes, [])
+
+    def test_foreign_amendment_response_holds_without_inventing_observed_drift(self):
+        self.bind_original(amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        self.issue.amendments[3] = {"id": 99, "url": self.locator + "#issuecomment-99", "body": "Foreign decision"}
+        self.failure("issue_identity_mismatch", self.tick)
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.stored()[0], original)
+        self.issue.amendments.pop(3)
+        self.tick()
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_absent_requested_number_cannot_discard_observed_source_drift(self):
+        self.bind_original(); self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        facts = deepcopy(read(self.project, "objective")["pod_ticks"]["facts"])
+        self.issue.body += "\nChanged requirement"
+        self.failure("issue_reconciliation_required", self.tick, 99)
+        ticks = read(self.project, "objective")["pod_ticks"]
+        self.assertNotIn("99", ticks["requests"])
+        self.assertEqual(ticks["facts"], facts)
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+        self.assertEqual(self.issue.writes, [])
+
+    def test_absent_requested_number_cannot_discard_required_source_unavailability(self):
+        self.bind_original(); self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        self.issue.unreadable = True
+        self.failure("issue_access_unavailable", self.tick, 99)
+        self.assertNotIn("99", read(self.project, "objective")["pod_ticks"]["requests"])
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.stored()[0], original)
+        self.held("mapping_binding_unavailable", self.write, close=True)
+        self.tick()
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(self.stored()[0]["receipts"], original["receipts"])
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_unavailable_readback_issue_holds_proof_and_recovers_without_resending(self):
+        self.bind_original(); self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        send = self.issue.issue_body_write
+        def unreadable_after_send(**arguments):
+            result = send(**arguments)
+            self.issue.unreadable = True
+            return result
+        with patch.object(self.issue, "issue_body_write", side_effect=unreadable_after_send):
+            self.failure("issue_access_unavailable", self.tick)
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.stored()[0], original)
+        self.held("mapping_binding_unavailable", self.write, close=True)
+        result = self.tick()
+        self.assertTrue(result["receipt"]["recovered"])
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(self.line()["authorship"], "own")
+        self.assertEqual(self.stored()[0]["receipts"], original["receipts"])
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_readback_partial_amendment_drift_survives_unavailable_sibling(self):
+        self.bind_original(amendments=[self.locator + f"#issuecomment-{number}" for number in (3, 4)])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        send, amendment = self.issue.issue_body_write, self.issue.amendment
+        def partial(**arguments):
+            return amendment(**arguments) if arguments["comment"] == 3 else self.unavailable_amendment(**arguments)
+        def changed_after_send(**arguments):
+            result = send(**arguments)
+            self.issue.amendments[3] = "Changed fixture decision"
+            self.issue.amendment = partial
+            return result
+        with patch.object(self.issue, "issue_body_write", side_effect=changed_after_send):
+            self.failure("issue_access_unavailable", self.tick)
+        self.assertTrue(self.stored()[0]["pod_mapping"]["invalidated"])
+        self.assert_original_history(original)
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(self.line()["authorship"], "own")
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_unavailable_source_holds_repaired_siblings_without_rewriting_history(self):
+        self.bind_original(2, amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored())
+        with patch.object(self.issue, "amendment", side_effect=self.unavailable_amendment):
+            self.failure("issue_access_unavailable", self.tick)
+        self.assertEqual(self.stored(), original)
+        self.assertFalse(self.line(1)["proven"])
+        self.assertFalse(self.line(2)["proven"])
+        self.tick()
+        self.assertTrue(self.line(1)["proven"])
+        self.assertTrue(self.line(2)["proven"])
+        self.assertEqual([row["receipts"] for row in self.stored()], [row["receipts"] for row in original])
+
+    def test_pre_send_closed_only_hold_preserves_current_derived_proof(self):
+        self.bind_original(amendments=[self.locator + "#issuecomment-3"])
+        self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        self.issue.state = "CLOSED"
+        error = self.failure("issue_reconciliation_required", self.tick)
+        self.assertEqual(error.detail["blocked"]["row"], "B3")
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(self.stored()[0], original)
+        self.assertEqual(self.issue.writes, [])
+
+    def test_pre_send_role_only_hold_preserves_currency_without_new_standing_observation(self):
+        self.bind_original(); self.repair(); self.prove()
+        original = deepcopy(self.stored()[0])
+        self.issue.title = "EEL: Fixture evidence"
+        with patch("pod.standing.observe", side_effect=AssertionError("new standing observation")):
+            self.failure("issue_is_evidence_ledger", self.tick)
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(self.stored()[0], original)
+        self.assertEqual(self.issue.writes, [])
+
+
 class HistoricalBindingTests(RepairCase):
     def test_foreign_issue_and_amendments_do_not_match_original_identity(self):
         self.bind_original()

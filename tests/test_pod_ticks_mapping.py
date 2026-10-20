@@ -1,7 +1,9 @@
 """R9 / A-C and D1-D4: real introducing checkpoints, tick and status entries."""
 
 from copy import deepcopy
+from unittest.mock import patch
 
+from pod.errors import PodError
 from pod.ledger import read
 from tests.pod_tick_support import TickCase
 
@@ -126,4 +128,55 @@ class MappingTests(TickCase):
         self.assertFalse(self.line()["proven"])
         self.assertEqual(self.line()["criteria"], [])
         self.failure("unmapped", self.tick)
+        self.assertEqual(self.issue.writes, [])
+
+    def test_unavailable_amendment_keeps_canonical_proof_and_blocked_closure_rules(self):
+        self.bind(amendments=[self.locator + "#issuecomment-3"])
+        self.prove()
+        original = deepcopy(self.stored())
+        previous_read = deepcopy(read(self.project, "objective")["pod_ticks"]["read"])
+        facts = deepcopy(read(self.project, "objective")["pod_ticks"]["facts"])
+        with patch.object(self.issue, "amendment", side_effect=PodError("issue_access_unavailable", "Fixture unavailable")):
+            error = self.failure("issue_access_unavailable", self.tick)
+        self.assertEqual(error.detail["blocked"]["row"], "B5")
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual(self.stored(), original)
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["read"], previous_read)
+        for key in ("source", "body_sha256", "lines"):
+            self.assertEqual(read(self.project, "objective")["pod_ticks"]["facts"][key], facts[key])
+        result = self.write(close=True)
+        limitation = result["pod_ticks"]["lines"][0]["blocked_at_closure"]
+        self.assertEqual(limitation["block"]["row"], "B5")
+        self.assertEqual(self.issue.writes, [])
+
+    def test_unavailable_canonical_readback_preserves_existing_read_record_and_recovers(self):
+        self.bind(); self.prove()
+        original = deepcopy(read(self.project, "objective")["pod_ticks"])
+        send = self.issue.issue_body_write
+        def unavailable_after_send(**arguments):
+            result = send(**arguments)
+            self.issue.unreadable = True
+            return result
+        with patch.object(self.issue, "issue_body_write", side_effect=unavailable_after_send):
+            self.failure("issue_access_unavailable", self.tick)
+        ticks = read(self.project, "objective")["pod_ticks"]
+        self.assertEqual(ticks["read"], original["read"])
+        self.assertEqual(ticks["facts"], original["facts"])
+        self.assertTrue(self.line()["proven"])
+        self.tick()
+        self.assertEqual(self.line()["authorship"], "own")
+        self.assertEqual(len(self.issue.writes), 1)
+
+    def test_canonical_amendment_refresh_preserves_existing_read_record(self):
+        self.bind(amendments=[self.locator + "#issuecomment-3"])
+        self.prove()
+        previous_read = deepcopy(read(self.project, "objective")["pod_ticks"]["read"])
+        self.issue.amendments[3] = "Changed fixture decision"
+        rows = self.stored()
+        rows.append(self.criterion(id="O2", provenance="user_direct",
+                    source={"ref": "extra criterion", "instruction": "Add a fixture criterion"}))
+        self.write(rows, criteria=["PoD#1", "extra criterion"],
+                   revision_authority={"provenance": "user_direct", "instruction": "Add a fixture criterion"})
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["read"], previous_read)
+        self.assertTrue(self.line()["proven"])
         self.assertEqual(self.issue.writes, [])

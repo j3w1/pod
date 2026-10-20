@@ -129,18 +129,21 @@ def _tick_transition(association: dict, source: dict, ledger: dict) -> dict | No
                  and (request.get("result") or {}).get("result") != "refused"), None)
 
 
-def observe(state: dict, ledger: dict, source: dict, body: str, *, mapping_check: dict | None = None) -> None:
+def observe(state: dict, ledger: dict, source: dict, body: str, *, mapping_check: dict | None = None,
+            apply: bool = True) -> bool:
     """Narrow _facts adapter: keep source/proof/standing/authorship hooks intact.
 
     An upcoming checkpoint rebind is judged by the map writer. Tick observations
     can retire an association here, including an earlier unbound drift read whose
-    next observation restores the exact bytes. Retirement is sticky.
+    next observation restores the exact bytes. Retirement is sticky. Checkpoint
+    refresh defers mutation until the writer validates exact prior metadata.
     """
     checkpoint = state.get("checkpoint") or {}
     if source != checkpoint.get("objective_source"):
-        return
+        return False
     previous = ledger.get("facts")
     observed_hash, observed_scope = _hash(body), scope_hash(body)
+    diverged = False
     for row in checkpoint.get("obligations", []):
         association = row.get("pod_mapping")
         if association is None or association["invalidated"]:
@@ -153,12 +156,18 @@ def observe(state: dict, ledger: dict, source: dict, body: str, *, mapping_check
         unchanged = (_identity(source) == _identity(association["accepted_source"])
                      and observed_hash == source["body_sha256"] and observed_scope == association["scope_sha256"])
         if not prior_current or not unchanged or (mapping_check or {}).get("amendment_changed") is True:
-            association["invalidated"] = True
+            diverged = True
+            if apply:
+                association["invalidated"] = True
         elif source != association["current_source"]:
             if transition is not None and (transition.get("result") or {}).get("result") == "accepted":
-                association["current_source"] = deepcopy(source)
+                if apply:
+                    association["current_source"] = deepcopy(source)
             elif transition is None:
-                association["invalidated"] = True
+                diverged = True
+                if apply:
+                    association["invalidated"] = True
+    return diverged
 
 
 def _historical(state: dict, row: dict, source: dict) -> dict:
@@ -289,7 +298,9 @@ def write(prior: dict | None, value: dict, rows: dict, ctx: dict, seq: int) -> N
                             and _tick_transition(stored, source, ctx.get("pod_mapping_ticks", {})) is not None
                             and facts is not None and facts["source"] == digest(source)
                             and facts.get("mapping_scope_sha256") == stored["scope_sha256"])
-            if definition_id(row) != earlier.get("definition") or not pending_tick and (
+            observed_divergence = ctx.get("pod_mapping_read", {}).get("reason") in (
+                "issue_body_changed", "issue_amendment_changed")
+            if observed_divergence or definition_id(row) != earlier.get("definition") or not pending_tick and (
                     source is not None and source != stored["current_source"] or (
                     facts is not None and (facts["source"] != digest(stored["current_source"])
                                            or facts.get("mapping_scope_sha256") is not None
