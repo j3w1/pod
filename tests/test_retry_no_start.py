@@ -454,7 +454,7 @@ class NoStartTests(unittest.TestCase):
 class RefusalGuardTests(GroupedTable):
     GROUPS = {
         'test_terminal_and_running_status': (('status', 'failed'), ('status', 'running')),
-        'test_missing_and_ready_status': (('status', None), ('status', 'ready')),
+        'test_missing_and_malformed_status': (('status', None), ('status', [])),
         'test_permission_and_safety_reasons': (('reason', 'permission_required'), ('reason', 'safety_refusal')),
         'test_auth_and_unknown_reasons': (('reason', 'auth_failed'), ('reason', 'unknown')),
         'test_other_run_and_task': (('runId', 'foreign'), ('taskId', 'foreign')),
@@ -487,7 +487,7 @@ class RefusalGuardTests(GroupedTable):
     def test_terminal_and_running_status(self):
         self.rows()
 
-    def test_missing_and_ready_status(self):
+    def test_missing_and_malformed_status(self):
         self.rows()
 
     def test_permission_and_safety_reasons(self):
