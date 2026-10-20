@@ -808,13 +808,30 @@ acceptance through the new logical definition, or keep the missing facts unknown
 Verified unchanged keeps retain that lineage. Merely including session
 authority with a metadata-only change does not reconcile the source.
 
+Recovery persists the actual requirement scope and each selected receipt's own
+scope in these existing entries, including a same-definition unreadable marker,
+without advancing acceptance or receipt sequences. Later omission of transient
+DATA does not erase known facts or make an unchanged retirement material. An
+already accepted revision's known previous fact can hydrate an incomplete cache
+only for its kept definition and the same retained acceptance lineage; the
+existing metadata-only carry requires the same semantic check and exact
+retained acceptance identity. Each selected proof must match the snapshot's
+exact immutable proof identity; its
+source comes from its own accepted-sequence binding and the retained
+`data_digests` used in that recovery, or its keyed proof cache. The aggregate
+requirement source and proposed source cannot supply another proof's identity.
+All qualifying cached and retained scope witnesses must agree; conflicting
+facts remain ambiguous. A new semantic acceptance or returning definition hash
+cannot borrow a fact from another acceptance lineage.
+
 Each entry may also retain `proofs`, bounded by the existing receipt limit. Its
 keys are `util.digest` of `{accepted_seq, evidence}`, omitting only evidence's
 separately rebindable `governance` stamp; values are the four-hash scope at actual
 first acceptance. Checkpoint, report and admission map writes record these facts
-only when their bound source has a unique observed complete block. Later writes,
-source observations and reused references never backfill or replace old proof
-facts. They survive semantic definition changes. Ordinary re-selection within
+when their bound source has a unique observed complete block, or retain the
+verified earlier recovery described above. Later source observations and
+reused references never backfill or replace old proof facts. They survive
+semantic definition changes. Ordinary re-selection within
 the actual accepted requirement lineage (`accepted_seq >= acceptance.seq`) keeps
 existing checkpoint, report and admission bookkeeping behavior, even when source
 facts are missing or an unreconciled different source was observed. A receipt

@@ -276,10 +276,11 @@ accept these common fields additively. Every new accepted decision stores its
 channel and, when relayed, the complete relay. Existing records without a channel
 read as `channel: session` with `channel_recorded: false` and text "session (earlier record)"; they are never rewritten on read.
 
-The exhaustive relayed list is: owner answers to an already recorded question,
+The common decision channel's exhaustive relayed list is: owner answers to an already recorded question,
 governance snapshot adoption/retarget, withdrawal, R110 continuation instructions
 recorded as `claim`, retirement (R112), the verified publish/merge authorizations below,
-and the verified standing-authorization activation and revocation of R136. A responder's
+and the verified standing-authorization activation and revocation of R136. R149's distinct
+checkpoint-only issue revision has its separate verified path below. A responder's
 answer (R138) is never an owner decision and appears on no owner list. A general `revision_authority` answer supplies
 `question`, resolving to a string or the `id`/`reference` of a question previously
 recorded in the checkpoint; Pod preserves that reference. A question added in the

@@ -1593,7 +1593,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                "bundle_digest": identity["bundle_digest"],
                                **({"continuity": continuity} if continuity else {})}
         from .pod_ticks import bind_criterion_scopes
-        bind_criterion_scopes(state, previous, verified=(issue_revision.current_scopes if issue_revision else None))
+        bind_criterion_scopes(state, previous, verified=(issue_revision.scope_bindings if issue_revision else None))
         _write(path, state, native=authority.get("native"),
                before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None)
         if isinstance(proposed, dict) and proposed.get("close") is True:

@@ -304,9 +304,13 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
                 "amendments_digest": digest(source["amendments"]), "block_sha256": blocks[0]}
         approved = (verified or {}).get(row["id"])
         changed = earlier.get("definition") != row["definition"]
-        if approved is not None and entry.get("definition") != row["definition"]:
-            entry = {**deepcopy(approved), "acceptance": _acceptance(source, checkpoint["seq"]),
-                     **({"proofs": entry["proofs"]} if "proofs" in entry else {})}
+        if approved is not None:
+            # Unchanged keeps carry the actual recovered requirement and each
+            # receipt's own scope, even when an unreadable marker already has
+            # this definition. Only genuinely new rows accept the new source.
+            entry = deepcopy(approved)
+            if not earlier:
+                entry["acceptance"] = _acceptance(source, checkpoint["seq"])
         elif changed:
             semantic = owner_revision and row.get("check") != earlier.get("check")
             initial = not previous.get("obligations")
