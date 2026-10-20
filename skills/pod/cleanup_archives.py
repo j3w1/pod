@@ -18,11 +18,12 @@ import time
 
 from .errors import PodError
 from .gitio import OBJECT_ID
-from .util import exact
+from .util import digest, exact
 
 MAX_ROWS = 96
 MAX_REFS = 96
 MAX_RECOVERY_REFS = 4096
+MAX_RESOURCE_REFLOG_ENTRIES = 4096
 MAX_OUTPUT = 2_000_000
 MAX_BUNDLE = 128 * 1024 * 1024
 MAX_OBJECTS = 1024
@@ -31,6 +32,11 @@ MAX_OBJECTS = 1024
 MAX_RESTORED_BYTES = 8 * 1024 * 1024 * 1024
 MAX_OBJECT_BYTES = 512 * 1024 * 1024
 MAX_RESTORED_OBJECTS = 100_000
+# Source traversal is a separate domain from restored pack/content limits.
+MAX_TRAVERSAL_OBJECTS = 100_000
+MAX_TRAVERSAL_OID_BYTES = 6_500_000  # SHA256; SHA1 uses exactly 100000 * 41 bytes.
+OID_CHUNK_BYTES = 65536
+TYPE_QUERY_OBJECTS = 4096
 MAX_GIT_MEMORY = 2 * 1024 * 1024 * 1024
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -41,6 +47,54 @@ _TYPES = {"commit", "tree", "blob", "tag"}
 
 class Unavailable(Exception):
     """An incomplete observation, never an empty successful proof."""
+
+
+class _OidOutput:
+    """Only complete, unique, format-exact OID lines may use the traversal domain."""
+
+    def __init__(self, width: int):
+        if width not in (40, 64):
+            raise Unavailable("Git object traversal format is unsupported")
+        self.width = width
+        self.byte_limit = min(MAX_TRAVERSAL_OID_BYTES, MAX_TRAVERSAL_OBJECTS * (width + 1))
+        self.size = self.records = 0
+        self.pending = b""
+        self.found = set()
+
+    def feed(self, block: bytes):
+        self.size += len(block)
+        if self.size > self.byte_limit:
+            raise Unavailable("Git object traversal exceeded its byte bound")
+        lines = (self.pending + block).split(b"\n")
+        self.pending = lines.pop()
+        if len(self.pending) > self.width:
+            raise Unavailable("Git object traversal has a malformed record")
+        for line in lines:
+            if (len(line) != self.width or not re.fullmatch(rb"[0-9a-f]+", line)
+                    or line == b"0" * self.width):
+                raise Unavailable("Git object traversal has a malformed record")
+            self.records += 1
+            if self.records > MAX_TRAVERSAL_OBJECTS:
+                raise Unavailable("Git object traversal exceeded its record bound")
+            oid = line.decode("ascii")
+            if oid in self.found:
+                raise Unavailable("Git object traversal has a duplicate record")
+            self.found.add(oid)
+            if len(self.found) > MAX_TRAVERSAL_OBJECTS:
+                raise Unavailable("Git object traversal exceeded its object bound")
+
+    def finish(self):
+        if self.pending or not self.records:
+            raise Unavailable("Git object traversal is incomplete")
+
+
+def material_diagnostic(facts: dict) -> dict:
+    """Opaque diagnostics only; decisions and reobservation use the complete facts."""
+    complete = facts.get("complete") is True
+    kind = facts.get("kind")
+    return {"sha256": digest(facts), "complete": complete,
+            "kind": kind if isinstance(kind, str) and kind in {"worktree", "reference"} else None,
+            "reasons": [] if complete else ["material_unavailable"]}
 
 
 def archive_rows(value: object) -> list[dict]:
@@ -88,7 +142,8 @@ def _inspection_environment():
 
 
 def _run(root: Path, argv: list[str], *, data: bytes | None = None, isolated: bool = False,
-         hash_output: bool = False, missing: bool = False, deadline: float | None = None) -> bytes:
+         hash_output: bool = False, missing: bool = False, deadline: float | None = None,
+         _oid_output: _OidOutput | None = None) -> bytes:
     if data is not None and len(data) > MAX_OUTPUT:
         raise Unavailable("Git archive inspection exceeded its input bound")
     if not isolated:
@@ -133,14 +188,16 @@ def _run(root: Path, argv: list[str], *, data: bytes | None = None, isolated: bo
                                     selector.unregister(key.fileobj)
                                     key.fileobj.close()
                                 continue
-                            block = os.read(key.fd, 65536)
+                            block = os.read(key.fd, OID_CHUNK_BYTES)
                             if not block:
                                 selector.unregister(key.fileobj)
                                 continue
                             sizes[key.data] += len(block)
-                            if sizes[key.data] > MAX_OUTPUT:
+                            if key.data == 0 and _oid_output is not None:
+                                _oid_output.feed(block)
+                            elif sizes[key.data] > MAX_OUTPUT:
                                 raise Unavailable("Git archive inspection exceeded its output bound")
-                            if key.data == 0:
+                            elif key.data == 0:
                                 if hash_output:
                                     hashed.update(block)
                                 else:
@@ -148,6 +205,10 @@ def _run(root: Path, argv: list[str], *, data: bytes | None = None, isolated: bo
                 code = process.wait(timeout=max(0, deadline - time.monotonic()))
                 if code and not (missing and code == 1 and not sizes[0]):
                     raise Unavailable("Git archive inspection failed: " + argv[0])
+                if _oid_output is not None:
+                    _oid_output.finish()
+                if time.monotonic() > deadline:
+                    raise Unavailable("Git archive inspection exceeded its time bound")
                 return hashed.hexdigest().encode() if hash_output else bytes(output)
             finally:
                 if process.poll() is None:
@@ -281,18 +342,25 @@ def _types(root: Path, oids: set[str], *, isolated: bool = False,
            limit: int = MAX_OBJECTS) -> dict[str, str]:
     if not oids or len(oids) > limit:
         raise Unavailable("Required object observation is empty or over its bound")
-    ordered = sorted(oids)
-    output = _text(root, ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
-                   data=("\n".join(ordered) + "\n").encode(), isolated=isolated)
-    lines = output.splitlines()
-    if len(lines) != len(ordered):
-        raise Unavailable("Required object inspection is incomplete")
+    ordered = sorted(_oid(oid) for oid in oids)
+    deadline = time.monotonic() + 30
     found = {}
-    for expected, line in zip(ordered, lines):
-        parts = line.split(" ")
-        if len(parts) != 2 or parts[0] != expected or parts[1] not in _TYPES:
-            raise Unavailable("Required recovery object is missing or has an unsupported type")
-        found[expected] = parts[1]
+    # Each ordinary metadata query retains the generic input/output bound. The
+    # entire batch operation shares one deadline; chunking buys no extra time.
+    for start in range(0, len(ordered), TYPE_QUERY_OBJECTS):
+        chunk = ordered[start:start + TYPE_QUERY_OBJECTS]
+        output = _text(root, ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+                       data=("\n".join(chunk) + "\n").encode(), isolated=isolated, deadline=deadline)
+        lines = output.splitlines()
+        if not output.endswith("\n") or len(lines) != len(chunk):
+            raise Unavailable("Required object inspection is incomplete")
+        for expected, line in zip(chunk, lines):
+            parts = line.split(" ")
+            if len(parts) != 2 or parts[0] != expected or parts[1] not in _TYPES:
+                raise Unavailable("Required recovery object is missing or has an unsupported type")
+            found[expected] = parts[1]
+        if time.monotonic() > deadline:
+            raise Unavailable("Required object inspection exceeded its time bound")
     return found
 
 
@@ -356,17 +424,35 @@ def _pack_bound(bundle: Path):
         raise Unavailable("Bundle pack object count is unsupported or over its bound")
 
 
+def _walk_oids(root: Path, roots: set[str], *, isolated: bool = False) -> set[str]:
+    """Read a bounded closure without buffering its raw output or resetting time."""
+    deadline = time.monotonic() + 30
+    object_format = _text(root, ["rev-parse", "--show-object-format=storage"],
+                          isolated=isolated, deadline=deadline)
+    if object_format not in {"sha1\n", "sha256\n"}:
+        raise Unavailable("Git object traversal format is unsupported")
+    width = 64 if object_format == "sha256\n" else 40
+    if (not roots or len(roots) > MAX_TRAVERSAL_OBJECTS
+            or any(len(_oid(oid)) != width for oid in roots)):
+        raise Unavailable("Git object traversal roots are empty, inconsistent or over their bound")
+    output = _OidOutput(width)
+    _run(root, ["rev-list", "--objects", "--no-object-names", "--stdin"],
+         data="".join(oid + "\n" for oid in sorted(roots)).encode(), isolated=isolated,
+         deadline=deadline, _oid_output=output)
+    if not roots <= output.found:
+        raise Unavailable("Git object traversal omitted a required root")
+    return output.found
+
+
 def _uncovered(root: Path, candidates: set[str], retained: set[str], *, isolated: bool = False) -> set[str]:
-    """Compare roots with a proven closure under the unchanged output bound.
+    """Compare arbitrary roots with the complete bounded surviving closure.
 
     Explicit tree/blob revision arguments are not subtracted by rev-list's
     negative commit arguments, so absence in a revision difference is no proof.
     """
     if not candidates:
         return set()
-    revisions = "".join(oid + "\n" for oid in sorted(retained))
-    found = {_oid(oid) for oid in _text(root, ["rev-list", "--objects", "--no-object-names", "--stdin"],
-                                        data=revisions.encode(), isolated=isolated).splitlines()}
+    found = _walk_oids(root, retained, isolated=isolated) if retained else set()
     return candidates - found
 
 
@@ -516,20 +602,15 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
                     else:
                         if relative != "HEAD" and not relative.startswith(_PRIVATE):
                             raise Unavailable("Resource has an unsupported private reflog")
-                        entries = []
-                        for line in value.splitlines():
-                            parts = line.split(b" ", 2)
-                            if len(parts) != 3:
-                                raise Unavailable("Resource reflog is incomplete")
-                            pair = [_oid(part.decode("ascii")) for part in parts[:2]]
-                            entries.append(pair)
+                        from .cleanup_observations import reflog_pairs
+                        entries = reflog_pairs(value, repository["object_format"],
+                                               limit=MAX_RESOURCE_REFLOG_ENTRIES)
+                        for pair in entries:
                             for oid in pair:
                                 if set(oid) != {"0"}:
                                     roots["reflog:" + oid] = oid
-                        if len(entries) > MAX_REFS:
-                            raise Unavailable("Resource reflog exceeds its bound")
                         result["reflogs"][relative] = {"sha256": hashlib.sha256(value).hexdigest(),
-                                                        "entries": entries}
+                                                        "entries": [list(pair) for pair in entries]}
         for index, oid in enumerate(repository["stash_roots"]):
             roots[f"stash:{index}"] = oid
         if len(roots) > MAX_OBJECTS:
@@ -671,8 +752,9 @@ def verify(project: Path, row: dict, resource: dict, excluded: list[Path]) -> di
                 _pack_bound(bundle)
                 _run(restored, ["bundle", "unbundle", str(bundle)], isolated=True)
                 result["restored_objects"] = _object_inventory(restored)
-                targets = _types(restored, set(actual.values()), isolated=True, limit=MAX_RECOVERY_REFS)
-                result["recovery_types"] = {name: targets[oid] for name, oid in actual.items()}
+                _types(restored, set(actual.values()), isolated=True, limit=MAX_RECOVERY_REFS)
+                # Types are fully checked above; their optional repeated diagnostic
+                # would exhaust the combined response before a complete 4096 map.
                 updates = "".join(f"create {name} {oid}\n" for name, oid in actual.items())
                 _run(restored, ["update-ref", "--stdin"], data=updates.encode(), isolated=True)
                 found = _text(restored, ["for-each-ref", "--format=%(refname) %(objectname)"], isolated=True)

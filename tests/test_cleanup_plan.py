@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from pod.cleanup import plan
 from pod import cleanup_archives
+from pod.util import digest
 from pod.errors import PodError
 from pod.github import repository_context
 from pod.github import repository_reads
@@ -36,6 +37,18 @@ def current_resources():
         yield resources
 
 
+def cleanup_entry(case, *, captured=None, **request):
+    """Exercise the production request/output boundary with fixture-only native ports."""
+    from pod.internal import run
+    def observe(project, objective=None, **options):
+        result = plan(project, objective, orca_reader=case.orca_read, native_port=case.port, **options)
+        if captured is not None:
+            captured.update(result=result)
+        return result
+    with patch("pod.cleanup.plan", side_effect=observe):
+        return run("cleanup-plan", {"project": str(case.project), "objective": "objective", **request})
+
+
 class CleanupPlanTests(KernelCase):
     def setUp(self):
         super().setUp()
@@ -57,8 +70,17 @@ class CleanupPlanTests(KernelCase):
         raise AssertionError(argv)
 
     def observed(self, **kwargs):
-        with repository_reads():
+        self.material_facts = {}
+        diagnostic = cleanup_archives.material_diagnostic
+        def inspect(facts):
+            self.material_facts[digest(facts)] = deepcopy(facts)
+            return diagnostic(facts)
+        with repository_reads(), patch.object(cleanup_archives, "material_diagnostic", side_effect=inspect):
             return plan(self.project, "objective", orca_reader=self.orca_read, native_port=self.port, **kwargs)
+
+    def material(self, row):
+        """Inspect the full decision basis, before its opaque wire diagnostic is compacted."""
+        return self.material_facts[row["identity"]["git"]["sha256"]]
 
     def resource(self, result, kind):
         return next(row for row in result["resources"] if row["kind"] == kind)
@@ -132,7 +154,7 @@ class CleanupPlanTests(KernelCase):
         git(self.child, "fetch", "-q", str(self.project), oid + ":refs/remotes/peer/other")
         result = self.observed()
         worktree = self.resource(result, "worktree")
-        facts = worktree["identity"]["git"]
+        facts = self.material(worktree)
         self.assertEqual(worktree["class"], "integrated")
         self.assertIsNotNone(worktree["delete_argv"])
         self.assertEqual(facts["additional_roots"], [])
@@ -154,11 +176,11 @@ class CleanupPlanTests(KernelCase):
         worktree = self.resource(result, "worktree")
         self.assertEqual(worktree["class"], "integrated")
         self.assertIsNotNone(worktree["delete_argv"])
-        self.assertNotIn(oid, worktree["identity"]["git"]["required_objects"])
+        self.assertNotIn(oid, self.material(worktree)["required_objects"])
         git(self.project, "update-ref", "-d", "refs/remotes/peer/other")
         current = self.resource(self.changed(result["expect"]), "worktree")
         self.assertEqual(current["class"], "unique")
-        self.assertIn(oid, current["identity"]["git"]["required_objects"])
+        self.assertIn(oid, self.material(current)["required_objects"])
         self.assertIsNone(current["delete_argv"])
 
     def test_removed_private_names_require_preservation_even_if_the_bytes_survive(self):
@@ -166,7 +188,7 @@ class CleanupPlanTests(KernelCase):
         git(self.child, "update-ref", "refs/worktree/private", oid)
         git(self.project, "update-ref", "refs/remotes/peer/other", oid)
         worktree = self.resource(self.observed(), "worktree")
-        facts = worktree["identity"]["git"]
+        facts = self.material(worktree)
         self.assertEqual(worktree["class"], "unique")
         self.assertIsNone(worktree["delete_argv"])
         self.assertIn("refs/worktree/private", facts["additional_roots"])
@@ -179,7 +201,7 @@ class CleanupPlanTests(KernelCase):
         git(self.child, "checkout", "-q", "--detach", oid)
         git(self.child, "checkout", "-q", "objective")
         git(self.child, "update-ref", "refs/worktree/only-holder", oid)
-        facts = self.resource(self.observed(), "worktree")["identity"]["git"]
+        facts = self.material(self.resource(self.observed(), "worktree"))
         self.assertIn("reflog:" + oid, facts["additional_roots"])
         self.assertIn(oid, facts["required_objects"])
 
@@ -529,6 +551,190 @@ class CleanupScaleTests(unittest.TestCase):
         self.assertEqual({row["id"] for row in result["resources"]},
                          {"worktree:" + str(self.case.child), "local_branch:refs/heads/objective",
                           "remote_branch:origin/objective"})
+
+
+class CleanupEntryScaleTests(unittest.TestCase):
+    """Build and inspect the maximum resource fixture once, including the before control."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.case = CleanupPlanTests()
+        cls.addClassCleanup(cls.case.doCleanups)
+        cls.case.setUp()
+        case = cls.case
+        state = read(case.project, "objective")
+        for index in range(47):
+            branch = f"placement-{index:03}"
+            path = case.root / branch
+            git(case.project, "worktree", "add", "-qb", branch, str(path))
+            state["admissions"][f"scope-{index}"] = {"recovery": {"placement_binding": {
+                "path": str(path), "branch": branch}}}
+        cls.roots = []
+        for index in range(3):
+            parent = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base,
+                         "-m", f"fixture index {index}")
+            root = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base,
+                       "-p", parent, "-m", f"fixture stash {index}")
+            git(case.project, "stash", "store", "-m", f"fixture stash {index}", root)
+            cls.roots.append(root)
+        with patch("pod.cleanup.read", return_value=state):
+            cls.before = {}
+            with patch.object(cleanup_archives, "material_diagnostic", side_effect=lambda facts: facts):
+                try:
+                    cleanup_entry(case, captured=cls.before)
+                except PodError as exc:
+                    cls.before_error = exc.code
+                else:
+                    cls.before_error = None
+            cls.result = cleanup_entry(case)
+        cls.scale_metrics = {"rows": len(cls.result["resources"]), "stash_roots": len(cls.roots),
+                             "entry_bytes": len(cls.encoded(cls.result)),
+                             "uncompacted_before_bytes": len(cls.encoded(cls.before["result"]))}
+
+    @staticmethod
+    def encoded(result):
+        return json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True).encode()
+
+    def test_96_rows_and_three_stashes_pass_the_actual_entry_below_two_mb(self):
+        self.assertEqual(len(self.result["resources"]), 96)
+        self.assertLess(len(self.encoded(self.result)), 2_000_000)
+        self.assertEqual({row["class"] for row in self.result["resources"]}, {"unique"})
+        self.assertTrue(all(row["delete_argv"] is None for row in self.result["resources"]))
+
+    def test_uncompacted_before_control_refuses_the_same_actual_entry(self):
+        self.assertEqual(self.before_error, "cleanup_unavailable")
+        self.assertGreater(len(self.encoded(self.before["result"])), 2_000_000)
+
+    def test_compaction_keeps_every_structured_stash_field_and_distinct_witness(self):
+        old = {row["id"]: row for row in self.before["result"]["resources"]}
+        for row in self.result["resources"]:
+            with self.subTest(resource=row["id"]):
+                saved = old[row["id"]]
+                self.assertEqual(row["stash_observation"], saved["stash_observation"])
+                self.assertEqual(row["identity"]["git"]["sha256"], digest(saved["identity"]["git"]))
+                self.assertEqual(set(row["stash_observation"]["support"]["closure"]["roots"]), set(self.roots))
+                self.assertEqual({part["relation"] for part in row["stash_observation"]["relations"]}, {"unknown"})
+                self.assertEqual(row["fingerprint"], digest({key: value for key, value in row.items()
+                                                            if key != "fingerprint"}))
+
+
+class CleanupReflogScaleTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.case = CleanupPlanTests()
+        cls.addClassCleanup(cls.case.doCleanups)
+        cls.case.setUp()
+        cls.admin = Path(git(cls.case.child, "rev-parse", "--absolute-git-dir"))
+        cls.line = (cls.case.base + " " + cls.case.base
+                    + " Fixture <fixture@example.invalid> 1 +0000\tprivate fixture subject\n").encode()
+
+    def log(self, count, *, relative="HEAD"):
+        file = self.admin / "logs" / relative
+        before = file.read_bytes() if file.exists() else None
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(self.line * count)
+        self.addCleanup(file.write_bytes, before) if before is not None else self.addCleanup(file.unlink)
+
+    def row(self):
+        result = cleanup_entry(self.case)
+        return self.case.resource(result, "worktree")
+
+    def assert_integrated(self, count):
+        self.log(count)
+        row = self.row()
+        self.assertTrue(row["identity"]["git"]["complete"], row["reasons"])
+        self.assertEqual(row["class"], "integrated")
+        self.assertIsNotNone(row["delete_argv"])
+        self.assertNotIn("private fixture subject", repr(row))
+
+    def test_97_head_entries_pass_where_the_old_96_entry_control_holds(self):
+        self.log(97)
+        with patch.object(cleanup_archives, "MAX_RESOURCE_REFLOG_ENTRIES", 96):
+            self.assertIsNone(self.row()["delete_argv"])
+        row = self.row()
+        self.assertEqual(row["class"], "integrated")
+        self.assertIsNotNone(row["delete_argv"])
+
+    def test_227_head_entries_are_fully_observed_at_the_actual_entry(self):
+        self.assert_integrated(227)
+
+    def test_4096_head_entries_pass_the_separate_per_log_count_boundary(self):
+        self.assert_integrated(4096)
+
+    def test_4097_head_entries_stay_held(self):
+        self.log(4097)
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertEqual(row["class"], "protected")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Reflog exceeds its bound", row["reasons"])
+
+    def test_4096_private_entries_do_not_grant_private_name_preservation(self):
+        git(self.case.child, "update-ref", "refs/worktree/fixture", self.case.base)
+        self.addCleanup(git, self.case.child, "update-ref", "-d", "refs/worktree/fixture")
+        self.log(4096, relative="refs/worktree/fixture")
+        row = self.row()
+        self.assertTrue(row["identity"]["git"]["complete"], row["reasons"])
+        self.assertEqual(row["class"], "unique")
+        self.assertIsNone(row["delete_argv"])
+
+    def test_4097_private_entries_stay_held_independently_of_head_entries(self):
+        git(self.case.child, "update-ref", "refs/worktree/fixture", self.case.base)
+        self.addCleanup(git, self.case.child, "update-ref", "-d", "refs/worktree/fixture")
+        self.log(4097, relative="refs/worktree/fixture")
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+
+    def test_raw_reflog_bytes_still_have_the_generic_metadata_bound(self):
+        file = self.admin / "logs" / "HEAD"
+        self.addCleanup(file.write_bytes, file.read_bytes())
+        file.write_bytes(self.line[:-1] + b"x" * cleanup_archives.MAX_OUTPUT + b"\n")
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Resource metadata exceeds its bound", row["reasons"])
+
+    def test_more_entries_do_not_expand_the_distinct_root_domain(self):
+        file = self.admin / "logs" / "HEAD"
+        self.addCleanup(file.write_bytes, file.read_bytes())
+        file.write_text("".join(f"{index:040x} {self.case.base} Fixture <fixture@example.invalid> 1 +0000\tx\n"
+                                for index in range(1, 1025)))
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Resource roots exceed the archive observation bound", row["reasons"])
+
+    def test_changed_hidden_head_log_bytes_invalidate_expect_with_the_same_complete_class(self):
+        self.log(97)
+        first = cleanup_entry(self.case)
+        before = self.case.resource(first, "worktree")
+        file = self.admin / "logs" / "HEAD"
+        file.write_bytes(file.read_bytes().replace(b"private fixture subject", b"changed fixture subject"))
+        with current_resources() as resources, self.assertRaises(PodError) as error:
+            cleanup_entry(self.case, expect=first["expect"])
+        self.assertEqual(error.exception.code, "cleanup_changed")
+        after = self.case.resource({"resources": resources}, "worktree")
+        self.assertEqual((before["class"], after["class"]), ("integrated", "integrated"))
+        self.assertNotEqual(before["identity"]["git"]["sha256"], after["identity"]["git"]["sha256"])
+        self.assertEqual({key: value for key, value in before["identity"]["git"].items() if key != "sha256"},
+                         {key: value for key, value in after["identity"]["git"].items() if key != "sha256"})
+        self.assertNotIn("fixture subject", repr(resources))
+
+    def unsupported_admin(self, name):
+        file = self.admin / name
+        file.write_text(self.case.base + "\n")
+        self.addCleanup(file.unlink)
+        row = self.row()
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIn("unsupported administrative roots", " ".join(row["reasons"]))
+
+    def test_unknown_rebase_head_is_still_held(self):
+        self.unsupported_admin("REBASE_HEAD")
+
+    def test_unknown_auto_merge_is_still_held(self):
+        self.unsupported_admin("AUTO_MERGE")
 
 
 class CleanupWorkerTests(KernelCase):

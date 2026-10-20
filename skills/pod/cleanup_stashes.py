@@ -18,6 +18,7 @@ from .gitio import worktree_inventory, worktree_rows
 from .util import digest
 
 PROFILE = "git-local-ref-delete/v1"
+MAX_HOLDER_REFS = 100_000
 REASONS = frozenset({"snapshot_unavailable", "snapshot_incomplete", "malformed_stash", "stash_changed",
     "resource_identity_unavailable", "resource_changed", "storage_unavailable", "storage_overlap",
     "unsupported_storage", "ref_alias_overlap", "private_ref_dependency", "effect_footprint_unavailable",
@@ -135,7 +136,7 @@ def snapshot(project: Path, repository: dict) -> dict:
             commits.update(archives._commits(project, parents - commits.keys(), limit=8192))
             needed = {oid: "commit" for oid in commits}
             needed.update({value["tree"]: "tree" for value in commits.values()})
-            if archives._types(project, set(needed), limit=archives.MAX_RESTORED_OBJECTS) != needed:
+            if archives._types(project, set(needed), limit=archives.MAX_TRAVERSAL_OBJECTS) != needed:
                 raise archives.Unavailable("Stash roots, parents and trees have inconsistent types")
             for oid in roots:
                 row = commits[oid]
@@ -145,10 +146,8 @@ def snapshot(project: Path, repository: dict) -> dict:
                     raise archives.Unavailable("Stash commit shape is malformed")
                 result["snapshot"].append({"oid": oid, "tree": row["tree"], "parents": row["parents"],
                                              "parent_trees": [commits[parent]["tree"] for parent in row["parents"]]})
-            output = archives._text(project, ["rev-list", "--objects", "--no-object-names", "--stdin"],
-                                     data=("\n".join(roots) + "\n").encode()).splitlines()
-            closure = {archives._oid(oid) for oid in output}
-            types = archives._types(project, closure, limit=archives.MAX_RESTORED_OBJECTS)
+            closure = archives._walk_oids(project, set(roots))
+            types = archives._types(project, closure, limit=archives.MAX_TRAVERSAL_OBJECTS)
             if not set(needed) <= closure:
                 raise archives.Unavailable("Stash closure is incomplete")
             archives._run(project, ["fsck", "--full", "--strict", "--no-reflogs", "--no-dangling", *roots])
@@ -266,7 +265,7 @@ def _holder_refs(path: Path, common: Path, admin: Path, deadline: float) -> list
             raise archives.Unavailable("Holder reference catalog is incomplete")
         name, oid, kind, target = parts
         archives._oid(oid)
-        if name in catalog or len(catalog) >= archives.MAX_RESTORED_OBJECTS:
+        if name in catalog or len(catalog) >= MAX_HOLDER_REFS:
             raise archives.Unavailable("Holder reference catalog is duplicate or over its bound")
         catalog[name] = (oid, kind, target)
     refs = []

@@ -180,7 +180,7 @@ def logical_ref(project: Path, name: str, object_format: str | None) -> dict:
     return row
 
 
-def reflog_pairs(raw: bytes, object_format: str) -> list[tuple[str, str]]:
+def reflog_pairs(raw: bytes, object_format: str, *, limit: int = 2048) -> list[tuple[str, str]]:
     if raw and not raw.endswith(b"\n"):
         raise archives.Unavailable("Reflog is incomplete")
     result, width = [], 64 if object_format == "sha256" else 40
@@ -196,7 +196,7 @@ def reflog_pairs(raw: bytes, object_format: str) -> list[tuple[str, str]]:
         if any(len(value) != width for value in pair):
             raise archives.Unavailable("Reflog object format is inconsistent")
         result.append(pair)
-        if len(result) > 2048:
+        if len(result) > limit:
             raise archives.Unavailable("Reflog exceeds its bound")
     return result
 
@@ -263,7 +263,8 @@ def storage_once(project: Path, name: str, repository: dict) -> tuple[dict, dict
         elif current["symref"] or (current["oid"] != packed):
             raise archives.Unavailable("Logical and packed reference identities differ")
         if contents["reflog"] is not None:
-            reflog_pairs(contents["reflog"], repository["object_format"])
+            reflog_pairs(contents["reflog"], repository["object_format"],
+                         limit=2048 if name == "refs/stash" else archives.MAX_RESOURCE_REFLOG_ENTRIES)
         result["status"] = "observed"
     except (archives.Unavailable, OSError, KeyError, ValueError, UnicodeError):
         result["reasons"].append("storage_unavailable")
@@ -501,6 +502,7 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
     if observe["kind"] in {"cache", "native"}:
         row.update(archives=[], archive_verified=False)
     row["reasons"] = sorted(set(row["reasons"]))
+    cleanup._compact_material([row])
     plan_hash, fingerprints = cleanup._expect_change(expect, [row], target)
     row["fingerprint"] = fingerprints[row["id"]]
     result = {"schema": "pod-cleanup-plan/v1", "objective": objective,

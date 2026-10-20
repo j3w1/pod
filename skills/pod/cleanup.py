@@ -333,6 +333,13 @@ def _resource(kind: str, name: str, identity: dict, classification: str, reasons
             "archive_verified": archive_verified, "archives": archive_observations or []}
 
 
+def _compact_material(resources: list[dict]) -> None:
+    for row in resources:
+        identity = row["identity"]
+        if identity.get("git") is not None:
+            identity["git"] = cleanup_archives.material_diagnostic(identity["git"])
+
+
 def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple[str, dict]:
     fingerprints = {row["id"]: digest({key: value for key, value in row.items() if key != "fingerprint"})
                     for row in resources}
@@ -661,6 +668,9 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
             tip = row["identity"].get("tip")
             integrated = bool(tip and target and (tip in merged or is_ancestor(project, tip, target) is True))
             cleanup_stashes.apply(row, observation, branch_integrated=integrated)
+        # The selected path borrows the full internal decision basis when this
+        # flag is false, then compacts its own final row after reobservation.
+        _compact_material(resources)
     plan_hash, fingerprints = _expect_change(expect, resources, observed_target)
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]

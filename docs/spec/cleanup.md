@@ -67,6 +67,17 @@ values remain null. Existing Git/native/worker/archive diagnostic internals are
 bounded opaque facts for consumers: retain and fingerprint them, but never use an
 unrecognized diagnostic field to replace a missing structured proof.
 
+`identity.git` is a compact opaque diagnostic: `sha256`, `complete`, `kind` and
+sanitized `reasons`. Its SHA256 uses the same canonical JSON encoding as the
+fingerprint, over the **complete actual internal material observation**, including
+nested repository, ref, root, commit, metadata, storage and unavailable facts.
+Decisions, archive verification and reobservation still use those full facts.
+Both ordinary and selected responses compact this diagnostic before the final
+whole-resource fingerprint. A hidden material change therefore invalidates
+expect; diagnostic completeness or a digest never supplies a structured proof.
+All structured identity, current, provenance, ref-storage and stash records remain
+complete, including every distinct relation witness and its basis.
+
 Project-only results have `objective: null`, `record_class: unavailable`, no closure
 basis or top-level worker, null target ref/commit and no observed delivered movement.
 Their standing projection is normal, null decision, no covered resource and the
@@ -159,6 +170,42 @@ a positive production plan or native removal. The requested stash-positive outco
 remains unimplemented. Wider Orca/fallback/async/plugin/context/completion facts remain
 unavailable. Verified empty ordinary plans retain their independent existing guards.
 
+## Inspection and output bounds
+
+Count, byte, content and time limits apply together. A legal count does not promise
+that arbitrary names or combined material fit the byte budget. Ordinary plans have
+at most 96 resource rows; input archives have at most 96 rows. The complete CLI
+response and each stash observation remain bounded to 2,000,000 encoded bytes.
+Regressions exercise the production entry with 96 rows and three stash roots, and
+with complete 4096-entry maps whose names are 60 characters. Longer combined maps
+that exceed the response budget still refuse; no field or distinct witness is
+truncated, paginated or replaced with a caller assertion.
+
+Surviving reachability, stash closure and restored archive coverage use one bounded
+OID walker. Its separate traversal domain permits at most 100,000 total valid
+records **and** 100,000 distinct objects, in fixed reads of at most 65,536 bytes.
+The aggregate OID-output ceiling is 6,500,000 bytes for SHA256 and exactly 4,100,000
+for SHA1. One absolute 30-second deadline covers format inspection and traversal;
+chunks do not reset it. Duplicate, malformed, wrong-format, incomplete, missing-root,
+over-count, over-byte, failed or expired observations hold. Arbitrary tree/blob
+roots are compared with the complete closure; negative commit subtraction cannot
+prove their coverage. Enclosing resource and archive freshness checks still hold
+concurrent changes. The walker retains validated OIDs, never a raw-output spool.
+
+Generic metadata input/output, including stderr, remains bounded to 2,000,000 bytes
+per process. Complete type checks use bounded batches of at most 4096 objects under
+those ordinary limits, sharing one absolute 30-second deadline for the entire type
+operation. There is no separate typed-output stream or extra per-chunk time budget.
+Traversal and restored-content object limits are independent domains. Git children
+retain the existing nonraising address-space/file-size limits and service caps.
+
+Each eligible resource HEAD or private reflog may contain at most 4096 complete
+entries, independently of the 96 resource/ref count. Raw metadata bytes, distinct
+required roots/objects, private ref and administrative-name counts, incarnation and
+time limits still apply. Repeated entries do not create provenance. Unknown
+`REBASE_HEAD`, `AUTO_MERGE` and other unsupported administrative roots still hold.
+The stash retaining-log and snapshot limits keep their own existing domain.
+
 ## Archives and consumer handoff
 
 Branch-only rows are exactly `{path, ref, tip}` and prove only their original narrow
@@ -171,10 +218,15 @@ or permission. Unsupported advertisement classes, thin/partial/corrupt/stale/mis
 or swapped bundles hold. No production bundle rewrite or duplicate recovery registry
 is required.
 
+Both the declared `recovery_refs` map and the complete actual `recovery_refs` map
+remain in every archive observation. The optional repeated `recovery_types`
+diagnostic is omitted to fit the combined byte budget; every advertised target and
+required object type is still independently and completely verified.
+
 Resource/archive-row count remains 96; advertised/expected recovery maps are bounded
 to 4096 entries. Compressed input remains 128 MiB, with separate bounded logical
-restoration/object/count controls and the existing per-process read/output/deadline
-limits. Git inspection never raises tighter inherited soft/hard process limits.
+restoration/object/count controls and the conjunctive inspection/output bounds above.
+Git inspection never raises tighter inherited soft/hard process limits.
 Archives must remain outside removable resource/admin paths with stable bytes,
 identity and mount placement. Volatile-media crash durability is not established by
 the outside-removal check. A verified archive preserves data; it grants no integration,

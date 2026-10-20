@@ -111,6 +111,55 @@ class SelectedObservationTests(unittest.TestCase):
         self.assertEqual(first["digest"], same["digest"])
         self.assert_changed(first, objective="missing-objective")
 
+    def test_selected_opaque_git_digest_is_canonical_and_binds_every_internal_material_leaf(self):
+        full = []
+        original = archives.material_diagnostic
+        def inspect(facts):
+            full.append(deepcopy(facts))
+            return original(facts)
+        with patch.object(archives, "material_diagnostic", side_effect=inspect):
+            first = self.source.row()
+        facts = full[-1]
+        self.assertEqual(first["identity"]["git"]["sha256"], digest(facts))
+        self.assertEqual(set(first["identity"]["git"]), {"sha256", "complete", "kind", "reasons"})
+        # Enumerate real internal leaf paths, including nested repository,
+        # incarnation, config, commit, parent, tree, source and unknown facts.
+        def leaves(value, path=()):
+            if isinstance(value, dict) and value:
+                for key, item in value.items():
+                    yield from leaves(item, (*path, key))
+            elif isinstance(value, list) and value:
+                for key, item in enumerate(value):
+                    yield from leaves(item, (*path, key))
+            else:
+                yield path
+        for path in leaves(facts):
+            changed = deepcopy(facts)
+            parent = changed
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = {"fixture_changed": True}
+            with self.subTest(path=path):
+                self.assertNotEqual(archives.material_diagnostic(changed)["sha256"],
+                                    first["identity"]["git"]["sha256"])
+
+    def test_selected_hidden_head_log_change_refuses_old_expect_without_exporting_subjects(self):
+        source = self.source
+        log = source.private / "logs" / "HEAD"
+        self.preserve(log)
+        selection = {"kind": "worktree", "name": str(source.case.child)}
+        first = source.observe(**selection)
+        marker = "synthetic-private-head-subject"
+        with log.open("ab") as stream:
+            stream.write((source.case.base + " " + source.case.base
+                          + " Fixture <fixture@example.invalid> 1 +0000\t" + marker + "\n").encode())
+        self.assert_changed(first, **selection)
+        row = source.row(**selection)
+        self.assertEqual(row["class"], first["resources"][0]["class"])
+        self.assertNotEqual(row["identity"]["git"]["sha256"], first["resources"][0]["identity"]["git"]["sha256"])
+        self.assertNotIn(marker, json.dumps(row))
+        self.assertIsNone(row["delete_argv"])
+
     def test_different_unavailable_objective_names_bind_the_same_other_facts_independently(self):
         first = self.source.observe(objective="missing-one")
         second = self.source.observe(objective="missing-two")
