@@ -559,7 +559,9 @@ def _op_admission(request: dict) -> dict:
                          plan_revision=request["plan_revision"],
                          frozen_packet=request["packet"],
                          worktree=request.get("worktree", "current"),
-                         reuse_of=request.get("reuse_of"), accompanying=request.get("map"))
+                         reuse_of=request.get("reuse_of"), retry_of=request.get("retry_of"),
+                         retry_after=request.get("retry_after"),
+                         accompanying=request.get("map"))
     from .display import admission_output
     row = result["admission"]
     current = read(Path(request["project"]), request["objective"])

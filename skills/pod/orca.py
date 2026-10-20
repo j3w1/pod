@@ -246,6 +246,12 @@ def _worker_start_shape(tail: list[str]) -> bool:
     if len(tail) >= 3 and tail[-3] == "--retry-request" and tail[-1] == "--json":
         retry = tail[-2]
         tail = tail[:-3] + ["--json"]
+    retry_parent = None
+    if len(tail) >= 3 and tail[-3] == "--retry-of" and tail[-1] == "--json":
+        retry_parent = tail[-2]
+        if not _argument(retry_parent):
+            return False
+        tail = tail[:-3] + ["--json"]
     if (len(tail) < 9 or tail[:1] != ["--task"] or not _argument(tail[1])
             or tail[2:3] != ["--run"] or not _argument(tail[3])
             or tail[4:5] != ["--worktree"] or worktree_selector(tail[5]) is None
@@ -253,7 +259,7 @@ def _worker_start_shape(tail: list[str]) -> bool:
         return False
     route = tail[6:-1]
     if len(route) == 2 and route[0] == "--terminal":
-        return _argument(route[1])
+        return retry_parent is None and _argument(route[1])
     if len(route) == 4 and route[0] == "--agent" and route[2] == "--model":
         return _argument(route[1]) and _argument(route[3])
     if len(route) == 6 and route[0] == "--agent" and route[2] == "--model" and route[4] == "--effort":
