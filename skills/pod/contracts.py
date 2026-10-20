@@ -116,6 +116,7 @@ TABLE = {
         **{key: _ANY for key in ("plan_revision", "policy_revision", "assignments", "questions",
                                   "verification_gaps", "next_safe_action", "route_decisions", "objective", "blocker", "remaining_gates")},
         "objective_source": {"type": "object", "form": "bound issue source"},
+        "issue_revision_data": record("issue revision data"),
         "native_refs": items(32, {"type": "object", "form": "runId and runtime text"}),
         "worktree": record("worktree_binding"), "verification": record("verification"), "display": record("display"),
     }, ("schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs", "assignments",
@@ -259,6 +260,14 @@ TABLE["responder answer"] = definition({
     "question": text(512), "text": text(4096),
     "relay": {"type": "object", "fields": {"reference": text(512)}},
 }, ("question", "text", "relay"))
+TABLE["issue revision data"] = definition({
+    "historical_bodies": items(64, record("issue body data")),
+}, ("historical_bodies",), max_bytes=128 * 1024)
+TABLE["issue body data"] = definition({
+    "body_sha256": _DIGEST,
+    "body": {"type": "text", "max_length": 512 * 1024, "max_bytes": 512 * 1024,
+             "form": "exact UTF-8 body DATA, never authority"},
+}, ("body_sha256", "body"))
 TABLE["standing decision"]["stored_max_bytes"] = 4 * 1024
 TABLE["responder answer"]["stored_max_bytes"] = 8 * 1024
 TABLE["standing authorization"] = definition({

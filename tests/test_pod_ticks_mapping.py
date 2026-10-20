@@ -41,7 +41,7 @@ class MappingTests(TickCase):
         self.assertEqual(self.issue.writes, [])
 
     def test_lost_last_mapping_unticked_is_unmapped_D2(self):
-        """Only mapping is injected: criterion sources are immutable in today's kernel."""
+        """Synthetic mapping control; R149 revision/observation tests cover actual loss."""
         self.bind()
         self.lapse(remove_mapping=True)
         self.failure("unmapped", self.tick)

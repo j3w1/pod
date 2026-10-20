@@ -23,6 +23,14 @@ STEPS = "Record the same proof without closing, run each due pod internal pod-ti
 INTENT_MARGIN_S = 5
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _NUMBER = re.compile(r"(?:0|[1-9][0-9]{0,8})\Z")
+SCOPE_FIELDS = {"definition", "source_digest", "amendments_digest", "block_sha256"}
+
+
+def validate_scope(value: object) -> dict:
+    scope = exact(value, SCOPE_FIELDS, SCOPE_FIELDS, name="criterion source scope")
+    if any(not isinstance(item, str) or not _SHA.fullmatch(item) for item in scope.values()):
+        raise PodError("state_unsupported", "PoD criterion source identity is malformed")
+    return scope
 
 
 def _hash(body: str) -> str:
@@ -52,7 +60,7 @@ def _pending_error(request: dict | None, message: str) -> PodError:
 
 def validate(value: object) -> None:
     """Optional representation: older contexts are read without conversion."""
-    row = exact(value, set(empty()), set(empty()), name="pod_ticks")
+    row = exact(value, set(empty()) | {"criterion_scopes"}, set(empty()), name="pod_ticks")
     if row["schema"] != SCHEMA:
         raise PodError("state_unsupported", "PoD tick representation is unsupported")
     if row["last_rebind"] is not None and (not isinstance(row["last_rebind"], str) or not _SHA.fullmatch(row["last_rebind"])):
@@ -69,7 +77,7 @@ def validate(value: object) -> None:
             raise PodError("state_unsupported", "PoD tick authorship is malformed")
     facts = row["facts"]
     if facts is not None:
-        exact(facts, {"source", "body_sha256", "lines"}, {"source", "body_sha256", "lines"}, name="PoD line facts")
+        exact(facts, {"source", "body_sha256", "lines", "blocks"}, {"source", "body_sha256", "lines"}, name="PoD line facts")
         if (not isinstance(facts["source"], str) or not _SHA.fullmatch(facts["source"])
                 or not isinstance(facts["body_sha256"], str) or not _SHA.fullmatch(facts["body_sha256"])
                 or not isinstance(facts["lines"], dict)):
@@ -78,6 +86,19 @@ def validate(value: object) -> None:
             if (not _NUMBER.fullmatch(key) or not isinstance(states, list) or not states
                     or any(type(state) is not bool for state in states)):
                 raise PodError("state_unsupported", "PoD checkbox observations are malformed")
+        blocks = facts.get("blocks", {})
+        if (not isinstance(blocks, dict) or set(blocks) - set(facts["lines"])
+                or any(not isinstance(hashes, list) or len(hashes) != len(facts["lines"][key])
+                       or any(not isinstance(item, str) or not _SHA.fullmatch(item) for item in hashes)
+                       for key, hashes in blocks.items())):
+            raise PodError("state_unsupported", "PoD source block observations are malformed")
+    scopes = row.get("criterion_scopes", {})
+    if not isinstance(scopes, dict) or len(scopes) > 96:
+        raise PodError("state_unsupported", "PoD criterion source identities are malformed")
+    for key, scope in scopes.items():
+        from .obligations import _ident
+        _ident(key, "criterion")
+        validate_scope(scope)
     for key, request in row["requests"].items():
         required = {"id", "pod", "seq", "source", "direction", "before", "intended", "phase", "result", "readback", "block"}
         exact(request, required | {"intent_at"}, required, name="PoD tick request")
@@ -148,9 +169,11 @@ def _validate_block(block: dict) -> None:
 
 
 def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None) -> None:
-    from .github import pod_lines
+    from .github import pod_lines, pod_blocks
     lines = {str(number): [line["ticked"] for line in rows] for number, rows in pod_lines(body).items()}
-    ledger["facts"] = {"source": digest(source), "body_sha256": _hash(body), "lines": lines}
+    ledger["facts"] = {"source": digest(source), "body_sha256": _hash(body), "lines": lines,
+                       "blocks": {str(number): [block["sha256"] for block in blocks]
+                                  for number, blocks in pod_blocks(body).items()}}
     ledger["read"] = {"status": "read", "reason": None}
     if context is not None:
         from .standing import observe
@@ -159,6 +182,37 @@ def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None
     # no longer establishes continuous authorship of a later tick.
     ledger["authors"] = {key: author for key, author in ledger["authors"].items()
                          if lines.get(key) and all(lines[key])}
+
+
+def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None = None) -> None:
+    """Bind only newly accepted definitions to an already observed complete source.
+
+    An ordinary later observation never supplies an existing definition's missing
+    earlier identity, even when its check happens to equal the current header.
+    """
+    from .github import pod_ref_number
+    checkpoint = state["checkpoint"]
+    source = checkpoint.get("objective_source")
+    ledger = state.get("pod_ticks", {})
+    facts = ledger.get("facts") or {}
+    if verified is not None:
+        for key, scope in verified.items():
+            old = ledger.get("criterion_scopes", {}).get(key, {})
+            if old.get("definition") != scope["definition"]:
+                ledger.setdefault("criterion_scopes", {})[key] = deepcopy(scope)
+    if source is None or facts.get("source") != digest(source):
+        return
+    before = {row["id"]: row for row in previous.get("obligations", [])}
+    for row in checkpoint.get("obligations", []):
+        if (row["kind"] != "criterion" or row["provenance"] != "objective" or row["state"] == "withdrawn"
+                or before.get(row["id"], {}).get("definition") == row["definition"]):
+            continue
+        number = pod_ref_number(row.get("source", {}).get("ref"))
+        blocks = facts.get("blocks", {}).get(str(number), [])
+        if len(blocks) == 1:
+            ledger.setdefault("criterion_scopes", {})[row["id"]] = {
+                "definition": row["definition"], "source_digest": digest(source),
+                "amendments_digest": digest(source["amendments"]), "block_sha256": blocks[0]}
 
 
 def refresh(state: dict, project: Path, source: dict) -> None:
@@ -179,10 +233,15 @@ def refresh(state: dict, project: Path, source: dict) -> None:
 
 def mapping(map_state: dict | None) -> dict[int, list[dict]]:
     from .github import pod_ref_number
+    revisions = [row for row in (map_state or {}).get("revision_decisions", [])
+                 if row.get("operation") == "issue_revision"]
+    approved = {row["id"] for row in revisions[-1]["criteria"]} if revisions else None
     result = {}
     for criterion in (map_state or {}).get("obligations", []):
-        if criterion.get("withdrawal", {}).get("by") == "issue_revision":
-            continue  # The withdrawn definition remains in revision history, never a current mapping.
+        if (criterion.get("kind") == "criterion" and criterion.get("provenance") == "objective"
+                and criterion.get("state") == "withdrawn" and approved is not None
+                and criterion["id"] not in approved):
+            continue  # An approved current mapping supersedes history without rewriting its withdrawal.
         number = pod_ref_number(criterion.get("source", {}).get("ref")) if criterion["kind"] == "criterion" else None
         if number is not None:
             result.setdefault(number, []).append(criterion)

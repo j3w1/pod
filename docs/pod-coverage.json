@@ -5009,7 +5009,10 @@
       ],
       "offline_test": [
         "tests.test_pod_ticks_closure.ClosureTests.test_forward_compatible_lost_mapping_own_tick_unticks_D7",
-        "tests.test_pod_ticks_mapping.MappingTests.test_lost_last_mapping_unticked_is_unmapped_D2"
+        "tests.test_pod_ticks_mapping.MappingTests.test_lost_last_mapping_unticked_is_unmapped_D2",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_real_revision_mapping_loss_unticked_is_unmapped_D2",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_real_revision_mapping_loss_own_tick_is_due_and_unticks_D7",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_real_revision_mapping_loss_leaves_other_actor_tick_untouched"
       ],
       "status": "NOT_RUN"
     },
@@ -6682,7 +6685,11 @@
         "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_verified_exact_source_criteria_revision_uses_current_map_and_native_binding",
         "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_prior_observation_allows_equal_source_digests_for_material_reconciliation",
         "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_delivery_only_source_observation_does_not_need_verifier",
-        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_changed_requirement_uses_fresh_id_and_leaves_own_tick_due_for_untick"
+        "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_changed_requirement_uses_fresh_id_and_leaves_own_tick_due_for_untick",
+        "tests.test_issue_revision.IssueRevisionIntakeViewTests.test_long_block_view_is_complete_deterministic_and_read_only",
+        "tests.test_issue_revision.IssueRevisionIntakeViewTests.test_unavailable_view_is_empty_and_preserves_overall_intake_behavior",
+        "tests.test_issue_revision.IssueRevisionIntakeViewTests.test_intake_view_uses_same_recognition_and_keeps_quoted_fenced_decoys_out",
+        "tests.test_issue_revision.IssueRevisionIntakeViewTests.test_intake_derived_long_check_is_accepted_by_checkpoint_with_fresh_proof_pending"
       ],
       "status": "NOT_RUN"
     },
@@ -6698,7 +6705,19 @@
         "tests.test_issue_revision.IssueRevisionRefusalTests.test_caller_cannot_inject_evidence_or_other_decision_kinds",
         "tests.test_issue_revision.IssueRevisionRefusalTests.test_arbitrary_checks_unmapped_duplicate_and_nonmaterial_revision_refuse",
         "tests.test_issue_revision.IssueRevisionRefusalTests.test_new_criteria_cannot_inherit_proof_and_user_or_policy_injection_refuses",
-        "tests.test_issue_revision.IssueRevisionRefusalTests.test_unknown_incarnation_and_changed_current_owner_or_run_fail_closed"
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_unknown_incarnation_and_changed_current_owner_or_run_fail_closed",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_objective_reference_target_and_source_mismatches",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_source_and_target_wire_identity_fields_are_exact",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_malformed_map_and_source_forms_refuse_with_no_effect",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_unchanged_criteria_and_source_hash_alone_grant_no_authority",
+        "tests.test_issue_revision.IssueRevisionRefusalTests.test_replacing_an_identical_check_cannot_manufacture_material_change",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_existing_owner_criterion_cannot_be_redefined_by_source_authority",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_legacy_missing_definition_source_fact_has_precise_hold_and_no_effect",
+        "tests.test_issue_revision.IssueRevisionDataTests.test_malformed_data_and_duplicate_hashes_refuse_without_effect",
+        "tests.test_issue_revision.IssueRevisionDataTests.test_body_data_cannot_claim_identity_trust_or_mismatched_bytes",
+        "tests.test_issue_revision.IssueRevisionDataTests.test_data_budgets_and_checkpoint_only_boundary_refuse_without_effect",
+        "tests.test_issue_revision.IssueRevisionDataTests.test_body_data_supplies_no_approval",
+        "tests.test_issue_revision.IssueRevisionDataTests.test_data_digests_bind_interrupted_receipt_to_identical_transition"
       ],
       "status": "NOT_RUN"
     },
@@ -6711,7 +6730,31 @@
       "offline_test": [
         "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_five_to_eight_keeps_prior_definitions_failed_unknown_and_tick_authorship",
         "tests.test_issue_revision.IssueRevisionAcceptanceTests.test_existing_native_attempt_and_unresolved_result_facts_are_unchanged",
-        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_later_revision_and_immutable_history_retain_all_prior_verifier_and_tick_facts"
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_later_revision_and_immutable_history_retain_all_prior_verifier_and_tick_facts",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_unchanged_paraphrased_five_to_eight_keeps_proof_and_own_tick",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_unchanged_unrelated_owner_criterion_is_preserved",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_approved_current_mapping_supersedes_old_owner_withdrawal_without_rewriting_it",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_changed_continuation_cannot_carry_passing_header_proof",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_changed_nested_lf_block_resets_proof_and_due_own_tick",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_changed_nested_crlf_block_resets_proof_and_due_own_tick",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_source_only_observation_does_not_replace_prior_definition_scope",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_unchanged_owner_criterion_waiting_on_source_criterion_is_preserved",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_previous_writer_reads_and_missing_identity_holds_without_rewrite",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_admission_records_source_and_definition_but_not_criterion_report_join",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_tick_source_keeps_exact_proof_sequence_after_later_observation",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_direct_five_to_eight_body_data_preserves_proof_and_tick",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_direct_body_data_after_observation_preserves_actual_previous_binding",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_delegated_body_data_preserves_definitions_proof_and_native_history",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_long_paraphrased_block_preserves_full_scope_proof_with_data",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_first_admission_body_data_preserves_unproved_definition_and_running_attempt",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_unproved_unknown_remap_accepts_current_approval_without_old_proof",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_unknown_old_pass_keeps_receipts_but_new_mapping_awaits_proof",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_later_admission_and_current_body_cannot_backdate_old_proof",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_reusing_reference_after_observation_cannot_move_accepted_sequence",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_changed_nested_scope_data_resets_only_changed_proof_and_own_tick",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_selected_proof_with_missing_old_body_cannot_use_only_later_body",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_conflicting_selected_complete_scopes_cannot_preserve_passing_proof",
+        "tests.test_issue_revision.IssueRevisionCorrectionTests.test_long_complete_block_uses_strict_fingerprint_and_resets_changed_proof"
       ],
       "status": "NOT_RUN"
     },
@@ -6747,7 +6790,12 @@
         "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_canonical_non_ascii_digest_vector_includes_amendments",
         "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_persisted_evidence_corruption_fails_on_read_and_public_projections_are_read_only",
         "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_report_and_admission_maps_explicitly_refuse_the_operation",
-        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_plain_relay_revision_refuses_but_owner_typed_revision_stays_supported"
+        "tests.test_issue_revision.IssueRevisionCompatibilityTests.test_plain_relay_revision_refuses_but_owner_typed_revision_stays_supported",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_previous_writer_reads_and_missing_identity_holds_without_rewrite",
+        "tests.test_issue_revision.SourceBlockTests.test_complete_scope_includes_nested_and_lazy_continuation_but_stops_at_siblings",
+        "tests.test_issue_revision.SourceBlockTests.test_identity_ignores_only_header_checkbox_and_final_terminator",
+        "tests.test_issue_revision.SourceBlockTests.test_recognition_excludes_quoted_indented_and_fenced_decoys",
+        "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_admission_records_source_and_definition_but_not_criterion_report_join"
       ],
       "status": "NOT_RUN"
     }

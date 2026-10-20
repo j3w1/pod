@@ -269,8 +269,12 @@ def _op_verify_sources(request: dict) -> dict:
 def _op_issue_intake(request: dict) -> dict:
     exact(request, {"project", "locator", "amendments"}, {"project", "locator"}, name="request")
     from .github import issue_intake
-    return issue_intake(Path(request["project"]), request["locator"],
-                        amendments=request.get("amendments"))
+    result = issue_intake(Path(request["project"]), request["locator"],
+                          amendments=request.get("amendments"))
+    from .issue_revision import criteria_view
+    if result.get("source") is not None:
+        result["issue_revision_criteria"] = criteria_view(result["body"])
+    return result
 
 
 def _op_issue_recheck(request: dict) -> dict:

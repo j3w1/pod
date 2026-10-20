@@ -302,7 +302,7 @@ class ClosureTests(TickCase):
             self.assertTrue(exc.detail["pod_ticks"]["lines"][0]["due"])
 
     def test_forward_compatible_lost_mapping_own_tick_unticks_D7(self):
-        """Only mapping is injected: today's immutable criterion source cannot reach D7."""
+        """Synthetic mapping control; R149 revision/observation tests cover actual D7."""
         self.bind(); self.prove(); self.tick(); self.lapse(remove_mapping=True)
         self.assert_due_refusal(lambda: self.write(close=True), direction="untick")
         self.assertEqual(self.line()["criteria"], [])
@@ -311,7 +311,7 @@ class ClosureTests(TickCase):
         self.assertEqual(self.line()["blocked"]["code"], "unmapped")
 
     def test_ambiguous_tick_is_never_unticked_when_mapping_lost_D11(self):
-        """Only mapping is injected for the currently unreachable loss-of-mapping case."""
+        """Synthetic mapping control, separate from actual revision/observation cases."""
         self.bind(); self.prove(); self.issue.lose_next = "landed"; self.tick()
         self.lapse(remove_mapping=True); self.tick()
         self.assertEqual(self.line()["status"], "ambiguous")

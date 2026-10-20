@@ -2,12 +2,15 @@
 
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import tempfile
+from unittest import TestCase
 from unittest.mock import patch
 
 import yaml
@@ -96,6 +99,11 @@ class IssueRevisionCase(TickCase):
                 "source": {"ref": f"PoD#{number}"}, "check": f"**PoD#{number}** requirement {number}",
                 "state": "blocked_external", "external": {"party": "user", "need": "provide the result",
                                                           "unblocks_when": "result is supplied"}}
+
+    @staticmethod
+    def historical_data(*bodies):
+        return {"historical_bodies": [{"body_sha256": hashlib.sha256(body.encode()).hexdigest(), "body": body}
+                                       for body in bodies]}
 
 
 class IssueRevisionAcceptanceTests(IssueRevisionCase):
@@ -234,6 +242,625 @@ class IssueRevisionAcceptanceTests(IssueRevisionCase):
         self.assertEqual(exposed["previous"], decision["previous"])
         self.assertEqual(after["decision_channels"], 4)
         self.assertEqual(result["report"]["decision_channels"], 4)
+
+
+class IssueRevisionCorrectionTests(IssueRevisionCase):
+    def source_revision(self, body, rows, criteria):
+        self.issue.body = body
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        return self.write(rows, seq=read(self.project, "objective")["checkpoint"]["seq"] + 1,
+            objective_source=source, criteria=criteria, revision_authority={
+            "operation": "issue_revision", "provenance": "user_direct", "channel": "relayed",
+            "instruction": "Reconcile approved source requirements", "relay": {"reference": "synthetic-decision"}})
+
+    def test_unchanged_paraphrased_five_to_eight_keeps_proof_and_own_tick(self):
+        self.issue.body = "\n".join(f"- [ ] **PoD#{n}** requirement {n}" for n in range(1, 6))
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write([{**self.new_criterion(n), "check": f"Result {n} meets acceptance"} for n in range(1, 6)],
+                   objective_source=source, criteria=[f"PoD#{n}" for n in range(1, 6)],
+                   governance={"base_ref": "target"})
+        rows = self.stored()
+        for row in rows:
+            row.pop("external")
+            row.update(state="satisfied", evidence=[self.proof(row["id"])])
+        self.write(rows, criteria=[f"PoD#{n}" for n in range(1, 6)]); self.tick()
+        before = read(self.project, "objective")
+        rows = self.stored() + [self.new_criterion(n) for n in range(6, 9)]
+        self.source_revision(self.issue.body + "\n" + "\n".join(
+            f"- [ ] **PoD#{n}** requirement {n}" for n in range(6, 9)), rows,
+            [f"PoD#{n}" for n in range(1, 9)])
+        after = read(self.project, "objective")
+        self.assertEqual(after["checkpoint"]["obligations"][:5], before["checkpoint"]["obligations"])
+        self.assertTrue(self.line()["proven"])
+        self.assertEqual((self.line()["status"], self.line()["authorship"], self.line()["due"]),
+                         ("current", "own", False))
+
+    def test_unchanged_unrelated_owner_criterion_is_preserved(self):
+        self.begin()
+        extra = self.criterion("blocked_external", id="EXTRA", provenance="user_direct",
+            source={"instruction": "Keep the owner acceptance condition"},
+            external={"party": "user", "need": "answer", "unblocks_when": "answered"})
+        self.write(self.stored() + [extra], revision_authority={
+            "provenance": "user_direct", "instruction": "Keep the owner acceptance condition"})
+        before = read(self.project, "objective")["checkpoint"]["obligations"][1]
+        self.revise(self.proposal())
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"][1], before)
+
+    def test_existing_owner_criterion_cannot_be_redefined_by_source_authority(self):
+        self.begin()
+        extra = self.criterion("blocked_external", id="EXTRA", provenance="user_direct",
+            source={"instruction": "Keep the owner acceptance condition"},
+            external={"party": "user", "need": "answer", "unblocks_when": "answered"})
+        self.write(self.stored() + [extra], revision_authority={
+            "provenance": "user_direct", "instruction": "Keep the owner acceptance condition"})
+        proposal = self.proposal()
+        proposal["obligations"][1]["check"] = "Different owner acceptance"
+        self.refused_revision(proposal, "issue_revision_refused")
+
+    def test_unchanged_owner_criterion_waiting_on_source_criterion_is_preserved(self):
+        self.begin()
+        extra = self.criterion("waiting", id="EXTRA", provenance="user_direct",
+            source={"instruction": "Check the owner's additional condition"},
+            wait={"class": "sequenced", "referent": "O1"})
+        self.write(self.stored() + [extra], revision_authority={
+            "provenance": "user_direct", "instruction": "Check the owner's additional condition"})
+        before = read(self.project, "objective")["checkpoint"]["obligations"][1]
+        self.revise(self.proposal())
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"][1], before)
+
+    def test_legacy_missing_definition_source_fact_has_precise_hold_and_no_effect(self):
+        # A legitimate preceding writer omitted these optional observations.
+        # Do not backfill an old definition from a newly read source.
+        with patch("pod.pod_ticks.bind_criterion_scopes"):
+            self.begin()
+        proposal = self.proposal()
+        before = read(self.project, "objective")
+        error = self.refused_revision(proposal, "issue_revision_refused")
+        self.assertEqual(error.detail["reason"], "prior_criterion_source_unavailable")
+        self.assertEqual(error.detail["criterion"], "O1")
+        self.assertEqual(error.detail["definition"], before["checkpoint"]["obligations"][0]["definition"])
+        self.assertIn("complete prior physical source block", error.detail["missing_fact"])
+
+    def test_approved_current_mapping_supersedes_old_owner_withdrawal_without_rewriting_it(self):
+        self.issue.body = "- [ ] **PoD#1** requirement 1\n- [ ] **PoD#2** requirement 2"
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write([self.new_criterion(1), self.new_criterion(2)], objective_source=source,
+                   criteria=["PoD#1", "PoD#2"], governance={"base_ref": "target"})
+        rows = self.stored()
+        rows[1].pop("external")
+        rows[1].update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "draft withdrawn"})
+        self.write(rows, criteria=["PoD#1", "PoD#2"], revision_authority={
+            "provenance": "user_direct", "instruction": "Withdraw the draft"})
+        withdrawn = read(self.project, "objective")["checkpoint"]["obligations"][1]
+        result = self.source_revision(self.issue.body.replace("requirement 2", "approved requirement 2"),
+            self.stored() + [{**self.new_criterion(2), "id": "R2", "check": "**PoD#2** approved requirement 2"}],
+            ["PoD#1", "PoD#2"])
+        self.assertEqual(result["pod_tick_intake"]["multiply_mapped"], [])
+        self.assertEqual([row["id"] for row in self.line(2)["criteria"]], ["R2"])
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"][1], withdrawn)
+        rows = self.stored(); rows[-1].pop("external")
+        rows[-1].update(state="satisfied", evidence=[self.proof("R2")])
+        self.write(rows, criteria=["PoD#1", "PoD#2"]); self.tick(2)
+        self.assertTrue(self.line(2)["proven"])
+        rows = self.stored(); rows[-1].pop("evidence")
+        rows[-1].update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "current criterion withdrawn"})
+        self.write(rows, criteria=["PoD#1", "PoD#2"], revision_authority={
+            "provenance": "user_direct", "instruction": "Withdraw the current criterion"})
+        self.assertEqual([row["id"] for row in self.line(2)["criteria"]], ["R2"])
+        self.assertFalse(self.line(2)["proven"])
+        self.assertEqual(self.line(2)["direction"], "untick")
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"][1], withdrawn)
+
+    def test_changed_continuation_cannot_carry_passing_header_proof(self):
+        self.issue.body = "- [ ] **PoD#1** Verify output\n  Acceptance requires alpha."
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write([self.criterion(check="**PoD#1** Verify output")], objective_source=source,
+                   governance={"base_ref": "target"})
+        self.prove()
+        proposal = self.proposal()
+        self.issue.body = self.issue.body.replace("requires alpha", "requires beta")
+        proposal["objective_source"] = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        proposal["obligations"][-1].pop("wait")
+        proposal["obligations"][-1].update(state="active", executor="coordinator")
+        self.refused_revision(proposal, "issue_revision_refused")
+
+    def replace_changed_block(self, newline):
+        old = "**PoD#1** Verify output" + newline + "  Acceptance:" + newline + "    - nested alpha"
+        self.issue.body = "- [ ] " + old
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write([self.criterion(check="The output meets the agreed checks")], objective_source=source,
+                   governance={"base_ref": "target"})
+        self.prove(); self.tick()
+        before = read(self.project, "objective")
+        new = old.replace("nested alpha", "nested beta")
+        rows = self.stored()
+        rows[0].pop("evidence")
+        rows[0].update(state="withdrawn", withdrawal={"by": "issue_revision", "reason": "nested acceptance changed"})
+        rows.append({**self.new_criterion(1), "id": "R1", "check": new})
+        self.source_revision("- [x] " + new, rows, ["PoD#1"])
+        state = read(self.project, "objective")
+        self.assertEqual(state["checkpoint"]["obligations"][0]["definition"],
+                         before["checkpoint"]["obligations"][0]["definition"])
+        self.assertEqual(state["checkpoint"]["revision_decisions"][-1]["previous"]["obligations"],
+                         before["checkpoint"]["obligations"])
+        replacement = state["checkpoint"]["obligations"][1]
+        self.assertNotIn("evidence", replacement)
+        self.assertEqual(replacement["receipts"], [])
+        self.assertEqual((self.line()["proven"], self.line()["direction"], self.line()["due"]),
+                         (False, "untick", True))
+
+    def test_changed_nested_lf_block_resets_proof_and_due_own_tick(self):
+        self.replace_changed_block("\n")
+
+    def test_changed_nested_crlf_block_resets_proof_and_due_own_tick(self):
+        self.replace_changed_block("\r\n")
+
+    def test_long_complete_block_uses_strict_fingerprint_and_resets_changed_proof(self):
+        text = "**PoD#1** Verify output\n  Acceptance:\n    - " + "alpha " * 150
+        self.issue.body = "- [ ] " + text
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write([self.criterion(check="Verify the full acceptance block")], objective_source=source,
+                   governance={"base_ref": "target"})
+        self.prove(); self.tick()
+        before = read(self.project, "objective")
+        changed = text + "\n    - beta after the check bound"
+        self.issue.body = "- [x] " + changed
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        rows = self.stored(); rows[0].pop("evidence")
+        rows[0].update(state="withdrawn", withdrawal={"by": "issue_revision", "reason": "complete block changed"})
+        fingerprint = hashlib.sha256(changed.encode()).hexdigest()
+        rows.append({**self.new_criterion(1), "id": "R1", "check": "PoD#1 complete source block sha256:" + fingerprint})
+        authority = {"operation": "issue_revision", "provenance": "user_direct", "channel": "relayed",
+                     "instruction": "Reconcile the complete block", "relay": {"reference": "synthetic-decision"}}
+        bad = deepcopy(rows); bad[-1]["check"] = "**PoD#1** Verify output"
+        self.refused_revision({"seq": before["checkpoint"]["seq"] + 1, "obligations": bad,
+            "objective_source": source, "criteria": ["PoD#1"], "revision_authority": authority}, "issue_revision_refused")
+        self.write(rows, seq=before["checkpoint"]["seq"] + 1, objective_source=source, revision_authority=authority)
+        self.assertLess(len(rows[-1]["check"]), 512)
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["criterion_scopes"]["R1"]["block_sha256"], fingerprint)
+        self.assertEqual((self.line()["proven"], self.line()["direction"]), (False, "untick"))
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"][0]["receipts"],
+                         before["checkpoint"]["obligations"][0]["receipts"])
+
+    def test_source_only_observation_does_not_replace_prior_definition_scope(self):
+        self.begin(); self.prove()
+        before = deepcopy(read(self.project, "objective")["pod_ticks"]["criterion_scopes"])
+        self.issue.body += "\n  Changed acceptance"
+        self.rebind()
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["criterion_scopes"], before)
+        proposal = self.proposal()
+        proposal["obligations"][-1].pop("wait")
+        proposal["obligations"][-1].update(state="active", executor="coordinator")
+        error = self.refused_revision(proposal, "issue_revision_refused")
+        self.assertEqual(error.detail["reason"], "changed_criterion_requires_replacement")
+
+    def retire_first_mapping(self, *, own=False, unread_refresh=False):
+        self.issue.body = "- [ ] **PoD#1** requirement 1\n- [ ] **PoD#2** requirement 2"
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write([self.new_criterion(1), self.new_criterion(2)], objective_source=source,
+                   criteria=["PoD#1", "PoD#2"], governance={"base_ref": "target"})
+        if own:
+            rows = self.stored(); rows[0].pop("external")
+            rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+            self.write(rows, criteria=["PoD#1", "PoD#2"]); self.tick()
+        rows = self.stored(); rows[0].pop("external", None); rows[0].pop("evidence", None)
+        rows[0].update(state="withdrawn", withdrawal={"by": "issue_revision", "reason": "source removed PoD#1"})
+        actual_issue, reads = self.issue.issue, []
+        def issue(**arguments):
+            reads.append(arguments)
+            if unread_refresh and len(reads) == 3:
+                raise PodError("issue_access_unavailable", "synthetic refresh failure")
+            return actual_issue(**arguments)
+        with patch.object(self.issue, "issue", side_effect=issue):
+            self.source_revision("- [ ] **PoD#2** requirement 2", rows, ["PoD#2"])
+        self.issue.body = "- [x] **PoD#1** requirement 1\n" + self.issue.body
+        self.rebind()
+
+    def test_real_revision_mapping_loss_unticked_is_unmapped_D2(self):
+        self.retire_first_mapping()
+        self.issue.body = self.issue.body.replace("- [x]", "- [ ]", 1); self.rebind()
+        self.assertEqual(self.line()["criteria"], [])
+        writes = deepcopy(self.issue.writes)
+        self.failure("unmapped", self.tick)
+        self.assertFalse(self.line()["due"])
+        self.assertEqual(self.issue.writes, writes)
+
+    def test_real_revision_mapping_loss_own_tick_is_due_and_unticks_D7(self):
+        # A transient refresh failure preserves the earlier own-tick record;
+        # supported observations then reintroduce its line without a mapping.
+        self.retire_first_mapping(own=True, unread_refresh=True)
+        self.assertEqual(self.line()["criteria"], [])
+        self.assertEqual((self.line()["authorship"], self.line()["direction"]), ("own", "untick"))
+        rows = self.stored(); rows[1].pop("external")
+        rows[1].update(state="satisfied", evidence=[self.proof("O2")])
+        self.write(rows, criteria=["PoD#2"]); self.tick(2)
+        self.failure("pod_ticks_due", lambda: self.write(close=True, criteria=["PoD#2"]))
+        result = self.tick()
+        self.assertEqual(result["receipt"]["direction"], "untick")
+        self.assertFalse(self.line()["ticked"])
+
+    def test_real_revision_mapping_loss_leaves_other_actor_tick_untouched(self):
+        self.retire_first_mapping()
+        self.assertEqual(self.line()["criteria"], [])
+        self.assertEqual(self.tick()["status"], "ticked_without_pod_proof")
+        self.assertEqual(self.issue.writes, [])
+
+
+class SourceBlockTests(TestCase):
+    def test_complete_scope_includes_nested_and_lazy_continuation_but_stops_at_siblings(self):
+        from pod.github import pod_blocks
+        body = ("- [ ] **PoD#1** header\r\n"
+                "lazy continuation\r\n\r\n  Acceptance:\r\n    - nested condition\r\n"
+                "\r\nAn unrelated paragraph\r\n- [ ] **PoD#2** next\r\n"
+                "- unrelated sibling\r\n  unrelated detail")
+        blocks = pod_blocks(body)
+        self.assertEqual(blocks[1][0]["text"],
+            "**PoD#1** header\r\nlazy continuation\r\n\r\n  Acceptance:\r\n    - nested condition")
+        self.assertEqual(blocks[2][0]["text"], "**PoD#2** next")
+
+    def test_identity_ignores_only_header_checkbox_and_final_terminator(self):
+        from pod.github import pod_blocks
+        def block(body):
+            return pod_blocks(body)[1][0]["sha256"]
+        body = "- [ ] **PoD#1** header\n  - nested [ ] alpha"
+        self.assertEqual(block(body), block(body + "\n"))
+        self.assertEqual(block(body), block(body.replace("- [ ] **", "- [X] **")))
+        for changed in (body.replace("alpha", "beta"), body.replace("\n", "\r\n"), body + " ",
+                        body.replace("nested [ ]", "nested [x]")):
+            self.assertNotEqual(block(body), block(changed))
+
+    def test_recognition_excludes_quoted_indented_and_fenced_decoys(self):
+        from pod.github import pod_blocks
+        self.assertEqual(list(pod_blocks(
+            "> - [ ] **PoD#8** quoted\n - [ ] **PoD#7** indented\n"
+            "```markdown\n- [ ] **PoD#6** fenced\n```\n- [ ] **PoD#1** real")), [1])
+
+
+class IssueRevisionLegacyTests(IssueRevisionCase):
+    @classmethod
+    def setUpClass(cls):
+        from tests.issue_revision_previous_writer import BASELINE
+        parent = Path(os.environ["POD_CACHE_HOME"]) if "POD_CACHE_HOME" in os.environ else None
+        if parent is not None:
+            parent.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="issue-previous-", dir=parent)
+        cls.addClassCleanup(temporary.cleanup)
+        cls.bundle = Path(temporary.name)
+        archive = cls.bundle / "previous.tar"
+        subprocess.run(["git", "archive", "-o", str(archive), BASELINE, "skills", "VERSION"], check=True)
+        with tarfile.open(archive) as source:
+            source.extractall(cls.bundle, filter="data")
+
+    def previous_record(self, *, delegated=False, unticked=False, unproved=False,
+                        nested=False, long=False, conflicting=False):
+        from pod.github import repository_context
+        from tests.issue_revision_previous_writer import BASELINE
+        destination = self.root / "earlier"; destination.mkdir()
+        repository = Path(__file__).resolve().parents[1]
+        completed = subprocess.run([sys.executable, str(repository / "tests/issue_revision_previous_writer.py"),
+                                    str(destination), *(["delegated"] if delegated else []),
+                                    *(["unticked"] if unticked else []), *(["unproved"] if unproved else []),
+                                    *(["nested"] if nested else []), *(["long"] if long else []),
+                                    *(["conflicting"] if conflicting else [])], cwd=repository,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join((str(self.bundle / "skills"), str(repository)))},
+            text=True, capture_output=True, timeout=10)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        produced = json.loads((destination / "writer.json").read_text())
+        self.assertEqual(produced["writer"], BASELINE)
+        self.root, self.project, self.candidate = destination, destination / "project", produced["candidate"]
+        os.environ.update(XDG_STATE_HOME=str(destination / "state"), XDG_CONFIG_HOME=str(destination / "config"))
+        self.issue.body = produced["body"]
+        context = repository_context(self.project)
+        self.port.placement.update(repository=context["repository"], repo_key=context["repo_key"],
+                                   path=context["worktree"], branch=context["branch"])
+        self.port.workers = produced["workers"]
+        self.configure(["/synthetic/verifier"])
+        before = self.saved()
+        self.assertEqual(read(self.project, "objective"), produced["state"])
+        self.op("map")
+        self.assertEqual(self.saved(), before)
+        return produced
+
+    def test_genuine_previous_writer_reads_and_missing_identity_holds_without_rewrite(self):
+        self.previous_record()
+        proposal = self.proposal()
+        proposal["obligations"][-1]["id"] = "O6"
+        proposal["obligations"][-1]["source"] = {"ref": "PoD#6"}
+        proposal["obligations"][-1]["check"] = "**PoD#6** new requirement"
+        self.issue.body = self.issue.body.rsplit("\n", 1)[0] + "\n- [ ] **PoD#6** new requirement"
+        proposal["objective_source"] = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        proposal["criteria"] = [f"PoD#{n}" for n in range(1, 7)]
+        proposal["obligations"][-1].pop("wait")
+        proposal["obligations"][-1].update(state="active", executor="coordinator")
+        error = self.refused_revision(proposal, "issue_revision_refused")
+        self.assertEqual(error.detail["reason"], "prior_criterion_source_unavailable")
+
+    def test_genuine_admission_records_source_and_definition_but_not_criterion_report_join(self):
+        produced = self.previous_record(delegated=True)
+        state = read(self.project, "objective")
+        admission = next(iter(state["admissions"].values()))
+        criterion = state["checkpoint"]["obligations"][0]
+        self.assertEqual(admission["binding"]["definitions"]["O1"], criterion["definition"])
+        self.assertEqual(admission["recovery"]["checkpoint_binding"]["objective_source"], produced["source"])
+        self.assertEqual(admission["report"]["status"], "validated_observation")
+        self.assertEqual(admission["report"]["observation"]["assignment"], admission["packet_id"])
+        self.assertEqual(admission["report"]["observation"]["evidence"], [])
+        self.assertNotIn("attempt", criterion["receipts"][0]["evidence"])
+        self.assertNotIn("reported_seq", criterion["receipts"][0])
+        self.assertGreater(criterion["receipts"][0]["accepted_seq"], admission["admitted_seq"])
+
+    def test_genuine_tick_source_keeps_exact_proof_sequence_after_later_observation(self):
+        produced = self.previous_record()
+        before = read(self.project, "objective")
+        proof_seq = before["checkpoint"]["seq"]
+        request = deepcopy(before["pod_ticks"]["requests"]["1"])
+        self.assertEqual(request["seq"], proof_seq)
+        self.assertEqual(request["source"], produced["source"])
+        self.assertTrue(all(row["receipts"][0]["accepted_seq"] == proof_seq
+                            for row in before["checkpoint"]["obligations"]))
+        self.issue.body += "\n\nDelivery metadata"
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        self.write(objective_source=source, criteria=[f"PoD#{n}" for n in range(1, 6)])
+        after = read(self.project, "objective")
+        self.assertGreater(after["checkpoint"]["seq"], proof_seq)
+        self.assertEqual(after["pod_ticks"]["requests"]["1"], request)
+        self.assertEqual(after["checkpoint"]["obligations"], before["checkpoint"]["obligations"])
+        self.assertNotIn("criterion_scopes", after["pod_ticks"])
+        self.assertEqual(self.requests, [])
+
+    def old_proposal(self, produced, *, observe=False, replace=False):
+        self.issue.body += "\n" + "\n".join(f"- [ ] **PoD#{n}** requirement {n}" for n in range(6, 9))
+        source = issue_intake(self.project, self.locator, port=self.issue)["source"]
+        if observe:
+            self.write(objective_source=source, criteria=[f"PoD#{n}" for n in range(1, 6)])
+        rows = self.stored()
+        if replace:
+            for row in rows:
+                for key in ("external", "executor", "wait", "evidence"):
+                    row.pop(key, None)
+                row.update(state="withdrawn", withdrawal={"by": "issue_revision", "reason": "Current remap; prior scope fact unknown"})
+            rows += [{**self.new_criterion(n), "id": f"R{n}"} for n in range(1, 6)]
+        rows += [self.new_criterion(n) for n in range(6, 9)]
+        return {"seq": read(self.project, "objective")["checkpoint"]["seq"] + 1, "obligations": rows,
+            "objective_source": source, "criteria": [f"PoD#{n}" for n in range(1, 9)],
+            "revision_authority": {"operation": "issue_revision", "provenance": "user_direct", "channel": "relayed",
+                "instruction": "Reconcile exact current source; unknown mappings await new proof",
+                "relay": {"reference": "synthetic-decision"}}}
+
+    def preserve_old_proof(self, *, delegated=False, observe=False, long=False):
+        produced = self.previous_record(delegated=delegated, long=long)
+        before = read(self.project, "objective")
+        proposal = self.old_proposal(produced, observe=observe)
+        previous_source = read(self.project, "objective")["checkpoint"]["objective_source"]
+        proposal["issue_revision_data"] = self.historical_data(produced["original_body"])
+        self.revise(proposal)
+        after = read(self.project, "objective")
+        self.assertEqual(after["checkpoint"]["obligations"][:5], before["checkpoint"]["obligations"])
+        self.assertEqual(after["admissions"], before["admissions"])
+        line = self.line()
+        self.assertEqual((line["proven"], line["status"], line["due"]), (True, "current", False))
+        decision = after["checkpoint"]["revision_decisions"][-1]
+        self.assertEqual(decision["previous"]["source"], previous_source)
+        self.assertTrue(all(fact["status"] == "known" for fact in decision["scope_facts"]["previous"]))
+        self.assertEqual(decision["scope_facts"]["data_digests"], [produced["source"]["body_sha256"]])
+        raw = _path(self.project, "objective").read_text()
+        self.assertNotIn("historical_bodies", raw)
+        self.assertNotIn(json.dumps(produced["original_body"]), raw)
+        self.assertTrue(all("issue_revision_data" not in request for request in self.requests))
+
+    def test_genuine_direct_five_to_eight_body_data_preserves_proof_and_tick(self):
+        self.preserve_old_proof()
+
+    def test_genuine_direct_body_data_after_observation_preserves_actual_previous_binding(self):
+        self.preserve_old_proof(observe=True)
+
+    def test_genuine_delegated_body_data_preserves_definitions_proof_and_native_history(self):
+        self.preserve_old_proof(delegated=True, observe=True)
+
+    def test_genuine_long_paraphrased_block_preserves_full_scope_proof_with_data(self):
+        self.preserve_old_proof(observe=True, long=True)
+
+    def test_genuine_first_admission_body_data_preserves_unproved_definition_and_running_attempt(self):
+        produced = self.previous_record(delegated=True, unproved=True)
+        before = read(self.project, "objective")
+        proposal = self.old_proposal(produced, observe=True)
+        proposal["issue_revision_data"] = self.historical_data(produced["original_body"])
+        self.revise(proposal)
+        after = read(self.project, "objective")
+        self.assertEqual(after["checkpoint"]["obligations"][:5], before["checkpoint"]["obligations"])
+        self.assertEqual(after["admissions"], before["admissions"])
+        self.assertFalse(self.line()["proven"])
+        self.assertTrue(all(fact["status"] == "known" for fact in after["checkpoint"]["revision_decisions"][-1]["scope_facts"]["previous"]))
+
+    def test_genuine_unproved_unknown_remap_accepts_current_approval_without_old_proof(self):
+        produced = self.previous_record(unproved=True)
+        before = read(self.project, "objective")
+        proposal = self.old_proposal(produced, observe=True, replace=True)
+        self.revise(proposal)
+        after = read(self.project, "objective")
+        decision = after["checkpoint"]["revision_decisions"][-1]
+        self.assertTrue(all(fact["status"] == "unknown" for fact in decision["scope_facts"]["previous"]))
+        self.assertEqual(decision["previous"]["obligations"], before["checkpoint"]["obligations"])
+        self.assertTrue(all(row["state"] == "withdrawn" for row in after["checkpoint"]["obligations"][:5]))
+        self.assertTrue(all(not row["receipts"] and "evidence" not in row for row in after["checkpoint"]["obligations"][5:]))
+        self.assertTrue(all(not line["proven"] for line in self.ticks()["lines"]))
+
+    def test_genuine_unknown_old_pass_keeps_receipts_but_new_mapping_awaits_proof(self):
+        produced = self.previous_record(unticked=True)
+        before = read(self.project, "objective")
+        proposal = self.old_proposal(produced, observe=True, replace=True)
+        self.revise(proposal)
+        after = read(self.project, "objective")
+        decision = after["checkpoint"]["revision_decisions"][-1]
+        self.assertTrue(all(fact["status"] == "unknown" for fact in decision["scope_facts"]["previous"]))
+        for old, current in zip(before["checkpoint"]["obligations"], after["checkpoint"]["obligations"][:5]):
+            self.assertEqual((old["definition"], old["receipts"]), (current["definition"], current["receipts"]))
+        self.assertFalse(self.line()["proven"])
+
+    def test_later_admission_and_current_body_cannot_backdate_old_proof(self):
+        produced = self.previous_record(unticked=True)
+        proposal = self.old_proposal(produced, observe=True)
+        rows = self.stored(); rows[0].update(state="active", executor="coordinator")
+        self.write(rows, criteria=[f"PoD#{n}" for n in range(1, 6)])
+        packet = self.packet(["O1"], criteria=[f"PoD#{n}" for n in range(1, 6)])
+        self.start("existing-task", packet)
+        proposal.update(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1,
+                        obligations=self.stored() + [self.new_criterion(n) for n in range(6, 9)],
+                        issue_revision_data=self.historical_data(self.issue.body))
+        error = self.refused_revision(proposal, "issue_revision_refused")
+        self.assertEqual(error.detail["reason"], "body_data_unreferenced")
+
+    def test_reusing_reference_after_observation_cannot_move_accepted_sequence(self):
+        produced = self.previous_record(unticked=True)
+        accepted = read(self.project, "objective")["checkpoint"]["obligations"][0]["receipts"][0]["accepted_seq"]
+        proposal = self.old_proposal(produced, observe=True)
+        self.write(self.stored(), criteria=[f"PoD#{n}" for n in range(1, 6)])
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"][0]["receipts"][0]["accepted_seq"], accepted)
+        proposal.update(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1,
+                        obligations=self.stored() + [self.new_criterion(n) for n in range(6, 9)],
+                        issue_revision_data=self.historical_data(self.issue.body))
+        self.assertEqual(self.refused_revision(proposal, "issue_revision_refused").detail["reason"], "body_data_unreferenced")
+
+    def test_genuine_changed_nested_scope_data_resets_only_changed_proof_and_own_tick(self):
+        produced = self.previous_record(nested=True)
+        before = read(self.project, "objective")
+        self.issue.body = self.issue.body.replace("requires alpha", "requires beta")
+        proposal = self.old_proposal(produced)
+        proposal["issue_revision_data"] = self.historical_data(produced["original_body"])
+        self.assertEqual(self.refused_revision(proposal, "issue_revision_refused").detail["reason"],
+                         "changed_criterion_requires_replacement")
+        proposal["obligations"][0].pop("evidence")
+        proposal["obligations"][0].update(state="withdrawn", withdrawal={"by": "issue_revision", "reason": "nested acceptance changed"})
+        proposal["obligations"].append({**self.new_criterion(1), "id": "R1",
+            "check": "**PoD#1** requirement 1\n  Acceptance requires beta."})
+        self.revise(proposal)
+        after = read(self.project, "objective")
+        self.assertEqual(after["checkpoint"]["obligations"][1:5], before["checkpoint"]["obligations"][1:5])
+        self.assertEqual(after["checkpoint"]["obligations"][0]["receipts"], before["checkpoint"]["obligations"][0]["receipts"])
+        line = self.line()
+        self.assertEqual((line["proven"], line["authorship"], line["direction"]), (False, "own", "untick"))
+
+    def test_selected_proof_with_missing_old_body_cannot_use_only_later_body(self):
+        produced = self.previous_record(conflicting=True)
+        proposal = self.old_proposal(produced)
+        proposal["issue_revision_data"] = self.historical_data(produced["proof_bodies"][-1])
+        error = self.refused_revision(proposal, "issue_revision_refused")
+        self.assertEqual(error.detail["fact_reason"], "historical_body_unavailable")
+
+    def test_conflicting_selected_complete_scopes_cannot_preserve_passing_proof(self):
+        produced = self.previous_record(conflicting=True)
+        proposal = self.old_proposal(produced)
+        proposal["issue_revision_data"] = self.historical_data(*produced["proof_bodies"])
+        error = self.refused_revision(proposal, "issue_revision_refused")
+        self.assertEqual(error.detail["fact_reason"], "prior_source_scope_ambiguous")
+
+
+class IssueRevisionDataTests(IssueRevisionCase):
+    def test_malformed_data_and_duplicate_hashes_refuse_without_effect(self):
+        self.begin(); proposal = self.proposal()
+        entry = self.historical_data("- [ ] **PoD#1** old requirement")["historical_bodies"][0]
+        for data in (None, [], {}, {"historical_bodies": None}, {"historical_bodies": [entry, entry]},
+                     {"historical_bodies": [entry] * 65}):
+            with self.subTest(data_type=type(data).__name__):
+                self.refused_revision({**proposal, "issue_revision_data": data})
+
+    def test_body_data_cannot_claim_identity_trust_or_mismatched_bytes(self):
+        self.begin(); proposal = self.proposal()
+        entry = self.historical_data("- [ ] **PoD#1** old requirement")["historical_bodies"][0]
+        for fields in ({"id": "O1"}, {"definition": "a" * 64}, {"verified": True},
+                       {"body": "different bytes"}, {"body": "\ud800"}):
+            self.refused_revision({**proposal, "issue_revision_data": {"historical_bodies": [{**entry, **fields}]}})
+        self.refused_revision({**proposal, "issue_revision_data": self.historical_data("unrelated body")})
+
+    def test_data_budgets_and_checkpoint_only_boundary_refuse_without_effect(self):
+        self.begin(); proposal = self.proposal()
+        self.refused_revision({**proposal, "issue_revision_data": self.historical_data("x" * (128 * 1024))})
+        self.refused_revision({"obligations": self.stored(), "issue_revision_data": self.historical_data("body")},
+                              "issue_revision_refused")
+        from pod.issue_revision import refuse_alternate
+        for data in ({}, self.historical_data("body")):
+            with self.assertRaises(PodError) as caught:
+                refuse_alternate({"issue_revision_data": data})
+            self.assertEqual(caught.exception.detail["reason"], "checkpoint_only")
+
+    def test_body_data_supplies_no_approval(self):
+        self.begin(); proposal = self.proposal()
+        proposal["issue_revision_data"] = self.historical_data("- [ ] **PoD#1** old requirement")
+        self.configure(None)
+        self.refused_revision(proposal, "relay_verifier_unconfigured")
+
+    def test_data_digests_bind_interrupted_receipt_to_identical_transition(self):
+        self.begin(); proposal = self.proposal()
+        proposal["issue_revision_data"] = self.historical_data("- [ ] **PoD#1** old requirement")
+        before = self.saved()
+        with patch("pod.ledger.publish_context", side_effect=OSError("synthetic interruption")):
+            with self.assertRaises(OSError):
+                self.revise(proposal)
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(len(self.receipts()), 1)
+        altered = deepcopy(proposal); altered.pop("issue_revision_data")
+        self.refused_revision(altered, "relay_authorization_reused")
+        self.revise(proposal)
+        self.assertEqual(len(self.receipts()), 1)
+        self.assertTrue(read(self.project, "objective")["checkpoint"]["revision_decisions"][-1]["scope_facts"]["data_digests"])
+
+
+class IssueRevisionIntakeViewTests(IssueRevisionCase):
+    def intake_view(self):
+        from pod.internal import run
+        return run("issue-intake", {"project": str(self.project), "locator": self.locator})
+
+    def test_long_block_view_is_complete_deterministic_and_read_only(self):
+        self.begin()
+        text = "**PoD#1** Header\n  Acceptance:\n    - " + "alpha " * 150
+        self.issue.body = "- [ ] " + text
+        before = self.saved(); self.issue.calls.clear()
+        result = self.intake_view()
+        fingerprint = hashlib.sha256(text.encode()).hexdigest()
+        self.assertEqual(result["issue_revision_criteria"], {"status": "ready", "reason": None, "criteria": [{
+            "ref": "PoD#1", "check": "PoD#1 complete source block sha256:" + fingerprint, "block_sha256": fingerprint}]})
+        self.assertEqual(result["body"], self.issue.body)
+        self.assertEqual(self.issue.calls, [("issue", "acme/example", 7)])
+        self.issue.body += "\n    - beta after the check limit"
+        changed = self.intake_view()["issue_revision_criteria"]["criteria"][0]
+        self.assertNotEqual(changed["block_sha256"], fingerprint)
+        self.assertNotEqual(changed["check"], result["issue_revision_criteria"]["criteria"][0]["check"])
+        self.assertEqual(self.saved(), before)
+        self.assertEqual((self.requests, self.issue.writes), ([], []))
+
+    def test_unavailable_view_is_empty_and_preserves_overall_intake_behavior(self):
+        self.begin(); before = self.saved()
+        for body in ("No PoD lines", "- [ ] **PoD#1** one\n- [ ] **PoD#01** duplicate",
+                     "\n".join(f"- [ ] **PoD#{n}** requirement" for n in range(65))):
+            self.issue.body = body
+            result = self.intake_view()
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["body"], body)
+            self.assertEqual(result["issue_revision_criteria"], {
+                "status": "unavailable", "reason": "source_pod_mapping", "criteria": []})
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.issue.writes, [])
+
+    def test_intake_view_uses_same_recognition_and_keeps_quoted_fenced_decoys_out(self):
+        self.issue.body = ("- [ ] **PoD#1** first\n\n> - [ ] **PoD#1** quote\n"
+                           "```\n- [ ] **PoD#1** code\n```\n- [ ] **PoD#2** second")
+        rows = self.intake_view()["issue_revision_criteria"]["criteria"]
+        self.assertEqual([(row["ref"], row["check"]) for row in rows], [
+            ("PoD#1", "**PoD#1** first"), ("PoD#2", "**PoD#2** second")])
+
+    def test_intake_derived_long_check_is_accepted_by_checkpoint_with_fresh_proof_pending(self):
+        self.begin()
+        self.issue.body = "- [ ] **PoD#1** changed\n  " + "nested acceptance " * 80
+        view = self.intake_view()
+        rows = self.stored(); rows[0].pop("executor")
+        rows[0].update(state="withdrawn", withdrawal={"by": "issue_revision", "reason": "complete scope changed"})
+        rows.append({**self.new_criterion(1), "id": "R1", "check": view["issue_revision_criteria"]["criteria"][0]["check"]})
+        self.write(rows, seq=2, objective_source=view["source"], revision_authority={
+            "operation": "issue_revision", "provenance": "user_direct", "channel": "relayed",
+            "instruction": "Reconcile complete scope", "relay": {"reference": "synthetic-decision"}})
+        self.assertFalse(self.line()["proven"])
+        self.assertEqual(read(self.project, "objective")["pod_ticks"]["criterion_scopes"]["R1"]["block_sha256"],
+                         view["issue_revision_criteria"]["criteria"][0]["block_sha256"])
 
 
 class IssueRevisionRefusalTests(IssueRevisionCase):
@@ -479,11 +1106,13 @@ class IssueRevisionCompatibilityTests(IssueRevisionCase):
         self.assertEqual(self.saved(), before)
         self.assertEqual(self.receipts(), {})
         # Public entry points refuse before any admission/report preparation can mutate history.
-        for operation, values in (("report", {"admission_id": "unused", "packet": {}, "report": {}, "map": proposal}),
-                                  ("admission", {"run": "run", "task": "unused", "plan_revision": "plan", "packet": {}, "map": proposal})):
-            with self.assertRaises(PodError) as caught:
-                self.op(operation, **values)
-            self.assertEqual(caught.exception.code, "issue_revision_refused")
+        for mapping in (proposal, {"issue_revision_data": self.historical_data("body DATA")}):
+            for operation, values in (("report", {"admission_id": "unused", "packet": {}, "report": {}, "map": mapping}),
+                                      ("admission", {"run": "run", "task": "unused", "plan_revision": "plan", "packet": {}, "map": mapping})):
+                with self.assertRaises(PodError) as caught:
+                    self.op(operation, **values)
+                self.assertEqual(caught.exception.code, "issue_revision_refused")
+                self.assertEqual(caught.exception.detail["reason"], "checkpoint_only")
         self.assertEqual(self.saved(), before)
 
     def test_plain_relay_revision_refuses_but_owner_typed_revision_stays_supported(self):
@@ -506,7 +1135,11 @@ class IssueRevisionCompatibilityTests(IssueRevisionCase):
         path = _path(self.project, "objective")
         for change in (lambda value: value.pop("decision_channels"),
                        lambda value: value["checkpoint"]["revision_decisions"][-1]["relay_verification"].update(verified=False),
-                       lambda value: value["checkpoint"]["revision_decisions"][-1]["relay_verification"]["issue_revision"]["source"].update(proposed_digest="e" * 64)):
+                       lambda value: value["checkpoint"]["revision_decisions"][-1]["relay_verification"]["issue_revision"]["source"].update(proposed_digest="e" * 64),
+                       lambda value: value["checkpoint"]["revision_decisions"][-1]["scope_facts"]["current"]["O1"].update(block_sha256="e" * 64),
+                       lambda value: value["checkpoint"]["revision_decisions"][-1]["scope_facts"]["previous"][0].update(
+                           status="unknown", reason="prior_source_association_unavailable", scope=None),
+                       lambda value: value["checkpoint"].update(issue_revision_data={"historical_bodies": []})):
             corrupted = deepcopy(state); change(corrupted)
             path.write_text(json.dumps(corrupted))
             with self.assertRaises(PodError):
@@ -573,7 +1206,10 @@ else:
 ''', str(path)], env={**os.environ, "PYTHONPATH": str(previous / "skills")},
             text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "state_unsupported")
+        # The preceding helper rejects the new compact physical source facts
+        # before it reaches the separately retained decision_channels=4 marker.
+        self.assertEqual(result.stdout.strip(), "invalid_pod_ticks")
+        self.assertEqual(read(self.project, "objective")["decision_channels"], 4)
         self.assertEqual(path.read_bytes(), before)
 
     def test_canonical_non_ascii_digest_vector_includes_amendments(self):

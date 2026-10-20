@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
@@ -220,6 +221,8 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported", "Admissions are malformed")
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict):
+        if "issue_revision_data" in checkpoint_value:
+            raise PodError("state_unsupported", "Transient issue body DATA cannot be stored in a checkpoint")
         from .issue_revision import requested, validate_decision
         if not isinstance(checkpoint_value.get("revision_decisions", []), list):
             raise PodError("state_unsupported", "Revision decision history is malformed")
@@ -1483,6 +1486,17 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
     if not isinstance(value, dict) or value.get("schema") != CHECKPOINT_SCHEMA:
         raise PodError("invalid_checkpoint", f"Checkpoint needs {CHECKPOINT_SCHEMA} and current native runtime readback")
     from .issue_revision import requested, refuse as issue_refuse
+    if "issue_revision_data" in value:
+        if not requested(value.get("revision_authority")):
+            raise issue_refuse("data_requires_issue_revision")
+        if not isinstance(value["issue_revision_data"], dict):
+            raise issue_refuse("malformed_body_data")
+        try:
+            data_size = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            raise issue_refuse("malformed_body_data") from None
+        if data_size > MAX_RECORD:
+            raise issue_refuse("data_input_too_large")
     if requested(value.get("revision_authority")) and "dispositions" in value:
         raise issue_refuse("combined_operation")
     path = _path(project, objective)
@@ -1491,6 +1505,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         previous = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
         try:
             core, proposed, dispositions = _checkpoint_input(project, objective, owner, value, native, previous)
+            revision_data = core.pop("issue_revision_data", None)
             if "display" in core:
                 from .display import validate_record
                 validate_record(core["display"], state["admissions"])
@@ -1527,7 +1542,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if "verification" not in core and "verification" in previous:
             # Like the map, the verification context carries forward until it is restated.
             core["verification"] = previous["verification"]
-        issue_revision = Revision(project, objective, owner, state, core, proposed) if issue_requested else None
+        issue_revision = Revision(project, objective, owner, state, core, proposed, data=revision_data) if issue_requested else None
         if issue_revision is not None:
             proposed = {**proposed, "revision_authority": issue_revision.authority}
         from .pod_ticks import refresh as refresh_ticks
@@ -1561,6 +1576,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                "pod_version": identity["version"],
                                "bundle_digest": identity["bundle_digest"],
                                **({"continuity": continuity} if continuity else {})}
+        from .pod_ticks import bind_criterion_scopes
+        bind_criterion_scopes(state, previous, verified=(issue_revision.current_scopes if issue_revision else None))
         _write(path, state, native=authority.get("native"),
                before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None)
         if isinstance(proposed, dict) and proposed.get("close") is True:
