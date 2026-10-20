@@ -69,11 +69,17 @@ def validate(value: object) -> None:
             raise PodError("state_unsupported", "PoD tick authorship is malformed")
     facts = row["facts"]
     if facts is not None:
-        exact(facts, {"source", "body_sha256", "lines"}, {"source", "body_sha256", "lines"}, name="PoD line facts")
+        exact(facts, {"source", "body_sha256", "lines", "mapping_scope_sha256", "mapping_source_current"},
+              {"source", "body_sha256", "lines"}, name="PoD line facts")
         if (not isinstance(facts["source"], str) or not _SHA.fullmatch(facts["source"])
                 or not isinstance(facts["body_sha256"], str) or not _SHA.fullmatch(facts["body_sha256"])
                 or not isinstance(facts["lines"], dict)):
             raise PodError("state_unsupported", "PoD line facts are malformed")
+        if "mapping_scope_sha256" in facts and (not isinstance(facts["mapping_scope_sha256"], str)
+                                                or not _SHA.fullmatch(facts["mapping_scope_sha256"])):
+            raise PodError("state_unsupported", "PoD mapping observation is malformed")
+        if "mapping_source_current" in facts and type(facts["mapping_source_current"]) is not bool:
+            raise PodError("state_unsupported", "PoD mapping source observation is malformed")
         for key, states in facts["lines"].items():
             if (not _NUMBER.fullmatch(key) or not isinstance(states, list) or not states
                     or any(type(state) is not bool for state in states)):
@@ -147,10 +153,16 @@ def _validate_block(block: dict) -> None:
         raise PodError("state_unsupported", "PoD block is malformed")
 
 
-def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None) -> None:
+def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None,
+           mapping_check: dict | None = None) -> None:
     from .github import pod_lines
+    from .pod_mapping import observe, read_current, scope_hash
+    if context is not None:
+        observe(context, ledger, source, body, mapping_check=mapping_check)
     lines = {str(number): [line["ticked"] for line in rows] for number, rows in pod_lines(body).items()}
     ledger["facts"] = {"source": digest(source), "body_sha256": _hash(body), "lines": lines}
+    ledger["facts"]["mapping_scope_sha256"] = scope_hash(body)
+    ledger["facts"]["mapping_source_current"] = read_current(source, body, mapping_check)
     ledger["read"] = {"status": "read", "reason": None}
     if context is not None:
         from .standing import observe
@@ -172,16 +184,19 @@ def refresh(state: dict, project: Path, source: dict) -> None:
         if live is None or _hash(live["body"]) != source["body_sha256"]:
             ledger["read"] = {"status": "not_read", "reason": result.get("reason") or "body_digest_mismatch"}
         else:
-            _facts(ledger, source, live["body"], context=state)
+            _facts(ledger, source, live["body"], context=state, mapping_check=result)
     except PodError as exc:
         ledger["read"] = {"status": "not_read", "reason": exc.code}
 
 
-def mapping(map_state: dict | None) -> dict[int, list[dict]]:
+def mapping(map_state: dict | None, *, source: dict | None = None, facts: dict | None = None,
+            read: dict | None = None) -> dict[int, list[dict]]:
     from .github import pod_ref_number
+    from .pod_mapping import effective_ref
+    ctx = {"pod_mapping_source": source, "pod_mapping_facts": facts, "pod_mapping_read": read or {}}
     result = {}
     for criterion in (map_state or {}).get("obligations", []):
-        number = pod_ref_number(criterion.get("source", {}).get("ref")) if criterion["kind"] == "criterion" else None
+        number = pod_ref_number(effective_ref(criterion, ctx))
         if number is not None:
             result.setdefault(number, []).append(criterion)
     return result
@@ -195,7 +210,7 @@ def intake(state: dict, map_state: dict | None = None) -> dict:
     facts = ledger["facts"]
     if facts is None or facts["source"] != digest(source) or ledger["read"]["status"] != "read":
         return {"status": "not_read", "reason": ledger["read"]["reason"]}
-    mapped = mapping(map_state or state["checkpoint"])
+    mapped = mapping(map_state or state["checkpoint"], source=source, facts=facts, read=ledger["read"])
     lines = {int(key): rows for key, rows in facts["lines"].items()}
     return {"status": "read", "unmapped": sorted(set(lines) - set(mapped)),
             "multiply_mapped": sorted(number for number, rows in mapped.items() if number in lines and len(rows) > 1),
@@ -217,7 +232,7 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
     facts = ledger["facts"]
     fresh = facts is not None and facts["source"] == digest(source)
     lines = (facts or {}).get("lines", {})
-    mapped = mapping(map_state)
+    mapped = mapping(map_state, source=source, facts=facts, read=ledger["read"])
     terminal = bool(state.get("continued_by") or state.get("historical_retirement") or (map_state or {}).get("closure"))
     closed_blocks = {row["pod"]: row for row in ledger["closure_blocked"]} if terminal else {}
     gov = bound_governance_digest(map_state) if map_state and map_state.get("obligations") is not None else ""
@@ -435,7 +450,8 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                 ticks["requests"][key] = deepcopy(request)
                 if live is not None:
                     _facts(ticks, {**source, "body_sha256": _hash(live["body"])}, live["body"],
-                           context=recorded if _hash(live["body"]) == source["body_sha256"] else None)
+                           context=recorded if _hash(live["body"]) == source["body_sha256"] else None,
+                           mapping_check=checked)
                 store._write(path, recorded)
         ctx = store.kernel_context(project, objective, recorded, None)
         exc.detail = {**(exc.detail or {}), "pod": pod, "direction": request["direction"],
@@ -461,7 +477,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                             "code": "line_missing", "reason": "line_missing", "row": "C2",
                             "readback": {"body_sha256": _hash(body), "state": live["state"], "ticked": None},
                             "pod_ticks": projection(state, store.map_of(state), ctx, project=project, objective=objective)})
-        _facts(ledger, source, body, context=state)
+        _facts(ledger, source, body, context=state, mapping_check=checked)
         ctx = store.kernel_context(project, objective, state, None)
         view = projection(state, store.map_of(state), ctx, project=project, objective=objective)
         row = next((row for row in view["lines"] if row["pod"] == pod), None)
@@ -605,7 +621,7 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             from .standing import carry_tick
             carry_tick(state, source)
         if live is not None:
-            _facts(ledger, state["checkpoint"]["objective_source"], live["body"], context=state)
+            _facts(ledger, state["checkpoint"]["objective_source"], live["body"], context=state, mapping_check=checked)
             # Drift observations are stale facts: never pretend that their body
             # is the checkpoint binding, even though status retains the readback.
             if now != state["checkpoint"]["objective_source"]["body_sha256"]:

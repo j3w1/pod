@@ -1000,6 +1000,10 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
+            "pod_mapping_source": checkpoint_value.get("objective_source"),
+            "pod_mapping_facts": state.get("pod_ticks", {}).get("facts"),
+            "pod_mapping_read": state.get("pod_ticks", {}).get("read", {}),
+            "pod_mapping_ticks": state.get("pod_ticks", {}),
             "standing_journal": journal,
             **({"standing_context": state} if "standing_authorization" in state else {}),
             "worker_tabs": tab_rows(state, placements, outstanding=outstanding),
@@ -1402,6 +1406,32 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             ctx["standing_context"] = {**state, "checkpoint": {**(state.get("checkpoint") or {}), **core}}
             ctx["authorization_granted"] = _authorization_granted(project, objective, context=ctx["standing_context"])
         ctx["operation"] = "checkpoint"
+        ctx["pod_mapping_source"] = core.get("objective_source")
+        if "mapping_repair" in proposed:
+            from .pod_mapping import observe as observe_mapping, prepare, request
+            from .github import issue_recheck_live
+            from .pod_ticks import _facts, _source_check, empty
+            request(proposed["mapping_repair"])
+            expected = (prior_map or {}).get("seq", 0) + 1
+            if type(proposed.get("seq")) is not int or proposed["seq"] != expected:
+                raise refuse("map_stale", "map_stale", "mapping repair requires the next map sequence",
+                             expected=expected, current_seq=expected - 1)
+            source = core.get("objective_source")
+            if source is None:
+                raise PodError("mapping_repair_refused", "Mapping repair requires a bound issue",
+                               {"detail": "current_binding_unavailable"})
+            checked, live = issue_recheck_live(project, source)
+            _source_check(checked)
+            if live is None:
+                raise PodError("mapping_repair_refused", "Mapping repair requires a current issue read",
+                               {"detail": "current_binding_unavailable"})
+            ctx["pod_mapping_repairs"] = prepare(state, source, proposed["mapping_repair"], live["body"])
+            ticks = state.setdefault("pod_ticks", empty())
+            # This extra mapping-only read supplies no standing-consent observation.
+            # The ordinary introducing/rebinding refresh keeps its existing hooks.
+            observe_mapping(state, ticks, source, live["body"], mapping_check=checked)
+            _facts(ticks, source, live["body"], mapping_check=checked)
+            ctx["pod_mapping_facts"], ctx["pod_mapping_read"] = ticks["facts"], ticks["read"]
         ctx["governance_refresh"] = refresh
         if kept is not None:
             ctx["governance_kept"] = kept

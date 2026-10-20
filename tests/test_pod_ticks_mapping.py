@@ -124,6 +124,6 @@ class MappingTests(TickCase):
     def test_withdrawn_mapping_is_not_proven(self):
         self.bind(); self.prove(); self.lapse(withdraw=True)
         self.assertFalse(self.line()["proven"])
-        self.assertEqual(self.line()["criteria"][0]["state"], "withdrawn")
-        self.assertEqual(self.tick()["status"], "not_proven")
+        self.assertEqual(self.line()["criteria"], [])
+        self.failure("unmapped", self.tick)
         self.assertEqual(self.issue.writes, [])
