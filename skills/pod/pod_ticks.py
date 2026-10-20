@@ -256,7 +256,7 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
     source = checkpoint.get("objective_source")
     ledger = state.get("pod_ticks", {})
     facts = ledger.get("facts") or {}
-    if source is None:
+    if source is None or not checkpoint.get("obligations"):
         return
     before = {row["id"]: row for row in previous.get("obligations", [])}
     decisions = checkpoint.get("revision_decisions", [])
