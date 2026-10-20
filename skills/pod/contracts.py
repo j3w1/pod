@@ -149,7 +149,7 @@ TABLE = {
         "state": choice(STATES), "executor": {"type": "text", "form": "coordinator or serving admission"},
         "wait": record("wait"), "external": record("external"), "withdrawal": record("withdrawal"),
         "evidence": items(16, {"type": "object", "form": "attempt reference, short evidence or detailed evidence"}),
-        "adopts": ident(), "reuse": _ANY, "findings": _ANY, "finding": _ANY,
+        "adopts": ident(), "reuse": _ANY, "findings": items(64, _ANY), "finding": _ANY,
         "definition": _ANY, "receipts": _ANY, "proof_scope": items(64, _PATH),
         "acceptances": {**items(16, record("acceptance")), "stored_only": True},
         "pod_mapping": {**record("pod mapping"), "stored_only": True},

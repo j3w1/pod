@@ -151,12 +151,12 @@ def compact(logical_state, *, protected_admissions=(), force=False,
         for index, receipt in enumerate(old_ob.get("receipts", [])):
             evidence = receipt.get("evidence") or {}
             candidate = evidence.get("candidate")
-            # Current/selected/REUSE proof stays inline, as do failed/unknown tests.
-            if (protect_receipts or candidate in protected_candidates or not candidate or candidate == current or receipt.get("reuse") is not None
+            # Current/selected proof stays inline, as do failed/unknown tests.
+            if (protect_receipts or candidate in protected_candidates or not candidate or candidate == current
                     or json.dumps(evidence, sort_keys=True) in selected):
                 continue
             if old_ob.get("kind") == "assurance":
-                eligible = (evidence.get("attempt") in movable
+                eligible = (receipt.get("reuse") is None and evidence.get("attempt") in movable
                             and ("reported_seq" in receipt or "accepted_seq" in receipt))
             else:
                 eligible = evidence.get("status") == "PASS" and "accepted_seq" in receipt

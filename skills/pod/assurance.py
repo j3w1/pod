@@ -216,15 +216,20 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
 
 def validate_findings(ob: dict, rows: dict, *, seq: int) -> None:
     """Parse immutable triage records on ordinary writes and closure reads."""
-    from .obligations import MAX_FINDINGS, SEVERITIES, TRIAGE, _exact, _text, _ident, refuse
+    from .obligations import MAX_FINDINGS, MAX_REPORT_FINDINGS, SEVERITIES, TRIAGE, _exact, _text, _ident, refuse
     findings = ob.get("findings", [])
     if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
         raise refuse("obligation_invalid", "malformed", "finding history is a bounded list", obligation=ob["id"])
     seen = set()
+    attempts = {}
     for raw in findings:
         required = {"attempt", "finding", "severity", "triage", "summary", "recorded_seq"}
         row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq"}, required, "persisted finding", obligation=ob["id"])
         _text(row["attempt"], "attempt", limit=128, obligation=ob["id"])
+        attempts[row["attempt"]] = attempts.get(row["attempt"], 0) + 1
+        if attempts[row["attempt"]] > MAX_REPORT_FINDINGS:
+            raise refuse("obligation_invalid", "malformed", f"finding history retains at most {MAX_REPORT_FINDINGS} records per review attempt",
+                         obligation=ob["id"], attempt=row["attempt"])
         _ident(row["finding"], "finding", obligation=ob["id"])
         _text(row["summary"], "summary", obligation=ob["id"])
         if row["severity"] not in SEVERITIES or row["triage"] not in TRIAGE:
@@ -558,7 +563,7 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     Returns the map value, finding-owned obligation ids, and the consumed review
     marker. Only this report boundary can supply those records to `accept_write`.
     """
-    from .obligations import (MAX_FINDINGS, PROPOSAL_SOURCES, SEVERITIES, _admissions,
+    from .obligations import (MAX_FINDINGS, MAX_REPORT_FINDINGS, PROPOSAL_SOURCES, SEVERITIES, _admissions,
                               _exact, _ident, _text, expand_update, refuse)
     value = expand_update(state, value)
     base = {key: value[key] for key in value if key in ("seq", "obligations", "proposals")}
@@ -566,7 +571,7 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     listed = [dict(row) for row in base.get("proposals", state.get("proposals", []))]
     admission = _admissions(ctx).get(admission_id) or {}
     assurance_id = (admission.get("serves") or [None])[0] if admission.get("role") == "review" else None
-    if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
+    if not isinstance(findings, list) or len(findings) > MAX_REPORT_FINDINGS:
         raise refuse("obligation_invalid", "malformed", "triage is a bounded list", record='review triage',
                      obligation=assurance_id)
     if findings and admission.get("role") != "review":
@@ -639,9 +644,18 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         if assurance is None:
             raise refuse("obligation_invalid", "malformed", "the reviewed assurance obligation is absent", record='review triage',
                          obligation=assurance_id)
+        if sum(item["attempt"] == admission_id for item in stored) + len(records) > MAX_REPORT_FINDINGS:
+            raise refuse("obligation_invalid", "finding_limit", "the review attempt's bounded finding history is full",
+                         obligation=assurance_id, attempt=admission_id,
+                         next_action="preserve every recorded finding; a completed review attempt at its finding "
+                                     "bound cannot be extended or its stored findings regrouped")
         if len(stored) + len(records) > MAX_FINDINGS:
             raise refuse("obligation_invalid", "finding_limit",
-                         "the bounded finding history is full", obligation=assurance_id)
+                         "the bounded finding history is full", obligation=assurance_id,
+                         retained=len(stored), proposed=len(stored) + len(records), limit=MAX_FINDINGS,
+                         next_action="preserve every stored finding and the unconsumed report; report this "
+                                     "capacity blocker to the maintainer, since no supported write can add "
+                                     "another finding beyond this assurance's retained history bound")
         assurance["findings"] = list(stored) + records
         written.add(assurance_id)
     if admission.get("role") == "review":

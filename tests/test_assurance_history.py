@@ -94,8 +94,8 @@ class AssuranceHistoryTests(boundaries.KernelCase):
         assurance.pop("executor")
         assurance.update(state="waiting", wait={"class": "dependency", "referent": "K0"})
         advisories = [{"finding": f"n{i}", "severity": "minor", "triage": "advisory",
-                       "summary": f"style note {i}"} for i in range(32)]
-        self.refused("obligation_invalid", "finding_limit", self.report, noisy, packet,
+                       "summary": f"style note {i}"} for i in range(33)]
+        self.refused("obligation_invalid", "malformed", self.report, noisy, packet,
                      map={"obligations": rows}, triage=advisories)
         self.assertEqual(read(self.project, "objective")["checkpoint"]["seq"], before + 2)
         self.assertEqual(len(self.assurance()["findings"]), 1)
