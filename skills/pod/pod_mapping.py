@@ -306,17 +306,19 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
     selected = {item["id"] for item in approved}
     accepted = {row["id"]: row for row in (prior or {}).get("obligations", [])}
     authority = ctx.get("revision_authority")
-    session_write = (not same_write and ctx.get("operation") == "checkpoint"
+    owner_write = (not same_write and ctx.get("operation") == "checkpoint"
                      and seq == prior["seq"] + 1 and ctx.get("authority_kind") in ("revision", "question")
-                     and isinstance(authority, dict) and authority.get("channel") == "session"
+                     and isinstance(authority, dict)
+                     and (ctx["authority_kind"] == "question" or authority.get("channel") == "session")
                      and _authority(authority, kind=ctx["authority_kind"]) == authority)
     owner_revision = next((row for row in reversed((prior or {}).get("revision_decisions", []))
                            if row.get("kind") in ("revision", "question")
-                           and row.get("channel", "session") == "session"
+                           and (row["kind"] == "question" or row.get("channel", "session") == "session")
                            and decision["seq"] < row["seq"] <= prior["seq"]), None)
     if owner_revision is not None:
         from .util import owner_decision
         owner_decision(owner_revision, kind=owner_revision["kind"], stored=True)
+    # R120 question authority retains its validated channel, as in ordinary intake.
     # Historical retirement follows the actual accepted definition and its
     # separate owner authority. It grants neither a new check nor passing proof.
     for item in approved:
@@ -333,7 +335,7 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
                     != ("criterion", "objective", {"ref": item["ref"]})
                     or earlier["definition"] != definition_id(earlier)
                     or earlier["check"] != item["check"] and owner_revision is None
-                    or row["check"] != earlier["check"] and not session_write):
+                    or row["check"] != earlier["check"] and not owner_write):
                 return set()
     mapped = {}
     for row in rows.values():

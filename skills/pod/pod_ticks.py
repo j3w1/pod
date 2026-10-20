@@ -43,12 +43,12 @@ def requirement_epoch(entry: dict, row: dict, checkpoint: dict) -> int:
     """Use the actual acceptance, never a later source observation, as lineage."""
     if "acceptance" in entry:
         return entry["acceptance"]["seq"]
-    # Earlier entries have no per-criterion event. A retained session revision
+    # Earlier entries have no per-criterion event. A retained R120 owner revision
     # is a conservative boundary, not evidence of a new source association.
     return max([row["introduced_seq"], *(decision["seq"]
         for decision in checkpoint.get("revision_decisions", [])
         if decision.get("kind") in ("revision", "question")
-        and decision.get("channel", "session") == "session")])
+        and (decision.get("kind") == "question" or decision.get("channel", "session") == "session"))])
 
 
 def _acceptance(source: dict, seq: int) -> dict:
@@ -286,7 +286,7 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
     """Keep requirement acceptance and first proof acceptance as separate facts.
 
     Metadata-only definition changes carry prior physical scope. A validated
-    session-owner check revision may accept new scope; ordinary observation may
+    R120 owner check revision may accept new scope; ordinary observation may
     not. An unknown new definition cannot resurrect an older hash's source.
     """
     from .github import pod_ref_number
@@ -301,7 +301,7 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
     decision = decisions[-1] if decisions else {}
     owner_revision = (decision.get("seq") == checkpoint["seq"]
                       and decision.get("kind") in ("revision", "question")
-                      and decision.get("channel", "session") == "session")
+                      and (decision.get("kind") == "question" or decision.get("channel", "session") == "session"))
     for row in checkpoint.get("obligations", []):
         if row["kind"] != "criterion" or row["provenance"] != "objective" or row["state"] == "withdrawn":
             continue
