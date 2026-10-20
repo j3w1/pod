@@ -148,11 +148,15 @@ git --no-optional-locks --no-replace-objects -c core.hooksPath=/dev/null -c main
 
 Its current profile is conservative about packed storage, pending locks and the
 observing HEAD's extra reflog effect. It clears no branch-config, worktree, cache,
-remote or Orca action. Current native metadata does not supply a complete needed-name
-dependency set, so actual stash-positive observations retain `holder_unavailable`.
-Post-worktree bookkeeping supplies no missing creator/lifecycle/admission predicate.
-The controlled live-reader material/Git fixture is not a positive production plan or
-native removal. Wider Orca/fallback/async/plugin/context/completion facts remain
+remote or Orca action. Current holder observations always retain `holder_unavailable`; no production
+stash-positive plan emits a removal command. Worktrees still become UNIQUE on any
+repository stash and expanded worktree recovery requires every repository stash
+root. Remote branches, including merged remote heads, also hold because their full
+executor/footprint is unavailable. Post-worktree bookkeeping supplies no missing
+creator/lifecycle/admission predicate, so the local-ref substitution has no
+admissible production path. The controlled live-reader material/Git fixture is not
+a positive production plan or native removal. The requested stash-positive outcome
+remains unimplemented. Wider Orca/fallback/async/plugin/context/completion facts remain
 unavailable. Verified empty ordinary plans retain their independent existing guards.
 
 ## Archives and consumer handoff

@@ -6557,7 +6557,8 @@
         "tests.test_cleanup_plan.CleanupWorkerTests.test_reuse_requires_a_complete_exact_chain_or_positive_independent_historical_release",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_contradictory_projection_ownership_and_unknown_integration_stay_held",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_missing_earlier_native_resource_after_reuse_stays_held",
-        "tests.test_evidence_closure.SweepTests.test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan"
+        "tests.test_evidence_closure.SweepTests.test_an_older_record_closed_by_evidence_reads_closed_in_its_cleanup_plan",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_stash_and_foreign_terminal_keep_all_worker_resources"
       ],
       "status": "NOT_RUN"
     },
@@ -6736,7 +6737,8 @@
         "tests.test_cleanup_observations.SelectedObservationTests.test_objective_selection_bookkeeping_cannot_supply_creation_release_or_authority",
         "tests.test_cleanup_archives.ArchiveInheritedLimitTests.test_finite_inherited_soft_and_hard_limits_are_never_raised",
         "tests.test_cleanup_archives.ArchiveInheritedLimitTests.test_infinite_inherited_limits_use_ordinary_bounds_without_changing_hard_limits",
-        "tests.test_cleanup_plan.CleanupWorkerTests.test_dirty_ignored_stash_and_foreign_terminal_keep_all_worker_resources"
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_dirty_ignored_stash_and_foreign_terminal_keep_all_worker_resources",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_stash_and_foreign_terminal_keep_all_worker_resources"
       ],
       "status": "NOT_RUN"
     },
