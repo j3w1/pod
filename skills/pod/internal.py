@@ -661,13 +661,13 @@ def _op_contract(request: dict) -> dict:
 def _op_display(request: dict) -> dict:
     exact(request, {"project", "objective"}, {"project", "objective"}, name="request")
     from .ledger import read
-    from .orca import read_command
+    from .orca import display_worktree_argv, read_command
     from .display import projection
     state = read(Path(request["project"]), request["objective"])
     if state is None:
         raise PodError("map_unavailable", "This objective has no recorded display facts")
     reads = []
-    for argv in (["terminal", "list", "--json"], ["worktree", "list", "--json"], ["--version"]):
+    for argv in (["terminal", "list", "--json"], display_worktree_argv(), ["--version"]):
         try:
             reads.append(read_command(argv))
         except PodError:

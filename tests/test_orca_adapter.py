@@ -17,6 +17,38 @@ START=['orchestration','worker-start','--task','task','--run','run','--worktree'
 
 
 class OrcaAdapterTests(unittest.TestCase):
+    def test_display_worktree_limit_is_one_exact_read_shape(self):
+        from pod.orca import _read_allowed
+        self.assertTrue(_read_allowed(["worktree", "list", "--limit", "1000", "--json"]))
+        self.assertTrue(_read_allowed(["worktree", "list", "--json"]))
+        for argv in (["worktree", "list", "--limit", "1001", "--json"],
+                     ["worktree", "list", "--limit", "999", "--json"],
+                     ["worktree", "list", "--limit", "01000", "--json"],
+                     ["worktree", "list", "--json", "--limit", "1000"],
+                     ["worktree", "list", "--limit", "1000", "--cursor", "next", "--json"],
+                     ["terminal", "list", "--limit", "1000", "--json"]):
+            with self.subTest(argv=argv), patch("pod.orca.subprocess.run") as runner:
+                self.assertFalse(_read_allowed(argv))
+                with self.assertRaises(PodError) as caught:
+                    read_command(argv)
+                self.assertEqual(caught.exception.code, "unsupported_orca_read")
+                runner.assert_not_called()
+
+    def test_display_bounded_read_keeps_timeout_output_and_environment(self):
+        from pod.orca import MAX_OUTPUT
+        argv = ["worktree", "list", "--limit", "1000", "--json"]
+        payload = json.dumps({"ok": True, "result": {"worktrees": []}, "_meta": {"runtimeId": "r"}})
+        with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
+             patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
+            self.assertEqual(read_command(argv)["runtime"], "r")
+            runner.assert_called_once_with(["/fixture/orca", *argv], capture_output=True, text=True,
+                                           timeout=10, check=False)
+        with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
+             patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, " " * (MAX_OUTPUT + 1), "")), \
+             self.assertRaises(PodError) as caught:
+            read_command(argv)
+        self.assertEqual(caught.exception.code, "orca_contract")
+
     def test_cleanup_terminal_inventory_is_an_exact_read_shape(self):
         from pod.orca import _read_allowed
         self.assertTrue(_read_allowed(["terminal", "list", "--worktree", "path:/fixture/work", "--json"]))

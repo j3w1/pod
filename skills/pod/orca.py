@@ -15,6 +15,7 @@ import sys
 from .errors import PodError
 
 MAX_OUTPUT = 2_000_000
+DISPLAY_WORKTREE_LIMIT = 1000
 EXIT_KINDS = ("operator_close", "signaled", "exited")
 CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1"}
@@ -60,7 +61,14 @@ def _argument(value: object, *, limit: int = 4096) -> bool:
     return _passable(value) and bool(value) and not value.startswith("-") and len(value) <= limit
 
 
+def display_worktree_argv() -> list[str]:
+    """One supported bounded naming read; lifecycle inventory shapes stay separate."""
+    return ["worktree", "list", "--limit", str(DISPLAY_WORKTREE_LIMIT), "--json"]
+
+
 def _read_allowed(argv: list[str]) -> bool:
+    if argv == display_worktree_argv():
+        return True
     if argv in (["--version"], ["status", "--json"],
                 ["orchestration", "run-current", "--json"],
                 # R113: the complete inventories that prove a released path absent.

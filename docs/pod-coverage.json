@@ -6236,7 +6236,15 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_display.DisplayOpTests.test_read_only_matches_new_backend_and_old_limitation",
+      "offline_test": [
+        "tests.test_display.DisplayOpTests.test_read_only_matches_new_backend_and_old_limitation",
+        "tests.test_display.DisplayOpTests.test_actual_display_entry_reads_beyond_default_cap_and_at_fixed_bound",
+        "tests.test_display.DisplayOpTests.test_claimed_complete_overbound_or_wrong_total_is_unreadable",
+        "tests.test_display.DisplayOpTests.test_missing_or_incomplete_host_and_truncation_metadata_is_unreadable",
+        "tests.test_display.DisplayOpTests.test_duplicate_or_unplaceable_worktree_rows_are_not_filtered_away",
+        "tests.test_orca_adapter.OrcaAdapterTests.test_display_worktree_limit_is_one_exact_read_shape",
+        "tests.test_orca_adapter.OrcaAdapterTests.test_display_bounded_read_keeps_timeout_output_and_environment"
+      ],
       "status": "NOT_RUN"
     },
     {
