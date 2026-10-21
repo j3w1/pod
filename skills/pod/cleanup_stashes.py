@@ -39,8 +39,8 @@ def local_argv(project: Path, ref: str, oid: str) -> list[str]:
             "update-ref", "--no-deref", "-d", ref, oid]
 
 
-def _retaining(project: Path, repository: dict) -> tuple[dict, list[str], dict]:
-    storage, raw = observations.storage_once(project, "refs/stash", repository)
+def _retaining(project: Path, repository: dict, *, deadline=None) -> tuple[dict, list[str], dict]:
+    storage, raw = observations.storage_once(project, "refs/stash", repository, deadline=deadline)
     result = {"status": "unavailable", "ref": storage["current"], "entries": None,
               "ref_identity": None, "log_identity": storage["reflog"]["identity"],
               "sha256": storage["reflog"]["sha256"], "reasons": [], "witnesses": []}
@@ -181,7 +181,7 @@ def _executor(project: Path, ref: str | None, tip: str | None, kind: str, contex
         path = Path(executable).resolve(strict=True)
         with archives._opened(path) as (descriptor, before):
             hashed = archives._hash(descriptor)
-            if archives._identity(os.fstat(descriptor)) != before["file"]:
+            if archives._identity(os.fstat(descriptor), descriptor=descriptor) != before["file"]:
                 raise archives.Unavailable("Git executable changed")
         version = archives._text(project, ["--version"]).strip()
         if not re.fullmatch(r"git version [0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[. -][A-Za-z0-9.-]+)?", version):

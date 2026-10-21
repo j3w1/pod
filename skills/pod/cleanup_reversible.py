@@ -99,7 +99,7 @@ def _noninterference(project, row, facts, saved, repository):
     return result, basis
 
 
-def apply(project, row, archive_input, repository, saved):
+def apply(project, row, archive_input, repository, saved, *, excluded=()):
     """Add exactly the optional v1 record; leave every existing decision field untouched."""
     identity = row["identity"]
     original = identity.get("git") or {}
@@ -111,13 +111,14 @@ def apply(project, row, archive_input, repository, saved):
     selected = next((item for item in candidates if item["tip"] == original.get("source_tip")), candidates[0])
     phases = {"worktree": ["git_worktree_remove"], "local_branch": ["git_local_ref_delete"],
               "remote_branch": ["git_tracking_ref_delete", "git_remote_ref_delete"]}[row["kind"]]
-    excluded = [Path(repository["common_dir"]["path"])] if "common_dir" in repository else []
+    excluded = [*excluded, *([Path(repository["common_dir"]["path"])] if "common_dir" in repository else [])]
     if row["kind"] == "worktree":
         excluded.append(Path(identity["path"]))
         facts = archives.resource_observation(Path(identity["path"]), identity.get("branch"),
                                               identity.get("tip"), repository, known_phases=True)
     else:
-        facts = original
+        facts = archives.reference_observation(project, original.get("source_ref"),
+                                               original.get("source_tip"), repository, known_phases=True)
     if facts.get("git_dir"):
         excluded.append(Path(facts["git_dir"]["path"]))
     git = archives.verify(project, selected, facts, excluded, known_phases=True)
@@ -127,7 +128,7 @@ def apply(project, row, archive_input, repository, saved):
     fresh = stashes.snapshot(project, fresh_repository)
     observer = archives.resource_observation if row["kind"] == "worktree" else archives.reference_observation
     fresh_facts = observer(Path(facts["observation_path"]), facts["source_ref"], facts["source_tip"], fresh_repository,
-                           **({"known_phases": True} if row["kind"] == "worktree" else {}))
+                           known_phases=True)
     fresh_phase, fresh_basis = _noninterference(project, row, fresh_facts, fresh, fresh_repository)
     if (not fresh["complete"] or fresh != saved or fresh_facts != facts
             or fresh_phase != noninterference or fresh_basis != phase_basis):

@@ -160,6 +160,8 @@ def _run(root: Path, argv: list[str], *, data: bytes | None = None, isolated: bo
         env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                    GIT_TERMINAL_PROMPT="0")
     env["GIT_NO_LAZY_FETCH"] = "1"
+    recovery_config = (["-c", "submodule.recurse=false", "-c", "diff.ignoreSubmodules=all"]
+                       if isolated else [])
     deadline = min(time.monotonic() + 30, deadline) if deadline is not None else time.monotonic() + 30
     if deadline <= time.monotonic():
         raise Unavailable("Git archive inspection exceeded its time bound")
@@ -170,7 +172,7 @@ def _run(root: Path, argv: list[str], *, data: bytes | None = None, isolated: bo
                 ["git", "--no-optional-locks", "--no-replace-objects", "-c", "maintenance.auto=false",
                  "-c", "gc.auto=0", "-c", "pack.threads=1", "-c", "core.fsmonitor=false",
                  "-c", "core.hooksPath=" + os.devnull,
-                 "-C", str(root), *argv], stdin=subprocess.DEVNULL if data is None else subprocess.PIPE,
+                 *recovery_config, "-C", str(root), *argv], stdin=subprocess.DEVNULL if data is None else subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=_git_limits) as process:
             try:
                 output, hashed, sizes, cursor = bytearray(), hashlib.sha256(), [0, 0], 0
@@ -255,6 +257,8 @@ def _incarnation(descriptor: int) -> int:
 
 def _identity(value: os.stat_result, *, directory: bool = False, descriptor: int | None = None) -> dict:
     result = {"dev": value.st_dev, "ino": value.st_ino, "mode": value.st_mode}
+    if descriptor is not None:
+        result["mount_id"] = _mount_id(descriptor)
     if directory:
         if descriptor is None:
             raise Unavailable("Directory incarnation descriptor is unavailable")
@@ -263,6 +267,19 @@ def _identity(value: os.stat_result, *, directory: bool = False, descriptor: int
         result.update(size=value.st_size, mtime_ns=value.st_mtime_ns, ctime_ns=value.st_ctime_ns,
                       links=value.st_nlink)
     return result
+
+
+def _mount_id(descriptor: int) -> int:
+    """Observe this open descriptor's mount incarnation, never an unrelated process."""
+    try:
+        with open(f"/proc/self/fdinfo/{descriptor}", "rb") as source:
+            raw = source.read(4097)
+        rows = [line[7:].strip() for line in raw.splitlines() if line.startswith(b"mnt_id:")]
+        if len(raw) > 4096 or len(rows) != 1 or not rows[0].isdigit():
+            raise Unavailable("Mount incarnation is unavailable")
+        return int(rows[0])
+    except OSError as exc:
+        raise Unavailable("Mount incarnation is unavailable") from exc
 
 
 @contextmanager
@@ -313,7 +330,7 @@ def _bytes(path: Path, *, limit: int = MAX_OUTPUT) -> bytes:
             if size > limit:
                 raise Unavailable("Resource metadata exceeds its bound")
         value = b"".join(blocks)
-        if _identity(os.fstat(descriptor)) != identity["file"] or len(value) != identity["file"]["size"]:
+        if _identity(os.fstat(descriptor), descriptor=descriptor) != identity["file"] or len(value) != identity["file"]["size"]:
             raise Unavailable("Resource metadata changed during observation")
         return value
 
@@ -481,7 +498,7 @@ def _describe(root: Path, roots: dict[str, str], stash: list[str]) -> dict:
     return {"roots": roots, "required_objects": required, "commits": commits}
 
 
-def repository_observation(project: Path) -> dict:
+def repository_observation(project: Path, *, deadline: float | None = None) -> dict:
     """Internal archive basis only; this is no stash relation or native footprint proof."""
     result = {"complete": False, "holds": [], "stash_roots": []}
     try:
@@ -491,19 +508,19 @@ def repository_observation(project: Path) -> dict:
         if overrides & os.environ.keys():
             raise Unavailable("Git repository or object overrides are unsupported for archival")
         topology = _text(project, ["rev-parse", "--path-format=absolute", "--git-common-dir",
-                                   "--show-object-format=storage"]).splitlines()
+                                   "--show-object-format=storage"], deadline=deadline).splitlines()
         if len(topology) != 2 or topology[1] not in ("sha1", "sha256"):
             raise Unavailable("Git storage format or common directory is unavailable")
         common = Path(topology[0])
         result.update(common_dir=_directory(common), object_format=topology[1])
-        if _text(project, ["rev-parse", "--is-shallow-repository"]).strip() != "false":
+        if _text(project, ["rev-parse", "--is-shallow-repository"], deadline=deadline).strip() != "false":
             raise Unavailable("Shallow repositories cannot supply complete archive roots")
         # Hash the effective configuration directly from bounded pipes. Inspect
         # values only for the storage keys; arbitrary credentials are never spooled,
         # returned, decoded, or retained in a complete configuration snapshot.
-        result["config_sha256"] = _run(project, ["config", "--null", "--list"], hash_output=True).decode("ascii")
+        result["config_sha256"] = _run(project, ["config", "--null", "--list"], hash_output=True, deadline=deadline).decode("ascii")
         config = _text(project, ["config", "--null", "--get-regexp",
-                                 r"^(extensions\.(partialclone|refstorage)|remote\..*\.promisor)$"], missing=True)
+                                 r"^(extensions\.(partialclone|refstorage)|remote\..*\.promisor)$"], missing=True, deadline=deadline)
         settings = [field.split("\n", 1) for field in config.split("\0") if field]
         if any(parts[0].lower() == "extensions.partialclone"
                or parts[0].lower() == "extensions.refstorage" and parts[1:] != ["files"]
@@ -513,21 +530,45 @@ def repository_observation(project: Path) -> dict:
         for name in ("objects/info/alternates", "objects/info/http-alternates", "info/grafts", "shallow"):
             if os.path.lexists(common / name):
                 raise Unavailable("Alternate, graft or shallow storage is unsupported for archival")
-        if _text(project, ["for-each-ref", "--format=%(refname)", "refs/replace/"]).strip():
+        if _text(project, ["for-each-ref", "--format=%(refname)", "refs/replace/"], deadline=deadline).strip():
             raise Unavailable("Replacement refs are unsupported for archival")
         result["storage_complete"] = True
-        stashes = _text(project, ["stash", "list", "--format=%H"]).splitlines()
+        stashes = _text(project, ["stash", "list", "--format=%H"], deadline=deadline).splitlines()
         if len(stashes) > MAX_REFS:
             raise Unavailable("Stash roots exceed the archive observation bound")
-        from .cleanup_stashes import retaining_roots
-        roots = retaining_roots(project, result)
+        from .cleanup_stashes import _retaining
+        retaining, roots, storage = _retaining(project, result, deadline=deadline)
+        if retaining["status"] == "unavailable":
+            raise Unavailable("Stash retaining reference or complete log is unavailable")
         if any(_oid(value) not in roots for value in stashes):
             raise Unavailable("Stash list and retaining roots disagree")
         result["stash_roots"] = roots
+        result["stash_retention"] = {"reflog": retaining, "storage": storage}
         result["complete"] = True
     except Unavailable as exc:
         result["holds"].append(str(exc))
     return result
+
+
+def retained_material(project: Path, ref: str, repository: dict, head: str, *,
+                      deadline: float | None = None) -> tuple[dict, set[str]]:
+    """Complete current common refs AND stash-log roots preserved by the known phase."""
+    if not repository["complete"] or "stash_retention" not in repository:
+        raise Unavailable("Retained common storage is unavailable")
+    refs = {}
+    for line in _text(project, ["for-each-ref", "--format=%(refname) %(objectname) %(symref)"], deadline=deadline).splitlines():
+        parts = line.split(" ")
+        if len(parts) != 3 or not _ref(parts[0]):
+            raise Unavailable("Surviving reference observation is incomplete")
+        name, oid, symbolic = parts
+        _oid(oid)
+        if name != ref and not name.startswith(_PRIVATE) and not symbolic:
+            refs[name] = oid
+    roots = {head, *refs.values(), *repository["stash_roots"]}
+    closure = _walk_oids(project, roots, deadline=deadline)
+    basis = {"refs": refs, "stash": repository["stash_retention"],
+             "closure": {"roots": sorted(roots), "objects": len(closure), "sha256": digest(sorted(closure))}}
+    return basis, closure
 
 
 def resource_observation(path: Path, ref: str | None, tip: str | None, repository: dict, *,
@@ -636,7 +677,14 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
             if name != ref and not name.startswith(_PRIVATE) and not symbolic:
                 surviving[name] = oid
         result["surviving_refs"] = surviving
-        absent = _uncovered(path, set(roots.values()), {head, *surviving.values()})
+        if known_phases:
+            retained, closure = retained_material(path, ref, repository, head)
+            if retained["refs"] != surviving:
+                raise Unavailable("Surviving reference observation changed")
+            result["retained_material"] = retained
+            absent = set(roots.values()) - closure
+        else:
+            absent = _uncovered(path, set(roots.values()), {head, *surviving.values()})
         # Names in the removed private namespace must be restored even if another
         # ref retains their bytes. Do not turn object survival into name preservation.
         additional = {name for name, oid in roots.items() if oid in absent or name in result["private_refs"]}
@@ -653,7 +701,8 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
     return result
 
 
-def reference_observation(project: Path, ref: str, tip: str | None, repository: dict) -> dict:
+def reference_observation(project: Path, ref: str, tip: str | None, repository: dict, *,
+                          known_phases: bool = False) -> dict:
     result = {"kind": "reference", "observation_path": str(project), "complete": False, "holds": [],
               "repository": repository, "source_ref": ref, "source_tip": tip, "private_refs": {},
               "required_objects": {}}
@@ -667,13 +716,66 @@ def reference_observation(project: Path, ref: str, tip: str | None, repository: 
         actual = _text(project, ["for-each-ref", "--format=%(refname) %(objectname) %(symref)", ref])
         if actual != f"{ref} {tip} \n":
             raise Unavailable("Actual source reference is missing, changed or symbolic")
-        result.update(_describe(project, {ref: _oid(tip or "")}, []))
+        roots = {ref: _oid(tip or "")}
+        if known_phases:
+            from .cleanup_observations import storage_once, reflog_pairs
+            storage, raw = storage_once(project, ref, repository)
+            if (storage["status"] != "observed" or storage["current"]["oid"] != tip
+                    or storage["current"]["symref"]):
+                raise Unavailable("Selected reference storage is unavailable")
+            retained, closure = retained_material(project, ref, repository, result["head"])
+            result["retained_material"] = retained
+            log = raw["reflog"]
+            log_roots = {oid for pair in reflog_pairs(log, repository["object_format"]) for oid in pair
+                         if set(oid) != {"0"}} if log is not None else set()
+            if len(log_roots | {tip}) > MAX_OBJECTS:
+                raise Unavailable("Selected reference roots exceed their bound")
+            # Inspect every old/new root even when a surviving common ref/log retains it.
+            if log_roots:
+                _types(project, log_roots)
+            roots.update({"reflog:" + oid: oid for oid in log_roots - closure})
+            blob = _log_blob(log, repository["object_format"]) if log is not None else None
+            result["selected_ref_log"] = {"storage": storage, "blob": blob,
+                                          "bytes": len(log) if log is not None else None}
+        result.update(_describe(project, roots, []))
+        if known_phases and result["selected_ref_log"]["blob"] is not None:
+            blob = result["selected_ref_log"]["blob"]
+            result["roots"]["selected_ref_log"] = blob
+            result["required_objects"][blob] = "blob"
+            if len(result["required_objects"]) > MAX_OBJECTS:
+                raise Unavailable("Selected reference roots exceed their bound")
         if result["required_objects"].get(tip) != "commit":
             raise Unavailable("Source branch is not a commit")
         result["complete"] = True
-    except Unavailable as exc:
-        result["holds"].append(str(exc))
+    except (Unavailable, OSError, KeyError, ValueError, UnicodeError) as exc:
+        result["holds"].append(str(exc) if isinstance(exc, Unavailable) else "Selected reference metadata is unavailable")
     return result
+
+
+def _log_blob(raw: bytes, object_format: str) -> str:
+    if len(raw) > MAX_OUTPUT or object_format not in {"sha1", "sha256"}:
+        raise Unavailable("Selected reference log format or byte bound is unsupported")
+    # Git's literal blob identity, without writing objects/refs or invoking filters.
+    return hashlib.new(object_format, b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+
+
+def verify_selected_log(project: Path, restored: Path, resource: dict, actual: dict, *, deadline=None):
+    expected = resource.get("selected_ref_log")
+    if expected is None:
+        return
+    from .cleanup_observations import storage_once
+    current, raw = storage_once(project, resource["source_ref"], resource["repository"], deadline=deadline)
+    if current != expected["storage"] or current["status"] != "observed":
+        raise Unavailable("Selected reference log changed or is unavailable")
+    log, oid = raw["reflog"], expected["blob"]
+    if oid is None:
+        if log is not None or current["reflog"]["status"] != "absent":
+            raise Unavailable("Selected reference log absence is unavailable")
+    elif (log is None or len(log) != expected["bytes"]
+          or _log_blob(log, resource["repository"]["object_format"]) != oid
+          or oid not in actual.values()
+          or _run(restored, ["cat-file", "blob", oid], isolated=True, deadline=deadline) != log):
+        raise Unavailable("Selected reference raw log bytes are not recoverable")
 
 
 def _outside(path: Path, excluded: list[Path]) -> dict:
@@ -687,21 +789,25 @@ def _outside(path: Path, excluded: list[Path]) -> dict:
         unescape = lambda value: re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
         for line in raw.decode().splitlines():
             fields = line.split(" ")
-            mounts.append((Path(unescape(fields[4])), fields[2], Path(unescape(fields[3]))))
+            if len(fields) < 10 or "-" not in fields[6:] or not all(value.isdigit() for value in fields[:2]):
+                raise ValueError
+            mounts.append((Path(unescape(fields[4])), fields[2], Path(unescape(fields[3])),
+                           int(fields[0]), int(fields[1])))
         def location(candidate):
-            applicable = [(mount, device, root) for mount, device, root in mounts
+            applicable = [(mount, device, root, identifier, parent) for mount, device, root, identifier, parent in mounts
                           if candidate.is_relative_to(mount)]
-            mount, device, root = max(applicable, key=lambda row: len(row[0].parts))
-            if len({(other_device, str(other_root)) for other_mount, other_device, other_root in applicable
+            mount, device, root, identifier, parent = max(applicable, key=lambda row: len(row[0].parts))
+            if len({(other_device, str(other_root), other_id, other_parent)
+                    for other_mount, other_device, other_root, other_id, other_parent in applicable
                     if other_mount == mount}) != 1:
                 raise Unavailable("Archive placement has ambiguous overmounted aliases")
-            return device, root / candidate.relative_to(mount)
-        device, physical = location(path)
+            return device, root / candidate.relative_to(mount), identifier, parent
+        device, physical, identifier, parent = location(path)
         for boundary in excluded:
-            other_device, other = location(boundary)
+            other_device, other, _, _ = location(boundary)
             if path.is_relative_to(boundary) or device == other_device and physical.is_relative_to(other):
                 raise Unavailable("Archive is inside a removable resource or administrative directory")
-        return {"device": device, "path": str(physical)}
+        return {"device": device, "path": str(physical), "mount_id": identifier, "parent_mount_id": parent}
     except (OSError, ValueError, IndexError, UnicodeError) as exc:
         raise Unavailable("Archive placement or mount aliases cannot be verified") from exc
 
@@ -722,7 +828,7 @@ def verify(project: Path, row: dict, resource: dict, excluded: list[Path], *,
                 bundle = scratch / "archive.bundle"
                 with bundle.open("wb") as copied:
                     result["sha256"] = _hash(descriptor, copied)
-                if _identity(os.fstat(descriptor)) != identity["file"]:
+                if _identity(os.fstat(descriptor), descriptor=descriptor) != identity["file"]:
                     raise Unavailable("Archive changed while reading its bytes")
                 if expanded and result["sha256"] != row["sha256"]:
                     raise Unavailable("Archive SHA256 differs from the supplied digest")
@@ -776,6 +882,7 @@ def verify(project: Path, row: dict, resource: dict, excluded: list[Path], *,
                 if expanded:
                     if _uncovered(restored, set(required), set(actual.values()), isolated=True):
                         raise Unavailable("Required roots are outside the advertised recovery closure")
+                    verify_selected_log(project, restored, resource, actual)
                 result["verified"] = True
                 if expanded:
                     result["covers_resource"] = True
@@ -788,12 +895,12 @@ def verify(project: Path, row: dict, resource: dict, excluded: list[Path], *,
                 observer = resource_observation if resource["kind"] == "worktree" else reference_observation
                 fresh = observer(Path(resource["observation_path"]), resource["source_ref"],
                                  resource["source_tip"], fresh_repository,
-                                 **({"known_phases": True} if known_phases and resource["kind"] == "worktree" else {}))
+                                 **({"known_phases": True} if known_phases else {}))
                 if fresh != resource:
                     raise Unavailable("Resource, HEAD, local roots or repository identity changed during verification")
                 with _opened(path) as (again, observed):
                     if (observed != identity or _hash(again) != result["sha256"]
-                            or _identity(os.fstat(descriptor)) != identity["file"]
+                            or _identity(os.fstat(descriptor), descriptor=descriptor) != identity["file"]
                             or _outside(path, excluded) != result["placement"]):
                         raise Unavailable("Archive file, containing directories, placement or bytes changed")
     except (Unavailable, OSError) as exc:

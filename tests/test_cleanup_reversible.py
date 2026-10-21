@@ -273,6 +273,21 @@ class RemainingRefEntryTests(EntryFixture):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        fixture = cls.fixture
+        # The disposable producer freezes exact common selected-ref log bytes
+        # in the ordinary complete map before any worktree phase occurs.
+        raw = (fixture.common / "logs" / fixture.ref).read_bytes()
+        blob = git(fixture.project, "hash-object", "-w", "--stdin", data=raw)
+        alias = "refs/recovery/selected-log"
+        git(fixture.project, "update-ref", alias, blob)
+        fixture.bundle.unlink()
+        git(fixture.target, "bundle", "create", str(fixture.bundle), fixture.ref,
+            "refs/bisect/saved", "refs/worktree/saved", "refs/rewritten/saved", alias)
+        fixture.bundle.chmod(0o600)
+        fixture.recovery_refs = {name: oid for oid, name in (line.split() for line in
+            git(fixture.project, "bundle", "list-heads", str(fixture.bundle)).splitlines())}
+        git(fixture.project, "update-ref", "-d", alias)
+        fixture.capture()
         cls.first = cls().entry()
         cls.stash_before = cls.fixture.stash_bytes()
         git(cls.fixture.project, "worktree", "remove", str(cls.fixture.target))

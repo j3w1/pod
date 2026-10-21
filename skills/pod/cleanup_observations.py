@@ -53,12 +53,7 @@ def selector(value: object) -> dict:
 def identity(path: Path, info, descriptor: int) -> dict:
     mount, incarnation = None, None
     try:
-        with open(f"/proc/self/fdinfo/{descriptor}", "rb") as source:
-            raw = source.read(4097)
-        if len(raw) <= 4096:
-            rows = [line[7:].strip() for line in raw.splitlines() if line.startswith(b"mnt_id:")]
-            if len(rows) == 1 and rows[0].isdigit():
-                mount = int(rows[0])
+        mount = archives._mount_id(descriptor)
         incarnation = archives._incarnation(descriptor)
     except (OSError, archives.Unavailable):
         pass
@@ -157,9 +152,9 @@ def empty_ref(name: str, status="unavailable") -> dict:
             "symref": None, "resolution": [] if status == "absent" else None}
 
 
-def logical_ref(project: Path, name: str, object_format: str | None) -> dict:
+def logical_ref(project: Path, name: str, object_format: str | None, *, deadline=None) -> dict:
     row = empty_ref(name)
-    output = archives._text(project, ["for-each-ref", "--format=%(refname) %(objectname) %(objecttype) %(symref)", name])
+    output = archives._text(project, ["for-each-ref", "--format=%(refname) %(objectname) %(objecttype) %(symref)", name], deadline=deadline)
     matches = []
     for line in output.splitlines():
         parts = line.split(" ")
@@ -229,7 +224,7 @@ def _packed(raw: bytes, selected: str, object_format: str) -> str | None:
     return selected_oid
 
 
-def storage_once(project: Path, name: str, repository: dict) -> tuple[dict, dict]:
+def storage_once(project: Path, name: str, repository: dict, *, deadline=None) -> tuple[dict, dict]:
     result = {"schema": "pod-ref-storage/v1", "status": "unavailable", "backend": None,
               "ref": name, "current": empty_ref(name), "loose": None, "packed": None,
               "reflog": None, "freshness": {"before_sha256": None, "after_sha256": None,
@@ -239,7 +234,7 @@ def storage_once(project: Path, name: str, repository: dict) -> tuple[dict, dict
     try:
         common = Path(repository["common_dir"]["path"])
         output = archives._text(project, ["rev-parse", "--path-format=absolute", "--git-path", name,
-                                           "--git-path", "packed-refs", "--git-path", "logs/" + name]).splitlines()
+                                           "--git-path", "packed-refs", "--git-path", "logs/" + name], deadline=deadline).splitlines()
         if len(output) != 3:
             raise archives.Unavailable("Storage paths are unresolved")
         for key, value in zip(("loose", "packed", "reflog"), output):
@@ -248,7 +243,7 @@ def storage_once(project: Path, name: str, repository: dict) -> tuple[dict, dict
                 or any(result[key]["status"] == "unavailable" for key in contents)):
             raise archives.Unavailable("Reference storage is unavailable")
         result["backend"] = "files"
-        current = logical_ref(project, name, repository["object_format"])
+        current = logical_ref(project, name, repository["object_format"], deadline=deadline)
         result["current"] = current
         packed = _packed(contents["packed"], name, repository["object_format"]) if contents["packed"] is not None else None
         loose = contents["loose"]
@@ -481,11 +476,19 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
         row["delete_argv"] = row["archive_argv"] = None
         row["class"] = "unique" if row["class"] == "unique" else "protected"
         row["reasons"].append("resource_provenance_unavailable")
+    # An objective selection already knows every ordinary checkout/admin boundary.
+    # Project-only selection can describe only its selected resource's boundary.
+    excluded = [Path(repository["common_dir"]["path"])] if "common_dir" in repository else []
+    for candidate in (ordinary or {}).get("resources", []):
+        if candidate["kind"] == "worktree":
+            excluded.append(Path(candidate["identity"]["path"]))
+            admin = (candidate["identity"].get("git") or {}).get("git_dir")
+            if admin:
+                excluded.append(Path(admin["path"]))
+    if observe["kind"] == "worktree":
+        excluded.append(Path(observe["name"]))
     if base is None:
         facts = row["identity"].get("git")
-        excluded = [Path(repository["common_dir"]["path"])] if "common_dir" in repository else []
-        if observe["kind"] == "worktree":
-            excluded.append(Path(observe["name"]))
         if facts:
             row["archives"] = [archives.verify(project, item, facts, excluded)
                                for item in rows if item["ref"] == facts.get("source_ref")]
@@ -498,7 +501,7 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
     cleanup_stashes.apply(row, observation, branch_integrated=integrated)
     if any("worktree_archive" in item for item in rows):
         from . import cleanup_reversible
-        cleanup_reversible.apply(project, row, rows, repository, saved)
+        cleanup_reversible.apply(project, row, rows, repository, saved, excluded=excluded)
     if observe["kind"] in {"cache", "native"} or objective is None:
         row["delete_argv"] = row["archive_argv"] = None
     if observe["kind"] in {"cache", "native"}:

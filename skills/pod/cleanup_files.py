@@ -207,7 +207,7 @@ def _manifest(raw, row):
             groups.setdefault((info["dev"], info["ino"]), []).append(entry)
         if path.parts[0] == "admin":
             _check(_admin_name(name, kind) and (kind == "dir" or info["nlink"] == 1), "unsupported_admin_state")
-        elif path.parts[1:2] == (".git",):
+        elif ".git" in path.parts[1:]:
             _check(name == "worktree/.git" and kind == "file" and info["nlink"] == 1, "unsupported_admin_state")
         size += entry["size"]
         _check(size <= MAX_BYTES, "file_archive_budget")
@@ -361,6 +361,9 @@ def _walk(root, prefix, deadline, *, restored=False, skip_marker=False):
                     continue
                 _name(key)
                 info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if prefix == "worktree" and ".git" in PurePosixPath(key).parts[1:]:
+                    _check(key == "worktree/.git" and stat.S_ISREG(info.st_mode)
+                           and info.st_nlink == 1, "unsupported_admin_state")
                 _check(not info.st_mode & 0o7000, "file_archive_unsafe")
                 _no_xattrs(full)
                 if stat.S_ISDIR(info.st_mode):
@@ -448,14 +451,18 @@ def _admin_roots(extracted, entries, object_format):
 
 
 def _retained(project, source, deadline):
-    result = {}
-    for line in git._text(project, ["for-each-ref", "--format=%(refname) %(objectname) %(symref)"], deadline=deadline).splitlines():
-        name, oid, symbolic = line.split(" ")
-        _check(git._ref(name), "unsupported_admin_state")
-        git._oid(oid)
-        if name != source["ref"] and not name.startswith(git._PRIVATE) and not symbolic:
-            result[name] = oid
-    return result
+    repository = git.repository_observation(project, deadline=deadline)
+    return git.retained_material(project, source["ref"], repository, source["tip"], deadline=deadline)
+
+
+def _no_gitlinks(root, tip, deadline, *, isolated=False, index=False):
+    modes = git._text(root, ["ls-tree", "-r", "--format=%(objectmode)", tip],
+                      isolated=isolated, deadline=deadline).splitlines()
+    _check("160000" not in modes, "unsupported_admin_state")
+    if index:
+        entries = git._run(root, ["ls-files", "--stage", "-z"], deadline=deadline)
+        _check(all(entry.split(b" ", 1)[0] != b"160000" for entry in entries.split(b"\0") if entry),
+               "unsupported_admin_state")
 
 
 def _pointers(manifest, extracted):
@@ -489,10 +496,13 @@ def _current(project, manifest, entries, extracted, deadline):
     _check(directories == [str(admin), str(common), str(path)], "unsupported_admin_state")
     _check(git._text(path, ["symbolic-ref", "HEAD"], deadline=deadline).strip() == source["ref"]
            and git._text(path, ["rev-parse", "--verify", "HEAD"], deadline=deadline).strip() == source["tip"], "file_current_changed")
-    before = git._run(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored"], deadline=deadline)
-    _check(hashlib.sha256(before).hexdigest() == manifest["status_sha256"], "file_current_changed")
+    _no_gitlinks(path, source["tip"], deadline, index=True)
+    # Reject nested controls in the complete no-follow walk before status can
+    # inspect any current submodule. Recovery rejects them before extraction.
     actual = _walk(path, "worktree", deadline)
     actual.update(_walk(admin, "admin", deadline))
+    before = git._run(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored"], deadline=deadline)
+    _check(hashlib.sha256(before).hexdigest() == manifest["status_sha256"], "file_current_changed")
     _check(len(actual) <= MAX_ENTRIES, "file_archive_budget")
     _compare(entries, actual, current=True)
     after = _walk(path, "worktree", deadline)
@@ -538,8 +548,6 @@ def verify(project, row, excluded, *, resource=None):
                         if resource.get("kind") == "worktree":
                             _check(source["path"] == resource["observation_path"]
                                    and source["git_admin_dir"] == (resource.get("git_dir") or {}).get("path"), "file_current_changed")
-                            _check(observations.filesystem(Path(resource["observation_path"])) == source["worktree_identity"]
-                                   and observations.filesystem(Path(source["git_admin_dir"])) == source["admin_identity"], "file_current_changed")
                     boundaries = [*excluded, *(Path(source[key]) for key in ("path", "common_git_dir", "git_admin_dir"))]
                     basis["placement"] = git._outside(path, boundaries)
                     file.update(manifest_sha256=hashlib.sha256(archive.extractfile(archive.getmember(MANIFEST)).read()).hexdigest(),
@@ -554,12 +562,14 @@ def verify(project, row, excluded, *, resource=None):
                     object_format = "sha256" if len(row["tip"]) == 64 else "sha1"
                     roots, refs, logs = _admin_roots(extracted, entries, object_format)
                     basis["admin"] = {"refs": refs, "logs": logs}
-                    retained = _retained(project, source, deadline)
+                    retained, closure = _retained(project, source, deadline)
                     # Copy what the known phase loses. Retained live stash material is
                     # fingerprinted, never made a mandatory recovery root by its presence.
-                    needed = {source["tip"], *refs.values(), *git._uncovered(
-                        project, roots, {source["tip"], *retained.values()}, deadline=deadline)}
-                    basis["retained_refs"] = retained
+                    needed = {source["tip"], *refs.values(), *(roots - closure)}
+                    if resource is not None and "selected_ref_log" in resource:
+                        _check(resource["complete"], "admin_recovery_missing")
+                        needed.update(resource["required_objects"])
+                    basis["retained_material"] = retained
                     # Recover Git and workfiles separately, preserving regenerated control pointers.
                     recovered_git, recovered = scratch / "recovery.git", scratch / "recovered"
                     git._run(scratch, ["init", "--bare", "--quiet", "--template=", "--object-format=" + object_format, str(recovered_git)], isolated=True, deadline=deadline)
@@ -577,23 +587,32 @@ def verify(project, row, excluded, *, resource=None):
                                 saved.write(block)
                         with bundle.open("rb") as saved:
                             _check(_hash(saved, deadline) == row["sha256"], "file_archive_changed")
-                        _check(git._identity(os.fstat(bundle_fd)) == bundle_before["file"], "file_archive_changed")
+                        _check(git._identity(os.fstat(bundle_fd), descriptor=bundle_fd) == bundle_before["file"], "file_archive_changed")
                     git._run(recovered_git, ["bundle", "verify", str(bundle)], isolated=True, deadline=deadline)
                     git._pack_bound(bundle)
                     git._run(recovered_git, ["bundle", "unbundle", str(bundle)], isolated=True, deadline=deadline)
                     git._types(recovered_git, needed, isolated=True, deadline=deadline)
                     _check(not git._uncovered(recovered_git, needed, set(row["recovery_refs"].values()), isolated=True, deadline=deadline), "admin_recovery_missing")
+                    if resource is not None:
+                        git.verify_selected_log(project, recovered_git, resource, row["recovery_refs"], deadline=deadline)
+                    _no_gitlinks(recovered_git, row["tip"], deadline, isolated=True)
                     git._run(recovered_git, ["worktree", "add", "--quiet", "--detach", "--no-checkout", str(recovered), row["tip"]], isolated=True, deadline=deadline)
                     git._run(recovered, ["read-tree", row["tip"]], isolated=True, deadline=deadline)
                     _extract(archive, members, entries, recovered, deadline, workfiles=True)
                     workfiles = {name: entry for name, entry in entries.items() if name == "worktree" or name.startswith("worktree/")}
                     _compare(workfiles, _walk(recovered, "worktree", deadline, restored=True, skip_marker=True), current=False, skip_marker=True)
-                    status = git._run(recovered, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored"], isolated=True, deadline=deadline)
+                    status = git._run(recovered, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored", "--ignore-submodules=all"], isolated=True, deadline=deadline)
                     _check(hashlib.sha256(status).hexdigest() == manifest["status_sha256"], "file_restore_failed")
                     file.update(status="verified", restore_verified=True)
                     admin.update(status="verified")
-                    file["current_match"], basis["current"] = _current(project, manifest, entries, extracted, deadline)
-                    _check(_retained(project, source, deadline) == retained, "file_current_changed")
+                    try:
+                        file["current_match"], basis["current"] = _current(project, manifest, entries, extracted, deadline)
+                        _check(_retained(project, source, deadline)[0] == retained, "file_current_changed")
+                    except (Held, git.Unavailable, OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
+                        code = str(exc) if isinstance(exc, Held) else "file_current_unavailable"
+                        file["current_match"] = False if code in {"file_current_changed", "manifest_incomplete"} else None
+                        basis["current"] = {"current": {"status": "unavailable"}, "reason": code}
+                        file["reasons"].append(code)
                     if file["current_match"] is None:
                         file["reasons"].append("file_current_unavailable")
                 with git._opened(path) as (again, _):
@@ -614,4 +633,5 @@ def verify(project, row, excluded, *, resource=None):
             file.update(status="held", restore_verified=False)
             admin.update(status="held", reasons=["admin_recovery_missing"])
         file["reasons"] = sorted(set(file["reasons"] + [code]))
+    file["reasons"] = sorted(set(file["reasons"]))
     return file, admin, basis

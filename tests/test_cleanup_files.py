@@ -26,7 +26,7 @@ def git(root, *args, data=None):
 class FileFixture:
     """An independently authored file artifact, plus an unrelated retained live stash."""
 
-    def __init__(self):
+    def __init__(self, *, object_format="sha1"):
         self.temporary = tempfile.TemporaryDirectory(prefix="pod-recovery-fixture-")
         self.root = Path(self.temporary.name)
         environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -38,7 +38,7 @@ class FileFixture:
         self.environment.start()
         self.project, self.target, self.live = (self.root / name for name in ("project", "target", "live"))
         self.project.mkdir()
-        git(self.project, "init", "--quiet", "--initial-branch=main", "--template=")
+        git(self.project, "init", "--quiet", "--initial-branch=main", "--template=", "--object-format=" + object_format)
         (self.project / "README").write_text("tracked fixture\n")
         (self.project / ".gitignore").write_text("ignored/\n")
         git(self.project, "add", ".")
@@ -349,13 +349,23 @@ class FileRecoveryTests(unittest.TestCase):
         os.setxattr(path, "user.pod_fixture", b"fixture")
         self.addCleanup(os.removexattr, path, "user.pod_fixture")
         self.fixture.capture()
-        self.held("file_archive_unsafe")
+        file, admin, _ = self.fixture.verify()
+        self.assertTrue(file["restore_verified"])
+        self.assertEqual(admin["status"], "verified")
+        self.assertIsNone(file["current_match"])
+        self.assertIn("file_archive_unsafe", file["reasons"])
+        self.assertIn("file_current_unavailable", file["reasons"])
 
     def test_special_current_file_is_held_without_opening_or_extracting_it(self):
         path = self.fixture.target / "ignored/private/fifo"
         os.mkfifo(path)
         self.addCleanup(path.unlink)
-        self.held("unsupported_file_type")
+        file, admin, _ = self.fixture.verify()
+        self.assertTrue(file["restore_verified"])
+        self.assertEqual(admin["status"], "verified")
+        self.assertIsNone(file["current_match"])
+        self.assertIn("unsupported_file_type", file["reasons"])
+        self.assertIn("file_current_unavailable", file["reasons"])
 
     def test_complete_4096_head_log_entries_are_preserved_as_data(self):
         path = self.fixture.admin / "logs/HEAD"

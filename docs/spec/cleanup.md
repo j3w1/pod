@@ -243,7 +243,10 @@ is `pod-reversible-eligibility/v1`, and its exact fields are:
 
 The new Git basis copies the tip, private roots and otherwise-unretained recovery
 roots that the known phases destroy. Retained live stash roots remain fully observed
-and fingerprinted, but their presence creates no new copying obligation. Every extra
+and fingerprinted, including roots retained only by the complete common stash log.
+Their exact retaining/log storage identities, bytes and complete surviving closure
+participate in reobservation; their presence creates no new copying obligation. Destroyed
+private ref names still require recovery even when a surviving ref/log retains their bytes. Every extra
 advertised recovery ref and type still verifies. Noninterference compares actual
 current immutable stash material, retaining names/logs/object storage and physical
 identities with the exact Git effects, in both containment directions. Missing,
@@ -251,6 +254,18 @@ changing, aliased or overlapping facts hold. It neither revises existing relatio
 claims complete future dependencies or earlier ownership. The direct-ref profile
 still holds packed, pending-lock and observing-HEAD effects, and checks complete
 current checkout absence. The remote-server effect profile remains unavailable.
+
+The local-ref phase also destroys the selected common ref's own reflog. Require every
+otherwise-lost nonzero old/new root from its complete current log, within the existing
+2048-entry, raw-byte, required-root, type, closure and time limits. Preserve the exact
+raw log bytes as an ordinary advertised Git blob in the existing complete recovery
+map, without prescribing an alias name. Pod derives the literal blob OID using the
+actual SHA1/SHA256 object format, restores the bundle in isolation and compares the
+recovered blob bytes with the fresh bounded current log. It writes no source Git
+object or ref. A source object, alias, digest or root list without actual restored
+bytes is insufficient. Successful positive log absence needs no empty blob; unavailable,
+changed, malformed, mismatched or over-bound observations hold. No transport field,
+additional archive root or metadata-backup receipt substitutes for these bytes.
 
 The private file artifact is an **uncompressed POSIX pax tar**, with the first
 regular member `pod-worktree-archive.json` and payload roots `worktree` and `admin`.
@@ -301,8 +316,20 @@ or operation root is admitted.
 Raw `.git`, admin and configuration are recovered **as data** only. A separate empty
 Git repository restores the verified bundle, regenerates linked-worktree registration
 and index, restores workfiles without replacing those regenerated control pointers,
-and compares recovered bytes/modes/status. No archived config is loaded or executed,
+and compares recovered bytes/modes/status. Any nested worktree `.git` file, directory
+or link is unsupported and rejected before extraction. Gitlinks in the recovery tip
+are rejected before recovery worktree creation; an index containing gitlinks also
+holds. The archived index remains raw data, never the recovery index. Recovery Git
+disables submodule recursion and ignores submodules when comparing status. These
+constraints do not suppress ordinary live dirty/submodule checks. No archived config is loaded or executed,
 and no historic native or metadata identity is claimed restored.
+
+Verified file/admin integrity is separate from the live source comparison and its
+retained-material recheck. A current read failure retains verified recovery, reports
+null `current_match` with `file_current_unavailable` and holds eligibility. Final
+artifact identity, placement and byte checks still run; actual artifact tamper
+invalidates integrity. Current unsupported links, mounts, metadata or file types
+remain holds even when the immutable archive still verifies.
 
 File verification has conjunctive ceilings: 128 MiB artifact, per-file and aggregate
 payload bytes; 4096 payload entries; 2,000,000 manifest bytes; 4096 UTF-8 bytes per
@@ -320,6 +347,14 @@ association registry, authority service, journal or execution API. Existing guar
 UNIQUE truth, unavailable history and null commands remain unchanged. Dirty, untracked,
 staged and locked worktrees remain held; ignored data requires complete recovery.
 
+Ordinary objective plans pass every selected worktree, private admin and common Git
+directory exclusion to both artifact verifiers and their final placement rechecks.
+An objective-selected observation retains all those known ordinary boundaries.
+Project-only selection knows only the selected resource/common boundary. Neither
+projection establishes the executor's whole finite removal scope: the executor must
+verify both original artifacts outside every resource/admin/common path in that
+authenticated finite scope before each effect.
+
 After actual worktree absence, immutable recovery integrity may remain verified while
 `current_match` is null. A new remaining-ref expect binds actual current ref/tip/storage
 and archive facts, without proving any earlier phase. Only the executor validates its
@@ -327,6 +362,10 @@ ORIGINAL authenticated finite scope, unchanged artifacts and committed phases of
 new operation. Missing/unknown old phases cannot be replayed or backfilled. Local-ref
 deletion requires complete fresh checkout exclusion plus atomic expected-OID
 `update-ref --no-deref -d`; branch config is a separately backed-up phase or leftover.
+The executor creates and freezes the original selected-log blob/root recovery and
+file artifacts before any worktree phase, then rechecks current log identity/bytes
+and remaining-ref expect at the branch boundary. Existing archives are not rewritten
+by Pod, and absent old phases are never manufactured from a new artifact.
 Remote origin/policy/open-PR/lease checks stay required. Observe public Orca absence
 after known Git phases; a persistent entry is retained and reported held. There is
 no proved metadata-only forget and no broad `orca worktree rm` or recreated-path recipe
@@ -343,7 +382,10 @@ to 4096 entries. Compressed input remains 128 MiB, with separate bounded logical
 restoration/object/count controls and the conjunctive inspection/output bounds above.
 Git inspection never raises tighter inherited soft/hard process limits.
 Archives must remain outside removable resource/admin paths with stable bytes,
-identity and mount placement. Volatile-media crash durability is not established by
+identity and mount placement. Git artifact and ancestor descriptor mount IDs, plus
+relevant placement mount/parent IDs, bind the existing diagnostic and expect alongside
+physical coordinates, no-follow aliases and birth identity. Unavailable mount
+incarnation holds; an ID-only change invalidates old expect. Volatile-media crash durability is not established by
 the outside-removal check. A verified Git archive preserves Git data; it grants no integration,
 unique-work discard, release, live-work clearance or uncommitted-file preservation.
 

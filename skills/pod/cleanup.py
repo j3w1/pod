@@ -671,7 +671,7 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         if any("worktree_archive" in item for item in archive_rows):
             from . import cleanup_reversible
             for row in resources:
-                cleanup_reversible.apply(project, row, archive_rows, repository, snapshot)
+                cleanup_reversible.apply(project, row, archive_rows, repository, snapshot, excluded=excluded)
         # The selected path borrows the full internal decision basis when this
         # flag is false, then compacts its own final row after reobservation.
         _compact_material(resources)
