@@ -668,6 +668,10 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
             tip = row["identity"].get("tip")
             integrated = bool(tip and target and (tip in merged or is_ancestor(project, tip, target) is True))
             cleanup_stashes.apply(row, observation, branch_integrated=integrated)
+        if any("worktree_archive" in item for item in archive_rows):
+            from . import cleanup_reversible
+            for row in resources:
+                cleanup_reversible.apply(project, row, archive_rows, repository, snapshot)
         # The selected path borrows the full internal decision basis when this
         # flag is false, then compacts its own final row after reobservation.
         _compact_material(resources)

@@ -496,6 +496,9 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
     tip = row["identity"].get("tip")
     integrated = bool(tip and target["commit"] and cleanup.is_ancestor(project, tip, target["commit"]) is True)
     cleanup_stashes.apply(row, observation, branch_integrated=integrated)
+    if any("worktree_archive" in item for item in rows):
+        from . import cleanup_reversible
+        cleanup_reversible.apply(project, row, rows, repository, saved)
     if observe["kind"] in {"cache", "native"} or objective is None:
         row["delete_argv"] = row["archive_argv"] = None
     if observe["kind"] in {"cache", "native"}:

@@ -103,13 +103,18 @@ def archive_rows(value: object) -> list[dict]:
         raise PodError("invalid_cleanup_archives", "Archives are a bounded list")
     seen = set()
     for item in rows:
-        row = exact(item, {"path", "ref", "tip", "sha256", "recovery_refs"},
+        row = exact(item, {"path", "ref", "tip", "sha256", "recovery_refs", "worktree_archive"},
                     {"path", "ref", "tip"}, name="cleanup_archive")
         if not all(isinstance(row[key], str) and len(row[key]) <= 4096
                    and "\0" not in row[key] for key in ("path", "ref", "tip")):
             raise PodError("invalid_cleanup_archives", "Archive path, ref and tip are bounded text")
         if ("sha256" in row) != ("recovery_refs" in row):
             raise PodError("invalid_cleanup_archives", "sha256 and recovery_refs must be supplied together")
+        if "worktree_archive" in row:
+            from .cleanup_files import archive_reference
+            archive_reference(row["worktree_archive"])
+            if "sha256" not in row:
+                raise PodError("invalid_cleanup_archives", "File recovery requires an expanded Git archive")
         if "sha256" in row:
             refs = row["recovery_refs"]
             if (not isinstance(row["sha256"], str) or not _SHA256.fullmatch(row["sha256"])
@@ -339,11 +344,11 @@ def _oid(value: str) -> str:
 
 
 def _types(root: Path, oids: set[str], *, isolated: bool = False,
-           limit: int = MAX_OBJECTS) -> dict[str, str]:
+           limit: int = MAX_OBJECTS, deadline: float | None = None) -> dict[str, str]:
     if not oids or len(oids) > limit:
         raise Unavailable("Required object observation is empty or over its bound")
     ordered = sorted(_oid(oid) for oid in oids)
-    deadline = time.monotonic() + 30
+    deadline = min(time.monotonic() + 30, deadline) if deadline is not None else time.monotonic() + 30
     found = {}
     # Each ordinary metadata query retains the generic input/output bound. The
     # entire batch operation shares one deadline; chunking buys no extra time.
@@ -424,9 +429,10 @@ def _pack_bound(bundle: Path):
         raise Unavailable("Bundle pack object count is unsupported or over its bound")
 
 
-def _walk_oids(root: Path, roots: set[str], *, isolated: bool = False) -> set[str]:
+def _walk_oids(root: Path, roots: set[str], *, isolated: bool = False,
+               deadline: float | None = None) -> set[str]:
     """Read a bounded closure without buffering its raw output or resetting time."""
-    deadline = time.monotonic() + 30
+    deadline = min(time.monotonic() + 30, deadline) if deadline is not None else time.monotonic() + 30
     object_format = _text(root, ["rev-parse", "--show-object-format=storage"],
                           isolated=isolated, deadline=deadline)
     if object_format not in {"sha1\n", "sha256\n"}:
@@ -444,7 +450,8 @@ def _walk_oids(root: Path, roots: set[str], *, isolated: bool = False) -> set[st
     return output.found
 
 
-def _uncovered(root: Path, candidates: set[str], retained: set[str], *, isolated: bool = False) -> set[str]:
+def _uncovered(root: Path, candidates: set[str], retained: set[str], *, isolated: bool = False,
+               deadline: float | None = None) -> set[str]:
     """Compare arbitrary roots with the complete bounded surviving closure.
 
     Explicit tree/blob revision arguments are not subtracted by rev-list's
@@ -452,7 +459,7 @@ def _uncovered(root: Path, candidates: set[str], retained: set[str], *, isolated
     """
     if not candidates:
         return set()
-    found = _walk_oids(root, retained, isolated=isolated) if retained else set()
+    found = _walk_oids(root, retained, isolated=isolated, deadline=deadline) if retained else set()
     return candidates - found
 
 
@@ -523,7 +530,8 @@ def repository_observation(project: Path) -> dict:
     return result
 
 
-def resource_observation(path: Path, ref: str | None, tip: str | None, repository: dict) -> dict:
+def resource_observation(path: Path, ref: str | None, tip: str | None, repository: dict, *,
+                         known_phases: bool = False) -> dict:
     result = {"kind": "worktree", "observation_path": str(path),
               "complete": False, "holds": [], "repository": repository, "source_ref": ref,
               "source_tip": tip, "private_refs": {}, "reflogs": {}, "required_objects": {}}
@@ -611,7 +619,7 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
                                     roots["reflog:" + oid] = oid
                         result["reflogs"][relative] = {"sha256": hashlib.sha256(value).hexdigest(),
                                                         "entries": [list(pair) for pair in entries]}
-        for index, oid in enumerate(repository["stash_roots"]):
+        for index, oid in enumerate([] if known_phases else repository["stash_roots"]):
             roots[f"stash:{index}"] = oid
         if len(roots) > MAX_OBJECTS:
             raise Unavailable("Resource roots exceed the archive observation bound")
@@ -635,7 +643,7 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
         required_roots = {name: oid for name, oid in roots.items()
                           if name == "HEAD" or name in additional or name.startswith("stash:")}
         result["observed_roots"] = roots
-        result.update(_describe(path, required_roots, repository["stash_roots"]))
+        result.update(_describe(path, required_roots, [] if known_phases else repository["stash_roots"]))
         if result["required_objects"].get(head) != "commit":
             raise Unavailable("Resource HEAD is not a commit")
         result["additional_roots"] = sorted(additional)
@@ -698,7 +706,8 @@ def _outside(path: Path, excluded: list[Path]) -> dict:
         raise Unavailable("Archive placement or mount aliases cannot be verified") from exc
 
 
-def verify(project: Path, row: dict, resource: dict, excluded: list[Path]) -> dict:
+def verify(project: Path, row: dict, resource: dict, excluded: list[Path], *,
+           known_phases: bool = False) -> dict:
     """Observe exact bytes and restoration; branch-only input retains its narrow proof."""
     expanded = "sha256" in row
     result = {"declared": row, "mode": "expanded" if expanded else "branch_only", "verified": False,
@@ -778,7 +787,8 @@ def verify(project: Path, row: dict, resource: dict, excluded: list[Path]) -> di
                 fresh_repository = repository_observation(project)
                 observer = resource_observation if resource["kind"] == "worktree" else reference_observation
                 fresh = observer(Path(resource["observation_path"]), resource["source_ref"],
-                                 resource["source_tip"], fresh_repository)
+                                 resource["source_tip"], fresh_repository,
+                                 **({"known_phases": True} if known_phases and resource["kind"] == "worktree" else {}))
                 if fresh != resource:
                     raise Unavailable("Resource, HEAD, local roots or repository identity changed during verification")
                 with _opened(path) as (again, observed):

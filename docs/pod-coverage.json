@@ -6693,7 +6693,13 @@
         "tests.test_cleanup_stashes.StashSourceTests.test_unknown_current_holder_keeps_even_a_complete_material_snapshot_held",
         "tests.test_cleanup_stashes.StashSourceTests.test_direct_stash_ref_without_reflog_is_unknown_never_verified_empty",
         "tests.test_cleanup_stashes.StashSourceTests.test_needed_private_name_alias_is_not_excluded_by_surviving_object_bytes",
-        "tests.test_cleanup_stashes.StashSourceTests.test_missing_untracked_blob_in_required_closure_keeps_unknown"
+        "tests.test_cleanup_stashes.StashSourceTests.test_missing_untracked_blob_in_required_closure_keeps_unknown",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_positive_new_data_with_null_argv_preserves_live_stash_and_legacy_unknown",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_missing_retaining_log_and_material_snapshot_hold",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_actual_storage_alias_and_unknown_footprint_hold",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_equal_bases_cannot_replace_unavailable_current_support",
+        "tests.test_cleanup_reversible.ChangedStashEntryTests.test_unrelated_retained_stash_change_requires_no_new_recovery_root",
+        "tests.test_cleanup_reversible.ChangedStashEntryTests.test_retaining_log_change_refuses_old_expect"
       ],
       "status": "NOT_RUN"
     },
@@ -6728,7 +6734,40 @@
         "tests.test_cleanup_archives.ArchiveConsolidatedTests.test_consolidated_malformed_or_stale_last_target_cannot_escape_validation",
         "tests.test_cleanup_archives.ArchiveBranchTests.test_recycled_ancestor_inode_with_retained_leaf_identity_invalidates_expect",
         "tests.test_cleanup_archives.ArchiveContentScaleTests.test_aggregate_full_history_legacy_keeps_its_narrow_valid_proof",
-        "tests.test_cleanup_archives.ArchiveRootTests.test_full_recovery_verifies_stash_index_untracked_and_all_private_object_types"
+        "tests.test_cleanup_archives.ArchiveRootTests.test_full_recovery_verifies_stash_index_untracked_and_all_private_object_types",
+        "tests.test_cleanup_files.FileRecoveryTests.test_full_private_pax_restores_all_modes_links_admin_and_regenerated_git",
+        "tests.test_cleanup_files.FileRecoveryTests.test_mode_loss_with_equal_exec_bits_fails_real_restore_comparison",
+        "tests.test_cleanup_files.FileRecoveryTests.test_missing_and_corrupt_archive_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_digest_mismatch_and_source_tip_mismatch_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_duplicate_manifest_entries_and_incomplete_payload_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_extra_manifest_fields_and_stat_bool_are_refused",
+        "tests.test_cleanup_files.FileRecoveryTests.test_header_mode_and_unsafe_special_mode_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_absolute_and_escaping_symlink_targets_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_cross_prefix_and_missing_hardlink_targets_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_unknown_vendor_pax_acl_and_gnu_headers_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_world_readable_file_or_containing_directory_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_archive_inside_removed_path_or_symlinked_file_holds",
+        "tests.test_cleanup_files.FileRecoveryTests.test_changed_source_bytes_keep_integrity_separate_from_current_match",
+        "tests.test_cleanup_files.FileRecoveryTests.test_unlisted_admin_root_is_not_silently_omitted",
+        "tests.test_cleanup_files.FileRecoveryTests.test_entry_manifest_byte_and_time_limits_are_conjunctive",
+        "tests.test_cleanup_files.FileRecoveryTests.test_artifact_per_file_and_aggregate_limits_do_not_raise_physical_caps",
+        "tests.test_cleanup_files.FileRecoveryTests.test_unsupported_current_mount_is_held_after_integrity_verification",
+        "tests.test_cleanup_files.FileRecoveryTests.test_actual_xattr_is_not_silently_discarded",
+        "tests.test_cleanup_files.FileRecoveryTests.test_special_current_file_is_held_without_opening_or_extracting_it",
+        "tests.test_cleanup_files.FileRecoveryTests.test_complete_4096_head_log_entries_are_preserved_as_data",
+        "tests.test_cleanup_files.FileRecoveryTests.test_complete_4096_private_log_entries_are_preserved_as_data",
+        "tests.test_cleanup_files.FileRecoveryTests.test_4097_log_entries_hold",
+        "tests.test_cleanup_files.FileRecoveryTests.test_missing_required_admin_marker_is_not_a_partial_success",
+        "tests.test_cleanup_files.FileRecoveryTests.test_validation_of_every_member_precedes_any_extraction",
+        "tests.test_cleanup_files.FileRecoveryTests.test_source_file_replacement_with_equal_bytes_does_not_match",
+        "tests.test_cleanup_files.FileRecoveryTests.test_symlink_descendant_manifest_cannot_be_extracted",
+        "tests.test_cleanup_files.FileRecoveryTests.test_aggregate_payload_limit_is_independent_of_each_file_limit",
+        "tests.test_cleanup_files.FileRecoveryTests.test_complete_admin_raw_bytes_are_bounded_together",
+        "tests.test_cleanup_files.FileRecoveryTests.test_unknown_empty_admin_namespace_is_not_a_known_directory",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_file_and_manifest_corruption_hold_with_null_commands",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_stale_or_partial_git_recovery_map_holds_combined_data",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_corrupt_git_bundle_holds_combined_data",
+        "tests.test_cleanup_files.FileRecoveryTests.test_relative_git_marker_and_absolute_common_pointer_remain_data"
       ],
       "status": "NOT_RUN"
     },
@@ -6747,7 +6786,15 @@
         "tests.test_cleanup_observations.SelectedObservationTests.test_loose_ref_same_oid_replacement_and_log_only_change_invalidate_expect",
         "tests.test_cleanup_observations.SelectedObservationTests.test_packed_file_changes_expect_even_with_same_selected_loose_oid",
         "tests.test_cleanup_stashes.StashSourceTests.test_repeated_order_and_nonzero_old_only_root_are_all_preserved",
-        "tests.test_cleanup_observations.SelectedWorkerObservationTests.test_previous_worktree_expect_cannot_be_used_for_current_remaining_branch"
+        "tests.test_cleanup_observations.SelectedWorkerObservationTests.test_previous_worktree_expect_cannot_be_used_for_current_remaining_branch",
+        "tests.test_cleanup_reversible.RemainingRefEntryTests.test_removed_worktree_retains_only_integrity_and_fresh_ref_data_not_old_phase_success",
+        "tests.test_cleanup_reversible.RemainingRefEntryTests.test_old_worktree_expect_cannot_prove_the_current_remaining_ref_or_phase",
+        "tests.test_cleanup_reversible.StableExpectEntryTests.test_a_same_data_expect_stays_stable",
+        "tests.test_cleanup_reversible.StableExpectEntryTests.test_b_equal_byte_archive_identity_replacement_refuses_old_expect",
+        "tests.test_cleanup_reversible.ChangedSourceEntryTests.test_current_byte_change_holds_eligibility_without_erasing_integrity",
+        "tests.test_cleanup_reversible.ChangedSourceEntryTests.test_current_byte_change_refuses_old_expect",
+        "tests.test_cleanup_reversible.ChangedStashEntryTests.test_retaining_log_change_refuses_old_expect",
+        "tests.test_cleanup_reversible.RemainingRefEntryTests.test_unavailable_existing_path_does_not_become_a_proved_absence"
       ],
       "status": "NOT_RUN"
     },
@@ -6763,7 +6810,14 @@
         "tests.test_cleanup_archives.ArchiveInheritedLimitTests.test_finite_inherited_soft_and_hard_limits_are_never_raised",
         "tests.test_cleanup_archives.ArchiveInheritedLimitTests.test_infinite_inherited_limits_use_ordinary_bounds_without_changing_hard_limits",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_dirty_ignored_stash_and_foreign_terminal_keep_all_worker_resources",
-        "tests.test_cleanup_plan.CleanupWorkerTests.test_stash_and_foreign_terminal_keep_all_worker_resources"
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_stash_and_foreign_terminal_keep_all_worker_resources",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_no_optional_reference_preserves_exact_legacy_wire_and_git_only_meaning",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_untracked_and_modified_worktrees_remain_held_with_complete_archives",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_untracked_data_is_not_authorized_by_a_whole_file_archive",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_staged_data_and_lock_state_hold_without_force",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_locked_admin_is_unsupported_even_with_all_bytes_archived",
+        "tests.test_cleanup_reversible.OrdinaryGuardsEntryTests.test_positive_preservation_keeps_ordinary_unique_and_null_commands",
+        "tests.test_cleanup_reversible.OrdinaryGuardsEntryTests.test_optional_data_clears_no_legacy_class_relation_or_guard"
       ],
       "status": "NOT_RUN"
     },
@@ -6778,7 +6832,11 @@
         "tests.test_cleanup_observations.SelectedObservationTests.test_selector_has_only_kind_and_name_and_no_caller_proof_or_context_flags",
         "tests.test_cleanup_observations.SelectedObservationTests.test_verified_consolidated_archive_is_preservation_only_in_project_only_mode",
         "tests.test_cleanup_observations.SelectedWorkerObservationTests.test_incompatible_worker_selector_cannot_expand_to_foreign_local_ref",
-        "tests.test_cleanup_observations.SelectedWorkerObservationTests.test_supported_native_readback_is_sanitized_current_data_and_no_release_command"
+        "tests.test_cleanup_observations.SelectedWorkerObservationTests.test_supported_native_readback_is_sanitized_current_data_and_no_release_command",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_positive_new_data_with_null_argv_preserves_live_stash_and_legacy_unknown",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_optional_reference_shape_and_caller_phase_or_authority_are_refused",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_same_ref_and_tip_sibling_archive_cannot_cover_the_selected_worktree",
+        "tests.test_cleanup_reversible.ReversibleEntryTests.test_foreign_same_history_repository_archive_cannot_cover_current_resource"
       ],
       "status": "NOT_RUN"
     }
