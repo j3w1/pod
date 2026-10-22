@@ -120,6 +120,18 @@ Caller-side mount/birth facts alone prove neither another executor's namespace n
 identity before this observation. For local branches, the stash record's resource path/identity
 describe the observing project; the physical ref fact is `identity.ref_storage`.
 
+Before accepting a slot, recheck its no-follow pathname component edges against the
+retained descriptors, working from the selected slot back toward the filesystem
+root. A detached descriptor's unchanged identity is insufficient. Each existing
+component requires stable device, inode, mode, mount and incarnation facts; a renamed,
+replaced, redirected or unreadable binding holds. The selected material directory
+and its descendants additionally retain full size and modification/change metadata.
+Unrelated sibling-entry activity above that material root creates no hold. Successful
+absence also requires the first missing component to remain absent without following
+links, and every existing ancestor binding to pass; an appearing intermediate, leaf
+or dangling symlink makes that observation unavailable. These are bounded current
+facts, not an atomic filesystem snapshot or proof of any earlier phase.
+
 ## Stash observation
 
 `stash_observation` uses schema `pod-stash-observation/v1` and exact top-level fields

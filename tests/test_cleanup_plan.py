@@ -46,6 +46,23 @@ def directory_entry_changes(directory):
         yield changes
 
 
+@contextmanager
+def path_change_on_fstat(path, change, *, occurrence=1):
+    """Mutate a disposable path during a real descriptor read without replacing facts."""
+    watched, original, changes, calls = path.stat(), os.fstat, [], 0
+    def changing(descriptor):
+        nonlocal calls
+        info = original(descriptor)
+        if (info.st_dev, info.st_ino) == (watched.st_dev, watched.st_ino):
+            calls += 1
+            if calls == occurrence:
+                change()
+                changes.append(descriptor)
+        return info
+    with patch("pod.cleanup_observations.os.fstat", side_effect=changing):
+        yield changes
+
+
 class CleanupDirectoryIdentityTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -75,6 +92,172 @@ class CleanupDirectoryIdentityTests(unittest.TestCase):
         alias = self.parent / "alias"
         alias.symlink_to(self.parent, target_is_directory=True)
         self.assertIsNone(filesystem(alias / self.selected.name))
+
+
+class CleanupPathBindingTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.parent = self.root / "ancestor"
+        self.selected = self.parent / "selected"
+        self.selected.mkdir(parents=True)
+        self.parked = self.root / "parked"
+
+    def replace_parent(self):
+        self.parent.rename(self.parked)
+        self.selected.mkdir(parents=True)
+
+    def assert_unavailable(self, fact, raw):
+        self.assertEqual(fact["status"], "unavailable")
+        self.assertIsNone(fact["identity"])
+        self.assertIsNone(fact["ancestors"])
+        self.assertIsNone(fact["sha256"])
+        self.assertIsNone(raw)
+
+    def test_detached_ancestor_cannot_supply_selected_directory_identity(self):
+        from pod.cleanup_observations import filesystem
+        before = self.selected.stat()
+        with path_change_on_fstat(self.parent, self.replace_parent) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertEqual((self.parked / "selected").stat().st_ino, before.st_ino)
+        self.assertNotEqual(self.selected.stat().st_ino, before.st_ino)
+        self.assertIsNone(found)
+
+    def test_renamed_ancestor_without_replacement_is_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        with path_change_on_fstat(self.parent, lambda: self.parent.rename(self.parked)) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertFalse(self.selected.exists())
+        self.assertIsNone(found)
+
+    def test_same_inode_through_new_symlinked_ancestor_is_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        before = self.selected.stat()
+        def redirect():
+            self.parent.rename(self.parked)
+            self.parent.symlink_to(self.parked, target_is_directory=True)
+        with path_change_on_fstat(self.parent, redirect) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertEqual(self.selected.stat().st_ino, before.st_ino)
+        self.assertIsNone(found)
+
+    def test_ancestor_replaced_during_final_leaf_read_is_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        with path_change_on_fstat(self.selected, self.replace_parent, occurrence=2) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertIsNone(found)
+
+    def test_replaced_leaf_keeps_neither_identity_nor_raw_bytes(self):
+        from pod.cleanup_observations import slot
+        leaf, parked = self.selected / "entry", self.root / "retained-entry"
+        leaf.write_bytes(b"same fixture bytes\n")
+        def replace():
+            leaf.rename(parked)
+            leaf.write_bytes(parked.read_bytes())
+        with path_change_on_fstat(leaf, replace) as changes:
+            fact, raw = slot(leaf, self.selected)
+        self.assertTrue(changes)
+        self.assertEqual(leaf.read_bytes(), parked.read_bytes())
+        self.assertNotEqual(leaf.stat().st_ino, parked.stat().st_ino)
+        self.assert_unavailable(fact, raw)
+
+    def test_genuine_absence_tolerates_unrelated_outside_parent_entries(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "absent" / "leaf"
+        with directory_entry_changes(self.selected) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertEqual(fact["status"], "absent")
+        self.assertEqual(fact["ancestors"], [])
+        self.assertIsNone(fact["identity"])
+        self.assertIsNone(raw)
+        self.assertFalse(missing.parent.exists())
+
+    def test_detached_parent_cannot_supply_successful_absence(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "absent"
+        with path_change_on_fstat(self.parent, self.replace_parent) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertFalse(missing.exists())
+        self.assert_unavailable(fact, raw)
+
+    def test_absent_leaf_appearance_during_final_parent_read_is_unavailable(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "appeared"
+        with path_change_on_fstat(self.selected, missing.mkdir, occurrence=2) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertTrue(missing.is_dir())
+        self.assert_unavailable(fact, raw)
+
+    def test_absent_intermediate_appearance_is_unavailable_even_if_leaf_is_missing(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "appeared" / "still-absent"
+        with path_change_on_fstat(self.selected, missing.parent.mkdir, occurrence=2) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertTrue(missing.parent.is_dir())
+        self.assertFalse(missing.exists())
+        self.assert_unavailable(fact, raw)
+
+    def test_dangling_symlink_appearance_is_not_successful_absence(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "appeared"
+        def redirect():
+            missing.symlink_to(self.root / "never-existed", target_is_directory=True)
+        with path_change_on_fstat(self.selected, redirect, occurrence=2) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertTrue(missing.is_symlink())
+        self.assertFalse(missing.exists())
+        self.assert_unavailable(fact, raw)
+
+    def unavailable_ancestor_fact(self, name):
+        from pod.cleanup_observations import slot
+        original = getattr(cleanup_archives, name)
+        def unavailable(descriptor):
+            if os.readlink(f"/proc/self/fd/{descriptor}") == str(self.parent):
+                raise cleanup_archives.Unavailable("Indispensable ancestor fact is unavailable")
+            return original(descriptor)
+        with patch.object(cleanup_archives, name, side_effect=unavailable):
+            self.assert_unavailable(*slot(self.selected, self.selected, directory=True))
+
+    def test_unknown_outside_ancestor_mount_is_unavailable(self):
+        self.unavailable_ancestor_fact("_mount_id")
+
+    def test_unknown_outside_ancestor_incarnation_is_unavailable(self):
+        self.unavailable_ancestor_fact("_incarnation")
+
+    def test_binding_reopen_failure_clears_bytes_and_closes_every_descriptor(self):
+        from pod.cleanup_observations import slot
+        leaf = self.selected / "entry"
+        leaf.write_bytes(b"fixture bytes\n")
+        original_open, original_close = os.open, os.close
+        opened, closed, attempts = [], [], 0
+        def opening(path, flags, **kwargs):
+            nonlocal attempts
+            if path == leaf.name:
+                attempts += 1
+                if attempts == 2:
+                    raise PermissionError("Current pathname edge cannot be read")
+            descriptor = original_open(path, flags, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        def closing(descriptor):
+            closed.append(descriptor)
+            original_close(descriptor)
+        with patch("pod.cleanup_observations.os.open", side_effect=opening), \
+                patch("pod.cleanup_observations.os.close", side_effect=closing):
+            fact, raw = slot(leaf, self.selected)
+        self.assertEqual(attempts, 2)
+        self.assertCountEqual(closed, opened)
+        self.assert_unavailable(fact, raw)
 
 
 @contextmanager

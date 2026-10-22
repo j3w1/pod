@@ -71,6 +71,144 @@ class SourceFixture:
         return self.observe(**kwargs)["resources"][0]
 
 
+class StashPathBindingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = SourceFixture()
+        cls.addClassCleanup(cls.source.close)
+        cls.parent = cls.source.case.root / "outside-ancestor"
+        cls.parent.mkdir()
+        child = cls.parent / "checkout"
+        plans.git(cls.source.case.project, "worktree", "move", str(cls.source.case.child), str(child))
+        cls.source.case.child = child
+
+    def context(self):
+        repository = archives.repository_observation(self.source.case.project)
+        return repository, stashes._context(self.source.case.project, repository)
+
+    def replace_checkout_parent(self):
+        child = self.source.case.child
+        parked = self.source.case.root / "parked-ancestor"
+        def restore():
+            child.rmdir()
+            self.parent.rmdir()
+            parked.rename(self.parent)
+        self.parent.rename(parked)
+        self.addCleanup(restore)
+        child.mkdir(parents=True)
+
+    def test_shared_context_tolerates_unrelated_outside_ancestor_entries(self):
+        repository, before = self.context()
+        with plans.directory_entry_changes(self.source.case.root) as changes:
+            after = stashes._context(self.source.case.project, repository)
+        self.assertTrue(changes)
+        self.assertEqual(after, before)
+
+    def test_complete_catalog_tolerates_unrelated_outside_ancestor_entries(self):
+        _, context = self.context()
+        before = stashes._catalog(self.source.case.project, context, time.monotonic() + 30)
+        with plans.directory_entry_changes(self.parent) as changes:
+            after = stashes._catalog(self.source.case.project, context, time.monotonic() + 30)
+        self.assertTrue(changes)
+        self.assertEqual(after, before)
+        self.assertEqual({row["path"] for row in after},
+                         {str(self.source.case.project), str(self.source.case.child)})
+        self.assertTrue(all(observations.reliable(row["identity"]) for row in after))
+
+    def test_catalog_rejects_detached_checkout_binding_before_name_exclusion(self):
+        _, context = self.context()
+        original, identities = observations.filesystem, {}
+        def inspect(path):
+            identities[str(path)] = original(path)
+            return identities[str(path)]
+        with patch.object(observations, "filesystem", side_effect=inspect), \
+                plans.path_change_on_fstat(self.parent, self.replace_checkout_parent) as changes, \
+                self.assertRaises(archives.Unavailable):
+            stashes._catalog(self.source.case.project, context, time.monotonic() + 30)
+        self.assertTrue(changes)
+        self.assertIsNone(identities[str(self.source.case.child)])
+
+    def worktree_facts(self):
+        repository, context = self.context()
+        facts = archives.resource_observation(self.source.case.child, "refs/heads/live",
+                                              self.source.case.base, repository)
+        self.assertTrue(facts["complete"], facts)
+        return facts, context
+
+    def test_worktree_layout_tolerates_unrelated_outside_ancestor_entries(self):
+        facts, context = self.worktree_facts()
+        before = stashes._worktree_footprint(facts, context)
+        self.assertEqual(before["status"], "observed")
+        with plans.directory_entry_changes(self.parent) as changes:
+            after = stashes._worktree_footprint(facts, context)
+        self.assertTrue(changes)
+        self.assertEqual(after, before)
+
+    def test_worktree_layout_holds_detached_checkout_binding(self):
+        facts, context = self.worktree_facts()
+        with plans.path_change_on_fstat(self.parent, self.replace_checkout_parent) as changes:
+            footprint = stashes._worktree_footprint(facts, context)
+        self.assertTrue(changes)
+        self.assertEqual(footprint["status"], "unavailable")
+        self.assertEqual(footprint["opaque"], ["effect_footprint_unavailable"])
+
+    def local_footprint(self, repository, context):
+        storage, raw = observations.storage_once(self.source.case.project, self.source.ref, repository)
+        self.assertEqual(storage["status"], "observed")
+        def read():
+            return stashes._footprint(self.source.case.project, self.source.ref, self.source.case.base,
+                                     "local_branch", storage, context, packed_raw=raw.get("packed"),
+                                     object_format=repository["object_format"])
+        self.assertEqual(read()["status"], "observed")
+        return read
+
+    def test_ref_lock_appearance_after_genuine_absence_holds_the_footprint(self):
+        repository, context = self.context()
+        read = self.local_footprint(repository, context)
+        lock, pending = self.source.common / "packed-refs.lock", b"fixture pending transaction\n"
+        self.assertFalse(lock.exists())
+        self.addCleanup(lock.unlink, missing_ok=True)
+        with plans.path_change_on_fstat(self.source.common, lambda: lock.write_bytes(pending), occurrence=2) as changes:
+            footprint = read()
+        self.assertTrue(changes)
+        self.assertEqual(footprint["status"], "unavailable")
+        self.assertEqual(lock.read_bytes(), pending)
+
+    def test_ref_lock_cannot_borrow_absence_from_detached_outside_ancestor(self):
+        repository, context = self.context()
+        read = self.local_footprint(repository, context)
+        project, common = self.source.case.project, self.source.common
+        parked, pending = self.source.case.root / "parked-project", b"fixture pending transaction\n"
+        lock = common / "packed-refs.lock"
+        ref_bytes, log_bytes = (common / "refs/stash").read_bytes(), (common / "logs/refs/stash").read_bytes()
+        def replace():
+            project.rename(parked)
+            project.mkdir()
+            (parked / ".git").rename(common)
+            lock.write_bytes(pending)
+            self.addCleanup(restore)
+        def restore():
+            lock.unlink()
+            common.rename(parked / ".git")
+            project.rmdir()
+            parked.rename(project)
+        original, slots = observations.slot, {}
+        def inspect(path, root, **kwargs):
+            value = original(path, root, **kwargs)
+            slots[str(path)] = value[0]
+            return value
+        self.assertFalse(lock.exists())
+        with patch.object(observations, "slot", side_effect=inspect), \
+                plans.path_change_on_fstat(project, replace) as changes:
+            footprint = read()
+        self.assertTrue(changes)
+        self.assertEqual(slots[str(lock)]["status"], "unavailable")
+        self.assertEqual(footprint["status"], "unavailable")
+        self.assertEqual(lock.read_bytes(), pending)
+        self.assertEqual((common / "refs/stash").read_bytes(), ref_bytes)
+        self.assertEqual((common / "logs/refs/stash").read_bytes(), log_bytes)
+
+
 class StashSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

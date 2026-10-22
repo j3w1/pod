@@ -71,11 +71,13 @@ def slot(path: Path, root: Path, *, directory: bool = False) -> tuple[dict, byte
     """Read a no-follow slot, including successful absence and its existing parent chain.
 
     Raw bytes exist only inside this observation call and its parser; callers export
-    the slot's digest. Descriptor/path facts are reobserved by the enclosing producer.
+    the slot's digest. Retained descriptors and their no-follow pathname edges are
+    checked before accepting either presence or absence.
     """
     result = {"path": str(path), "status": "unavailable", "identity": None,
               "ancestors": None, "sha256": None}
     descriptors, observed, ancestors = [], [], []
+    missing = None
     raw = None
     try:
         if not path.is_absolute() or ".." in path.parts or not path.is_relative_to(root):
@@ -93,6 +95,7 @@ def slot(path: Path, root: Path, *, directory: bool = False) -> tuple[dict, byte
             try:
                 current = os.open(part, flags | (os.O_DIRECTORY if is_directory else 0), dir_fd=current)
             except FileNotFoundError:
+                missing = (current, part)
                 result.update(status="absent", ancestors=ancestors)
                 break
             descriptors.append(current)
@@ -117,12 +120,35 @@ def slot(path: Path, root: Path, *, directory: bool = False) -> tuple[dict, byte
                     raise archives.Unavailable("Storage metadata changed")
             result.update(status="present", identity=found, ancestors=ancestors,
                           sha256=hashlib.sha256(raw).hexdigest() if raw is not None else None)
-        for descriptor, before in observed:
+        # Work back toward the root: checking a detached descriptor against itself
+        # cannot prove that its parent still names it. Reopen each edge relative to
+        # its retained parent, then check that parent's own binding on the next step.
+        for index in reversed(range(len(observed))):
+            descriptor, before = observed[index]
             after = identity(Path(before["path"]), os.fstat(descriptor), descriptor)
             keys = before.keys() if Path(before["path"]).is_relative_to(root) else (
                 "path", "device", "inode", "mode", "mount_id", "incarnation")
-            if any(after[key] != before[key] for key in keys):
+            if (not reliable(before) or not reliable(after)
+                    or any(after[key] != before[key] for key in keys)):
                 raise archives.Unavailable("Storage metadata changed")
+            if missing is not None and descriptor == missing[0]:
+                try:
+                    os.stat(missing[1], dir_fd=descriptor, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise archives.Unavailable("Absent storage component appeared")
+            if index:
+                flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+                if stat.S_ISDIR(before["mode"]):
+                    flags |= os.O_DIRECTORY
+                rebound = os.open(Path(before["path"]).name, flags, dir_fd=observed[index - 1][0])
+                try:
+                    bound = identity(Path(before["path"]), os.fstat(rebound), rebound)
+                    if not reliable(bound) or any(bound[key] != before[key] for key in keys):
+                        raise archives.Unavailable("Storage pathname binding changed")
+                finally:
+                    os.close(rebound)
     except (OSError, archives.Unavailable):
         result.update(status="unavailable", identity=None, ancestors=None, sha256=None)
         raw = None

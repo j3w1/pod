@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -379,6 +380,100 @@ class SelectedObservationTests(unittest.TestCase):
             first = self.source.observe()
         with patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "fixture.value", "GIT_CONFIG_VALUE_0": "two"}):
             self.assert_changed(first)
+
+
+class SelectedCacheBindingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = stash_tests.SourceFixture()
+        cls.addClassCleanup(cls.source.close)
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.parent = self.root / "ancestor"
+        self.selected = self.parent / "selected"
+        self.selected.mkdir(parents=True)
+        self.selection = {"kind": "cache", "name": str(self.selected)}
+
+    def replace_parent(self):
+        self.parent.rename(self.root / "parked")
+        self.selected.mkdir(parents=True)
+
+    def assert_held(self, row, status):
+        self.assertEqual(row["identity"]["current"]["status"], status)
+        if status != "present":
+            self.assertIsNone(row["identity"]["filesystem"])
+        self.assertIsNone(row["delete_argv"])
+        self.assertIsNone(row["archive_argv"])
+        self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
+
+    def test_public_cache_refuses_detached_ancestor_identity(self):
+        before = self.selected.stat()
+        with plans.path_change_on_fstat(self.parent, self.replace_parent) as changes:
+            row = self.source.row(**self.selection)
+        self.assertTrue(changes)
+        self.assertNotEqual(self.selected.stat().st_ino, before.st_ino)
+        self.assert_held(row, "unavailable")
+
+    def test_public_cache_replacement_refuses_same_stale_expect(self):
+        first = self.source.observe(**self.selection)
+        self.assert_held(first["resources"][0], "present")
+        with plans.current_resources() as rows, \
+                plans.path_change_on_fstat(self.parent, self.replace_parent) as changes, \
+                self.assertRaises(PodError) as caught:
+            self.source.observe(**self.selection, expect=first["expect"])
+        self.assertTrue(changes)
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+        self.assert_held(rows[0], "unavailable")
+
+    def test_public_cache_unrelated_ancestor_entries_accept_same_expect(self):
+        first = self.source.observe(**self.selection)
+        with plans.directory_entry_changes(self.parent) as changes:
+            second = self.source.observe(**self.selection, expect=first["expect"])
+        self.assertTrue(changes)
+        self.assertEqual(second["expect"], first["expect"])
+        self.assert_held(second["resources"][0], "present")
+
+    def test_public_cache_genuine_absence_then_appearance_changes_expect(self):
+        self.selected.rmdir()
+        first = self.source.observe(**self.selection)
+        self.assert_held(first["resources"][0], "absent")
+        self.selected.mkdir()
+        with self.assertRaises(PodError) as caught:
+            self.source.observe(**self.selection, expect=first["expect"])
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+        self.assert_held(self.source.row(**self.selection), "present")
+
+    def test_public_cache_absence_under_replaced_ancestor_refuses_old_expect(self):
+        self.selected.rmdir()
+        first = self.source.observe(**self.selection)
+        self.assert_held(first["resources"][0], "absent")
+        def replace():
+            self.parent.rename(self.root / "parked")
+            self.parent.mkdir()
+        with plans.current_resources() as rows, \
+                plans.path_change_on_fstat(self.parent, replace) as changes, \
+                self.assertRaises(PodError) as caught:
+            self.source.observe(**self.selection, expect=first["expect"])
+        self.assertTrue(changes)
+        self.assertFalse(self.selected.exists())
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+        self.assert_held(rows[0], "unavailable")
+
+    def test_public_cache_appearance_during_absence_read_refuses_old_expect(self):
+        self.selected.rmdir()
+        first = self.source.observe(**self.selection)
+        self.assert_held(first["resources"][0], "absent")
+        with plans.current_resources() as rows, \
+                plans.path_change_on_fstat(self.parent, self.selected.mkdir, occurrence=2) as changes, \
+                self.assertRaises(PodError) as caught:
+            self.source.observe(**self.selection, expect=first["expect"])
+        self.assertTrue(changes)
+        self.assertTrue(self.selected.is_dir())
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+        self.assert_held(rows[0], "unavailable")
 
 
 class SelectedWorkerObservationTests(unittest.TestCase):
