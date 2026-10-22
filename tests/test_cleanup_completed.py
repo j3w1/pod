@@ -33,7 +33,9 @@ class _CompletedFixture(TickCase):
     def native(self, argv, **kwargs):
         if argv[:2] == ["worktree", "show"]:
             path = argv[3].removeprefix("path:")
-            branch = git(Path(path), "symbolic-ref", "--short", "HEAD")
+            # A quiet fixture native entry can persist after the actual Git phase.
+            # Its null branch is never the source of task/ref association.
+            branch = git(Path(path), "symbolic-ref", "--short", "HEAD") if Path(path).exists() else None
             return {"runtime": "runtime", "result": {"worktree": {
                 "id": "fixture-" + Path(path).name, "path": path, "branch": branch,
                 "isMainWorktree": Path(path) == self.project, "isBare": False, "role": self.role,
@@ -212,14 +214,16 @@ class CompletedCleanupTests(_CompletedFixture):
         git(self.project, "worktree", "lock", str(self.child))
         self.assert_held(self.observed())
 
-    def test_absent_worktree_branch_none_supplies_no_ownership_for_remaining_ref(self):
+    def test_absent_worktree_without_recorded_branch_binding_holds_remaining_ref(self):
         self.closed()
         git(self.project, "worktree", "remove", str(self.child))
-        result = self.observed()
-        self.assertIsNone(self.row(result)["identity"]["branch"])
-        branch = self.row(result, "local_branch")
+        state = read(self.project, "objective")
+        state["checkpoint"]["worktree"]["branch"] = None
+        with patch("pod.cleanup.read", return_value=state):
+            branch = self.observed(observe={"kind": "local_branch", "name": "refs/heads/task-branch"})["resources"][0]
+        self.assertEqual(branch["identity"]["current"]["status"], "present")
+        self.assertEqual(branch["identity"]["provenance"]["status"], "unavailable")
         self.assertIsNone(branch["delete_argv"])
-        self.assertIn("unproven", " ".join(branch["reasons"]))
 
     def test_private_stash_alias_stays_held_after_genuine_completion(self):
         (self.child / "README.md").write_text("retained stash\n")
@@ -254,6 +258,228 @@ class CompletedCleanupTests(_CompletedFixture):
                 row = self.observed(observe={"kind": kind, "name": name})["resources"][0]
                 self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
                 self.assertIsNone(row["delete_argv"])
+
+class CompletedRemainingRefTests(_CompletedFixture):
+    ref = "refs/heads/task-branch"
+
+    def remaining(self):
+        self.unique()
+        self.closed()
+        self.tip = git(self.project, "rev-parse", self.ref)
+        subprocess.run(cleanup_stashes.worktree_argv(self.project, str(self.child)), capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+
+    def selected(self, **options):
+        return self.observed(observe={"kind": "local_branch", "name": self.ref}, **options)
+
+    def assert_remaining(self, row):
+        self.assertEqual(row["class"], "unique")
+        self.assertEqual(row["delete_argv"], cleanup_stashes.local_argv(self.project, self.ref, self.tip))
+        self.assertEqual(row["archives"], [])
+        self.assertFalse(row["archive_verified"])
+        self.assertIsNone(row["archive_argv"])
+        self.assertEqual(row["identity"]["checked_out"], [])
+        self.assertEqual(row["identity"]["current"], {"status": "present", "path": None, "ref": self.ref, "oid": self.tip})
+        self.assertEqual(row["identity"]["provenance"], {
+            "status": "observed", "source": "objective_checkpoint", "reference": "objective"})
+        self.assertEqual(row["identity"]["ref_storage"]["current"]["oid"], self.tip)
+        self.assertTrue(row["identity"]["ref_storage"]["freshness"]["stable"])
+        self.assertEqual(row["stash_observation"]["executor"]["profile"], cleanup_stashes.PROFILE)
+        self.assertEqual(row["stash_observation"]["footprint"]["status"], "observed")
+
+    def test_genuine_completed_recorded_ref_after_actual_worktree_removal_has_guarded_command(self):
+        self.remaining()
+        result = self.observed()
+        row = self.row(result, "local_branch")
+        self.assert_remaining(row)
+        self.assertIn(row["id"], result["standing_authorization"]["covers"])
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        absent = subprocess.run(["git", "-C", str(self.project), "show-ref", "--verify", self.ref], capture_output=True)
+        self.assertNotEqual(absent.returncode, 0)
+
+    def test_selected_remaining_ref_preserves_current_provenance_storage_stash_and_expect(self):
+        self.remaining()
+        result = self.selected()
+        row = result["resources"][0]
+        self.assert_remaining(row)
+        self.assertEqual(result["expect"]["resources"], {row["id"]: row["fingerprint"]})
+
+    def test_missing_objective_record_cannot_supply_current_ref_eligibility(self):
+        self.remaining()
+        with patch("pod.cleanup.read", return_value=None):
+            row = self.selected()["resources"][0]
+        self.assertEqual(row["identity"]["current"]["status"], "present")
+        self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
+        self.assertIsNone(row["delete_argv"])
+
+    def test_wrong_recorded_branch_cannot_borrow_the_actual_remaining_ref(self):
+        self.remaining()
+        state = read(self.project, "objective")
+        state["checkpoint"]["worktree"]["branch"] = "different"
+        with patch("pod.cleanup.read", return_value=state):
+            row = self.selected()["resources"][0]
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
+
+    def ambiguous(self, path, branch):
+        state = read(self.project, "objective")
+        # Negative record-port disagreement only; no private or accepted record is written.
+        state["admissions"]["conflict"] = {"admission_id": "conflict", "state": "closed", "recovery": {
+            "placement_binding": {"path": str(path), "branch": branch}}}
+        with patch("pod.cleanup.read", return_value=state):
+            row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("ambiguous", " ".join(row["reasons"]))
+
+    def test_disagreeing_bindings_on_the_same_recorded_path_hold(self):
+        self.remaining()
+        self.ambiguous(self.child, "different")
+
+    def test_two_recorded_paths_for_the_same_ref_are_ambiguous(self):
+        self.remaining()
+        self.ambiguous(self.root / "other-placement", "task-branch")
+
+    def test_admission_binding_is_current_selection_data_without_creation_history(self):
+        self.remaining()
+        state = read(self.project, "objective")
+        placement = state["checkpoint"].pop("worktree")
+        state["admissions"]["recorded"] = {"admission_id": "recorded", "recovery": {"placement_binding": placement}}
+        from pod.cleanup_archives import repository_observation
+        facts = cleanup._remaining_local_ref(self.project, "objective", state, self.ref, {},
+                                             repository_observation(self.project), self.native)
+        self.assertEqual(facts["status"], "observed")
+        self.assertEqual(facts["provenance"], {"status": "observed", "source": "admission", "reference": "recorded"})
+        self.assertNotIn("creation", facts)
+
+    def test_current_checkout_elsewhere_still_holds_completed_ref(self):
+        self.remaining()
+        git(self.project, "worktree", "add", "-q", str(self.root / "shared"), "task-branch")
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertTrue(row["identity"]["checked_out"])
+
+    def test_recreated_unregistered_path_is_not_completed_resource_absence(self):
+        self.remaining()
+        self.child.mkdir()
+        (self.child / "valuable.txt").write_text("unrelated current path\n")
+        self.assertIsNone(self.row(self.observed(), "local_branch")["delete_argv"])
+
+    def test_current_attached_native_terminal_holds_after_git_worktree_absence(self):
+        self.remaining()
+        self.terminals = [{"handle": "attached", "worktreePath": str(self.child)}]
+        self.assertIsNone(self.row(self.observed(), "local_branch")["delete_argv"])
+
+    def test_current_role_entry_holds_after_git_worktree_absence(self):
+        self.remaining()
+        self.role = "director"
+        self.assertIsNone(self.row(self.observed(), "local_branch")["delete_argv"])
+
+    def test_incomplete_native_terminal_read_stays_held(self):
+        self.remaining()
+        original = self.native
+        def incomplete(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[:2] == ["terminal", "list"]:
+                result["result"]["truncated"] = True
+            return result
+        with patch.object(self, "native", side_effect=incomplete):
+            self.assertIsNone(self.row(self.observed(), "local_branch")["delete_argv"])
+
+    def test_unavailable_native_observation_is_not_quiet_absence(self):
+        self.remaining()
+        with patch.object(self, "native", side_effect=PodError("orca_unavailable", "unavailable")):
+            self.assertIsNone(self.row(self.observed(), "local_branch")["delete_argv"])
+
+    def test_held_native_role_change_still_changes_expect(self):
+        self.remaining()
+        self.role = "director"
+        first = self.observed()
+        self.role = "lead"
+        with self.assertRaises(PodError) as caught:
+            self.observed(expect=first["expect"])
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+
+    def test_missing_live_source_completion_still_holds_the_remaining_ref(self):
+        self.remaining()
+        self.issue.unreadable = True
+        self.assertIsNone(self.row(self.observed(), "local_branch")["delete_argv"])
+
+    def test_changed_ref_oid_refuses_old_expect_and_the_actual_old_oid_command(self):
+        self.remaining()
+        first = self.observed()
+        old_argv = self.row(first, "local_branch")["delete_argv"]
+        new = git(self.project, "commit-tree", self.base + "^{tree}", "-p", self.tip, "-m", "changed current ref")
+        git(self.project, "update-ref", self.ref, new)
+        stale = subprocess.run(old_argv, capture_output=True)
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertEqual(git(self.project, "rev-parse", self.ref), new)
+        with self.assertRaises(PodError) as caught:
+            self.observed(expect=first["expect"])
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+
+    def test_equal_oid_ref_file_replacement_refuses_old_expect(self):
+        self.remaining()
+        first = self.observed()
+        path = self.project / ".git" / self.ref
+        replacement = path.with_name("replacement")
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+        with self.assertRaises(PodError) as caught:
+            self.observed(expect=first["expect"])
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+
+    def test_unchanged_current_remaining_ref_accepts_its_own_expect(self):
+        self.remaining()
+        first = self.observed()
+        self.assertEqual(self.observed(expect=first["expect"])["digest"], first["digest"])
+
+    def stash(self):
+        (self.project / "README.md").write_text("unrelated retained stash\n")
+        git(self.project, "stash", "push", "-qm", "fixture stash")
+
+    def test_unrelated_retained_stash_stays_byte_identical_through_actual_ref_deletion(self):
+        self.remaining()
+        self.stash()
+        paths = [self.project / ".git" / name for name in ("refs/stash", "logs/refs/stash")]
+        before = [path.read_bytes() for path in paths]
+        row = self.row(self.observed(), "local_branch")
+        self.assert_remaining(row)
+        self.assertEqual({value["relation"] for value in row["stash_observation"]["relations"]}, {"unrelated"})
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertEqual([path.read_bytes() for path in paths], before)
+
+    def test_actual_symbolic_private_dependency_keeps_remaining_ref_held(self):
+        self.remaining()
+        self.stash()
+        git(self.project, "symbolic-ref", "refs/worktree/needed-name", self.ref)
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual({value["relation"] for value in row["stash_observation"]["relations"]}, {"related"})
+
+    def test_missing_stash_log_is_not_empty_after_actual_worktree_removal(self):
+        self.remaining()
+        self.stash()
+        (self.project / ".git/logs/refs/stash").unlink()
+        self.assertIsNone(self.row(self.observed(), "local_branch")["delete_argv"])
+
+    def test_packed_storage_keeps_the_unprofiled_effect_held_even_with_empty_stash(self):
+        self.remaining()
+        git(self.project, "pack-refs", "--all", "--no-prune")
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("primitive is unavailable", " ".join(row["reasons"]))
+
+    def test_unknown_footprint_keeps_empty_stash_remaining_ref_held(self):
+        self.remaining()
+        original = cleanup_stashes._footprint
+        def unknown(*args, **kwargs):
+            value = original(*args, **kwargs)
+            value.update(status="unavailable", opaque=["effect_footprint_unavailable"], reasons=["effect_footprint_unavailable"])
+            return value
+        with patch.object(cleanup_stashes, "_footprint", side_effect=unknown):
+            row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+
 
 class CompletedRemoteTests(_CompletedFixture):
     def remote_plan(self):

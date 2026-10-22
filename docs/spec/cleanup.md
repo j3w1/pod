@@ -192,9 +192,25 @@ therefore cannot cross a completion or source change.
 
 The exact task association comes from current supported checkpoint placement,
 admission placement and actual Governor publications. A missing checkout's null
-branch cannot associate a remaining ref. Selected remaining-ref mode still observes
-current ref/storage and stash facts with unavailable authority where appropriate.
-CE alone retains its original finite scope and committed phase outcomes, checks
+branch cannot associate a remaining ref. For the completed-only default, an exact
+unambiguous current checkpoint/admission placement branch binding can select its
+remaining local ref after positive filesystem/Git absence of that recorded checkout.
+The same path cannot have conflicting branches, and multiple recorded paths cannot
+supply one unambiguous binding. The recorded branch and source/reference are current
+selection data, never historical creation, ownership or a completed prior phase.
+
+A fresh remaining row retains its existing current/provenance/ref-storage/stash/expect
+shapes and UNIQUE truth, without archives. Its hardened no-deref exact-OID command
+requires complete current checkout absence, target/default exclusion, stable logical
+and physical ref storage, a quiet exact native entry and the actual known Git
+primitive, including when the stash is verified empty. Native branch null is not the
+association source; unknown, contradictory, attached or role facts hold. Current
+association/native/storage facts, including held observations, bind the opaque
+material/expect and are rechecked. A newly attached checkout or changed current fact
+refuses the stale observation. An unavailable native read is never quiet absence.
+CE consumes only the fixed-template eligibility, never arbitrary returned argv.
+
+CE alone retains its current new-operation finite scope and actual phase outcomes, checks
 current process/attachment/reservation/role/default/shared facts and performs known
 Git phases. Complete checkout absence and atomic expected-OID no-deref deletion
 remain required. Remote origin, policy, open-PR and lease checks remain required.

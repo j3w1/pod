@@ -337,6 +337,7 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
     current = {"status": "unavailable", "path": None, "ref": None, "oid": None}
     git, worker = (base or {}).get("identity", {}).get("git"), None
     completion = (git or {}).get("objective_completion")
+    association = (git or {}).get("recorded_association")
     row = deepcopy(base) if base is not None else cleanup._resource(kind, name, {}, "protected", [])
     row.pop("fingerprint", None)
     row["identity"] = {}
@@ -429,6 +430,8 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
             row["identity"] = {"dispatch": name, "native": None, **common}
     if completion is not None and isinstance(row["identity"].get("git"), dict):
         row["identity"]["git"]["objective_completion"] = completion
+    if association is not None and isinstance(row["identity"].get("git"), dict):
+        row["identity"]["git"]["recorded_association"] = association
     if current["status"] != "present":
         row["class"] = "unique" if row["class"] == "unique" else "protected"
         row["delete_argv"] = row["archive_argv"] = None
@@ -507,6 +510,7 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
     tip = row["identity"].get("tip")
     integrated = bool(tip and target["commit"] and cleanup.is_ancestor(project, tip, target["commit"]) is True)
     cleanup_stashes.apply(row, observation, branch_integrated=integrated)
+    cleanup._guard_remaining_ref(project, row)
     if observe["kind"] in {"cache", "native"} or objective is None:
         row["delete_argv"] = row["archive_argv"] = None
     if observe["kind"] in {"cache", "native"}:
@@ -514,9 +518,18 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
     row["reasons"] = sorted(set(row["reasons"]))
     completion = (row["identity"].get("git") or {}).get("objective_completion")
     if completion is not None:
-        _, fresh_completion = cleanup._completion(project, objective, cleanup.read(project, objective) or {}, older=False)
+        fresh_state = cleanup.read(project, objective) or {}
+        _, fresh_completion = cleanup._completion(project, objective, fresh_state, older=False)
         if fresh_completion != completion:
             raise PodError("cleanup_changed", "Objective completion changed during selected observation")
+        association = (row["identity"].get("git") or {}).get("recorded_association")
+        if association is not None and association["status"] == "observed":
+            paths = {value["path"] for value in association["bindings"]}
+            current_paths, checkouts, _ = cleanup._objective_worktrees(project, paths, {row["identity"]["ref"]})
+            if (checkouts.get(row["identity"]["ref"]) or cleanup._remaining_local_ref(
+                    project, objective, fresh_state, row["identity"]["ref"], current_paths,
+                    repository, orca_reader) != association):
+                raise PodError("cleanup_changed", "Current recorded branch association changed during selected observation")
     cleanup._compact_material([row])
     plan_hash, fingerprints = cleanup._expect_change(expect, [row], target)
     row["fingerprint"] = fingerprints[row["id"]]
