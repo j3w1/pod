@@ -17,11 +17,11 @@ PREVIOUS = "678fb09c1d3ade80614cc763c87776b2072d01ce"
 REPOSITORY = Path(__file__).resolve().parents[1]
 
 
-def previous_history_bundle(directory):
+def previous_history_bundle(directory, revision=PREVIOUS):
     """Archive the complete reviewed pre-change bundle, never installed helpers."""
     bundle = Path(directory)
     archive = bundle / "source.tar"
-    subprocess.run(["git", "-C", str(REPOSITORY), "archive", "-o", str(archive), PREVIOUS,
+    subprocess.run(["git", "-C", str(REPOSITORY), "archive", "-o", str(archive), revision,
                     "skills", "VERSION"], check=True)
     with tarfile.open(archive) as source:
         source.extractall(bundle, filter="data")
