@@ -773,6 +773,7 @@ class CleanupWorkerTests(KernelCase):
         self.resource_owners = {}
         self.native_fields = {}
         self.terminals, self.orca_reads = [], []
+        self.path_terminals = {}
         self.context_path.write_bytes(self.context_bytes)
         self.journal_path.write_bytes(self.journal_bytes)
         git(self.project, "update-ref", "refs/heads/worker", self.base)
@@ -888,7 +889,10 @@ class CleanupWorkerTests(KernelCase):
                 "path": path, "branch": branch, "isBare": False, "isMainWorktree": Path(path) == self.project,
                 "git": {"path": path, "branch": branch, "isBare": False}, **self.native_fields}}}
         if argv[:2] == ["terminal", "list"]:
-            return {"runtime": self.port.runtime, "result": {"terminals": list(self.terminals), "truncated": False}}
+            path = argv[3].removeprefix("path:")
+            return {"runtime": self.port.runtime, "result": {
+                "terminals": list(self.terminals) + list(getattr(self, "path_terminals", {}).get(path, [])),
+                "truncated": False}}
         raise AssertionError(argv)
     resource = CleanupPlanTests.resource
     changed = CleanupPlanTests.changed
@@ -1012,6 +1016,85 @@ class CleanupWorkerTests(KernelCase):
     def test_locked_worker_never_receives_an_extra_force(self):
         git(self.project, "worktree", "lock", str(self.child))
         self.assertIsNone(self.resource(self.selected_entry(), "worktree")["delete_argv"])
+
+    def assert_unforced_positive_preserves_stash(self):
+        before = self.stash_state()
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        stash = row["stash_observation"]
+        self.assertEqual({item["relation"] for item in stash["relations"]}, {"unrelated"}, stash)
+        self.assertEqual((stash["holders"]["status"], stash["holders"]["observations"]), ("observed", []))
+        # Only the selected checkout is read natively; other worktrees are excluded by Git facts.
+        native = {argv[3] for argv in self.orca_reads if argv[:2] in (["worktree", "show"], ["terminal", "list"])}
+        self.assertEqual(native, {"path:" + str(self.child)})
+        self.assertNotIn(["terminal", "show"], [argv[:2] for argv in self.orca_reads])
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertEqual(self.stash_state(), before)
+        return row
+
+    def test_coordinator_and_exited_terminals_elsewhere_do_not_veto_an_unrelated_stash(self):
+        self.stash()
+        sibling = self.root / "foreign-worktree"
+        git(self.project, "worktree", "add", "-q", "--detach", str(sibling))
+        self.path_terminals = {str(self.project): [{"handle": "coordinator", "worktreePath": str(self.project)}],
+                               str(sibling): [{"handle": "exited-reviewer", "worktreePath": str(sibling)}]}
+        row = self.assert_unforced_positive_preserves_stash()
+        excluded = next(item for item in row["stash_observation"]["holders"]["witnesses"]
+                        if item["reference"] == "holders.exclusions")
+        self.assertEqual(excluded["status"], "PASS")
+
+    def test_two_unrelated_stash_entries_keep_the_unforced_worker_positive(self):
+        self.stash()
+        (self.project / "README.md").write_text("second unrelated retained worker fixture\n")
+        git(self.project, "stash", "push", "-qm", "second retained fixture")
+        self.assertEqual(len(git(self.project, "stash", "list").splitlines()), 2)
+        row = self.assert_unforced_positive_preserves_stash()
+        self.assertEqual(len(row["stash_observation"]["snapshot"]), 2)
+        self.assertEqual(row["class"], "integrated")
+
+    def test_unrelated_stash_entries_do_not_mask_otherwise_lost_worker_roots(self):
+        self.stash()
+        (self.project / "README.md").write_text("second unrelated retained worker fixture\n")
+        git(self.project, "stash", "push", "-qm", "second retained fixture")
+        (self.child / "README.md").write_text("abandoned worker commit\n")
+        git(self.child, "commit", "-qam", "abandoned worker commit")
+        git(self.child, "reset", "-q", "--hard", self.base)
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("worktree has additional local recovery roots", row["reasons"])
+
+    def test_unreadable_registered_worktree_holds_an_unrelated_stash_relation(self):
+        self.stash()
+        sibling = self.root / "foreign-worktree"
+        git(self.project, "worktree", "add", "-q", "--detach", str(sibling))
+        parked = self.root / "parked-foreign-worktree"
+        sibling.rename(parked)
+        self.addCleanup(git, self.project, "worktree", "prune")
+        self.addCleanup(parked.rename, sibling)
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual({item["relation"] for item in row["stash_observation"]["relations"]}, {"unknown"})
+
+    def test_returned_unforced_worker_argv_starts_no_configured_fsmonitor(self):
+        marker, hook = self.root / "fsmonitor-marker", self.root / "fsmonitor-hook"
+        hook.write_text('#!/bin/sh\necho ran >> "%s"\nexit 1\n' % marker)
+        hook.chmod(0o755)
+        git(self.project, "config", "extensions.worktreeConfig", "true")
+        self.addCleanup(git, self.project, "config", "--unset", "extensions.worktreeConfig")
+        git(self.project, "config", "core.fsmonitor", str(hook))
+        self.addCleanup(git, self.project, "config", "--unset", "core.fsmonitor")
+        git(self.child, "config", "--worktree", "core.fsmonitor", str(hook))
+        row = self.resource(self.selected_entry(), "worktree")
+        argv = row["delete_argv"]
+        self.assertEqual(argv, cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        position = argv.index("core.hooksPath=/dev/null")
+        self.assertEqual(argv[position + 1:position + 7], ["-c", "core.fsmonitor=false", "-c", "maintenance.auto=false",
+                                                           "-c", "gc.auto=0"])
+        self.assertNotIn("--force", argv)
+        subprocess.run(argv, capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertFalse(marker.exists())
 
     def test_unknown_worktree_effect_stays_held_even_with_verified_empty_stash(self):
         original = cleanup_stashes._worktree_footprint

@@ -134,7 +134,7 @@ describe the observing project; the physical ref fact is `identity.ref_storage`.
 | `executor` | Status/kind/runtime/version/profile, actual artifact/source-binding digests, reasons and witnesses. A version label alone is not implementation correspondence. |
 | `footprint` | Status and typed path/ref/config/native effects, opaque effects, digest, reasons and witnesses. It covers the entire recognized operation. |
 | `support` | Status/object format, object dirs/alternates, retaining refs/log/context/config digests, complete required closure, unsupported facts, reasons and witnesses. |
-| `holders` | Status and current binding/path/role/liveness/dependency/source observations, reasons and witnesses. Different paths/branches alone do not prove outside dependency. |
+| `holders` | Status and current binding/path/role/liveness/dependency/source observations for the effect's selected resource and actual overlaps, reasons and witnesses, including an exclusion witness for every other registered worktree. Different paths/branches alone do not prove outside dependency. |
 | `freshness` | Before/after digests, stable boolean and reasons. Equal hashes of unavailable values do not establish complete stable proof. |
 | `relations` | Exactly one `oid`, `relation`, `basis` row per unique snapshot OID. Relation is `related`, `unrelated` or `unknown`; basis has `kind`, `reasons`, `witnesses`. |
 
@@ -157,15 +157,43 @@ The recognized local-ref primitive is internally constructed:
 git --no-optional-locks --no-replace-objects -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 -C PROJECT update-ref --no-deref -d FULL_REF CURRENT_OID
 ```
 
-Its `git-local-ref-delete/v1` profile is conservative about packed storage, pending
-locks and the observing HEAD's additional reflog effect. A complete current checkout
-or symbolic/private alias depending on the deleted name remains a dependency.
-Terminal-less native inventories prove only their own current absence, never a
-privileged process scan or earlier exit/release. A present terminal with unknown
-needed-name/dependency facts holds; placement or branch difference alone proves none.
+Its `git-local-ref-delete/v1` profile requires a loose, non-symbolic selected ref.
+A `packed-refs` file is not a packed entry: when the file exists, its parsed content
+must positively lack the selected name, its identity must be reliable and no pending
+packed or loose lock may exist. Git then only takes and releases the packed lock; the
+file's bytes and identity stay bound through ref storage, freshness and `expect`.
+A packed or shadowed selected entry, a pending lock or an unparsable file holds;
+nothing rewrites or repacks storage. The observing HEAD's additional reflog effect
+is not profiled. Every checkout or symbolic/private alias of the deleted name in the
+complete Git catalog below remains a dependency, even when the stash is verified empty.
+
+Holder facts are scoped to the exact effect, never to the whole repository. A
+complete Git-only catalog of every registered worktree is read under the shared
+30-second deadline: matching common/object directories, reliable checkout and
+administrative identities, HEAD binding (a detached HEAD is a supported
+non-symbolic binding), and private and symbolic refs. A repeated, bare, prunable or
+unreadable row, a catalog error or an exhausted bound holds. A worktree is relevant
+when its checkout or ref chain names a deleted ref, or when the footprint reaches its
+working files or administrative tree by lexical or mount-coordinate containment;
+physical overlap holds. Native terminal reads happen only for the selected resource
+and name-overlapping worktrees, within the existing 32-read bound; any terminal there
+depends on the effect and unreadable or unverifiable facts are unknown. Every other
+worktree is excluded by these complete facts and appears only in an exclusion
+witness. Its terminals are not read: a coordinator or exited terminal, a detached
+checkout or the number of irrelevant worktrees creates no veto, and no process
+absence, exit, release or ownership is claimed for it.
 
 The worktree profile `git-worktree-remove/v1` recognizes two internally built forms
-with the same hardened Git prefix. A clean integrated exact worker, with its recorded
+with the same hardened Git prefix, which adds `-c core.fsmonitor=false` immediately
+after `-c core.hooksPath=/dev/null`, so no configured fsmonitor program starts:
+
+```text
+git --no-optional-locks --no-replace-objects -c core.hooksPath=/dev/null -c core.fsmonitor=false -c maintenance.auto=false -c gc.auto=0 -C PROJECT worktree remove [--force] EXACT_PATH
+```
+
+Git's clean check inside the unforced form, like Pod's own status inspection, can still
+run configured attribute filter programs. Their effects are outside this profile and
+remain unclaimed. A clean integrated exact worker, with its recorded
 report, fresh exact native settlement, positive release, exited liveness and empty
 current attachment inventory, uses `worktree remove EXACT_PATH` without force.
 Its native worktree/runtime must match the admission, and report/release/placement
@@ -185,6 +213,11 @@ default/target/shared branch or changed current identity remains protected.
 Other ordinary Orca worktree removal remains opaque; neither release nor
 completion can make that effect known or make a stash unrelated. Remote effects
 with unproved full footprints stay unknown when a stash is present.
+
+Roots retained only by the complete common stash log are not a linked checkout's
+otherwise-lost roots: that log lies outside the checkout's administrative tree, and an
+effect relies on it only through the stash record's exact storage exclusion. Private
+names and HEAD-log roots outside every surviving retention remain additional roots.
 
 Complete terminal inventories and Git reference observations are bounded and fresh.
 A successful terminal-less inventory supplies no arbitrary process dependency claim;

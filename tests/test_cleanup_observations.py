@@ -345,7 +345,8 @@ class SelectedObservationTests(unittest.TestCase):
         self.assertIsNone(row["delete_argv"])
 
     def test_stash_log_and_holder_races_keep_unknown_and_change_current_expect(self):
-        first = self.source.observe()
+        # The racing terminal belongs to the deleted name's own checkout, a relevant holder.
+        first = self.source.observe(name="refs/heads/live")
         original = self.source.reader
         calls = 0
         def changing(argv, **kwargs):
@@ -356,11 +357,11 @@ class SelectedObservationTests(unittest.TestCase):
                     self.source.unknown_holder = True
             return original(argv, **kwargs)
         with patch.object(self.source, "reader", side_effect=changing):
-            row = self.source.row()
+            row = self.source.row(name="refs/heads/live")
         self.assertFalse(row["stash_observation"]["freshness"]["stable"])
         self.assertIn("holder_changed", row["stash_observation"]["freshness"]["reasons"])
         self.assertIsNone(row["delete_argv"])
-        self.assert_changed(first)
+        self.assert_changed(first, name="refs/heads/live")
 
     def test_synthetic_config_environment_and_native_payload_values_never_leave_producer(self):
         config = self.source.common / "config"

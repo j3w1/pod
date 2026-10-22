@@ -42,8 +42,9 @@ def local_argv(project: Path, ref: str, oid: str) -> list[str]:
 
 def worktree_argv(project: Path, path: str, *, completed: bool = False) -> list[str]:
     # One force permits completed-task workfiles, never a locked worktree's extra force.
+    # The unforced form's internal clean check must not start a configured fsmonitor program.
     return ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
-            "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", str(project),
+            "-c", "core.fsmonitor=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", str(project),
             "worktree", "remove", *(["--force"] if completed else []), path]
 
 
@@ -204,7 +205,7 @@ def _executor(project: Path, ref: str | None, tip: str | None, kind: str, contex
 
 
 def _footprint(project: Path, ref: str | None, tip: str | None, kind: str, storage: dict | None,
-               context: dict | None) -> dict:
+               context: dict | None, *, packed_raw: bytes | None = None, object_format: str | None = None) -> dict:
     result = _unknown(("paths", "refs", "config", "native", "opaque", "sha256"),
                       "effect_footprint_unavailable", operation="primitive_footprint", kind="source_correspondence")
     result["opaque"] = ["effect_footprint_unavailable"]
@@ -213,8 +214,17 @@ def _footprint(project: Path, ref: str | None, tip: str | None, kind: str, stora
     paths = []
     try:
         if (storage["status"] != "observed" or storage["current"]["status"] != "present"
-                or storage["current"]["symref"] or storage["packed"]["status"] != "absent"):
+                or storage["current"]["symref"] or storage["loose"]["status"] != "present"
+                or storage["packed"]["status"] not in {"present", "absent"}):
             raise archives.Unavailable("Primitive storage footprint is unsupported")
+        # A packed-refs FILE is not the selected ref's packed ENTRY. Git rewrites the
+        # file only when the deleted name is packed (including a shadowed loose ref);
+        # otherwise it only takes and releases the lock below. The file's bytes and
+        # identity stay bound through the surrounding storage observation and expect.
+        if storage["packed"]["status"] == "present" and (
+                packed_raw is None or not observations.reliable(storage["packed"]["identity"])
+                or observations._packed(packed_raw, ref, object_format) is not None):
+            raise archives.Unavailable("Selected packed reference entry is present or unproven")
         # Git may split an update of HEAD's referent into another HEAD-log
         # transaction. This profile does not claim that additional effect.
         if context is None or context["head_ref"] == ref:
@@ -329,13 +339,92 @@ def _holder_refs(path: Path, common: Path, admin: Path, deadline: float) -> list
     return refs
 
 
-def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, context: dict | None) -> tuple[dict, list[dict]]:
+def _catalog(project: Path, context: dict, deadline: float) -> list[dict]:
+    """Complete Git-only worktree and name catalog; any unreadable row holds every relation."""
+    rows, paths_seen = [], set()
+    with worktree_inventory(project) as inventory:
+        for row in worktree_rows(inventory):
+            path = row.get("worktree")
+            if path in paths_seen:
+                raise archives.Unavailable("Holder inventory repeats a worktree")
+            paths_seen.add(path)
+            rows.append(row)
+            if len(rows) > observations.MAX_ITEMS:
+                raise archives.Unavailable("Holder inventory exceeds its bound")
+    checkouts = []
+    for row in rows:
+        path, branch = row.get("worktree"), row.get("branch")
+        # A detached HEAD is a supported non-symbolic binding; bare/prunable rows are unreadable.
+        if (not isinstance(path, str) or "bare" in row or "prunable" in row
+                or (branch is None) != ("detached" in row)):
+            raise archives.Unavailable("Holder checkout identity is incomplete")
+        directories = archives._text(Path(path), ["rev-parse", "--path-format=absolute", "--git-common-dir",
+                                                   "--git-dir", "--git-path", "objects"], deadline=deadline).splitlines()
+        identity, admin = observations.filesystem(Path(path)), None
+        if len(directories) == 3:
+            admin = observations.filesystem(Path(directories[1]))
+        if (len(directories) != 3 or directories[0] != context["common"]["path"]
+                or directories[2] != context["objects"]["path"]
+                or not observations.reliable(identity) or not observations.reliable(admin)):
+            raise archives.Unavailable("Holder storage context is incomplete")
+        named = _holder_refs(Path(path), Path(directories[0]), Path(directories[1]), deadline)
+        if branch is not None:
+            named.append({"name": branch, "status": "present", "oid": row["HEAD"],
+                          "object_type": "commit", "symref": None, "resolution": [branch]})
+        checkouts.append({"path": path, "admin": directories[1], "branch": branch, "head": row["HEAD"],
+                          "identity": identity, "admin_identity": admin, "refs": named})
+    return checkouts
+
+
+def _within(inner: tuple[str, dict], outer: tuple[str, dict]) -> bool:
+    """Lexical or physical containment from current mount coordinates."""
+    (inner_path, inner_place), (outer_path, outer_place) = inner, outer
+    return (Path(inner_path).is_relative_to(outer_path)
+            or inner_place["device"] == outer_place["device"]
+            and Path(inner_place["path"]).is_relative_to(outer_place["path"]))
+
+
+def _alias_exclusion(footprint: dict, catalog: list[dict] | None, reasons: list[str], *,
+                     record_alias: bool) -> None:
+    """A deleted ref name must not be checked out or aliased anywhere, even with no stash.
+
+    With a stash snapshot the same complete catalog enters support refs and the relation
+    records an alias as a dependency; without one, the footprint itself carries it.
+    """
+    if footprint["status"] != "observed":
+        return
+    if catalog is None:
+        footprint.update(status="unavailable", opaque=["effect_footprint_unavailable"])
+        footprint["reasons"] = sorted(set(footprint["reasons"] + (reasons or ["inspection_error"])))
+        return
+    names = {effect["name"] for effect in footprint["refs"]}
+    aliased = sorted({row["path"] for row in catalog for ref in row["refs"]
+                      if names & set(ref["resolution"] or [])})
+    if aliased and record_alias:
+        footprint["reasons"] = sorted(set(footprint["reasons"] + ["ref_alias_overlap"]))
+    footprint["witnesses"].append(observations.witness(
+        "git_read", "holder_read", {"names": sorted(names), "aliased": aliased,
+                                    "catalog": [[row["path"], digest(row["refs"])] for row in catalog]},
+        reference="footprint.name_exclusion"))
+
+
+def _holders(project: Path, footprint: dict, selected_path: str | None, kind: str, orca_reader,
+             context: dict | None, catalog: list[dict] | None, catalog_reasons: list[str],
+             deadline: float) -> tuple[dict, list[dict]]:
+    """Native holder facts only for the exact effect's selected resource and actual overlaps.
+
+    Every other registered worktree is excluded by complete Git name and physical
+    coordinate facts. Its terminals are not read and no process absence is claimed.
+    """
     result = _unknown(("observations",), "holder_unavailable", operation="holder_read", kind="native_read")
     refs = []
-    if kind not in {"local_branch", "git_worktree"} or context is None:
+    if kind not in {"local_branch", "git_worktree"} or context is None or footprint["status"] != "observed":
+        return result, refs
+    if catalog is None:
+        result["reasons"] = sorted(set(result["reasons"] + (catalog_reasons or ["inspection_error"])))
         return result, refs
     try:
-        deadline, read_count = time.monotonic() + 30, 0
+        read_count = 0
         def native_read(argv):
             nonlocal read_count
             remaining = deadline - time.monotonic()
@@ -343,38 +432,45 @@ def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, co
                 raise archives.Unavailable("Native holder inspection exceeded its bound")
             read_count += 1
             return orca_reader(argv, timeout=min(10, remaining))
-        rows, paths_seen = [], set()
-        with worktree_inventory(project) as inventory:
-            for row in worktree_rows(inventory):
-                path = row.get("worktree")
-                if path in paths_seen:
-                    raise archives.Unavailable("Holder inventory repeats a worktree")
-                paths_seen.add(path)
-                rows.append(row)
-                if len(rows) > observations.MAX_ITEMS:
-                    raise archives.Unavailable("Holder inventory exceeds its bound")
-        holders, facts = [], []
-        uncertain = False
-        for row in rows:
-            path, branch = row.get("worktree"), row.get("branch")
-            if not isinstance(path, str) or not isinstance(branch, str):
-                raise archives.Unavailable("Holder checkout identity is incomplete")
-            directories = archives._text(Path(path), ["rev-parse", "--path-format=absolute", "--git-common-dir",
-                                                       "--git-dir", "--git-path", "objects"], deadline=deadline).splitlines()
-            if (len(directories) != 3 or directories[0] != context["common"]["path"]
-                    or directories[2] != context["objects"]["path"]
-                    or not observations.reliable(observations.filesystem(Path(path)))):
-                raise archives.Unavailable("Holder storage context is incomplete")
-            refs += _holder_refs(Path(path), Path(directories[0]), Path(directories[1]), deadline)
+        def place(path):
+            return path, archives._outside(Path(path), [])
+        names = {effect["name"] for effect in footprint["refs"]}
+        effects = [place(effect["path"]) for effect in footprint["paths"]]
+        common = place(context["common"]["path"])
+        holders, facts, exclusions, overlap = [], [], [], []
+        if selected_path is not None and [row["path"] for row in catalog].count(selected_path) != 1:
+            raise archives.Unavailable("Selected resource is not one complete inventory row")
+        for row in catalog:
+            path, branch = row["path"], row["branch"]
+            refs += row["refs"]
+            selected = path == selected_path
+            # Common symbolic refs appear in every checkout's listing; they enter support refs
+            # once and relate there. Only this checkout's own HEAD/private names make it a holder.
+            own = [ref for ref in row["refs"] if ref["name"] == branch
+                   or ref["name"].startswith(("worktrees/", "main-worktree/"))]
+            aliased = any(names & set(ref["resolution"] or []) for ref in own)
+            if not selected:
+                directory, admin = place(path), place(row["admin"])
+                # The effect reaches this checkout's working files or administrative tree.
+                if any(_within(item, directory) and not _within(item, admin) and not _within(item, common)
+                       or _within(directory, item) or _within(admin, item) for item in effects):
+                    overlap.append(path)
+                    continue
+                if not aliased:
+                    exclusions.append({"path": path, "admin": row["admin"], "branch": branch, "head": row["head"],
+                                       "identity": row["identity"], "admin_identity": row["admin_identity"],
+                                       "refs_sha256": digest(row["refs"]), "directory": directory[1], "admin_place": admin[1]})
+                    continue
             shown = native_read(["worktree", "show", "--worktree", "path:" + path, "--json"])
             listed = native_read(["terminal", "list", "--worktree", "path:" + path, "--json"])
             native = shown["result"]["worktree"]
             terminals = listed["result"]["terminals"]
             git = native.get("git") or {}
+            short = branch.removeprefix("refs/heads/") if branch is not None else None
             if (not shown.get("runtime") or listed.get("runtime") != shown["runtime"]
                     or native.get("path") != path or git.get("path") != path
                     or native.get("branch") != git.get("branch")
-                    or "refs/heads/" + str(git.get("branch")).removeprefix("refs/heads/") != branch
+                    or (git.get("branch") not in {short, branch} if branch is not None else git.get("branch") is not None)
                     or native.get("isBare") is not False or git.get("isBare") is not False
                     or listed["result"].get("truncated") is not False or not isinstance(terminals, list)
                     or len(terminals) > observations.MAX_ITEMS
@@ -382,17 +478,15 @@ def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, co
                     and (not isinstance(listed["result"]["page"], dict)
                          or listed["result"]["page"].get("hasMore") is not False)):
                 raise archives.Unavailable("Native holder inventory is incomplete")
-            refs.append({"name": branch, "status": "present", "oid": row["HEAD"],
-                         "object_type": "commit", "symref": None, "resolution": [branch]})
-            facts.append({"path": path, "branch": branch, "oid": row["HEAD"], "runtime": shown["runtime"],
-                          "worktree_id": native.get("id"), "terminals": []})
+            facts.append({"path": path, "branch": branch, "oid": row["head"], "runtime": shown["runtime"],
+                          "worktree_id": native.get("id"), "selected": selected, "aliased": aliased, "terminals": []})
             handles = set()
             for terminal in terminals:
                 handle = terminal.get("handle")
                 if not isinstance(handle, str) or handle in handles:
                     raise archives.Unavailable("Holder terminal inventory is repeated or incomplete")
                 handles.add(handle)
-                if (terminal.get("worktreePath") != path or not isinstance(handle, str)
+                if (terminal.get("worktreePath") != path
                         or terminal.get("worktreeId") != native.get("id") or native.get("id") is None):
                     raise archives.Unavailable("Holder terminal binding is incomplete")
                 readback = native_read(["terminal", "show", "--terminal", handle, "--json"])
@@ -413,20 +507,22 @@ def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, co
                 safe = {"binding": binding, "liveness": liveness}
                 facts[-1]["terminals"].append(safe)
                 role = native.get("role")
-                uncertain = True
+                # A terminal of the selected resource or of an actual name overlap depends on the effect.
                 holders.append({"binding_sha256": digest(binding), "resource_path": path,
                                 "role": role if role in {"coordinator", "worker", "setup", "role"} else "unknown",
-                                "liveness": liveness, "dependency": "inside" if branch == selected_ref else "unknown",
-                                "source_sha256": digest(safe)})
-        result.update(status="unavailable" if uncertain else "observed", observations=holders,
-                      reasons=["holder_unavailable"] if uncertain else [],
+                                "liveness": liveness, "dependency": "inside", "source_sha256": digest(safe)})
+        result.update(status="observed", observations=holders,
+                      reasons=["storage_overlap"] if overlap else [],
                       witnesses=[observations.witness("native_read", "holder_read", facts,
-                                                       reference="holders.observations")])
-        if uncertain:
-            result["witnesses"].append(observations.witness("native_read", "holder_read", status="UNAVAILABLE",
-                                                            reference="holders.current_dependencies"))
+                                                       reference="holders.observations"),
+                                 observations.witness("git_read", "holder_read", {"excluded": exclusions,
+                                                                                  "overlap": overlap},
+                                                      reference="holders.exclusions")])
     except (archives.Unavailable, PodError, OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
-        result["reasons"] = sorted(set(result["reasons"] + [observations.reason(exc)]))
+        result.update(status="unavailable", observations=None)
+        result["reasons"] = sorted(set(result["reasons"] + ["holder_unavailable", observations.reason(exc)]))
+        result["witnesses"] = [observations.witness("native_read", "holder_read", status="UNAVAILABLE",
+                                                    reference="holders.observations")]
     return result, refs
 
 
@@ -581,8 +677,8 @@ def _once(project: Path, row: dict, repository: dict, saved: dict, orca_reader) 
     kind, identity = row["kind"], row["identity"]
     resource = _resource(project, row, context)
     ref, tip = resource["ref"], resource["tip"]
-    storage = (observations.storage_once(project, ref, repository)[0]
-               if kind == "local_branch" and ref else None)
+    storage, storage_raw = (observations.storage_once(project, ref, repository)
+                            if kind == "local_branch" and ref else (None, {}))
     completed = (kind == "worktree" and row.get("delete_argv")
                  == worktree_argv(project, identity.get("path"), completed=True))
     primitive = ("git_worktree" if kind == "worktree" and (completed
@@ -590,9 +686,24 @@ def _once(project: Path, row: dict, repository: dict, saved: dict, orca_reader) 
     executor = _executor(project, ref, tip, primitive, context, worktree_path=identity.get("path"),
                          completed=completed)
     footprint = (_worktree_footprint(identity.get("git") or {}, context) if primitive == "git_worktree"
-                 else _footprint(project, ref, tip, kind, storage, context))
-    holders, holder_refs = _holders(project, ref, primitive, orca_reader, context) if saved["snapshot"] else (
-        _unknown(("observations",), "holder_unavailable", operation="holder_read", kind="native_read"), [])
+                 else _footprint(project, ref, tip, kind, storage, context, packed_raw=storage_raw.get("packed"),
+                                 object_format=repository.get("object_format")))
+    # One shared deadline covers this observation's complete Git catalog and native reads.
+    # A local ref's alias guard matters wherever this row carries a delete command.
+    deadline, catalog, catalog_reasons = time.monotonic() + 30, None, []
+    guarded = primitive == "local_branch" and row.get("delete_argv") is not None
+    if (primitive in {"local_branch", "git_worktree"} and context is not None
+            and footprint["status"] == "observed" and (saved["snapshot"] or guarded)):
+        try:
+            catalog = _catalog(project, context, deadline)
+        except (archives.Unavailable, PodError, OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
+            catalog_reasons = [observations.reason(exc)]
+    if guarded or primitive == "local_branch" and saved["snapshot"]:
+        _alias_exclusion(footprint, catalog, catalog_reasons, record_alias=not saved["snapshot"])
+    holders, holder_refs = (_holders(project, footprint, identity.get("path") if primitive == "git_worktree" else None,
+                                     primitive, orca_reader, context, catalog, catalog_reasons, deadline)
+                            if saved["snapshot"] else
+                            (_unknown(("observations",), "holder_unavailable", operation="holder_read", kind="native_read"), []))
     support = _unknown(("object_format", "object_dirs", "alternates", "refs", "reflog_sha256", "closure",
                         "git_context_sha256", "config_sha256", "unsupported"),
                        "storage_unavailable", operation="git_context_read")

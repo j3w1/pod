@@ -677,7 +677,13 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
             if name != ref and not name.startswith(_PRIVATE) and not symbolic:
                 surviving[name] = oid
         result["surviving_refs"] = surviving
-        absent = _uncovered(path, set(roots.values()), {head, *surviving.values()})
+        # The complete common stash log (outside every linked admin tree) retains its
+        # roots, so they are not this checkout's otherwise-lost roots. They stay in the
+        # observed/required roots; an effect may rely on them only through the stash
+        # record's exact storage exclusion. Private names remain additional below.
+        retention = (repository.get("stash_retention") or {}).get("reflog") or {}
+        retained = set(repository["stash_roots"]) if retention.get("status") == "present" else set()
+        absent = _uncovered(path, set(roots.values()), {head, *surviving.values(), *retained})
         # Names in the removed private namespace must be restored even if another
         # ref retains their bytes. Do not turn object survival into name preservation.
         additional = {name for name, oid in roots.items() if oid in absent or name in result["private_refs"]}

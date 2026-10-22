@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 import unittest
 from unittest.mock import patch
 
@@ -141,9 +142,12 @@ class StashSourceTests(unittest.TestCase):
         row = source.row()
         record = row["stash_observation"]
         self.assertTrue(record["complete"], record)
-        self.assertEqual({value["relation"] for value in record["relations"]}, {"unknown"}, record)
+        # The live sibling terminal belongs to another checkout outside this exact ref effect:
+        # complete Git facts exclude it, so it is neither read nor a veto.
+        self.assertEqual({value["relation"] for value in record["relations"]}, {"unrelated"}, record)
         self.assertEqual(record["executor"]["profile"], stashes.PROFILE)
-        self.assertIn("holder_unavailable", record["holders"]["reasons"])
+        self.assertEqual((record["holders"]["status"], record["holders"]["observations"]), ("observed", []))
+        self.assertEqual(source.reads, [])
         self.assertEqual(row["class"], "protected")
         self.assertIsNone(row["delete_argv"])  # Material proof supplies no missing Pod admission/authority.
         self.assertIsNone(row["archive_argv"])
@@ -191,17 +195,45 @@ class StashSourceTests(unittest.TestCase):
     def test_live_selected_binding_is_a_removal_dependency_even_when_all_bytes_survive(self):
         row = self.source.row(name="refs/heads/live")
         record = row["stash_observation"]
-        self.assertEqual({value["relation"] for value in record["relations"]}, {"unknown"}, record)
+        # The live terminal is the deleted name's own checkout: an observed removal dependency.
+        self.assertEqual({value["relation"] for value in record["relations"]}, {"related"}, record)
+        self.assertTrue({"holder_live", "ref_alias_overlap"} <= set(record["relations"][0]["basis"]["reasons"]))
         complete = self.complete_material(name="refs/heads/live", query="refs/heads/live")
         self.assertEqual({value["relation"] for value in complete["relations"]}, {"related"}, complete)
         self.assertIn("ref_alias_overlap", complete["relations"][0]["basis"]["reasons"])
         self.assertIsNone(row["delete_argv"])
 
     def test_unknown_current_holder_keeps_even_a_complete_material_snapshot_held(self):
+        # The holder is the deleted name's own checkout, so its unknown liveness is relevant.
         self.source.unknown_holder = True
-        record = self.assert_unknown(self.source.row())
+        record = self.assert_unknown(self.source.row(name="refs/heads/live"))
         self.assertIn("holder_unavailable", record["relations"][0]["basis"]["reasons"])
         self.assertEqual(record["holders"]["observations"][0]["liveness"], "unverifiable")
+
+    def test_footprint_reaching_another_checkout_is_overlap_not_exclusion(self):
+        source, case = self.source, self.source.case
+        repository = archives.repository_observation(case.project)
+        context = stashes._context(case.project, repository)
+        deadline = time.monotonic() + 30
+        catalog = stashes._catalog(case.project, context, deadline)
+        self.assertEqual({row["path"] for row in catalog}, {str(case.project), str(case.child)})
+        refs = [{"name": "refs/heads/unlisted", "scope": "exact", "operation": "delete",
+                 "expected_oid": case.base, "resolution": ["refs/heads/unlisted"]}]
+        def holders(path):
+            footprint = {"status": "observed", "refs": refs,
+                         "paths": [{"path": path, "identity": None, "operation": "unlink"}]}
+            return stashes._holders(case.project, footprint, None, "local_branch", source.reader, context,
+                                    catalog, [], deadline)[0]
+        reached = holders(str(case.child / "README.md"))
+        self.assertEqual((reached["status"], reached["reasons"]), ("observed", ["storage_overlap"]))
+        # The main checkout's Git directory is storage, not its working files.
+        storage = holders(str(source.common / "refs/heads/unlisted"))
+        self.assertEqual((storage["status"], storage["reasons"], storage["observations"]), ("observed", [], []))
+        self.assertEqual(source.reads, [])
+        unreadable = stashes._holders(case.project, {"status": "observed", "refs": refs, "paths": []}, None,
+                                      "local_branch", source.reader, context, None, ["inspection_error"], deadline)[0]
+        self.assertEqual(unreadable["status"], "unavailable")
+        self.assertIn("inspection_error", unreadable["reasons"])
 
     def test_shared_base_without_complete_effect_binding_is_unknown(self):
         record = self.complete_material()

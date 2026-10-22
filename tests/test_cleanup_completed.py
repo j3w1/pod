@@ -20,6 +20,7 @@ class _CompletedFixture(TickCase):
         self.child = self.root / "task-checkout"
         git(self.project, "worktree", "add", "-qb", "task-branch", str(self.child))
         self.terminals = []
+        self.path_terminals = {}
         self.role = None
 
     def closed(self, *, body="- [x] **PoD#1 - Completed task.**"):
@@ -41,7 +42,9 @@ class _CompletedFixture(TickCase):
                 "isMainWorktree": Path(path) == self.project, "isBare": False, "role": self.role,
                 "git": {"path": path, "branch": branch, "isBare": False}}}}
         if argv[:2] == ["terminal", "list"]:
-            return {"runtime": "runtime", "result": {"terminals": list(self.terminals), "truncated": False}}
+            path = argv[3].removeprefix("path:")
+            return {"runtime": "runtime", "result": {
+                "terminals": list(self.terminals) + list(self.path_terminals.get(path, [])), "truncated": False}}
         raise AssertionError(argv)
 
     def observed(self, **options):
@@ -108,6 +111,52 @@ class CompletedCleanupTests(_CompletedFixture):
         after = subprocess.run(["git", "-C", str(sibling), "cat-file", "--batch"],
                                input=(root + "\n" + root + "^{tree}\n").encode(), capture_output=True, check=True).stdout
         self.assertEqual(after, before)
+
+    def test_unrelated_stash_with_terminals_elsewhere_keeps_the_completed_force_phase(self):
+        self.unique()
+        sibling = self.root / "sibling"
+        git(self.project, "worktree", "add", "-qb", "sibling", str(sibling))
+        (sibling / "README.md").write_text("unrelated stash material\n")
+        git(sibling, "stash", "push", "-qm", "fixture stash")
+        (sibling / "README.md").write_text("second unrelated stash material\n")
+        git(sibling, "stash", "push", "-qm", "second fixture stash")
+        detached = self.root / "detached-review"
+        git(self.project, "worktree", "add", "-q", "--detach", str(detached))
+        common = self.project / ".git"
+        retained = {name: (common / name).read_bytes() for name in ("refs/stash", "logs/refs/stash")}
+        self.closed()
+        self.path_terminals = {str(sibling): [{"handle": "exited-reviewer", "worktreePath": str(sibling)}],
+                               str(self.project): [{"handle": "coordinator", "worktreePath": str(self.project)}]}
+        reads = []
+        original = self.native
+        def native(argv, **kwargs):
+            reads.append(list(argv))
+            return original(argv, **kwargs)
+        self.native = native
+        row = self.row(self.observed())
+        self.assertEqual({item["relation"] for item in row["stash_observation"]["relations"]}, {"unrelated"}, row)
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child), completed=True))
+        self.assertNotIn(["terminal", "show"], [argv[:2] for argv in reads])
+        self.assertFalse({"path:" + str(sibling), "path:" + str(detached), "path:" + str(self.project)}
+                         & {argv[3] for argv in reads if len(argv) > 3})
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertEqual({name: (common / name).read_bytes() for name in retained}, retained)
+
+    def test_completed_force_argv_starts_no_configured_fsmonitor(self):
+        self.unique()
+        self.closed()
+        marker, hook = self.root / "fsmonitor-marker", self.root / "fsmonitor-hook"
+        hook.write_text('#!/bin/sh\necho ran >> "%s"\nexit 1\n' % marker)
+        hook.chmod(0o755)
+        git(self.project, "config", "core.fsmonitor", str(hook))
+        row = self.row(self.observed())
+        argv = row["delete_argv"]
+        position = argv.index("core.hooksPath=/dev/null")
+        self.assertEqual(argv[position + 1:position + 3], ["-c", "core.fsmonitor=false"])
+        self.assertEqual(argv.count("--force"), 1)
+        subprocess.run(argv, capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertFalse(marker.exists())
 
     def test_current_dirty_bytes_bind_expect_even_with_unchanged_status_and_tip(self):
         self.unique()
@@ -432,6 +481,69 @@ class CompletedRemainingRefTests(_CompletedFixture):
         self.remaining()
         first = self.observed()
         self.assertEqual(self.observed(expect=first["expect"])["digest"], first["digest"])
+
+    def packed_identity(self):
+        path = self.project / ".git" / "packed-refs"
+        info = path.stat()
+        return path.read_bytes(), (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+
+    def test_unrelated_packed_refs_file_keeps_the_loose_remaining_ref_command_and_bytes(self):
+        self.remaining()
+        git(self.project, "tag", "unrelated-packed")
+        git(self.project, "pack-refs")
+        packed, identity = self.packed_identity()
+        self.assertNotIn(self.ref.encode(), packed)
+        self.assertTrue((self.project / ".git" / self.ref).is_file())
+        row = self.row(self.observed(), "local_branch")
+        self.assert_remaining(row)
+        self.assertEqual(row["identity"]["ref_storage"]["packed"]["status"], "present")
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        absent = subprocess.run(["git", "-C", str(self.project), "show-ref", "--verify", self.ref], capture_output=True)
+        self.assertNotEqual(absent.returncode, 0)
+        self.assertEqual(self.packed_identity(), (packed, identity))
+        self.assertFalse((self.project / ".git" / "packed-refs.lock").exists())
+
+    def test_changed_packed_refs_file_refuses_the_old_remaining_ref_expect(self):
+        self.remaining()
+        git(self.project, "tag", "unrelated-packed")
+        git(self.project, "pack-refs")
+        first = self.observed()
+        git(self.project, "tag", "another-packed")
+        git(self.project, "pack-refs")
+        with self.assertRaises(PodError) as caught:
+            self.observed(expect=first["expect"])
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+
+    def test_packed_only_selected_entry_holds_the_remaining_ref(self):
+        self.remaining()
+        git(self.project, "pack-refs", "--all")
+        self.assertFalse((self.project / ".git" / self.ref).exists())
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+
+    def test_alias_of_the_remaining_ref_holds_even_with_an_empty_stash(self):
+        self.remaining()
+        git(self.project, "symbolic-ref", "refs/heads/task-alias", self.ref)
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("primitive is unavailable", " ".join(row["reasons"]))
+        self.assertIn("ref_alias_overlap", row["stash_observation"]["footprint"]["reasons"])
+        git(self.project, "symbolic-ref", "--delete", "refs/heads/task-alias")
+        other = self.root / "alias-holder"
+        git(self.project, "worktree", "add", "-q", "--detach", str(other))
+        git(other, "symbolic-ref", "refs/worktree/needs-task", self.ref)
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("ref_alias_overlap", row["stash_observation"]["footprint"]["reasons"])
+
+    def test_unreadable_registered_worktree_holds_the_remaining_ref_even_with_an_empty_stash(self):
+        self.remaining()
+        other = self.root / "unreadable-sibling"
+        git(self.project, "worktree", "add", "-q", "--detach", str(other))
+        other.rename(self.root / "parked-sibling")
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual(row["stash_observation"]["footprint"]["status"], "unavailable")
 
     def stash(self):
         (self.project / "README.md").write_text("unrelated retained stash\n")
