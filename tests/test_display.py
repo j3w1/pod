@@ -216,7 +216,8 @@ def inventories(state):
     task = {"id": "task-tree", "path": "/project/task", "displayNameMode": "automatic", "displayName": "task",
             "linkedIssue": None, "linkedPR": None, "parentWorktreeId": None, "workspaceStatus": "in-progress", "comment": ""}
     terminal = {"handle": "owner", "worktreePath": "/project/task", "title": "Coordinator", "connected": True}
-    return {"result": {"terminals": [terminal]}}, {"result": {"worktrees": [task]}}
+    return {"result": {"terminals": [terminal]}}, {"result": {"worktrees": [task], "totalCount": 1,
+        "truncated": False, "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}}
 
 
 class DisplayFailedReadTests(unittest.TestCase):
@@ -266,6 +267,7 @@ class DisplayOwnershipTests(unittest.TestCase):
                 self.assertIsNone(display.admission_output(state, row)["worktree_command"])
                 trees["result"]["worktrees"].append({"id": "host-tree", "path": "/project/host", "displayName": "Host chosen name",
                     "displayNameMode": "fixed", "parentWorktreeId": None, "isMainWorktree": bool(naming and naming["main"])})
+                trees["result"]["totalCount"] = len(trees["result"]["worktrees"])
                 output = display.projection(state, terms, trees, {"version": "1.4.230"})
                 host = [item for item in output["rows"] if item["target"] == "path:/project/host"]
                 self.assertEqual(len(host), 1)
@@ -298,7 +300,7 @@ class DisplayOpTests(TabCase):
             raise PodError("orca_read_failed", "synthetic failure")
         if argv == ["terminal", "list", "--json"]:
             return deepcopy(self.terminals)
-        if argv == ["worktree", "list", "--json"]:
+        if argv == ["worktree", "list", "--limit", "1000", "--json"]:
             return deepcopy(self.worktrees)
         raise AssertionError(argv)
 
@@ -309,7 +311,8 @@ class DisplayOpTests(TabCase):
         self.terminals = {"result": {"terminals": [{"handle": "owner", "worktreePath": str(self.project),
                                                    "title": "Coordinator", "connected": True}]}}
         self.worktrees = {"result": {"worktrees": [{"path": str(self.project), "id": "task-tree",
-            "displayNameMode": "automatic", "displayName": "Parser repair", "linkedIssue": None}]}}
+            "displayNameMode": "automatic", "displayName": "Parser repair", "linkedIssue": None}],
+            "totalCount": 1, "truncated": False, "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}}
         self.version = "1.4.230"; self.unreadable = None; self.display_calls = []
         return state
 
@@ -321,7 +324,7 @@ class DisplayOpTests(TabCase):
         before = self.saved()
         with patch("pod.orca.read_command", side_effect=self.display_read), patch("pod.orca.mutate_command") as mutation:
             result = internal.run("display", {"project": str(self.project), "objective": "objective"})
-        self.assertEqual(self.display_calls[-3:], [["terminal", "list", "--json"], ["worktree", "list", "--json"], ["--version"]])
+        self.assertEqual(self.display_calls[-3:], [["terminal", "list", "--json"], ["worktree", "list", "--limit", "1000", "--json"], ["--version"]])
         self.assertEqual(self.saved(), before); mutation.assert_not_called()
         self.assertEqual(result["desktop"], "NOT_VERIFIED")
         return result
@@ -362,7 +365,82 @@ class DisplayOpTests(TabCase):
         self.assertIsNone(row["command"])
         self.assertEqual(output["verdict"], "drift")
         self.unreadable = None; self.worktrees["result"]["truncated"] = True
-        self.assertEqual(self.run_display()["rows"][0]["verdict"], "unreadable")
+        row = self.run_display()["rows"][0]
+        self.assertEqual(row["verdict"], "unreadable")
+        self.assertEqual(row["read_command"], ["orca", "worktree", "list", "--limit", "1000", "--json"])
+
+    def bounded_worktrees(self, count):
+        task = deepcopy(self.worktrees["result"]["worktrees"][0])
+        task.update(displayNameMode="fixed", displayName="Parser repair (#17)", linkedIssue=17)
+        rows = [{"id": "other-" + str(index), "path": "/other/" + str(index)}
+                for index in range(count - 1)] + [task]
+        return {"result": {"worktrees": rows, "totalCount": count, "truncated": False,
+                           "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}}
+
+    def test_actual_display_entry_reads_beyond_default_cap_and_at_fixed_bound(self):
+        self.setup_display()
+        before = self.saved()
+        for count in (206, 1000):
+            with self.subTest(count=count):
+                payload = self.bounded_worktrees(count)
+                calls = []
+                def native(argv):
+                    calls.append(argv)
+                    if argv == ["worktree", "list", "--json"]:
+                        short = deepcopy(payload)
+                        short["result"].update(worktrees=payload["result"]["worktrees"][:200], truncated=True)
+                        return short
+                    if argv == ["worktree", "list", "--limit", "1000", "--json"]:
+                        return deepcopy(payload)
+                    return self.display_read(argv)
+                with patch("pod.orca.read_command", side_effect=native), patch("pod.orca.mutate_command") as mutation:
+                    output = internal.run("display", {"project": str(self.project), "objective": "objective"})
+                self.assertEqual(output["verdict"], "backend_matches")
+                self.assertIn(["worktree", "list", "--limit", "1000", "--json"], calls)
+                self.assertEqual(self.saved(), before)
+                mutation.assert_not_called()
+
+    def test_claimed_complete_overbound_or_wrong_total_is_unreadable(self):
+        self.setup_display()
+        valid = self.bounded_worktrees(1)
+        variants = [self.bounded_worktrees(1001)]
+        for total in (0, 2, True, "1", None):
+            item = deepcopy(valid); item["result"]["totalCount"] = total; variants.append(item)
+        for item in variants:
+            with self.subTest(total=item["result"]["totalCount"]):
+                self.worktrees = item
+                row = self.run_display()["rows"][0]
+                self.assertEqual(row["verdict"], "unreadable")
+                self.assertIsNone(row["command"])
+
+    def test_missing_or_incomplete_host_and_truncation_metadata_is_unreadable(self):
+        self.setup_display()
+        valid = self.bounded_worktrees(1)
+        changes = [{"hostScope": None}, {"hostScope": {}},
+                   {"hostScope": {"hostIds": ["remote"], "omittedHostIds": []}},
+                   {"hostScope": {"hostIds": ["local"], "omittedHostIds": ["remote"]}},
+                   {"hostScope": {"hostIds": ["local", "local"], "omittedHostIds": []}},
+                   {"truncated": None}, {"truncated": 0}, {"truncated": True},
+                   {"page": {"hasMore": True}}, {"page": []}]
+        for change in changes:
+            with self.subTest(change=change):
+                self.worktrees = deepcopy(valid); self.worktrees["result"].update(change)
+                self.assertEqual(self.run_display()["rows"][0]["verdict"], "unreadable")
+
+    def test_duplicate_or_unplaceable_worktree_rows_are_not_filtered_away(self):
+        self.setup_display()
+        valid = self.bounded_worktrees(1)
+        original = valid["result"]["worktrees"][0]
+        for extra in (deepcopy(original), {**original, "id": "other"},
+                      {**original, "path": "/other"}, {"id": "unknown"},
+                      {"id": "other", "path": "relative"}, {"id": "other", "path": "//other"},
+                      {"id": "other", "path": "/other", "git": {"path": "/different"}},
+                      {"id": "other", "path": "/other", "git": {}}, None):
+            with self.subTest(extra=extra):
+                self.worktrees = deepcopy(valid)
+                self.worktrees["result"]["worktrees"].append(extra)
+                self.worktrees["result"]["totalCount"] = 2
+                self.assertEqual(self.run_display()["rows"][0]["verdict"], "unreadable")
     def test_worker_layers_readback_status_and_session_steps(self):
         state = state_fixture(); row = admit(state)
         terms, trees = inventories(state)
@@ -372,6 +450,7 @@ class DisplayOpTests(TabCase):
             "displayName": "Source changes", "displayNameMode": "fixed", "parentWorktreeId": "task-tree",
             "linkedIssue": {"number": 17}, "linkedPR": None, "workspaceStatus": "in-progress",
             "comment": "Implementer working"})
+        trees["result"]["totalCount"] = len(trees["result"]["worktrees"])
         terms["result"]["terminals"].append({"handle": row["native_binding"]["terminalHandle"],
             "worktreePath": "/project/worker", "title": "Implementer", "connected": True})
         output = display.projection(state, terms, trees, {"version": "1.4.230"})

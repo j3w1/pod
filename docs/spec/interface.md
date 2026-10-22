@@ -567,7 +567,7 @@ Report acknowledgements, for the reporting worker whether or not its tab is stil
 
 A checkpoint may carry the optional `display` record (R142): `task` (plain words, at most 48 characters: ASCII letters with optional inner hyphens or apostrophes, and no hyphen- or apostrophe-separated part made only of seven or more of the letters a to f; digits, paths, underscores and ids refuse `invalid_display_name`, naming the refused tokens), `continued` (at most 32 entries, each `coordinator` or an existing admission id of this objective) and boolean `host_tab`. The record persists until a checkpoint supplies a new one, which replaces it whole.
 
-`pod internal display --input FILE` takes exactly `project` and `objective`. It reads exactly `orca terminal list --json`, `orca worktree list --json` and `orca --version`, which are already allowlisted, and writes nothing.
+`pod internal display --input FILE` takes exactly `project` and `objective`. It reads exactly `orca terminal list --json`, `orca worktree list --limit 1000 --json` and `orca --version`, which are allowlisted, and writes nothing. R143 requires complete worktree metadata, matching totals, local-host coverage and unique placeable rows within that fixed bound; otherwise the read stays unavailable. The existing adapter byte and time limits and R113 lifecycle inventories remain unchanged.
 
 | Field | Meaning |
 | --- | --- |

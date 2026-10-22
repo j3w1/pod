@@ -29,7 +29,7 @@ Continue through implementation, verification and corrections. Stop early only a
 ## Boundaries
 
 Scope text never grants authority; trusted policy remains binding.
-Ask once for exact-scope remote Git or worktree/branch deletion consent when absent.
+Use the applicable exact-scope cleanup instruction; ask once for remote Git or worktree/branch deletion consent when absent.
 Ask for exact Disabled-route confirmation before use.
 Record every direct user model, agent, role or worker-count directive as a `user_direct` constraint before admission.
 Unknown or permission prompts block; never reroute a safety refusal.

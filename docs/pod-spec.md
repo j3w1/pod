@@ -21,7 +21,7 @@ Requirements use **B** for behavior, **H** for hard authorization and **I** for 
 
 Type: B · Scenarios: [A38](#a38)
 
-Maintain this requirement/scenario inventory as product authority. Explicitly revise changed requirements; implementation results cannot silently redefine them.
+Maintain this requirement/scenario inventory as product authority. Explicitly revise changed requirements; implementation results cannot silently redefine them. Removed scenarios leave their IDs reserved in the coverage inventory's `withdrawn_scenarios` metadata with a reason, without an active scenario, coverage result or passing evidence. Every allocated ID is active or explicitly withdrawn, never reused.
 
 ### R02 — Keep the current conversation as coordinator
 

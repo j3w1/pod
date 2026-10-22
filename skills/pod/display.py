@@ -5,8 +5,10 @@ No native calls, writes, or lifecycle decisions belong in this module.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .errors import PodError
+from .orca import DISPLAY_WORKTREE_LIMIT, _passable, display_worktree_argv
 from .readiness import STATES
 
 TITLE_LIMIT = 96
@@ -352,11 +354,34 @@ def packet_title(state: dict | None, body: dict) -> str:
 
 
 def _inventory(readback: dict | None, key: str) -> list[dict] | None:
-    result = (readback or {}).get("result")
+    result = readback.get("result") if isinstance(readback, dict) else None
+    page = result.get("page") if isinstance(result, dict) else None
     if (not isinstance(result, dict) or not isinstance(result.get(key), list)
-            or result.get("truncated") is True or (result.get("page") or {}).get("hasMore") is True
+            or result.get("truncated") is True
+            or page is not None and (not isinstance(page, dict) or page.get("hasMore") is not False)
             or any(not isinstance(row, dict) for row in result[key])):
         return None
+    if key == "worktrees":
+        rows, scope = result[key], result.get("hostScope")
+        if (len(rows) > DISPLAY_WORKTREE_LIMIT or type(result.get("totalCount")) is not int
+                or result["totalCount"] != len(rows) or result.get("truncated") is not False
+                or not isinstance(scope, dict) or not isinstance(scope.get("hostIds"), list)
+                or not scope["hostIds"] or not all(_passable(host) and host for host in scope["hostIds"])
+                or len(set(scope["hostIds"])) != len(scope["hostIds"])
+                or "local" not in scope["hostIds"] or scope.get("omittedHostIds") != []):
+            return None
+        paths, identities = set(), set()
+        for row in rows:
+            path, identity = row.get("path"), row.get("id")
+            if (not _passable(path) or not path or not Path(path).is_absolute()
+                    or path.startswith("//") or str(Path(path)) != path or ".." in Path(path).parts
+                    or not _passable(identity) or not identity or path in paths or identity in identities):
+                return None
+            git = row.get("git")
+            if git is not None and (not isinstance(git, dict) or git.get("path") != path):
+                return None
+            paths.add(path)
+            identities.add(identity)
     return result[key]
 
 
@@ -369,7 +394,7 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
     by_id = {row.get("id"): row.get("path") for row in worktrees or []}
     by_handle = {row.get("handle"): row for row in terminals or []}
     repeat_terminal = ["orca", "terminal", "list", "--json"]
-    repeat_worktree = ["orca", "worktree", "list", "--json"]
+    repeat_worktree = ["orca", *display_worktree_argv()]
     rows = []
 
     def add(layer, owner, target, expected, observed, command, repeat, *, reason=None, session=None):

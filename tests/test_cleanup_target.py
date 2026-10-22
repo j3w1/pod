@@ -82,18 +82,22 @@ class DeliveredTargetTests(KernelCase):
                          ["orca", "worktree", "rm", "--worktree", "path:" + str(self.child), "--json"])
 
     def test_a_later_merge_that_advances_the_target_keeps_the_delivery_and_its_guarded_commands(self):
-        before = self.observed()
         later = git(self.project, "commit-tree", self.result + "^{tree}", "-p", self.result, "-m", "a later merge")
         self.move_target(later)
-        with self.assertRaises(PodError) as changed:
-            self.observed(expect=before["expect"])
-        self.assertEqual(changed.exception.code, "cleanup_changed")
         result = self.observed()
         rows = self.rows(result)
         self.assertEqual((result["target"]["commit"], result["target"]["moved_after_delivery"]), (later, False))
         self.assertEqual((rows["worktree"]["class"], rows["worktree"]["reasons"]), ("integrated", []))
         self.assertEqual(rows["worktree"]["delete_argv"][:3], ["orca", "worktree", "rm"])
         self.assertEqual(rows["local_branch"]["class"], "integrated")
+
+    def test_an_advanced_target_invalidates_the_old_expect(self):
+        before = self.observed()
+        later = git(self.project, "commit-tree", self.result + "^{tree}", "-p", self.result, "-m", "a later merge")
+        self.move_target(later)
+        with self.assertRaises(PodError) as changed:
+            self.observed(expect=before["expect"])
+        self.assertEqual(changed.exception.code, "cleanup_changed")
 
     def test_a_target_that_no_longer_contains_the_delivery_result_protects_every_dependent_resource(self):
         rewritten = git(self.project, "commit-tree", self.result + "^{tree}", "-m", "rewritten history")

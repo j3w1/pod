@@ -15,6 +15,7 @@ import sys
 from .errors import PodError
 
 MAX_OUTPUT = 2_000_000
+DISPLAY_WORKTREE_LIMIT = 1000
 EXIT_KINDS = ("operator_close", "signaled", "exited")
 CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1"}
@@ -60,7 +61,14 @@ def _argument(value: object, *, limit: int = 4096) -> bool:
     return _passable(value) and bool(value) and not value.startswith("-") and len(value) <= limit
 
 
+def display_worktree_argv() -> list[str]:
+    """One supported bounded naming read; lifecycle inventory shapes stay separate."""
+    return ["worktree", "list", "--limit", str(DISPLAY_WORKTREE_LIMIT), "--json"]
+
+
 def _read_allowed(argv: list[str]) -> bool:
+    if argv == display_worktree_argv():
+        return True
     if argv in (["--version"], ["status", "--json"],
                 ["orchestration", "run-current", "--json"],
                 # R113: the complete inventories that prove a released path absent.
@@ -407,6 +415,7 @@ def worker_rows(run: str) -> dict:
     prefix = ["orchestration", "worker-list", "--include-remote", "--json", "--limit", "100"]
     prefix += ["--run", run]
     all_rows: list[dict] = []
+    identities = set()
     cursor = None
     seen = set()
     runtime = None
@@ -414,9 +423,10 @@ def worker_rows(run: str) -> dict:
     for _ in range(100):
         response = read_command(prefix + (["--cursor", cursor] if cursor else []))
         result = response["result"]
-        page = result.get("page", {})
+        page = result.get("page")
         rows = result.get("workers")
-        if not isinstance(rows, list) or not isinstance(page, dict):
+        if (not isinstance(rows, list) or len(rows) > 100 or not isinstance(page, dict)
+                or type(page.get("hasMore")) is not bool or result.get("truncated", False) is not False):
             raise PodError("orca_contract", "Run worker page is malformed")
         page_scope = result.get("scope")
         if (not isinstance(page_scope, dict) or page_scope.get("run") != run
@@ -427,12 +437,17 @@ def worker_rows(run: str) -> dict:
         if runtime is not None and result.get("scope") != scope:
             raise PodError("orca_scope_changed", "Run worker scope changed during read")
         runtime, scope = response["runtime"], result.get("scope")
+        for row in rows:
+            identity = row.get("dispatchId") if isinstance(row, dict) else None
+            if not _argument(identity) or identity in identities:
+                raise PodError("orca_pagination", "Run worker inventory is repeated or incomplete")
+            identities.add(identity)
         all_rows.extend(rows)
-        if not page.get("hasMore"):
+        if page["hasMore"] is False:
             return {"runtime": runtime, "scope": scope, "workers": all_rows,
                     "complete": True, "page_count": len(seen) + 1}
         cursor = page.get("nextCursor")
-        if not isinstance(cursor, str) or cursor in seen:
+        if not _argument(cursor) or cursor in seen or not rows:
             raise PodError("orca_pagination", "Run worker cursor is missing or repeated")
         seen.add(cursor)
     raise PodError("orca_pagination", "Run worker read exceeds bounded pages")

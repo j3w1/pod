@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import subprocess
+from contextlib import contextmanager
 from copy import deepcopy
+import hashlib
 import json
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from pod.cleanup import plan
+from pod import cleanup_archives
+from pod import cleanup_stashes
+from pod.util import digest
 from pod.errors import PodError
 from pod.github import repository_context
 from pod.github import repository_reads
@@ -18,6 +26,262 @@ from pod.ledger import read
 from pod.operations import guarded_start, OrcaPort
 from tests.kernel_support import KernelCase, git
 from tests.common import receipt
+
+
+@contextmanager
+def directory_entry_changes(directory):
+    """Change real disposable entries during reads, returning only actual fstat facts."""
+    watched, original, changes = directory.stat(), os.fstat, []
+    def changing(descriptor):
+        info = original(descriptor)
+        if (info.st_dev, info.st_ino) == (watched.st_dev, watched.st_ino):
+            sibling = directory / "concurrent-fixture-entry"
+            sibling.mkdir()
+            sibling.rmdir()
+            # Distinguish the actual metadata change even on a coarse clock; no sleep.
+            os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+            changes.append(descriptor)
+        return info
+    with patch("pod.cleanup_observations.os.fstat", side_effect=changing):
+        yield changes
+
+
+@contextmanager
+def path_change_on_fstat(path, change, *, occurrence=1):
+    """Mutate a disposable path during a real descriptor read without replacing facts."""
+    watched, original, changes, calls = path.stat(), os.fstat, [], 0
+    def changing(descriptor):
+        nonlocal calls
+        info = original(descriptor)
+        if (info.st_dev, info.st_ino) == (watched.st_dev, watched.st_ino):
+            calls += 1
+            if calls == occurrence:
+                change()
+                changes.append(descriptor)
+        return info
+    with patch("pod.cleanup_observations.os.fstat", side_effect=changing):
+        yield changes
+
+
+class CleanupDirectoryIdentityTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.parent = Path(temporary.name)
+        self.selected = self.parent / "selected"
+        self.selected.mkdir()
+
+    def test_unrelated_parent_entry_changes_keep_the_selected_identity(self):
+        from pod.cleanup_observations import filesystem, reliable
+        before = self.selected.stat()
+        with directory_entry_changes(self.parent) as changes:
+            observed = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertTrue(reliable(observed))
+        self.assertEqual((observed["device"], observed["inode"]), (before.st_dev, before.st_ino))
+
+    def test_changed_selected_directory_entries_are_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        with directory_entry_changes(self.selected) as changes:
+            observed = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertIsNone(observed)
+
+    def test_symlinked_parent_cannot_supply_the_selected_directory_identity(self):
+        from pod.cleanup_observations import filesystem
+        alias = self.parent / "alias"
+        alias.symlink_to(self.parent, target_is_directory=True)
+        self.assertIsNone(filesystem(alias / self.selected.name))
+
+
+class CleanupPathBindingTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.parent = self.root / "ancestor"
+        self.selected = self.parent / "selected"
+        self.selected.mkdir(parents=True)
+        self.parked = self.root / "parked"
+
+    def replace_parent(self):
+        self.parent.rename(self.parked)
+        self.selected.mkdir(parents=True)
+
+    def assert_unavailable(self, fact, raw):
+        self.assertEqual(fact["status"], "unavailable")
+        self.assertIsNone(fact["identity"])
+        self.assertIsNone(fact["ancestors"])
+        self.assertIsNone(fact["sha256"])
+        self.assertIsNone(raw)
+
+    def test_detached_ancestor_cannot_supply_selected_directory_identity(self):
+        from pod.cleanup_observations import filesystem
+        before = self.selected.stat()
+        with path_change_on_fstat(self.parent, self.replace_parent) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertEqual((self.parked / "selected").stat().st_ino, before.st_ino)
+        self.assertNotEqual(self.selected.stat().st_ino, before.st_ino)
+        self.assertIsNone(found)
+
+    def test_renamed_ancestor_without_replacement_is_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        with path_change_on_fstat(self.parent, lambda: self.parent.rename(self.parked)) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertFalse(self.selected.exists())
+        self.assertIsNone(found)
+
+    def test_same_inode_through_new_symlinked_ancestor_is_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        before = self.selected.stat()
+        def redirect():
+            self.parent.rename(self.parked)
+            self.parent.symlink_to(self.parked, target_is_directory=True)
+        with path_change_on_fstat(self.parent, redirect) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertEqual(self.selected.stat().st_ino, before.st_ino)
+        self.assertIsNone(found)
+
+    def test_ancestor_replaced_during_final_leaf_read_is_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        with path_change_on_fstat(self.selected, self.replace_parent, occurrence=2) as changes:
+            found = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertIsNone(found)
+
+    def test_replaced_leaf_keeps_neither_identity_nor_raw_bytes(self):
+        from pod.cleanup_observations import slot
+        leaf, parked = self.selected / "entry", self.root / "retained-entry"
+        leaf.write_bytes(b"same fixture bytes\n")
+        def replace():
+            leaf.rename(parked)
+            leaf.write_bytes(parked.read_bytes())
+        with path_change_on_fstat(leaf, replace) as changes:
+            fact, raw = slot(leaf, self.selected)
+        self.assertTrue(changes)
+        self.assertEqual(leaf.read_bytes(), parked.read_bytes())
+        self.assertNotEqual(leaf.stat().st_ino, parked.stat().st_ino)
+        self.assert_unavailable(fact, raw)
+
+    def test_genuine_absence_tolerates_unrelated_outside_parent_entries(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "absent" / "leaf"
+        with directory_entry_changes(self.selected) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertEqual(fact["status"], "absent")
+        self.assertEqual(fact["ancestors"], [])
+        self.assertIsNone(fact["identity"])
+        self.assertIsNone(raw)
+        self.assertFalse(missing.parent.exists())
+
+    def test_detached_parent_cannot_supply_successful_absence(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "absent"
+        with path_change_on_fstat(self.parent, self.replace_parent) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertFalse(missing.exists())
+        self.assert_unavailable(fact, raw)
+
+    def test_absent_leaf_appearance_during_final_parent_read_is_unavailable(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "appeared"
+        with path_change_on_fstat(self.selected, missing.mkdir, occurrence=2) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertTrue(missing.is_dir())
+        self.assert_unavailable(fact, raw)
+
+    def test_absent_intermediate_appearance_is_unavailable_even_if_leaf_is_missing(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "appeared" / "still-absent"
+        with path_change_on_fstat(self.selected, missing.parent.mkdir, occurrence=2) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertTrue(missing.parent.is_dir())
+        self.assertFalse(missing.exists())
+        self.assert_unavailable(fact, raw)
+
+    def test_dangling_symlink_appearance_is_not_successful_absence(self):
+        from pod.cleanup_observations import slot
+        missing = self.selected / "appeared"
+        def redirect():
+            missing.symlink_to(self.root / "never-existed", target_is_directory=True)
+        with path_change_on_fstat(self.selected, redirect, occurrence=2) as changes:
+            fact, raw = slot(missing, missing, directory=True)
+        self.assertTrue(changes)
+        self.assertTrue(missing.is_symlink())
+        self.assertFalse(missing.exists())
+        self.assert_unavailable(fact, raw)
+
+    def unavailable_ancestor_fact(self, name):
+        from pod.cleanup_observations import slot
+        original = getattr(cleanup_archives, name)
+        def unavailable(descriptor):
+            if os.readlink(f"/proc/self/fd/{descriptor}") == str(self.parent):
+                raise cleanup_archives.Unavailable("Indispensable ancestor fact is unavailable")
+            return original(descriptor)
+        with patch.object(cleanup_archives, name, side_effect=unavailable):
+            self.assert_unavailable(*slot(self.selected, self.selected, directory=True))
+
+    def test_unknown_outside_ancestor_mount_is_unavailable(self):
+        self.unavailable_ancestor_fact("_mount_id")
+
+    def test_unknown_outside_ancestor_incarnation_is_unavailable(self):
+        self.unavailable_ancestor_fact("_incarnation")
+
+    def test_binding_reopen_failure_clears_bytes_and_closes_every_descriptor(self):
+        from pod.cleanup_observations import slot
+        leaf = self.selected / "entry"
+        leaf.write_bytes(b"fixture bytes\n")
+        original_open, original_close = os.open, os.close
+        opened, closed, attempts = [], [], 0
+        def opening(path, flags, **kwargs):
+            nonlocal attempts
+            if path == leaf.name:
+                attempts += 1
+                if attempts == 2:
+                    raise PermissionError("Current pathname edge cannot be read")
+            descriptor = original_open(path, flags, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        def closing(descriptor):
+            closed.append(descriptor)
+            original_close(descriptor)
+        with patch("pod.cleanup_observations.os.open", side_effect=opening), \
+                patch("pod.cleanup_observations.os.close", side_effect=closing):
+            fact, raw = slot(leaf, self.selected)
+        self.assertEqual(attempts, 2)
+        self.assertCountEqual(closed, opened)
+        self.assert_unavailable(fact, raw)
+
+
+@contextmanager
+def current_resources():
+    """Inspect the actual current rows passed to the unchanged expect validator."""
+    resources = []
+    original = plan.__globals__["_expect_change"]
+    def inspect(expect, rows, target):
+        resources[:] = rows
+        return original(expect, rows, target)
+    with patch("pod.cleanup._expect_change", side_effect=inspect):
+        yield resources
+
+
+def cleanup_entry(case, *, captured=None, **request):
+    """Exercise the production request/output boundary with fixture-only native ports."""
+    from pod.internal import run
+    def observe(project, objective=None, **options):
+        result = plan(project, objective, orca_reader=case.orca_read, native_port=case.port, **options)
+        if captured is not None:
+            captured.update(result=result)
+        return result
+    with patch("pod.cleanup.plan", side_effect=observe):
+        return run("cleanup-plan", {"project": str(case.project), "objective": "objective", **request})
 
 
 class CleanupPlanTests(KernelCase):
@@ -41,11 +305,26 @@ class CleanupPlanTests(KernelCase):
         raise AssertionError(argv)
 
     def observed(self, **kwargs):
-        with repository_reads():
+        self.material_facts = {}
+        diagnostic = cleanup_archives.material_diagnostic
+        def inspect(facts):
+            self.material_facts[digest(facts)] = deepcopy(facts)
+            return diagnostic(facts)
+        with repository_reads(), patch.object(cleanup_archives, "material_diagnostic", side_effect=inspect):
             return plan(self.project, "objective", orca_reader=self.orca_read, native_port=self.port, **kwargs)
+
+    def material(self, row):
+        """Inspect the full decision basis, before its opaque wire diagnostic is compacted."""
+        return self.material_facts[row["identity"]["git"]["sha256"]]
 
     def resource(self, result, kind):
         return next(row for row in result["resources"] if row["kind"] == kind)
+
+    def changed(self, expect, **kwargs):
+        with current_resources() as resources, self.assertRaises(PodError) as error:
+            self.observed(expect=expect, **kwargs)
+        self.assertEqual(error.exception.code, "cleanup_changed")
+        return {"resources": resources}
 
     def test_clean_integrated_worktree_and_branch_have_guarded_commands_without_writes(self):
         state_path = objective_root(self.project, "objective") / "context.json"
@@ -101,6 +380,77 @@ class CleanupPlanTests(KernelCase):
             self.observed(expect=first["expect"])
         self.assertEqual(changed.exception.code, "cleanup_changed")
         self.assertIn("worktree:" + str(self.child), changed.exception.detail["changed"])
+
+    def independent_root(self):
+        return git(self.project, "commit-tree", self.base + "^{tree}", "-m", "independent retained history")
+
+    def test_fetched_root_on_surviving_remote_ref_does_not_make_integrated_work_unique(self):
+        oid = self.independent_root()
+        git(self.child, "fetch", "-q", str(self.project), oid + ":refs/remotes/peer/other")
+        result = self.observed()
+        worktree = self.resource(result, "worktree")
+        facts = self.material(worktree)
+        self.assertEqual(worktree["class"], "integrated")
+        self.assertIsNotNone(worktree["delete_argv"])
+        self.assertEqual(facts["additional_roots"], [])
+        self.assertIn(oid, facts["observed_roots"].values())
+        self.assertEqual(facts["surviving_refs"]["refs/remotes/peer/other"], oid)
+        self.assertNotIn(oid, facts["required_objects"])
+        bundle = self.root / "branch.bundle"
+        git(self.project, "bundle", "create", str(bundle), "refs/heads/objective")
+        archived = self.resource(self.observed(archives=[{
+            "path": str(bundle), "ref": "refs/heads/objective", "tip": self.base}]), "worktree")
+        self.assertTrue(archived["archive_verified"], archived["archives"])
+
+    def test_head_reflog_root_on_surviving_ref_needs_no_extra_preservation(self):
+        oid = self.independent_root()
+        git(self.child, "checkout", "-q", "--detach", oid)
+        git(self.child, "checkout", "-q", "objective")
+        git(self.project, "update-ref", "refs/remotes/peer/other", oid)
+        result = self.observed()
+        worktree = self.resource(result, "worktree")
+        self.assertEqual(worktree["class"], "integrated")
+        self.assertIsNotNone(worktree["delete_argv"])
+        self.assertNotIn(oid, self.material(worktree)["required_objects"])
+        git(self.project, "update-ref", "-d", "refs/remotes/peer/other")
+        current = self.resource(self.changed(result["expect"]), "worktree")
+        self.assertEqual(current["class"], "unique")
+        self.assertIn(oid, self.material(current)["required_objects"])
+        self.assertIsNone(current["delete_argv"])
+
+    def test_removed_private_names_require_preservation_even_if_the_bytes_survive(self):
+        oid = self.independent_root()
+        git(self.child, "update-ref", "refs/worktree/private", oid)
+        git(self.project, "update-ref", "refs/remotes/peer/other", oid)
+        worktree = self.resource(self.observed(), "worktree")
+        facts = self.material(worktree)
+        self.assertEqual(worktree["class"], "unique")
+        self.assertIsNone(worktree["delete_argv"])
+        self.assertIn("refs/worktree/private", facts["additional_roots"])
+        self.assertIn(oid, facts["required_objects"])
+        self.assertNotIn("refs/worktree/private", facts["surviving_refs"])
+        self.assertNotIn("refs/heads/objective", facts["surviving_refs"])
+
+    def test_removed_private_refs_do_not_prove_survival_of_reflog_only_material(self):
+        oid = self.independent_root()
+        git(self.child, "checkout", "-q", "--detach", oid)
+        git(self.child, "checkout", "-q", "objective")
+        git(self.child, "update-ref", "refs/worktree/only-holder", oid)
+        facts = self.material(self.resource(self.observed(), "worktree"))
+        self.assertIn("reflog:" + oid, facts["additional_roots"])
+        self.assertIn(oid, facts["required_objects"])
+
+    def test_unavailable_surviving_reference_inventory_holds_the_resource(self):
+        original = cleanup_archives._run
+        def run(root, argv, **kwargs):
+            if argv == ["for-each-ref", "--format=%(refname) %(objectname) %(symref)"]:
+                raise cleanup_archives.Unavailable("Surviving reference observation is incomplete")
+            return original(root, argv, **kwargs)
+        with patch.object(cleanup_archives, "_run", side_effect=run):
+            worktree = self.resource(self.observed(), "worktree")
+        self.assertEqual(worktree["class"], "protected")
+        self.assertIsNone(worktree["delete_argv"])
+        self.assertIn("Surviving reference", " ".join(worktree["reasons"]))
 
     def test_verified_archive_allows_a_guarded_unique_worktree_command(self):
         (self.child / "README.md").write_text("unique commit\n")
@@ -158,6 +508,8 @@ class CleanupPlanTests(KernelCase):
         with self.assertRaises(PodError) as changed:
             self.observed(expect=first["expect"])
         self.assertIn("remote_branch:origin/objective", changed.exception.detail["changed"])
+
+    def test_main_checkout_is_protected(self):
         main_context = repository_context(self.project)
         self.write(self.stored(), worktree={"repository": main_context["repository"],
                                             "repo_key": main_context["repo_key"],
@@ -402,10 +754,7 @@ class CleanupScaleTests(unittest.TestCase):
         first = case.observed()
         self.addCleanup(git, foreign, "checkout", "-q", "unrelated-149")
         git(foreign, "checkout", "-q", "--ignore-other-worktrees", "objective")
-        with self.assertRaises(PodError) as changed:
-            case.observed(expect=first["expect"])
-        self.assertEqual(changed.exception.code, "cleanup_changed")
-        result = case.observed()
+        result = case.changed(first["expect"])
         worktree = case.resource(result, "worktree")
         self.assertEqual(worktree["identity"]["shared_with"], [str(foreign)])
         self.assertEqual((worktree["class"], worktree["delete_argv"]), ("protected", None))
@@ -439,6 +788,200 @@ class CleanupScaleTests(unittest.TestCase):
                           "remote_branch:origin/objective"})
 
 
+class CleanupEntryScaleTests(unittest.TestCase):
+    """The actual response bound and compactor over one frozen structured observation."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.case = CleanupPlanTests()
+        cls.case.setUp()
+        cls.addClassCleanup(cls.case.doCleanups)
+        case = cls.case
+        for index in range(3):
+            parent = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base, "-m", f"index {index}")
+            root = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base, "-p", parent, "-m", f"stash {index}")
+            git(case.project, "stash", "store", "-m", f"fixture {index}", root)
+
+    @staticmethod
+    def encoded(result):
+        return json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True).encode()
+
+    def frozen(self):
+        with patch.object(cleanup_archives, "material_diagnostic", side_effect=lambda facts: facts):
+            observed = self.case.observed()
+        # Full structured stash data comes from the actual reader. Repeating a
+        # large opaque material diagnostic isolates output/compaction from fresh-read races.
+        source = observed["resources"][0]
+        rows = []
+        for index in range(96):
+            row = deepcopy(source)
+            row["id"] = f"local_branch:refs/heads/row-{index:03}"
+            row["identity"]["git"]["bounded_fixture_material"] = "x" * 24000
+            rows.append(row)
+        observed["resources"] = rows
+        return observed
+
+    def entry(self, result):
+        from pod.internal import run
+        with patch("pod.cleanup.plan", return_value=result):
+            return run("cleanup-plan", {"project": str(self.case.project), "objective": "objective"})
+
+    def test_96_rows_and_three_stashes_pass_the_actual_entry_below_two_mb(self):
+        from pod.cleanup import _compact_material
+        result = self.frozen()
+        _compact_material(result["resources"])
+        actual = self.entry(result)
+        self.assertEqual(len(actual["resources"]), 96)
+        self.assertEqual(len(actual["resources"][0]["stash_observation"]["snapshot"]), 3)
+        self.assertLess(len(self.encoded(actual)), 2_000_000)
+
+    def test_uncompacted_before_control_refuses_the_same_actual_entry(self):
+        result = self.frozen()
+        self.assertGreater(len(self.encoded(result)), 2_000_000)
+        with self.assertRaises(PodError) as caught:
+            self.entry(result)
+        self.assertEqual(caught.exception.code, "cleanup_unavailable")
+
+    def test_compaction_keeps_every_structured_stash_field_and_distinct_witness(self):
+        from pod.cleanup import _compact_material, _expect_change
+        result = self.frozen()
+        before = deepcopy(result["resources"])
+        _compact_material(result["resources"])
+        _, fingerprints = _expect_change(None, result["resources"], result["target"])
+        for row, saved in zip(result["resources"], before):
+            with self.subTest(resource=row["id"]):
+                self.assertEqual(row["stash_observation"], saved["stash_observation"])
+                self.assertEqual(row["identity"]["git"]["sha256"], digest(saved["identity"]["git"]))
+                self.assertEqual(fingerprints[row["id"]], digest({key: value for key, value in row.items()
+                                                                 if key != "fingerprint"}))
+
+
+class CleanupReflogScaleTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.case = CleanupPlanTests()
+        cls.addClassCleanup(cls.case.doCleanups)
+        cls.case.setUp()
+        cls.admin = Path(git(cls.case.child, "rev-parse", "--absolute-git-dir"))
+        cls.line = (cls.case.base + " " + cls.case.base
+                    + " Fixture <fixture@example.invalid> 1 +0000\tprivate fixture subject\n").encode()
+
+    def log(self, count, *, relative="HEAD"):
+        file = self.admin / "logs" / relative
+        before = file.read_bytes() if file.exists() else None
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(self.line * count)
+        self.addCleanup(file.write_bytes, before) if before is not None else self.addCleanup(file.unlink)
+
+    def row(self):
+        result = cleanup_entry(self.case)
+        return self.case.resource(result, "worktree")
+
+
+
+
+
+
+
+
+    def test_raw_reflog_bytes_still_have_the_generic_metadata_bound(self):
+        file = self.admin / "logs" / "HEAD"
+        self.addCleanup(file.write_bytes, file.read_bytes())
+        file.write_bytes(self.line[:-1] + b"x" * cleanup_archives.MAX_OUTPUT + b"\n")
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Resource metadata exceeds its bound", row["reasons"])
+
+
+    def test_changed_hidden_head_log_bytes_invalidate_expect_with_the_same_complete_class(self):
+        self.log(2)
+        first = cleanup_entry(self.case)
+        before = self.case.resource(first, "worktree")
+        file = self.admin / "logs" / "HEAD"
+        file.write_bytes(file.read_bytes().replace(b"private fixture subject", b"changed fixture subject"))
+        with current_resources() as resources, self.assertRaises(PodError) as error:
+            cleanup_entry(self.case, expect=first["expect"])
+        self.assertEqual(error.exception.code, "cleanup_changed")
+        after = self.case.resource({"resources": resources}, "worktree")
+        self.assertEqual((before["class"], after["class"]), ("integrated", "integrated"))
+        self.assertNotEqual(before["identity"]["git"]["sha256"], after["identity"]["git"]["sha256"])
+        self.assertEqual({key: value for key, value in before["identity"]["git"].items() if key != "sha256"},
+                         {key: value for key, value in after["identity"]["git"].items() if key != "sha256"})
+        self.assertNotIn("fixture subject", repr(resources))
+
+    def unsupported_admin(self, name):
+        file = self.admin / name
+        file.write_text(self.case.base + "\n")
+        self.addCleanup(file.unlink)
+        row = self.row()
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIn("unsupported administrative roots", " ".join(row["reasons"]))
+
+    def test_unknown_rebase_head_is_still_held(self):
+        self.unsupported_admin("REBASE_HEAD")
+
+    def test_unknown_auto_merge_is_still_held(self):
+        self.unsupported_admin("AUTO_MERGE")
+
+
+
+    def test_4097_head_entries_stay_held(self):
+        self.log(4097)
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertEqual(row["class"], "protected")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Reflog exceeds its bound", row["reasons"])
+
+    def test_4097_private_entries_stay_held_independently_of_head_entries(self):
+        git(self.case.child, "update-ref", "refs/worktree/fixture", self.case.base)
+        self.addCleanup(git, self.case.child, "update-ref", "-d", "refs/worktree/fixture")
+        self.log(4097, relative="refs/worktree/fixture")
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+
+    def test_more_entries_do_not_expand_the_distinct_root_domain(self):
+        file = self.admin / "logs" / "HEAD"
+        self.addCleanup(file.write_bytes, file.read_bytes())
+        file.write_text("".join(f"{index:040x} {self.case.base} Fixture <fixture@example.invalid> 1 +0000\tx\n"
+                                for index in range(1, 1025)))
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Resource roots exceed the archive observation bound", row["reasons"])
+
+
+class CleanupInventoryTests(unittest.TestCase):
+    def inventory(self, text):
+        from contextlib import contextmanager
+        from io import StringIO
+        @contextmanager
+        def opened(project):
+            yield StringIO(text)
+        return patch("pod.cleanup.worktree_inventory", side_effect=opened)
+
+    def test_repeated_selected_paths_or_checkouts_are_incomplete(self):
+        from pod.cleanup import _objective_worktrees
+        row = "worktree /fixture/selected\0HEAD " + "1" * 40 + "\0branch refs/heads/task\0\0"
+        for paths in ({"/fixture/selected"}, set()):
+            with self.subTest(paths=paths), self.inventory(row * 2), self.assertRaises(PodError) as caught:
+                _objective_worktrees(Path("/fixture"), paths, {"refs/heads/task"})
+            self.assertEqual(caught.exception.code, "cleanup_unavailable")
+
+    def test_incomplete_inventory_is_never_supported_absence(self):
+        from pod.cleanup import _objective_worktrees
+        row = "worktree /fixture/main\0HEAD " + "1" * 40 + "\0branch refs/heads/main\0\0"
+        with self.inventory(row):
+            self.assertEqual(_objective_worktrees(Path("/fixture"), {"/fixture/missing"}, set()),
+                             ({}, {}, "/fixture/main"))
+        for text in ("", row[:-1], row + "worktree /fixture/interrupted\0"):
+            with self.subTest(text=text), self.inventory(text), self.assertRaises(PodError):
+                _objective_worktrees(Path("/fixture"), {"/fixture/missing"}, set())
+
+
 class CleanupWorkerTests(KernelCase):
     @classmethod
     def setUpClass(cls):
@@ -450,6 +993,8 @@ class CleanupWorkerTests(KernelCase):
         cls.journal_path = _record_path(cls.fixture_case.project, "objective")
         cls.journal_bytes = cls.journal_path.read_bytes()
         cls.native_workers = deepcopy(cls.fixture_case.port.workers)
+        admin = Path(git(cls.fixture_case.child, "rev-parse", "--absolute-git-dir"))
+        cls.head_reflog = (admin / "logs" / "HEAD").read_bytes()
 
     def setUp(self):
         fixture = self.fixture_case
@@ -460,7 +1005,9 @@ class CleanupWorkerTests(KernelCase):
         self.port.show_worker = self.shown
         self.resource_case, self.retained_reason = "released", None
         self.resource_owners = {}
+        self.native_fields = {}
         self.terminals, self.orca_reads = [], []
+        self.path_terminals = {}
         self.context_path.write_bytes(self.context_bytes)
         self.journal_path.write_bytes(self.journal_bytes)
         git(self.project, "update-ref", "refs/heads/worker", self.base)
@@ -471,6 +1018,16 @@ class CleanupWorkerTests(KernelCase):
                 (self.child / name).unlink(missing_ok=True)
         else:
             git(self.project, "worktree", "add", "-q", str(self.child), "worker")
+        # A reset does not remove independent older roots from a previous method's private reflog.
+        admin = Path(git(self.child, "rev-parse", "--absolute-git-dir"))
+        (admin / "logs" / "HEAD").write_bytes(self.head_reflog)
+        (admin / "ORIG_HEAD").unlink(missing_ok=True)
+        git(self.child, "update-ref", "-d", "refs/worktree/needed-stash")
+        if (admin / "locked").exists():
+            git(self.project, "worktree", "unlock", str(self.child))
+        for other in ("foreign-worktree", "shared-worker"):
+            if (self.root / other).exists():
+                git(self.project, "worktree", "remove", str(self.root / other))
         git(self.project, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/target")
         git(self.root / "origin.git", "update-ref", "refs/heads/worker", self.base)
         git(self.project, "update-ref", "refs/remotes/origin/worker", self.base)
@@ -507,6 +1064,7 @@ class CleanupWorkerTests(KernelCase):
         self.port.show_worker = self.shown
         self.terminals = []
         self.orca_reads = []
+        self.native_fields = {}
         bare = self.root / "origin.git"
         subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
         git(self.project, "remote", "add", "origin", str(bare))
@@ -554,8 +1112,24 @@ class CleanupWorkerTests(KernelCase):
             shown["runtime"] = "another-runtime"
         return shown
 
-    orca_read = CleanupPlanTests.orca_read
+    def orca_read(self, argv, **kwargs):
+        self.orca_reads.append(list(argv))
+        if argv[:2] == ["worktree", "show"]:
+            path = argv[3].removeprefix("path:")
+            branch = git(Path(path), "symbolic-ref", "--short", "HEAD") if Path(path).exists() else None
+            binding = self.admission["native_binding"]
+            return {"runtime": self.port.runtime, "result": {"worktree": {
+                "id": binding["worktreeId"] if Path(path) == self.child else "fixture-" + Path(path).name,
+                "path": path, "branch": branch, "isBare": False, "isMainWorktree": Path(path) == self.project,
+                "git": {"path": path, "branch": branch, "isBare": False}, **self.native_fields}}}
+        if argv[:2] == ["terminal", "list"]:
+            path = argv[3].removeprefix("path:")
+            return {"runtime": self.port.runtime, "result": {
+                "terminals": list(self.terminals) + list(getattr(self, "path_terminals", {}).get(path, [])),
+                "truncated": False}}
+        raise AssertionError(argv)
     resource = CleanupPlanTests.resource
+    changed = CleanupPlanTests.changed
 
     def observed(self, worker=None, **kwargs):
         with repository_reads():
@@ -568,6 +1142,368 @@ class CleanupWorkerTests(KernelCase):
         for row in result["resources"]:
             self.assertIsNone(row["delete_argv"], row)
             self.assertIn(reason, " ".join(row["reasons"]), row)
+
+    def stash(self):
+        (self.project / "README.md").write_text("unrelated retained worker fixture\n")
+        git(self.project, "stash", "push", "-qm", "retained fixture")
+
+    def stash_state(self):
+        common = self.project / ".git"
+        root = git(self.project, "rev-parse", "refs/stash")
+        oids = git(self.project, "rev-list", "--objects", "--no-object-names", root).splitlines()
+        objects = subprocess.run(["git", "-C", str(self.project), "cat-file", "--batch"],
+                                 input=("\n".join(oids) + "\n").encode(), capture_output=True, check=True).stdout
+        return {"root": root, "oids": oids, "objects_sha256": hashlib.sha256(objects).hexdigest(),
+                "ref": (common / "refs/stash").read_bytes(), "log": (common / "logs/refs/stash").read_bytes()}
+
+    def selected_entry(self, **request):
+        return cleanup_entry(self, worker={"dispatch": self.dispatch},
+                             observe={"kind": "worktree", "name": str(self.child)}, **request)
+
+    def test_reported_released_worker_unforced_entry_preserves_unrelated_real_stash(self):
+        self.stash()
+        before = self.stash_state()
+        state_path = objective_root(self.project, "objective") / "context.json"
+        state = state_path.read_bytes()
+        result = self.selected_entry()
+        row = self.resource(result, "worktree")
+        self.assertIsNone(result["closure_basis"])
+        self.assertEqual(row["class"], "integrated")
+        self.assertEqual(row["identity"]["provenance"]["source"], "admission")
+        self.assertEqual(row["identity"]["current"]["oid"], self.base)
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        self.assertEqual(row["delete_argv"][-3:], ["worktree", "remove", str(self.child)])
+        self.assertNotIn("--force", row["delete_argv"])
+        self.assertFalse(row["archive_verified"])
+        self.assertIsNone(row["archive_argv"])
+        stash = row["stash_observation"]
+        self.assertEqual(stash["executor"]["kind"], "git_worktree_remove")
+        self.assertEqual(stash["executor"]["profile"], "git-worktree-remove/v1")
+        self.assertTrue(stash["executor"]["source_binding_sha256"])
+        self.assertEqual({item["relation"] for item in stash["relations"]}, {"unrelated"})
+        self.assertTrue(stash["freshness"]["stable"])
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertEqual(self.stash_state(), before)
+        self.assertEqual(state_path.read_bytes(), state)
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), self.base)
+
+    def test_clean_worker_plan_lists_only_unforced_git_worktree_phase_and_keeps_checked_out_ref(self):
+        first = self.observed()
+        row = self.resource(first, "worktree")
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        branch = self.resource(first, "local_branch")
+        self.assertIsNone(branch["delete_argv"])
+        self.assertIn("reobserve current checkout absence", " ".join(branch["reasons"]))
+        self.assertNotIn("Orca also removes", " ".join(branch["reasons"]))
+
+    def test_unforced_worker_command_refuses_new_dirty_data_in_the_actual_git_effect(self):
+        row = self.resource(self.selected_entry(), "worktree")
+        (self.child / "valuable.txt").write_text("new data after observation\n")
+        effect = subprocess.run(row["delete_argv"], capture_output=True)
+        self.assertNotEqual(effect.returncode, 0)
+        self.assertTrue(self.child.exists())
+        self.assertEqual((self.child / "valuable.txt").read_text(), "new data after observation\n")
+
+    def test_ordinary_missing_worktree_keeps_current_recorded_branch_unproven(self):
+        row = self.resource(self.selected_entry(), "worktree")
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        result = cleanup_entry(self, worker={"dispatch": self.dispatch},
+                               observe={"kind": "local_branch", "name": "refs/heads/worker"})
+        branch = result["resources"][0]
+        self.assertEqual(branch["identity"]["current"]["status"], "present")
+        self.assertIsNone(branch["delete_argv"])
+        self.assertIn("creation by this objective is unproven", " ".join(branch["reasons"]))
+
+    def test_open_integration_is_never_selected_as_an_ordinary_released_worker(self):
+        self.stash()
+        state = read(self.project, "objective")
+        state["checkpoint"]["worktree"]["path"] = str(self.child)
+        with patch("pod.cleanup.read", return_value=state):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("objective integration worktree", " ".join(row["reasons"]))
+
+    def test_director_lead_or_role_entry_keeps_ordinary_worker_held(self):
+        for role in ("director", "lead", "role"):
+            self.native_fields = {"role": role}
+            self.assertIsNone(self.resource(self.selected_entry(), "worktree")["delete_argv"])
+
+    def test_current_native_identity_must_match_the_released_worker_binding(self):
+        self.native_fields = {"id": "foreign-native-worktree"}
+        self.assert_held("terminal here is active")
+
+    def test_truncated_attachment_inventory_cannot_enable_ordinary_git_phase(self):
+        original = self.orca_read
+        def truncated(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[:2] == ["terminal", "list"]:
+                result["result"]["truncated"] = True
+            return result
+        with patch.object(self, "orca_read", side_effect=truncated):
+            self.assertIsNone(self.resource(self.selected_entry(), "worktree")["delete_argv"])
+
+    def test_worker_branch_shared_with_another_checkout_is_still_held(self):
+        git(self.project, "worktree", "add", "--force", "-q", str(self.root / "shared-worker"), "worker")
+        self.assert_held("also checked out")
+
+    def test_locked_worker_never_receives_an_extra_force(self):
+        git(self.project, "worktree", "lock", str(self.child))
+        self.assertIsNone(self.resource(self.selected_entry(), "worktree")["delete_argv"])
+
+    def assert_unforced_positive_preserves_stash(self):
+        before = self.stash_state()
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        stash = row["stash_observation"]
+        self.assertEqual({item["relation"] for item in stash["relations"]}, {"unrelated"}, stash)
+        self.assertEqual((stash["holders"]["status"], stash["holders"]["observations"]), ("observed", []))
+        # Only the selected checkout is read natively; other worktrees are excluded by Git facts.
+        native = {argv[3] for argv in self.orca_reads if argv[:2] in (["worktree", "show"], ["terminal", "list"])}
+        self.assertEqual(native, {"path:" + str(self.child)})
+        self.assertNotIn(["terminal", "show"], [argv[:2] for argv in self.orca_reads])
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertEqual(self.stash_state(), before)
+        return row
+
+    def test_coordinator_and_exited_terminals_elsewhere_do_not_veto_an_unrelated_stash(self):
+        self.stash()
+        sibling = self.root / "foreign-worktree"
+        git(self.project, "worktree", "add", "-q", "--detach", str(sibling))
+        self.path_terminals = {str(self.project): [{"handle": "coordinator", "worktreePath": str(self.project)}],
+                               str(sibling): [{"handle": "exited-reviewer", "worktreePath": str(sibling)}]}
+        row = self.assert_unforced_positive_preserves_stash()
+        excluded = next(item for item in row["stash_observation"]["holders"]["witnesses"]
+                        if item["reference"] == "holders.exclusions")
+        self.assertEqual(excluded["status"], "PASS")
+
+    def test_two_unrelated_stash_entries_keep_the_unforced_worker_positive(self):
+        self.stash()
+        (self.project / "README.md").write_text("second unrelated retained worker fixture\n")
+        git(self.project, "stash", "push", "-qm", "second retained fixture")
+        self.assertEqual(len(git(self.project, "stash", "list").splitlines()), 2)
+        row = self.assert_unforced_positive_preserves_stash()
+        self.assertEqual(len(row["stash_observation"]["snapshot"]), 2)
+        self.assertEqual(row["class"], "integrated")
+
+    def test_unrelated_stash_entries_do_not_mask_otherwise_lost_worker_roots(self):
+        self.stash()
+        (self.project / "README.md").write_text("second unrelated retained worker fixture\n")
+        git(self.project, "stash", "push", "-qm", "second retained fixture")
+        (self.child / "README.md").write_text("abandoned worker commit\n")
+        git(self.child, "commit", "-qam", "abandoned worker commit")
+        git(self.child, "reset", "-q", "--hard", self.base)
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("worktree has additional local recovery roots", row["reasons"])
+
+    def test_unreadable_registered_worktree_holds_an_unrelated_stash_relation(self):
+        self.stash()
+        sibling = self.root / "foreign-worktree"
+        git(self.project, "worktree", "add", "-q", "--detach", str(sibling))
+        parked = self.root / "parked-foreign-worktree"
+        sibling.rename(parked)
+        self.addCleanup(git, self.project, "worktree", "prune")
+        self.addCleanup(parked.rename, sibling)
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual({item["relation"] for item in row["stash_observation"]["relations"]}, {"unknown"})
+
+    def test_returned_unforced_worker_argv_starts_no_configured_fsmonitor(self):
+        marker, hook = self.root / "fsmonitor-marker", self.root / "fsmonitor-hook"
+        hook.write_text('#!/bin/sh\necho ran >> "%s"\nexit 1\n' % marker)
+        hook.chmod(0o755)
+        git(self.project, "config", "extensions.worktreeConfig", "true")
+        self.addCleanup(git, self.project, "config", "--unset", "extensions.worktreeConfig")
+        git(self.project, "config", "core.fsmonitor", str(hook))
+        self.addCleanup(git, self.project, "config", "--unset", "core.fsmonitor")
+        git(self.child, "config", "--worktree", "core.fsmonitor", str(hook))
+        row = self.resource(self.selected_entry(), "worktree")
+        argv = row["delete_argv"]
+        self.assertEqual(argv, cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        position = argv.index("core.hooksPath=/dev/null")
+        self.assertEqual(argv[position + 1:position + 7], ["-c", "core.fsmonitor=false", "-c", "maintenance.auto=false",
+                                                           "-c", "gc.auto=0"])
+        self.assertNotIn("--force", argv)
+        subprocess.run(argv, capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertFalse(marker.exists())
+
+    def filter_driver(self, driver, variables=("clean",), *, worktree=False):
+        """Configure a disposable helper that only records that it ran; never run on purpose."""
+        marker = self.root / (driver + "-filter-marker")
+        marker.unlink(missing_ok=True)
+        target, scope = (self.child, ["--worktree"]) if worktree else (self.project, [])
+        def quiet(*argv):
+            subprocess.run(["git", *argv], capture_output=True)
+        if worktree:
+            git(self.project, "config", "extensions.worktreeConfig", "true")
+            self.addCleanup(quiet, "-C", str(self.project), "config", "--unset", "extensions.worktreeConfig")
+        for variable in variables:
+            git(target, "config", *scope, f"filter.{driver}.{variable}", f"sh -c 'echo ran >> {marker}; cat'")
+        self.addCleanup(quiet, "-C", str(target), "config", *scope, "--remove-section", "filter." + driver)
+        return marker
+
+    def attributes(self, text):
+        path = self.project / ".git" / "info" / "attributes"
+        path.write_text(text)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+    def test_applicable_filter_helper_holds_the_unforced_worker_before_any_effect(self):
+        self.stash()
+        before, tip = self.stash_state(), git(self.project, "rev-parse", "refs/heads/worker")
+        self.filter_driver("probe")
+        self.attributes("* filter=probe\n")
+        exact = "Git's clean check in this unforced removal could run configured attribute filter helpers: probe"
+        selected = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(selected["delete_argv"])
+        self.assertEqual(selected["class"], "protected")
+        self.assertIn(exact, selected["reasons"])
+        # No removal ran: checkout, branch and stash bytes are unchanged.
+        self.assertTrue(self.child.is_dir())
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), tip)
+        self.assertEqual(self.stash_state(), before)
+
+    def test_worktree_scoped_applicable_filter_holds_the_ordinary_worker_plan(self):
+        self.filter_driver("probe", worktree=True)  # the selected checkout's own current config
+        self.attributes("* filter=probe\n")
+        ordinary = self.resource(self.observed(), "worktree")
+        self.assertIsNone(ordinary["delete_argv"])
+        self.assertIn("Git's clean check in this unforced removal could run configured attribute filter helpers: probe",
+                      ordinary["reasons"])
+        self.assertTrue(self.child.is_dir())
+
+    def test_configured_driver_named_like_an_attribute_state_holds_the_unforced_worker(self):
+        tip = git(self.project, "rev-parse", "refs/heads/worker")
+        marker = self.filter_driver("set")
+        self.attributes("* filter\n")  # check-attr prints "set" for the boolean state too
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Git's clean check in this unforced removal could run configured attribute filter helpers: set",
+                      row["reasons"])
+        self.assertTrue(self.child.is_dir())
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), tip)
+        self.assertFalse(marker.exists())
+
+    def test_inactive_unrelated_filter_helpers_do_not_veto_the_unforced_worker(self):
+        self.stash()
+        before = self.stash_state()
+        marker = self.filter_driver("unrelated", ("clean", "smudge", "process"))
+        self.attributes("*.never-present filter=unrelated\nREADME.md filter=undefined-driver\n")
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.stash_state(), before)
+
+    def test_unavailable_selected_helper_facts_hold_the_unforced_worker(self):
+        self.filter_driver("unrelated")
+        original = cleanup_archives._run
+        def unavailable(root, argv, **kwargs):
+            if argv[:1] == ["check-attr"]:
+                raise cleanup_archives.Unavailable("Filter attribute observation exceeded its bound")
+            return original(root, argv, **kwargs)
+        with patch.object(cleanup_archives, "_run", side_effect=unavailable):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("selected removal helper relevance is unavailable: Filter attribute observation exceeded "
+                      "its bound", row["reasons"])
+
+    def test_unavailable_mount_identity_keeps_the_worker_held(self):
+        with patch.object(cleanup_archives, "_mount_id", side_effect=cleanup_archives.Unavailable("mount unavailable")):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["identity"]["git"]["complete"])
+
+    def test_unavailable_directory_incarnation_keeps_the_worker_held(self):
+        with patch.object(cleanup_archives, "_incarnation", side_effect=cleanup_archives.Unavailable("birth unavailable")):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["identity"]["git"]["complete"])
+
+    def test_unstable_selected_helper_facts_refuse_the_worker_observation(self):
+        self.filter_driver("unrelated")
+        from pod import cleanup
+        original, calls = cleanup._helper_state, []
+        def changing(path):
+            calls.append(path)
+            state = original(path)
+            return state if len(calls) == 1 else {**state, "attributes_sha256": "0" * 64}
+        with directory_entry_changes(self.root.parent) as activity, \
+                patch.object(cleanup, "_helper_state", side_effect=changing), self.assertRaises(PodError) as unstable:
+            self.selected_entry()
+        self.assertTrue(activity)
+        self.assertEqual(unstable.exception.code, "cleanup_changed")
+        self.assertEqual(len(calls), 2)
+
+    def test_changed_selected_helper_facts_refuse_a_stale_worker_expect(self):
+        self.filter_driver("unrelated")
+        first = self.selected_entry()
+        self.assertIsNotNone(self.resource(first, "worktree")["delete_argv"])
+        self.attributes("* filter=unrelated\n")
+        with self.assertRaises(PodError) as stale:
+            self.selected_entry(expect=first["expect"])
+        self.assertEqual(stale.exception.code, "cleanup_changed")
+
+    def test_unknown_worktree_effect_stays_held_even_with_verified_empty_stash(self):
+        original = cleanup_stashes._worktree_footprint
+        def unsupported(*args):
+            result = original(*args)
+            result.update(status="unavailable", reasons=["unsupported_primitive"], opaque=["unsupported_primitive"])
+            return result
+        with patch.object(cleanup_stashes, "_worktree_footprint", side_effect=unsupported):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["stash_observation"]["freshness"]["stable"])
+
+    def test_unknown_worktree_effect_cannot_borrow_an_unrelated_stash_exemption(self):
+        self.stash()
+        with patch.object(cleanup_stashes, "_worktree_footprint", return_value={
+                **cleanup_stashes._unknown(("paths", "refs", "config", "native", "opaque", "sha256"),
+                    "effect_footprint_unavailable", operation="primitive_footprint", kind="source_correspondence"),
+                "opaque": ["unsupported_primitive"]}):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual({item["relation"] for item in row["stash_observation"]["relations"]}, {"unknown"})
+
+    def test_ordinary_stash_with_missing_log_is_not_an_unrelated_positive(self):
+        self.stash()
+        (self.project / ".git/logs/refs/stash").unlink()
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["stash_observation"]["complete"])
+
+    def test_changed_retained_stash_refuses_the_ordinary_worker_expect(self):
+        self.stash()
+        first = self.selected_entry()
+        (self.project / "README.md").write_text("changed retaining roots\n")
+        git(self.project, "stash", "push", "-qm", "changed fixture")
+        with self.assertRaises(PodError) as refused:
+            self.selected_entry(expect=first["expect"])
+        self.assertEqual(refused.exception.code, "cleanup_changed")
+
+    def test_current_bound_target_branch_stays_protected_for_ordinary_worker(self):
+        state = read(self.project, "objective")
+        state["checkpoint"]["governance"]["base_ref"] = "refs/heads/worker"
+        with patch("pod.cleanup.read", return_value=state):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("target branch", " ".join(row["reasons"]))
+
+    def test_release_changed_during_ordinary_observation_refuses_before_returning_argv(self):
+        original = self.port.show_worker
+        calls = 0
+        def changed(dispatch):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                self.resource_case = "unreleased"
+            return original(dispatch)
+        with patch.object(self.port, "show_worker", side_effect=changed), self.assertRaises(PodError) as refused:
+            self.selected_entry()
+        self.assertEqual(refused.exception.code, "cleanup_changed")
 
     def test_exact_selector_removes_released_worker_and_its_local_and_remote_branches_while_open(self):
         context = (objective_root(self.project, "objective") / "context.json").read_bytes()
@@ -582,7 +1518,8 @@ class CleanupWorkerTests(KernelCase):
         port.apply(again)
         self.assertFalse(self.child.exists())
         self.assertEqual(git(self.project, "ls-remote", "origin", "refs/heads/worker"), "")
-        self.assertNotIn("refs/heads/worker", git(self.project, "show-ref"))
+        # The narrow Git phase leaves the common branch; it is no earlier-removal proof.
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), self.base)
         self.assertEqual((objective_root(self.project, "objective") / "context.json").read_bytes(), context)
         self.assertTrue(self.project.is_dir())
 
@@ -609,10 +1546,12 @@ class CleanupWorkerTests(KernelCase):
         retained = self.observed(worker=worker)
         self.assertEqual(retained["worker"]["reuse_reason"], reason)
         self.assert_held("reused next round: " + reason, retained)
-        for old, selected in ((first, worker), (retained, {**worker, "reuse_reason": "a different next round"})):
-            with self.subTest(selector=selected), self.assertRaises(PodError) as changed:
-                self.observed(worker=selected, expect=old["expect"])
-            self.assertEqual(changed.exception.code, "cleanup_changed")
+        self.changed(first["expect"], worker=worker)
+
+    def test_different_recorded_reuse_reason_changes_expect(self):
+        worker = {"admission": self.admission["admission_id"], "reuse_reason": "initial next round"}
+        retained = self.observed(worker=worker)
+        self.changed(retained["expect"], worker={**worker, "reuse_reason": "a different next round"})
 
     def test_native_retention_and_reuse_keep_the_exact_reason(self):
         self.resource_case = "retained"
@@ -627,8 +1566,13 @@ class CleanupWorkerTests(KernelCase):
         self.port.workers[self.dispatch]["outcome"] = "in_progress"
         self.assert_held("worker Dispatch is active or unsettled")
         self.port.workers[self.dispatch]["outcome"] = "succeeded"
-        for case, reason in (("unreleased", "not natively released"), ("live", "exit is unverified"),
-                             ("unknown_release", "not natively released"),
+        for case, reason in (("unreleased", "not natively released"), ("live", "exit is unverified")):
+            with self.subTest(case=case):
+                self.resource_case = case
+                self.assert_held(reason)
+
+    def test_unknown_release_and_changed_runtime_keep_worker_resources_held(self):
+        for case, reason in (("unknown_release", "not natively released"),
                              ("wrong_runtime", "native settlement or release is unavailable")):
             with self.subTest(case=case):
                 self.resource_case = case
@@ -666,9 +1610,13 @@ class CleanupWorkerTests(KernelCase):
                 (self.child / filename).write_text("keep this data\n")
                 self.assert_held(filename)
                 (self.child / filename).unlink()
+
+    def test_private_stash_dependency_and_foreign_terminal_keep_all_worker_resources(self):
         (self.child / "README.md").write_text("stashed data\n")
         git(self.child, "stash", "push", "-qm", "retain")
+        git(self.child, "update-ref", "refs/worktree/needed-stash", git(self.project, "rev-parse", "refs/stash"))
         self.assert_held("stash")
+        git(self.child, "update-ref", "-d", "refs/worktree/needed-stash")
         git(self.project, "stash", "clear")
         self.terminals = [{"handle": "foreign", "worktreePath": str(self.child)}]
         self.assert_held("terminal here is active")
@@ -683,6 +1631,23 @@ class CleanupWorkerTests(KernelCase):
         archive.write_text("corrupt archive\n")
         self.assert_held("outside the observed target", self.observed(
             archives=[{"path": str(archive), "ref": "refs/heads/worker", "tip": tip}]))
+
+    def test_branch_archive_does_not_clear_worker_release_or_report_holds(self):
+        ref = "refs/heads/worker"
+        archive = self.root / "worker-guard.bundle"
+        git(self.project, "bundle", "create", str(archive), ref)
+        rows = [{"path": str(archive), "ref": ref, "tip": self.base}]
+        self.resource_case = "unreleased"
+        result = self.observed(archives=rows)
+        self.assertTrue(self.resource(result, "worktree")["archive_verified"])
+        self.assert_held("not natively released", result)
+        self.resource_case = "released"
+        state = read(self.project, "objective")
+        state["admissions"][self.admission["admission_id"]]["report"] = None
+        with patch("pod.cleanup.read", return_value=state):
+            result = self.observed(archives=rows)
+        self.assertTrue(self.resource(result, "worktree")["archive_verified"])
+        self.assert_held("worker report has not been recorded", result)
 
     def test_changed_release_report_or_remote_tip_invalidates_expect(self):
         first = self.observed()
@@ -729,7 +1694,15 @@ class CleanupWorkerTests(KernelCase):
 
     def test_incomplete_resource_and_wrong_worker_terminal_never_prove_release(self):
         shown = self.shown(self.dispatch)
-        for key in ("ownerDispatchId", "worktreeId", "terminalHandle", "ownershipState", "releaseState"):
+        for key in ("ownerDispatchId", "worktreeId", "terminalHandle"):
+            incomplete = deepcopy(shown)
+            incomplete["result"]["terminalResource"].pop(key)
+            with self.subTest(missing=key), patch.object(self.port, "show_worker", return_value=incomplete):
+                self.assertTrue(all(row["delete_argv"] is None for row in self.observed()["resources"]))
+
+    def test_incomplete_release_fields_and_wrong_worker_terminal_never_prove_release(self):
+        shown = self.shown(self.dispatch)
+        for key in ("ownershipState", "releaseState"):
             incomplete = deepcopy(shown)
             incomplete["result"]["terminalResource"].pop(key)
             with self.subTest(missing=key), patch.object(self.port, "show_worker", return_value=incomplete):
@@ -742,8 +1715,16 @@ class CleanupWorkerTests(KernelCase):
         shown = self.shown(self.dispatch)
         binding = self.admission["native_binding"]
         terminal = {"handle": binding["terminalHandle"], "worktreeId": binding["worktreeId"], "connected": False}
-        for fields in ({"connected": True}, {"connected": None}, {"handle": "other-terminal"},
-                       {"worktreeId": "other-worktree"}):
+        for fields in ({"connected": True}, {"connected": None}):
+            shown["result"]["terminal"] = {**terminal, **fields}
+            with self.subTest(fields=fields), patch.object(self.port, "show_worker", return_value=shown):
+                self.assert_held("terminal readback is connected, incomplete or belongs to another binding")
+
+    def test_foreign_terminal_handle_or_worktree_holds_release(self):
+        shown = self.shown(self.dispatch)
+        binding = self.admission["native_binding"]
+        terminal = {"handle": binding["terminalHandle"], "worktreeId": binding["worktreeId"], "connected": False}
+        for fields in ({"handle": "other-terminal"}, {"worktreeId": "other-worktree"}):
             shown["result"]["terminal"] = {**terminal, **fields}
             with self.subTest(fields=fields), patch.object(self.port, "show_worker", return_value=shown):
                 self.assert_held("terminal readback is connected, incomplete or belongs to another binding")
@@ -789,22 +1770,30 @@ class CleanupWorkerTests(KernelCase):
         return final
 
     def test_final_reused_round_can_remove_the_reported_released_placement(self):
-        reason = "immediate next round on the correction's frozen candidate"
-        self.assert_held("reused next round: " + reason, self.observed(worker={
-            "admission": self.admission["admission_id"], "reuse_reason": reason}))
         final = self.final_reused_round()
         selector = {"admission": final["admission_id"]}
-        self.assert_held("worker resource is not natively released", self.observed(worker=selector))
         self.resource_case = "released"
         first = self.observed(worker=selector)
         self.assertEqual(first["worker"]["placement_history"][0]["proof"], "transferred_to_selected")
-        self.assert_held("reused next round: " + reason, self.observed(worker={
-            "admission": self.admission["admission_id"], "reuse_reason": reason}))
         again = self.observed(worker=selector, expect=first["expect"])
         FixtureCleanupPort(self.project, [self.child]).apply(again)
         self.assertFalse(self.child.exists())
         self.assertEqual(git(self.project, "ls-remote", "origin", "refs/heads/worker"), "")
         self.assertIsNone(read(self.project, "objective")["checkpoint"].get("closure"))
+
+    def test_older_reused_round_keeps_its_explicit_reuse_reason_held(self):
+        reason = "immediate next round on the correction's frozen candidate"
+        self.final_reused_round()
+        self.resource_case = "released"
+        self.assert_held("reused next round: " + reason, self.observed(worker={
+            "admission": self.admission["admission_id"], "reuse_reason": reason}))
+
+    def test_reuse_reason_and_unreleased_final_round_stay_held(self):
+        reason = "immediate next round on the correction's frozen candidate"
+        self.assert_held("reused next round: " + reason, self.observed(worker={
+            "admission": self.admission["admission_id"], "reuse_reason": reason}))
+        final = self.final_reused_round()
+        self.assert_held("worker resource is not natively released", self.observed(worker={"admission": final["admission_id"]}))
 
     def test_reuse_history_active_unknown_or_foreign_ownership_holds_and_changes_expect(self):
         final = self.final_reused_round()
@@ -816,6 +1805,11 @@ class CleanupWorkerTests(KernelCase):
         with self.assertRaises(PodError) as changed:
             self.observed(worker=selector, expect=first["expect"])
         self.assertEqual(changed.exception.code, "cleanup_changed")
+
+    def test_reuse_history_foreign_ownership_holds(self):
+        final = self.final_reused_round()
+        self.resource_case = "released"
+        selector = {"dispatch": final["native_binding"]["dispatchId"]}
         self.port.workers[self.dispatch]["outcome"] = "succeeded"
         self.resource_owners[self.dispatch] = "foreign-dispatch"
         self.assert_held("other admission", self.observed(worker=selector))

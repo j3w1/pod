@@ -17,6 +17,38 @@ START=['orchestration','worker-start','--task','task','--run','run','--worktree'
 
 
 class OrcaAdapterTests(unittest.TestCase):
+    def test_display_worktree_limit_is_one_exact_read_shape(self):
+        from pod.orca import _read_allowed
+        self.assertTrue(_read_allowed(["worktree", "list", "--limit", "1000", "--json"]))
+        self.assertTrue(_read_allowed(["worktree", "list", "--json"]))
+        for argv in (["worktree", "list", "--limit", "1001", "--json"],
+                     ["worktree", "list", "--limit", "999", "--json"],
+                     ["worktree", "list", "--limit", "01000", "--json"],
+                     ["worktree", "list", "--json", "--limit", "1000"],
+                     ["worktree", "list", "--limit", "1000", "--cursor", "next", "--json"],
+                     ["terminal", "list", "--limit", "1000", "--json"]):
+            with self.subTest(argv=argv), patch("pod.orca.subprocess.run") as runner:
+                self.assertFalse(_read_allowed(argv))
+                with self.assertRaises(PodError) as caught:
+                    read_command(argv)
+                self.assertEqual(caught.exception.code, "unsupported_orca_read")
+                runner.assert_not_called()
+
+    def test_display_bounded_read_keeps_timeout_output_and_environment(self):
+        from pod.orca import MAX_OUTPUT
+        argv = ["worktree", "list", "--limit", "1000", "--json"]
+        payload = json.dumps({"ok": True, "result": {"worktrees": []}, "_meta": {"runtimeId": "r"}})
+        with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
+             patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
+            self.assertEqual(read_command(argv)["runtime"], "r")
+            runner.assert_called_once_with(["/fixture/orca", *argv], capture_output=True, text=True,
+                                           timeout=10, check=False)
+        with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
+             patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, " " * (MAX_OUTPUT + 1), "")), \
+             self.assertRaises(PodError) as caught:
+            read_command(argv)
+        self.assertEqual(caught.exception.code, "orca_contract")
+
     def test_cleanup_terminal_inventory_is_an_exact_read_shape(self):
         from pod.orca import _read_allowed
         self.assertTrue(_read_allowed(["terminal", "list", "--worktree", "path:/fixture/work", "--json"]))
@@ -351,6 +383,25 @@ class OrcaAdapterTests(unittest.TestCase):
                                 'page':{'hasMore':False}}}
         with patch('pod.orca.read_command',side_effect=[valid,later]), self.assertRaises(PodError):
             worker_rows('run')
+
+    def test_worker_pages_need_explicit_completion_and_unique_rows(self):
+        valid = {'runtime': 'runtime', 'result': {'scope': {'source': 'flag', 'run': 'run'},
+                 'workers': [{'dispatchId': 'one'}], 'page': {'hasMore': False}}}
+        for changes in ({'page': None}, {'page': {}}, {'page': {'hasMore': None}},
+                        {'page': {'hasMore': 0}}, {'truncated': True},
+                        {'workers': [{'dispatchId': 'one'}, {'dispatchId': 'one'}]},
+                        {'workers': [{}]}, {'workers': [None]}):
+            with self.subTest(changes=changes), patch('pod.orca.read_command', return_value={
+                    **valid, 'result': {**valid['result'], **changes}}), self.assertRaises(PodError):
+                worker_rows('run')
+
+    def test_worker_repeated_cursor_page_or_interrupted_sequence_is_not_empty_success(self):
+        page = {'runtime': 'runtime', 'result': {'scope': {'source': 'flag', 'run': 'run'},
+                'workers': [{'dispatchId': 'one'}], 'page': {'hasMore': True, 'nextCursor': 'next'}}}
+        for second in (page, PodError('orca_read_failed', 'interrupted'),
+                       {**page, 'result': {**page['result'], 'workers': [], 'page': {'hasMore': True, 'nextCursor': 'third'}}}):
+            with self.subTest(second=second), patch('pod.orca.read_command', side_effect=[page, second]), self.assertRaises(PodError):
+                worker_rows('run')
 
     def test_contract_needs_runtime_status_not_version_only(self):
         with patch('pod.orca.read_command',side_effect=[
