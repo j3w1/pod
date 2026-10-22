@@ -254,19 +254,6 @@ class SiblingPlacementTests(unittest.TestCase):
                      "admissions": {label: {"admission_id": label, "recovery": {
                          "placement_binding": {"path": str(path), "branch": path.name}}}
                          for label, path in cls.paths.items() if path != fixture.target}}
-        # One real ordinary plan serves all four methods: isolated Git/file negatives
-        # and two independently archived worktrees with both artifacts outside scope.
-        # The real production plan's setup duration is recorded separately by the runner.
-        cls.placements = []
-        original = archives._outside
-        artifact_paths = {Path(row["path"]) for row in cls.rows.values()}
-        artifact_paths.update(Path(row["worktree_archive"]["path"]) for row in cls.rows.values())
-        def placement(path, excluded):
-            if path in artifact_paths:
-                cls.placements.append((path, set(excluded)))
-            return original(path, excluded)
-        with patch.object(archives, "_outside", side_effect=placement):
-            cls.result = cls().observed()
 
     def observed(self, **options):
         def reader(argv, **kwargs):
@@ -285,49 +272,57 @@ class SiblingPlacementTests(unittest.TestCase):
     def worktree(self, result, path):
         return next(row for row in result["resources"] if row["id"] == "worktree:" + str(path))
 
+    def test_ordinary_plan_retains_full_scope_artifact_boundaries(self):
+        # Keep the one four-resource production plan in the timed body. Class
+        # fixtures may repeat in lane workers; subtests share this actual result.
+        placements = []
+        original = archives._outside
+        artifact_paths = {Path(row["path"]) for row in self.rows.values()}
+        artifact_paths.update(Path(row["worktree_archive"]["path"]) for row in self.rows.values())
+        def placement(path, excluded):
+            if path in artifact_paths:
+                placements.append((path, set(excluded)))
+            return original(path, excluded)
+        with patch.object(archives, "_outside", side_effect=placement):
+            result = self.observed()
 
-    def test_ordinary_git_artifact_inside_other_removable_worktree_holds(self):
-        result = self.result
-        row = self.worktree(result, self.paths["git_inside"])
-        record = row["reversible_eligibility"]
-        self.assertFalse(row["archive_verified"])
-        self.assertFalse(record["git_recovery"]["verified_covering"])
-        self.assertEqual(record["file_recovery"]["status"], "verified")
-        self.assertEqual(record["status"], "held")
-        self.assertEqual(self.worktree(result, self.fixture.live)["reversible_eligibility"]["status"], "data_eligible")
-        self.assertIsNone(row["delete_argv"])
-
-
-    def test_ordinary_file_artifact_inside_other_removable_worktree_holds(self):
-        result = self.result
-        row = self.worktree(result, self.paths["file_inside"])
-        record = row["reversible_eligibility"]
-        self.assertEqual(record["status"], "held")
-        self.assertFalse(record["archive_verified"])
-        self.assertTrue(record["git_recovery"]["verified_covering"])
-        self.assertNotEqual(record["file_recovery"]["status"], "verified")
-        self.assertEqual(self.worktree(result, self.fixture.live)["reversible_eligibility"]["status"], "data_eligible")
-        self.assertIsNone(row["delete_argv"])
-
-
-    def test_two_resources_with_both_artifacts_outside_full_scope_keep_positive_data(self):
-        result = self.result
-        for path in (self.paths["outside"], self.paths["carrier"]):
-            row = self.worktree(result, path)
-            self.assertEqual(row["reversible_eligibility"]["status"], "data_eligible", row)
+        with self.subTest(case="git_inside"):
+            row = self.worktree(result, self.paths["git_inside"])
+            record = row["reversible_eligibility"]
+            self.assertFalse(row["archive_verified"])
+            self.assertFalse(record["git_recovery"]["verified_covering"])
+            self.assertEqual(record["file_recovery"]["status"], "verified")
+            self.assertEqual(record["status"], "held")
+            self.assertEqual(self.worktree(result, self.fixture.live)["reversible_eligibility"]["status"], "data_eligible")
             self.assertIsNone(row["delete_argv"])
 
-    def test_both_artifact_freshness_checks_keep_every_known_objective_boundary(self):
-        fixture = self.fixture
-        expected = {fixture.common, *self.paths.values(), *(Path(git(path, "rev-parse", "--absolute-git-dir"))
-                    for path in self.paths.values())}
-        for path, excluded in self.placements:
-            self.assertLessEqual(expected, excluded, path)
-        paths = {path for path, _ in self.placements}
-        self.assertEqual(len(paths), 8)
-        positive_paths = {Path(self.rows[label]["path"]) for label in ("outside", "carrier")}
-        positive_paths.update(Path(self.rows[label]["worktree_archive"]["path"]) for label in ("outside", "carrier"))
-        self.assertTrue(all(sum(current == path for current, _ in self.placements) >= 2 for path in positive_paths))
+        with self.subTest(case="file_inside"):
+            row = self.worktree(result, self.paths["file_inside"])
+            record = row["reversible_eligibility"]
+            self.assertEqual(record["status"], "held")
+            self.assertFalse(record["archive_verified"])
+            self.assertTrue(record["git_recovery"]["verified_covering"])
+            self.assertNotEqual(record["file_recovery"]["status"], "verified")
+            self.assertEqual(self.worktree(result, self.fixture.live)["reversible_eligibility"]["status"], "data_eligible")
+            self.assertIsNone(row["delete_argv"])
+
+        with self.subTest(case="two_outside"):
+            for path in (self.paths["outside"], self.paths["carrier"]):
+                row = self.worktree(result, path)
+                self.assertEqual(row["reversible_eligibility"]["status"], "data_eligible", row)
+                self.assertIsNone(row["delete_argv"])
+
+        with self.subTest(case="freshness_and_all_eight_artifact_boundaries"):
+            fixture = self.fixture
+            expected = {fixture.common, *self.paths.values(), *(Path(git(path, "rev-parse", "--absolute-git-dir"))
+                        for path in self.paths.values())}
+            for path, excluded in placements:
+                self.assertLessEqual(expected, excluded, path)
+            paths = {path for path, _ in placements}
+            self.assertEqual(len(paths), 8)
+            positive_paths = {Path(self.rows[label]["path"]) for label in ("outside", "carrier")}
+            positive_paths.update(Path(self.rows[label]["worktree_archive"]["path"]) for label in ("outside", "carrier"))
+            self.assertTrue(all(sum(current == path for current, _ in placements) >= 2 for path in positive_paths))
 
 
 class LegacySelectedPlacementTests(EntryFixture):
@@ -355,9 +350,6 @@ class LegacySelectedPlacementTests(EntryFixture):
                                     "governance": {"base_ref": "refs/heads/main"}},
                      "admissions": {"known": {"admission_id": "known", "recovery": {
                          "placement_binding": {"path": str(fixture.target), "branch": "target"}}}}}
-        # This one accepted current-scope baseline is shared by the coverage and
-        # changed-scope fingerprint methods. No unrelated worktree is inferred.
-        cls.before = cls().selected(include_target=False)
 
     def setUp(self):
         pass
@@ -408,14 +400,16 @@ class LegacySelectedPlacementTests(EntryFixture):
                                    "archive_verified", "archives", "stash_observation", "fingerprint"})
 
     def test_legacy_selected_known_scope_does_not_infer_unlisted_worktree_boundaries(self):
-        row = self.selected_row(self.before)
+        before = self.selected(include_target=False)
+        row = self.selected_row(before)
         self.assertTrue(row["archive_verified"], row)
         self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
         self.assertEqual(row["identity"]["observation_scope"]["mode"], "objective")
 
     def test_new_known_objective_boundary_invalidates_same_selected_legacy_expect(self):
+        before = self.selected(include_target=False)
         with self.assertRaises(PodError) as changed:
-            self.selected(expect=self.before["expect"])
+            self.selected(expect=before["expect"])
         self.assertEqual(changed.exception.code, "cleanup_changed")
 
     def test_ordinary_legacy_bundle_inside_known_sibling_holds(self):
