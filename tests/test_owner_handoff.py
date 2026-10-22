@@ -407,8 +407,8 @@ class DetectionTableTests(HandoffCase):
             ("manual caller rebind", lambda: self.current.update(coordinator_handle="next", consumer_generation=2), "handoff_unavailable", "lineage_unproven"),
             ("manual foreign rebind", lambda: self.current.update(coordinator_handle="third", consumer_generation=2), "handoff_unavailable", "lineage_unproven"),
             ("generation", lambda: self.current.update(consumer_generation=8), "handoff_unavailable", "generation_changed"),
-            ("worker-only", lambda: self.extra_workers.append({"terminalHandle": "next"}), "handoff_unavailable", "caller_is_worker"),
-            ("native worker handle", lambda: self.extra_workers.append({"agentTerminalHandle": "next"}), "handoff_unavailable", "caller_is_worker"),
+            ("worker-only", lambda: self.extra_workers.append({"dispatchId": "other-worker", "terminalHandle": "next"}), "handoff_unavailable", "caller_is_worker"),
+            ("native worker handle", lambda: self.extra_workers.append({"dispatchId": "other-worker", "agentTerminalHandle": "next"}), "handoff_unavailable", "caller_is_worker"),
             ("worker list unreadable", lambda: setattr(self, "worker_list_failure", True), "handoff_unavailable", "workers_unreadable"),
             ("work identity", lambda: next(iter(self.port.workers.values())).update(worktree="different"), "handoff_unavailable", "identity_differs"),
         ]
@@ -439,6 +439,28 @@ class DetectionTableTests(HandoffCase):
         question = self.status()["owner_handoff"]["question"]
         self.assertIn("objective", question); self.assertIn("handle stale or gone", question)
         self.assertNotIn("next", question); self.assertNotIn("run", question)
+
+    def test_worker_rows_without_dispatch_identity_hold_status_and_authority(self):
+        self.establish()
+        self.lose()
+        before, starts = self.snapshot(), deepcopy(self.port.starts)
+        for field in ("terminalHandle", "agentTerminalHandle"):
+            with self.subTest(field=field):
+                self.extra_workers = [{field: "next"}]
+                observed = self.status()["owner_handoff"]
+                self.assertEqual((observed["status"], observed["condition"]),
+                                 ("handoff_unavailable", "workers_unreadable"))
+                for supplied in ("owner", "next"):
+                    for boundary, call in self.boundary_calls(supplied).items():
+                        with self.subTest(boundary=boundary, supplied=supplied):
+                            error = self.refused(call)
+                            expected = ("coordinator_conflict" if boundary in ("checkpoint", "admission")
+                                        and supplied != "owner" else "native_authority_unverified")
+                            self.assertEqual(error.code, expected)
+                            self.assertEqual(error.detail["owner_handoff"]["condition"], "workers_unreadable")
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(self.port.starts, starts)
+                self.assertEqual(self.mutations, [])
 
     def test_shared_scope_and_every_bound_identity_disagreement(self):
         self.establish()

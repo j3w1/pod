@@ -284,7 +284,8 @@ def _footprint(project: Path, ref: str | None, tip: str | None, kind: str, stora
         # transaction. This profile does not claim that additional effect.
         if context is None or context["head_ref"] == ref:
             raise archives.Unavailable("Primitive HEAD-log effects require separate binding")
-        packed_lock, _ = observations.slot(Path(storage["packed"]["path"] + ".lock"), Path("/"))
+        common = Path(storage["packed"]["path"]).parent
+        packed_lock, _ = observations.slot(Path(storage["packed"]["path"] + ".lock"), common)
         if packed_lock["status"] != "absent":
             raise archives.Unavailable("Packed reference transaction is pending")
         paths.append({"path": packed_lock["path"], "identity": None, "operation": "unlink"})
@@ -294,7 +295,7 @@ def _footprint(project: Path, ref: str | None, tip: str | None, kind: str, stora
                 raise archives.Unavailable("Primitive path footprint is incomplete")
             path = Path(slot["path"])
             paths.append({"path": str(path), "identity": slot["identity"], "operation": "unlink"})
-            lock, _ = observations.slot(path.with_name(path.name + ".lock"), Path("/"))
+            lock, _ = observations.slot(path.with_name(path.name + ".lock"), common)
             if lock["status"] != "absent":
                 raise archives.Unavailable("Primitive has a pending reference transaction")
             paths.append({"path": lock["path"], "identity": None, "operation": "unlink"})

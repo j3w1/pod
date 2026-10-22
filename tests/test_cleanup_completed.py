@@ -12,6 +12,7 @@ from pod.internal import run
 from pod.ledger import read
 from tests.kernel_support import git
 from tests.pod_tick_support import TickCase
+from tests.test_cleanup_plan import directory_entry_changes
 
 
 class _CompletedFixture(TickCase):
@@ -509,7 +510,9 @@ class CompletedRemainingRefTests(_CompletedFixture):
         packed, identity = self.packed_identity()
         self.assertNotIn(self.ref.encode(), packed)
         self.assertTrue((self.project / ".git" / self.ref).is_file())
-        row = self.row(self.observed(), "local_branch")
+        with directory_entry_changes(self.root.parent) as activity:
+            row = self.row(self.observed(), "local_branch")
+        self.assertTrue(activity)
         self.assert_remaining(row)
         self.assertEqual(row["identity"]["ref_storage"]["packed"]["status"], "present")
         subprocess.run(row["delete_argv"], capture_output=True, check=True)
@@ -535,6 +538,27 @@ class CompletedRemainingRefTests(_CompletedFixture):
         self.assertFalse((self.project / ".git" / self.ref).exists())
         row = self.row(self.observed(), "local_branch")
         self.assertIsNone(row["delete_argv"])
+
+    def assert_pending_lock_holds(self, name):
+        self.remaining()
+        lock = self.project / ".git" / name
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        pending = b"fixture pending transaction\n"
+        lock.write_bytes(pending)
+        row = self.row(self.observed(), "local_branch")
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual(row["stash_observation"]["footprint"]["status"], "unavailable")
+        self.assertEqual(lock.read_bytes(), pending)
+        self.assertEqual(git(self.project, "rev-parse", self.ref), self.tip)
+
+    def test_pending_packed_lock_holds_the_remaining_ref(self):
+        self.assert_pending_lock_holds("packed-refs.lock")
+
+    def test_pending_loose_lock_holds_the_remaining_ref(self):
+        self.assert_pending_lock_holds(self.ref + ".lock")
+
+    def test_pending_reflog_lock_holds_the_remaining_ref(self):
+        self.assert_pending_lock_holds("logs/" + self.ref + ".lock")
 
     def test_alias_of_the_remaining_ref_holds_even_with_an_empty_stash(self):
         self.remaining()
@@ -628,8 +652,9 @@ class CompletedRemoteTests(_CompletedFixture):
         return patch.object(cleanup, "_git", side_effect=observed)
 
     def test_completed_unmerged_remote_has_exact_lease_and_no_archive_or_question(self):
-        with self.remote_plan():
+        with self.remote_plan(), directory_entry_changes(self.root.parent) as activity:
             result = self.observed()
+        self.assertTrue(activity)
         row = self.row(result, "remote_branch")
         self.assertEqual(row["class"], "unique")
         self.assertFalse(row["archive_verified"])

@@ -1058,10 +1058,22 @@ class NativeIdentityTests(AbsentCase):
         for bad in ("d\ud800", "d\x00x"):
             with self.subTest(dispatch=ascii(bad)):
                 self.extra_workers = [{"dispatchId": bad, "taskId": "x"}]
-                self.refuses(decision, "Dispatch identity cannot be encoded as UTF-8 text without NUL")
+                # Strict worker-page validation refuses it before the downstream fleet guard.
+                self.refuses(decision, "could not be read (orca_pagination)")
         self.assertFalse({"d\ud800", "d\x00x"} & set(self.shown))  # Refused before any worker read used it.
         self.extra_workers = []
         self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
+
+    def test_unencodable_dispatch_also_refuses_the_downstream_fleet_guard(self):
+        from pod.retirement import fleet_dispatches
+        for bad in ("d\ud800", "d\x00x"):
+            with self.subTest(dispatch=ascii(bad)):
+                found, refused = fleet_dispatches({"complete": True, "runtime": "runtime",
+                    "workers": [{"dispatchId": bad, "taskId": "x"}]})
+                self.assertEqual(found, [])
+                self.assertEqual(refused[0], "workers_unverified")
+                self.assertIn("Dispatch identity cannot be encoded as UTF-8 text without NUL", refused[1])
+        self.assertEqual(self.shown, [])
 
     def test_a_runtime_pod_cannot_record_refuses_before_the_write(self):
         decision = self.decided()

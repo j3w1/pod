@@ -133,7 +133,9 @@ def slot(path: Path, root: Path, *, directory: bool = False) -> tuple[dict, byte
 
 
 def filesystem(path: Path) -> dict | None:
-    found, _ = slot(path, Path("/"), directory=True)
+    # The directory is the observed material. Ancestors still require unchanged
+    # device/inode/mode/mount/incarnation, not unchanged unrelated sibling entries.
+    found, _ = slot(path, path, directory=True)
     return found["identity"] if found["status"] == "present" else None
 
 
@@ -344,7 +346,7 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
     try:
         if kind == "worktree":
             path = Path(name)
-            slot_fact, _ = slot(path, Path("/"), directory=True)
+            slot_fact, _ = slot(path, path, directory=True)
             by_path, checkouts, _ = cleanup._objective_worktrees(project, {name}, set())
             registration = by_path.get(name)
             current["path"] = name
@@ -385,7 +387,7 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
             row["identity"] = {"remote": remote, "ref": ref, "tip": tip, "git": git,
                                "worker": identity.get("worker"), "provenance": None, "current": current}
         elif kind == "cache":
-            fact, _ = slot(Path(name), Path("/"), directory=True)
+            fact, _ = slot(Path(name), Path(name), directory=True)
             current.update(status=fact["status"], path=name)
             row["identity"] = {"path": name, "filesystem": fact["identity"], "worker": None,
                                "provenance": None, "current": current}

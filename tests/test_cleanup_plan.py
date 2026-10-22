@@ -7,7 +7,9 @@ from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -24,6 +26,55 @@ from pod.ledger import read
 from pod.operations import guarded_start, OrcaPort
 from tests.kernel_support import KernelCase, git
 from tests.common import receipt
+
+
+@contextmanager
+def directory_entry_changes(directory):
+    """Change real disposable entries during reads, returning only actual fstat facts."""
+    watched, original, changes = directory.stat(), os.fstat, []
+    def changing(descriptor):
+        info = original(descriptor)
+        if (info.st_dev, info.st_ino) == (watched.st_dev, watched.st_ino):
+            sibling = directory / "concurrent-fixture-entry"
+            sibling.mkdir()
+            sibling.rmdir()
+            # Distinguish the actual metadata change even on a coarse clock; no sleep.
+            os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+            changes.append(descriptor)
+        return info
+    with patch("pod.cleanup_observations.os.fstat", side_effect=changing):
+        yield changes
+
+
+class CleanupDirectoryIdentityTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.parent = Path(temporary.name)
+        self.selected = self.parent / "selected"
+        self.selected.mkdir()
+
+    def test_unrelated_parent_entry_changes_keep_the_selected_identity(self):
+        from pod.cleanup_observations import filesystem, reliable
+        before = self.selected.stat()
+        with directory_entry_changes(self.parent) as changes:
+            observed = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertTrue(reliable(observed))
+        self.assertEqual((observed["device"], observed["inode"]), (before.st_dev, before.st_ino))
+
+    def test_changed_selected_directory_entries_are_unavailable(self):
+        from pod.cleanup_observations import filesystem
+        with directory_entry_changes(self.selected) as changes:
+            observed = filesystem(self.selected)
+        self.assertTrue(changes)
+        self.assertIsNone(observed)
+
+    def test_symlinked_parent_cannot_supply_the_selected_directory_identity(self):
+        from pod.cleanup_observations import filesystem
+        alias = self.parent / "alias"
+        alias.symlink_to(self.parent, target_is_directory=True)
+        self.assertIsNone(filesystem(alias / self.selected.name))
 
 
 @contextmanager
@@ -1177,6 +1228,18 @@ class CleanupWorkerTests(KernelCase):
         self.assertIn("selected removal helper relevance is unavailable: Filter attribute observation exceeded "
                       "its bound", row["reasons"])
 
+    def test_unavailable_mount_identity_keeps_the_worker_held(self):
+        with patch.object(cleanup_archives, "_mount_id", side_effect=cleanup_archives.Unavailable("mount unavailable")):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["identity"]["git"]["complete"])
+
+    def test_unavailable_directory_incarnation_keeps_the_worker_held(self):
+        with patch.object(cleanup_archives, "_incarnation", side_effect=cleanup_archives.Unavailable("birth unavailable")):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["identity"]["git"]["complete"])
+
     def test_unstable_selected_helper_facts_refuse_the_worker_observation(self):
         self.filter_driver("unrelated")
         from pod import cleanup
@@ -1185,8 +1248,10 @@ class CleanupWorkerTests(KernelCase):
             calls.append(path)
             state = original(path)
             return state if len(calls) == 1 else {**state, "attributes_sha256": "0" * 64}
-        with patch.object(cleanup, "_helper_state", side_effect=changing), self.assertRaises(PodError) as unstable:
+        with directory_entry_changes(self.root.parent) as activity, \
+                patch.object(cleanup, "_helper_state", side_effect=changing), self.assertRaises(PodError) as unstable:
             self.selected_entry()
+        self.assertTrue(activity)
         self.assertEqual(unstable.exception.code, "cleanup_changed")
         self.assertEqual(len(calls), 2)
 

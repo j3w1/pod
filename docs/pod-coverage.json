@@ -2938,7 +2938,8 @@
         "tests.test_owner_handoff.DetectionTableTests.test_successful_nonlive_caller_shapes_keep_authority_codes_and_no_effects",
         "tests.test_owner_handoff.DetectionTableTests.test_absent_caller_stays_absent_at_every_boundary",
         "tests.test_fixture_authority.FixtureAuthorityTests.test_default_and_explicit_callers_survive_stopall_without_home_escape",
-        "tests.test_fixture_authority.FixtureAuthorityTests.test_explicit_caller_changes_inside_default_fixture_remain_effective"
+        "tests.test_fixture_authority.FixtureAuthorityTests.test_explicit_caller_changes_inside_default_fixture_remain_effective",
+        "tests.test_owner_handoff.DetectionTableTests.test_worker_rows_without_dispatch_identity_hold_status_and_authority"
       ],
       "status": "NOT_RUN"
     },
@@ -3391,7 +3392,8 @@
         "tests.test_historical_retirement.DetectionTests.test_requests_and_decisions_are_exact",
         "tests.test_historical_retirement.DetectionTests.test_an_unknown_objective_or_an_unrecorded_path_refuses_alone",
         "tests.test_retirement_absent.NativeIdentityTests.test_a_worker_dispatch_that_cannot_be_encoded_refuses",
-        "tests.test_retirement_absent.NativeIdentityTests.test_a_runtime_pod_cannot_record_refuses_before_the_write"
+        "tests.test_retirement_absent.NativeIdentityTests.test_a_runtime_pod_cannot_record_refuses_before_the_write",
+        "tests.test_retirement_absent.NativeIdentityTests.test_unencodable_dispatch_also_refuses_the_downstream_fleet_guard"
       ],
       "status": "NOT_RUN"
     },
@@ -7395,7 +7397,12 @@
         "tests.test_cleanup_revision_corrections.SelectedPlacementTests.test_ordinary_selected_outside_ordinary_list_holds_bundle_inside_known_objective",
         "tests.test_cleanup_revision_corrections.SelectedPlacementTests.test_project_only_ordinary_placement_keeps_only_its_observed_boundary",
         "tests.test_orca_adapter.OrcaAdapterTests.test_worker_pages_need_explicit_completion_and_unique_rows",
-        "tests.test_orca_adapter.OrcaAdapterTests.test_worker_repeated_cursor_page_or_interrupted_sequence_is_not_empty_success"
+        "tests.test_orca_adapter.OrcaAdapterTests.test_worker_repeated_cursor_page_or_interrupted_sequence_is_not_empty_success",
+        "tests.test_cleanup_plan.CleanupDirectoryIdentityTests.test_changed_selected_directory_entries_are_unavailable",
+        "tests.test_cleanup_plan.CleanupDirectoryIdentityTests.test_unrelated_parent_entry_changes_keep_the_selected_identity",
+        "tests.test_cleanup_plan.CleanupDirectoryIdentityTests.test_symlinked_parent_cannot_supply_the_selected_directory_identity",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_unavailable_mount_identity_keeps_the_worker_held",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_unavailable_directory_incarnation_keeps_the_worker_held"
       ],
       "status": "NOT_RUN"
     },
@@ -7456,7 +7463,10 @@
         "tests.test_cleanup_completed.CompletedRemainingRefTests.test_unrelated_retained_stash_stays_byte_identical_through_actual_ref_deletion",
         "tests.test_cleanup_completed.CompletedRemainingRefTests.test_wrong_recorded_branch_cannot_borrow_the_actual_remaining_ref",
         "tests.test_cleanup_completed.CompletedRemoteTests.test_changed_remote_oid_refuses_the_completed_plan_expect",
-        "tests.test_cleanup_completed.CompletedRemoteTests.test_completed_unmerged_remote_has_exact_lease_and_no_archive_or_question"
+        "tests.test_cleanup_completed.CompletedRemoteTests.test_completed_unmerged_remote_has_exact_lease_and_no_archive_or_question",
+        "tests.test_cleanup_completed.CompletedRemainingRefTests.test_pending_packed_lock_holds_the_remaining_ref",
+        "tests.test_cleanup_completed.CompletedRemainingRefTests.test_pending_loose_lock_holds_the_remaining_ref",
+        "tests.test_cleanup_completed.CompletedRemainingRefTests.test_pending_reflog_lock_holds_the_remaining_ref"
       ],
       "status": "NOT_RUN"
     }
