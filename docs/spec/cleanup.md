@@ -197,7 +197,7 @@ unambiguous current checkpoint/admission placement branch binding can select its
 remaining local ref after positive filesystem/Git absence of that recorded checkout.
 The same path cannot have conflicting branches, and multiple recorded paths cannot
 supply one unambiguous binding. The recorded branch and source/reference are current
-selection data, never historical creation, ownership or a completed prior phase.
+selection data, never creation before this observation, ownership or a completed prior phase.
 
 A fresh remaining row retains its existing current/provenance/ref-storage/stash/expect
 shapes and UNIQUE truth, without archives. Its hardened no-deref exact-OID command
