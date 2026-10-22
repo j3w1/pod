@@ -113,7 +113,7 @@ owner decision.
 
 ## Evidence and review
 
-R33, R41, R43 and R87–R91 define source, receipt, obligation, triage and closure
+R33, R41, R43, R87–R91 and [R150](spec/assurance.md#r150--keep-findings-goal-scoped-and-bound-review-rounds) define source, receipt, obligation, triage, review allowance and closure
 contracts; R29/R98/R105 define exact native authority and continuity. Tests exercise
 those production boundaries with disposable projects and injected ports. Seeded
 stdlib generative checks test P1–P6 after each accepted transition and print
@@ -129,6 +129,11 @@ corrections. Missing audit remains incomplete, and withdrawal never passes revie
 A change to admission, assurance or closure is audited under the mechanism installed
 before it. Proof produced by the changed mechanism about itself is labeled
 self-hosting and cannot substitute for that audit.
+
+Apply R150's goal-scoped findings, per-requirement reuse statement and three-round
+allowance during review. Exercise report ingestion, review admission, checkpoint
+question deduplication and session-only answer refusals through their production
+boundaries; fixture records stay separate from native and preceding-mechanism audit evidence.
 
 If a post-merge trial fails, preserve exact evidence and leave the objective
 incomplete. Distinguish product defects from environment/trial faults. Product fixes

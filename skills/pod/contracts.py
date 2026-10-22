@@ -249,7 +249,10 @@ TABLE["governance"] = definition({"base_ref": {**text(256), "nullable": True},
 TABLE["revision authority"] = definition({"provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
                                           "operation": {**choice(("issue_revision",)), "form": "selects the checkpoint-only issue revision authority record"},
                                           "question": text(), "channel": choice(("session", "relayed")),
+                                          "allowance": record("review allowance answer"),
                                           "relay": {"type": "object"}}, ("provenance", "instruction"))
+TABLE["review allowance answer"] = definition({"choice": choice(("stop", "simplify", "continue")),
+    "rounds": {"type": "integer", "minimum": 1, "maximum": 8, "only": "continue"}}, ("choice",))
 TABLE["disposition"] = definition({"admission": {"type": "text"}, "integrated_into": text(128),
                                    "discarded": {"type": "boolean"}, "reason": text(1024), "attestation": text(1024)},
                                   ("admission",))
@@ -323,6 +326,7 @@ TABLE["standing authorization"] = definition({
 TABLE["finding"] = definition({
     "finding": ident(), "severity": choice(SEVERITIES), "triage": choice(TRIAGE),
     "summary": text(512),
+    "blocks": {**text(128), "validated_when": "new required_correction; refused on advisory"},
     "reason": {**text(1024), "validated_when": "blocker or major finding downgraded to advisory"},
     "root_cause": text(512),
     "findings": {**items(8, record("group member")), "min_items": 1},

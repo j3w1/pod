@@ -142,7 +142,7 @@ class InvalidationTableTests(GroupedTable):
                     rows.append({"id": "CA", "kind": "correction", "provenance": "coordinator",
                                  "parent": "A", "check": "fix", "state": "blocked_external",
                                  "external": external})
-                    triage = [{"finding": "F1", "severity": "major", "triage": "required_correction",
+                    triage = [{"finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                                "summary": "violated invariant", "correction": "CA"}]
                 case.report(attempt, frozen, outcome="failed" if failed else "succeeded",
                             map={"obligations": rows}, triage=triage)
@@ -269,7 +269,7 @@ class InvalidationCorrectionTests(ProductionCase):
                     rows.append({"id": "C", "kind": "correction", "provenance": "coordinator", "parent": "A",
                                  "check": "fix", "state": "blocked_external", "external": external})
                     case.report(first, frozen, map={"obligations": rows}, triage=[{
-                        "finding": "F1", "severity": "major", "triage": "required_correction",
+                        "finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                         "summary": "violated invariant", "correction": "C"}])
                     rows = case.stored()
                     for row in rows:
@@ -346,7 +346,7 @@ class InvalidationCorrectionTests(ProductionCase):
         rows += [{"id": key, "kind": "correction", "provenance": "coordinator", "parent": "A", "check": "fix",
                   "state": "blocked_external", "external": external} for key in corrections]
         self.report(review, frozen, map={"obligations": rows}, triage=[{
-            "finding": f"F{i}", "severity": "major", "triage": "required_correction",
+            "finding": f"F{i}", "severity": "major", "triage": "required_correction", "blocks": "outcome",
             "summary": "violated invariant", "correction": key} for i, key in enumerate(corrections)])
         rows = self.stored()
         rows[0].pop("executor")

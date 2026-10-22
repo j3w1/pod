@@ -226,7 +226,11 @@ def validate_findings(ob: dict, rows: dict, *, seq: int, lineage=None) -> None:
     attempts = {}
     for raw in findings:
         required = {"attempt", "finding", "severity", "triage", "summary", "recorded_seq"}
-        row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq"}, required, "persisted finding", obligation=ob["id"])
+        row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq", "blocks"}, required, "persisted finding", obligation=ob["id"])
+        if "blocks" in row:
+            _text(row["blocks"], "blocks", limit=bound("finding", "blocks"), obligation=ob["id"])
+            if row["triage"] != "required_correction":
+                raise refuse("obligation_invalid", "malformed", "only required corrections carry blocks", obligation=ob["id"])
         _text(row["attempt"], "attempt", limit=128, obligation=ob["id"])
         attempts[row["attempt"]] = attempts.get(row["attempt"], 0) + 1
         if attempts[row["attempt"]] > MAX_REPORT_FINDINGS:
@@ -414,6 +418,62 @@ def review_completed(admission: Any) -> bool:
     report = admission.get("report") if isinstance(admission, dict) else None
     return (isinstance(report, dict) and report.get("outcome") == "succeeded"
             and report.get("status") == "validated_observation")
+
+
+def review_allowance(state: dict, ctx: dict) -> dict:
+    """R150: derive the allowance from admissions and accepted owner decisions only."""
+    from .display import review_rounds
+    reviews = review_rounds(ctx)
+    decisions = [row["allowance"] for row in state.get("revision_decisions", []) if "allowance" in row]
+    granted = 3 + sum(row.get("rounds", 1) for row in decisions if row["choice"] != "stop")
+    finished = bool(reviews and reviews[-1].get("report")
+                    and reviews[-1]["admission_id"] not in ctx.get("outstanding", []))
+    open_assurance = any(ob["kind"] in ("assurance", "correction") and ob["state"] not in ("satisfied", "withdrawn")
+                         for ob in state.get("obligations", []))
+    status = ("stopped" if any(row["choice"] == "stop" for row in decisions) else
+              "clear" if not open_assurance else "open" if len(reviews) < granted else
+              "running" if not finished else "due")
+    return {"state": status, "rounds": len(reviews), "granted": granted, "finished": finished,
+            "open_assurance": open_assurance,
+            "question": f"review-allowance-{granted}" if status == "due" else None}
+
+
+def allowance_question(granted: int) -> dict:
+    return {"id": f"review-allowance-{granted}", "owner_only": True, "kind": "review_allowance",
+            "text": f"The {granted} granted review rounds are used and assurance is unfinished. "
+                    "Stop as incomplete, simplify named obligations for one verification round, "
+                    "or continue for a stated 1..8 rounds. Type the answer in the coordinator's own tab."}
+
+
+def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
+    """Checkpoint projection owns reserved rows, including CE's top-level answer facts."""
+    allowance = review_allowance(state, ctx)
+    if not isinstance(questions, list):
+        if allowance["state"] != "due" and not any("allowance" in row for row in state.get("revision_decisions", [])):
+            return questions
+        raise PodError("invalid_checkpoint", "Review allowance questions require a question list")
+    result = [row for row in questions if not (
+        isinstance(row, dict) and str(row.get("id", "")).startswith("review-allowance-")
+        or isinstance(row, str) and row.startswith("review-allowance-"))]
+    for decision in state.get("revision_decisions", []):
+        if "allowance" in decision:
+            granted = int(decision["question"].removeprefix("review-allowance-"))
+            result.append({**allowance_question(granted), "resolved": True, "status": "answered",
+                           "answer": deepcopy(decision["allowance"])})
+    if allowance["state"] == "due":
+        result.append(allowance_question(allowance["granted"]))
+    return result
+
+
+def allowance_answer(value: Any) -> dict:
+    from .obligations import _exact, refuse
+    row = _exact(value, contract_fields("review allowance answer"), {"choice"}, "review allowance answer")
+    if (row["choice"] not in ("stop", "simplify", "continue")
+            or (row["choice"] == "continue" and (type(row.get("rounds")) is not int or not 1 <= row["rounds"] <= 8))
+            or (row["choice"] != "continue" and "rounds" in row)):
+        raise refuse("obligation_invalid", "malformed", "continue grants 1..8 rounds; stop and simplify take no rounds",
+                     record="review allowance answer")
+    return dict(row)
 
 
 def _reuse_valid(ob: dict, ctx: dict, candidate: str) -> bool:
@@ -644,6 +704,11 @@ def _finding_record(raw, assurance_id):
     if record["severity"] not in SEVERITIES or record["triage"] not in TRIAGE:
         raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES) + "; triage allowed: " + ", ".join(TRIAGE),
                      finding=record["finding"], obligation=assurance_id)
+    if "blocks" in record:
+        _text(record["blocks"], "blocks", limit=bound("finding", "blocks"), obligation=assurance_id)
+        if record["triage"] == "advisory":
+            raise refuse("obligation_invalid", "malformed", "an advisory carries no blocks; retain required linked findings",
+                         finding=record["finding"], obligation=assurance_id)
     if record["severity"] in ("blocker", "major") and record["triage"] == "advisory":
         if "reason" not in record:
             raise refuse("obligation_invalid", "downgrade_unreasoned",
@@ -698,6 +763,8 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         entry = {"attempt": admission_id, "finding": record["finding"], "severity": record["severity"],
                  "triage": record["triage"], "summary": record["summary"],
                  "recorded_seq": state["seq"] + 1}
+        if "blocks" in record:
+            entry["blocks"] = record["blocks"]
         if "root_cause" in record:
             entry["root_cause"] = record["root_cause"]
         if "findings" in record:
@@ -706,13 +773,19 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         matching = [item for item in same_attempt if set(item.get("findings", [item["finding"]])) & set(ids)]
         if matching:
             prior = matching[0]
-            replay = {key: prior.get(key) for key in ("finding", "severity", "triage", "summary", "reason", "correction", "findings", "root_cause")}
+            replay = {key: prior.get(key) for key in ("finding", "severity", "triage", "summary", "reason", "correction", "findings", "root_cause", "blocks")}
             proposed = {key: record.get(key) for key in replay}
             proposed["findings"] = ids if "findings" in record else None
             if replay != proposed:
                 raise refuse("obligation_invalid", "receipt_conflict", "stored finding ids cannot be regrouped or changed",
                              finding=record["finding"], record="finding", obligation=assurance_id)
             continue
+        if record["triage"] == "required_correction" and "blocks" not in record:
+            raise refuse("obligation_invalid", "finding_unlinked", "a new required correction names what it blocks",
+                         finding=record["finding"], obligation=assurance_id,
+                         next_action="ask the reviewer for the outcome, requirement, PoD or policy link, or record an advisory "
+                                     "with the required downgrade reason; label substantive safety/privacy findings "
+                                     "policy:safety or policy:privacy rather than downgrading them for a missing label")
         if "reason" in record:
             entry["reason"] = record["reason"]
         known = {row.get("id") for row in listed}

@@ -521,7 +521,7 @@ def _proposal(raw: Any) -> dict:
 def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> dict | None:
     if value is None:
         return None
-    record = _exact(value, DECISION_FIELDS | {"question"}, {"provenance", "instruction"}, "revision authority")
+    record = _exact(value, DECISION_FIELDS | {"question", "allowance"}, {"provenance", "instruction"}, "revision authority")
     from .relay import decision_input
     if record["provenance"] != "user_direct" and not decision_input(record):
         raise refuse("obligation_invalid", "provenance_unauthorized",
@@ -529,6 +529,12 @@ def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> d
     _text(record["instruction"], "instruction", limit=bound("revision authority", "instruction"))
     if "question" in record:
         _text(record["question"], "question", limit=bound("revision authority", "question"))
+    if "allowance" in record or str(record.get("question", "")).startswith("review-allowance-"):
+        from .assurance import allowance_answer
+        owner_decision(record, kind="review allowance", stored=stored)
+        if not str(record.get("question", "")).startswith("review-allowance-"):
+            raise refuse("obligation_invalid", "malformed", "an allowance answers its recorded review-allowance question", record="revision authority")
+        allowance_answer(record.get("allowance"))
     return owner_decision(record, kind=kind, stored=stored)
 
 
@@ -1192,6 +1198,18 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
                                         else row for row in value["obligations"]]}
     raw_obligations, prior_rows, rows, criteria = _write_obligations(
         prior_map, value, ctx, seq, user, triaged, refresh, observed, sources, gov, proposals)
+
+    if authority is not None and "allowance" in authority:
+        allowance = review_allowance(prior_map or {}, ctx)
+        if ctx.get("operation") != "checkpoint" or allowance["state"] != "due" or authority["question"] != allowance["question"]:
+            raise refuse("obligation_invalid", "allowance_not_due", "answer the current due allowance through a checkpoint", question=authority["question"])
+        if authority["allowance"]["choice"] == "simplify" and not any(
+                earlier["state"] != "withdrawn" and (definition_id(rows[key]) != definition_id(earlier)
+                    or rows[key]["state"] == "withdrawn" and rows[key]["withdrawal"]["by"] == "user_direct")
+                for key, earlier in prior_rows.items() if key in rows):
+            raise refuse("obligation_invalid", "simplification_required", "simplify must withdraw or revise a named obligation in this write",
+                         question=authority["question"],
+                         next_action="name and withdraw or revise at least one obligation through the existing owner-authorized procedure")
 
     # Coverage: every original criterion has an objective obligation (R39).
     covered = _covered(rows, ctx)
@@ -1967,17 +1985,25 @@ def validate_map_record(state: dict) -> None:
         decisions = value["revision_decisions"]
         if not isinstance(decisions, list):
             raise refuse("obligation_invalid", "malformed", "revision decisions are a list", record="revision decisions")
+        granted, stopped = 3, False
         for row in decisions:
             if row.get("operation") == "issue_revision":
                 from .issue_revision import validate_decision
                 validate_decision(row, state)
                 continue
-            _exact(row, DECISION_FIELDS | {"seq", "question", "kind"}, {"seq", "provenance", "instruction", "kind"}, "revision decision")
+            _exact(row, DECISION_FIELDS | {"seq", "question", "kind", "allowance"}, {"seq", "provenance", "instruction", "kind"}, "revision decision")
             if type(row["seq"]) is not int or not 1 <= row["seq"] <= value["seq"]:
                 raise refuse("obligation_invalid", "malformed", "revision decision names its accepted sequence", record="revision decision")
             if row["kind"] not in ("question", "governance", "withdrawal", "revision"):
                 raise refuse("obligation_invalid", "malformed", "revision decision kind is unsupported", record="revision decision")
             owner_decision(row, kind=row["kind"], stored=True)
+            if "allowance" in row or str(row.get("question", "")).startswith("review-allowance-"):
+                _authority({key: item for key, item in row.items() if key not in ("seq", "kind")}, kind="question", stored=True)
+                if row["kind"] != "question" or stopped or row["question"] != f"review-allowance-{granted}":
+                    raise refuse("obligation_invalid", "malformed", "allowance history retains each successive owner answer once", record="revision decision")
+                stopped = row["allowance"]["choice"] == "stop"
+                if not stopped:
+                    granted += row["allowance"].get("rounds", 1)
     governance = _exact(value["governance"], {"base_ref", "selection", "exclude", "base", "proof_base"},
                         {"base_ref", "selection", "exclude", "base"}, "persisted governance")
     if governance["base_ref"] is not None:
@@ -2233,6 +2259,10 @@ def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
                        for row in map_decisions(state))):
             raise refuse("obligation_invalid", "malformed", "a channel-aware closure retains its decision report marker", record="closure")
     expected = _close(state, {**ctx, "legacy_decision_report": legacy_report})
+    # These additive read-only projections were absent from earlier closure reports.
+    for field in ("review_findings", "review_allowance"):
+        if field not in closure["report"]:
+            expected["report"].pop(field, None)
     if closure != expected:
         raise refuse("obligation_invalid", "malformed", "closure report matches the validated map and evidence", record="closure")
     return tuple(sorted(set(unverifiable)))
@@ -2292,6 +2322,17 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
     if binding["map_revision"] != state["revision"]:
         raise refuse("unbound_assignment", "out_of_revision", "the packet names another map revision",
                      packet=binding["map_revision"], current=state["revision"])
+    if binding["role"] == "review":
+        from .assurance import allowance_question
+        allowance = review_allowance(state, ctx)
+        if allowance["rounds"] >= allowance["granted"] or allowance["state"] == "stopped":
+            action = ("wait for the running round to settle and consume its report" if allowance["state"] == "running" else
+                      "the owner stopped review; report incomplete with every unfinished obligation" if allowance["state"] == "stopped" else
+                      "checkpoint the owner-only allowance question and obtain a session answer" if allowance["state"] == "due" else
+                      "finish normally; assurance is clear")
+            raise refuse("review_allowance_reached", allowance["state"], "the objective's granted review rounds are used",
+                         rounds=allowance["rounds"], granted=allowance["granted"], state=allowance["state"], next_action=action,
+                         **({"question": allowance_question(allowance["granted"])} if allowance["state"] == "due" else {}))
     rows = {ob["id"]: ob for ob in state["obligations"]}
     proposals = {row["id"] for row in state.get("proposals", [])}
     lineage = Lineage(rows)
@@ -2491,6 +2532,9 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
                              **(decision_channel(ob["withdrawal"]) if not legacy_report and ob["withdrawal"]["by"] in ("user_direct", "agent_decision") else ob["withdrawal"])}
                             for ob in rows if ob["state"] == "withdrawn"],
               "triage_downgrades": downgrades,
+              "review_findings": [{"obligation": ob["id"], **deepcopy(finding)} for ob in rows
+                                  for finding in ob.get("findings", [])],
+              "review_allowance": review_allowance(state, ctx),
               "boundary_exceeded": [{"admission": key, "paths": row["boundary_exceeded"],
                                      "disposition": row.get("disposition")}
                                     for key, row in sorted(admissions.items()) if row.get("boundary_exceeded")],
@@ -2664,6 +2708,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
         elif row.get("role") == "implement" and key in undispositioned(ctx):
             lines.append(f"Results    {key[:12]} awaiting disposition")
     label = label_qualification(state, ctx, ctx.get("candidate"))
+    allowance = review_allowance(state, ctx)
+    lines.append(f"Review     {allowance['rounds']}/{allowance['granted']} rounds · {allowance['state']}"
+                 + (f" · {allowance['question']}" if allowance["question"] else ""))
     for gap in label["assurance_unbound"]:
         lines.append(f"Assurance  {gap['obligation'] or 'none'} {gap['gap']}")
     if (state.get("quiescence") or {}).get("state") == "quiescent":
@@ -2688,6 +2735,7 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                     "delivery": state.get("delivery"),
                     "retained_history": retained,
                     "observations": state.get("observations"), "label": label,
+                    "review_allowance": allowance,
                     "obligations": [{"id": ob["id"], "state": ob["state"],
                                      "referent": referent(ob),
                                      **({"acceptances": deepcopy(ob["acceptances"])}
@@ -2699,5 +2747,5 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
 
 from .assurance import (_source_entries, _dependencies, _evidence_record, _stamp_evidence,
                         binding_current, review_completed, _reuse_valid, _bind_reuse, evidence_valid,
-                        _accepted_assurance_current, triage, label_qualification)
+                        _accepted_assurance_current, triage, label_qualification, review_allowance)
 from .traces import evaluate_trace

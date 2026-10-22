@@ -40,7 +40,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
                      "check": "repair the reported defect", "boundary": {"paths": ["src"]},
                      "state": "unassigned"})
         self.report(old, old_packet, map={"obligations": rows}, triage=[
-            {"finding": "blocker", "severity": "blocker", "triage": "required_correction",
+            {"finding": "blocker", "severity": "blocker", "triage": "required_correction", "blocks": "outcome",
              "summary": "real defect", "correction": "K0"}])
         self.assertEqual(self.label(), "WITHHELD")
         return old, accepted
@@ -160,7 +160,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
                      "check": "repair the reported defect", "boundary": {"paths": ["src"]},
                      "state": "unassigned"})
         self.report(blocker, blocker_packet, map={"obligations": rows}, triage=[
-            {"finding": "later", "severity": "blocker", "triage": "required_correction",
+            {"finding": "later", "severity": "blocker", "triage": "required_correction", "blocks": "outcome",
              "summary": "real defect", "correction": "K0"}])
         self.satisfy_correction()
         self.offer_old_proof(early)
@@ -188,6 +188,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
                        if item["evidence"]["attempt"] == premature["admission_id"])
         self.assertLess(receipt["reported_seq"], finding["resolved_seq"])
         self.offer_old_proof(premature)
+        self.grant_delta_round()
         self.review("review-after-fix")
         self.assertEqual(self.label(), "QUALIFIED")
 
@@ -213,8 +214,15 @@ class AssuranceHistoryTests(boundaries.KernelCase):
         self.assertLess(premature["admitted_seq"], finding["resolved_seq"])
         self.assertGreater(receipt["reported_seq"], finding["resolved_seq"])
         self.offer_old_proof(premature)
+        self.grant_delta_round()
         self.review("admitted-after-fix")
         self.assertEqual(self.label(), "QUALIFIED")
+
+    def grant_delta_round(self):
+        self.write(self.stored())
+        self.write(self.stored(), revision_authority={"provenance": "user_direct", "channel": "session",
+            "instruction": "Allow one fresh delta review", "question": "review-allowance-3",
+            "allowance": {"choice": "continue", "rounds": 1}})
 
     def test_restored_proof_without_new_blocker_stays_bound(self):
         accepted = self.satisfied()

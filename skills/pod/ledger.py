@@ -1781,6 +1781,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                 exc.detail = {**(exc.detail or {}), "worker_tabs": tabs}
             raise
         state["owner"] = owner
+        if map_state:
+            from .assurance import allowance_questions
+            core["questions"] = allowance_questions(map_state, ctx, core.get("questions", []))
         identity = running_identity()
         if identity["bundle_digest"] is None:
             raise PodError("installed_version_changed", "Running bundle is incomplete; reload the skill and write a fresh checkpoint")

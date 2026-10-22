@@ -114,6 +114,8 @@ The router instructs the coordinator to read a reference when the current action
 
 `SKILL.md` has exactly Roles, Done when, Boundaries, Helpers and Read when needed. Each bundled reference has one unique triggered router link and no reference-to-reference links. Validation retains frontmatter/metadata restrictions, VERSION, inventory and symlink rules, required and forbidden helper forms, launcher, interface, catalog and observations checks, and the 64 KiB per-file bundle byte bound. Metadata and VERSION restrictions are reported before body checks. Word and line counts cause neither refusals nor warnings; printed per-file stored word counts and their single total are informational and do not measure the context an agent loads. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle's applicable task references, preserving authority, completion, judgment and recovery; templates serve authoring and revision, while repository docs provide contributor checks and detailed contracts.
 
+R150's review allowance, goal-scoped findings and review report-contract guidance follow this contract in the verification reference.
+
 ### R73 — The model workspace is one table of exact routes
 
 Type: B,H · Scenarios: [A117](#a117), [A139](#a139), [A140](#a140), [A178](models/catalog.md#a178), [A183](#a183), [A217](#a217)
