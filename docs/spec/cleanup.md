@@ -226,7 +226,9 @@ Only expanded rows may additionally carry `worktree_archive: {path, sha256}`.
 Both fields are strings: the path is normalized absolute text without NUL or parent
 traversal, at most 4096 UTF-8 bytes; the digest is exactly 64 lowercase hexadecimal
 characters. Extra keys, caller phases, verdicts, footprints and authority refuse.
-Without this reference the existing wire and all existing field meanings remain unchanged.
+Without this reference the wire shapes and Git-only root-coverage meanings remain
+unchanged. The known-objective placement restriction below also applies to Git-only
+objective-selected requests without a file recovery reference.
 
 Matching Git resources gain exactly one `reversible_eligibility` record. Its schema
 is `pod-reversible-eligibility/v1`, and its exact fields are:
@@ -266,6 +268,10 @@ object or ref. A source object, alias, digest or root list without actual restor
 bytes is insufficient. Successful positive log absence needs no empty blob; unavailable,
 changed, malformed, mismatched or over-bound observations hold. No transport field,
 additional archive root or metadata-backup receipt substitutes for these bytes.
+Both Git and file/admin recovery require complete known-phase reference material
+and an actually observed selected-log fact, including positively observed absence.
+Missing, malformed or incomplete reference evidence, including an unavailable
+retained closure, cannot produce verified file/admin recovery or a verified restore.
 
 The private file artifact is an **uncompressed POSIX pax tar**, with the first
 regular member `pod-worktree-archive.json` and payload roots `worktree` and `admin`.
@@ -325,8 +331,10 @@ constraints do not suppress ordinary live dirty/submodule checks. No archived co
 and no historic native or metadata identity is claimed restored.
 
 Verified file/admin integrity is separate from the live source comparison and its
-retained-material recheck. A current read failure retains verified recovery, reports
-null `current_match` with `file_current_unavailable` and holds eligibility. Final
+retained-material recheck. A current walk or recheck failure, including recursion
+exhaustion, retains verified recovery, reports null `current_match` with
+`file_current_unavailable` and holds eligibility. Archive validation, extraction and
+restored-walk failures still invalidate integrity. Final
 artifact identity, placement and byte checks still run; actual artifact tamper
 invalidates integrity. Current unsupported links, mounts, metadata or file types
 remain holds even when the immutable archive still verifies.
@@ -350,6 +358,12 @@ staged and locked worktrees remain held; ignored data requires complete recovery
 Ordinary objective plans pass every selected worktree, private admin and common Git
 directory exclusion to both artifact verifiers and their final placement rechecks.
 An objective-selected observation retains all those known ordinary boundaries.
+This includes a Git-only selection outside the ordinary resource list with no file
+recovery reference: its bundle inside another known objective checkout holds; an
+equivalent bundle outside the known set retains its narrow Git coverage. This is an
+intentional conservative compatibility restriction of the earlier selected-only
+placement domain. It changes no wire key, Git-only boolean meaning, root-copy policy,
+classification, relation or command authority.
 Project-only selection knows only the selected resource/common boundary. Neither
 projection establishes the executor's whole finite removal scope: the executor must
 verify both original artifacts outside every resource/admin/common path in that

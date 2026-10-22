@@ -566,8 +566,9 @@ def verify(project, row, excluded, *, resource=None):
                     # Copy what the known phase loses. Retained live stash material is
                     # fingerprinted, never made a mandatory recovery root by its presence.
                     needed = {source["tip"], *refs.values(), *(roots - closure)}
-                    if resource is not None and "selected_ref_log" in resource:
-                        _check(resource["complete"], "admin_recovery_missing")
+                    if resource is not None and resource.get("kind") == "reference":
+                        _check(resource.get("complete") is True
+                               and isinstance(resource.get("selected_ref_log"), dict), "admin_recovery_missing")
                         needed.update(resource["required_objects"])
                     basis["retained_material"] = retained
                     # Recover Git and workfiles separately, preserving regenerated control pointers.
@@ -608,7 +609,7 @@ def verify(project, row, excluded, *, resource=None):
                     try:
                         file["current_match"], basis["current"] = _current(project, manifest, entries, extracted, deadline)
                         _check(_retained(project, source, deadline)[0] == retained, "file_current_changed")
-                    except (Held, git.Unavailable, OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
+                    except (Held, git.Unavailable, OSError, ValueError, TypeError, KeyError, UnicodeError, RecursionError) as exc:
                         code = str(exc) if isinstance(exc, Held) else "file_current_unavailable"
                         file["current_match"] = False if code in {"file_current_changed", "manifest_incomplete"} else None
                         basis["current"] = {"current": {"status": "unavailable"}, "reason": code}

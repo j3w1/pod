@@ -476,7 +476,8 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
         row["delete_argv"] = row["archive_argv"] = None
         row["class"] = "unique" if row["class"] == "unique" else "protected"
         row["reasons"].append("resource_provenance_unavailable")
-    # An objective selection already knows every ordinary checkout/admin boundary.
+    # Selections outside the ordinary list also retain every known ordinary
+    # checkout/admin boundary, even without an optional file recovery reference.
     # Project-only selection can describe only its selected resource's boundary.
     excluded = [Path(repository["common_dir"]["path"])] if "common_dir" in repository else []
     for candidate in (ordinary or {}).get("resources", []):

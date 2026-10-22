@@ -6784,7 +6784,11 @@
         "tests.test_cleanup_revision_corrections.SelectedRefSHA256LogTests.test_actual_sha256_object_format_derives_and_verifies_log_blob",
         "tests.test_cleanup_revision_corrections.SelectedRefAbsentLogTests.test_positive_selected_log_absence_needs_no_manufactured_empty_blob",
         "tests.test_cleanup_revision_corrections.SelectedRefLogBoundTests.test_exact_selected_2048_log_domain_passes_with_actual_bytes_and_roots",
-        "tests.test_cleanup_revision_corrections.SelectedRefLogBoundTests.test_selected_2049_entries_hold_without_raising_resource_log_domain"
+        "tests.test_cleanup_revision_corrections.SelectedRefLogBoundTests.test_selected_2049_entries_hold_without_raising_resource_log_domain",
+        "tests.test_cleanup_revision_corrections.SelectedRefLogEntryTests.test_direct_file_verification_requires_complete_reference_material",
+        "tests.test_cleanup_revision_corrections.SelectedRefLogEntryTests.test_direct_file_verification_requires_an_actual_selected_log_fact",
+        "tests.test_cleanup_revision_corrections.SelectedRefLogEntryTests.test_unknown_retained_closure_cannot_verify_file_or_admin_recovery",
+        "tests.test_cleanup_revision_corrections.SelectedRefLogEntryTests.test_unknown_reference_closure_holds_nested_production_recovery_fields"
       ],
       "status": "NOT_RUN"
     },
@@ -6818,7 +6822,10 @@
         "tests.test_cleanup_revision_corrections.GitMountIncarnationTests.test_mount_id_only_change_refuses_old_legacy_expect",
         "tests.test_cleanup_revision_corrections.GitMountIncarnationTests.test_opened_git_artifact_and_all_ancestors_bind_mount_incarnation",
         "tests.test_cleanup_revision_corrections.GitMountIncarnationTests.test_unavailable_mount_incarnation_refuses_verified_git_artifact",
-        "tests.test_cleanup_revision_corrections.SelectedRefLogEntryTests.test_changed_selected_log_bytes_refuse_old_expect_with_the_same_roots"
+        "tests.test_cleanup_revision_corrections.SelectedRefLogEntryTests.test_changed_selected_log_bytes_refuse_old_expect_with_the_same_roots",
+        "tests.test_cleanup_revision_corrections.CurrentComparisonEntryTests.test_deep_live_tree_keeps_verified_artifacts_with_unavailable_current_data",
+        "tests.test_cleanup_revision_corrections.CurrentComparisonEntryTests.test_restored_walk_recursion_still_invalidates_integrity",
+        "tests.test_cleanup_revision_corrections.CurrentComparisonEntryTests.test_post_current_retention_recursion_keeps_integrity_and_holds_production_data"
       ],
       "status": "NOT_RUN"
     },
@@ -6861,10 +6868,17 @@
         "tests.test_cleanup_reversible.ReversibleEntryTests.test_optional_reference_shape_and_caller_phase_or_authority_are_refused",
         "tests.test_cleanup_reversible.ReversibleEntryTests.test_same_ref_and_tip_sibling_archive_cannot_cover_the_selected_worktree",
         "tests.test_cleanup_reversible.ReversibleEntryTests.test_foreign_same_history_repository_archive_cannot_cover_current_resource",
-        "tests.test_cleanup_revision_corrections.SiblingGitPlacementTests.test_ordinary_git_artifact_inside_other_removable_worktree_holds",
-        "tests.test_cleanup_revision_corrections.SiblingFilePlacementTests.test_ordinary_file_artifact_inside_other_removable_worktree_holds",
-        "tests.test_cleanup_revision_corrections.OutsideSiblingPlacementTests.test_two_resources_with_both_artifacts_outside_full_scope_keep_positive_data",
-        "tests.test_cleanup_revision_corrections.OutsideSiblingPlacementTests.test_both_artifact_freshness_checks_keep_every_known_objective_boundary"
+        "tests.test_cleanup_revision_corrections.SiblingPlacementTests.test_ordinary_git_artifact_inside_other_removable_worktree_holds",
+        "tests.test_cleanup_revision_corrections.SiblingPlacementTests.test_ordinary_file_artifact_inside_other_removable_worktree_holds",
+        "tests.test_cleanup_revision_corrections.SiblingPlacementTests.test_two_resources_with_both_artifacts_outside_full_scope_keep_positive_data",
+        "tests.test_cleanup_revision_corrections.SiblingPlacementTests.test_both_artifact_freshness_checks_keep_every_known_objective_boundary",
+        "tests.test_cleanup_revision_corrections.LegacySelectedPlacementTests.test_legacy_selected_outside_ordinary_list_holds_bundle_inside_known_objective",
+        "tests.test_cleanup_revision_corrections.LegacySelectedPlacementTests.test_legacy_selected_outside_known_scope_keeps_original_narrow_coverage_and_shape",
+        "tests.test_cleanup_revision_corrections.LegacySelectedPlacementTests.test_legacy_selected_known_scope_does_not_infer_unlisted_worktree_boundaries",
+        "tests.test_cleanup_revision_corrections.LegacySelectedPlacementTests.test_new_known_objective_boundary_invalidates_same_selected_legacy_expect",
+        "tests.test_cleanup_revision_corrections.LegacySelectedPlacementTests.test_ordinary_legacy_bundle_inside_known_sibling_holds",
+        "tests.test_cleanup_revision_corrections.LegacySelectedPlacementTests.test_ordinary_legacy_bundle_outside_known_scope_keeps_positive_git_evidence",
+        "tests.test_cleanup_revision_corrections.LegacySelectedPlacementTests.test_project_only_legacy_placement_keeps_only_its_observed_boundary"
       ],
       "status": "NOT_RUN"
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import io
 import os
@@ -107,6 +108,65 @@ class GitlinkEntryTests(EntryFixture):
 
 
 class CurrentComparisonEntryTests(EntryFixture):
+    def test_deep_live_tree_keeps_verified_artifacts_with_unavailable_current_data(self):
+        fixture = self.fixture
+        row = fixture.row()
+        directories = []
+        def remove_deep_tree():
+            # Iterative scratch-only cleanup stays safe beyond Python's recursion limit.
+            for path in reversed(directories):
+                path.rmdir()
+        self.addCleanup(remove_deep_tree)
+        path = fixture.target / "ignored/deep"
+        for _ in range(1001):
+            path.mkdir()
+            directories.append(path)
+            path /= "d"
+        seen, original = [], files._current
+        def current(*args, **kwargs):
+            try:
+                return original(*args, **kwargs)
+            except RecursionError:
+                seen.append("RecursionError")
+                raise
+        with patch.object(files, "_current", side_effect=current):
+            file, admin, basis = files.verify(fixture.project, row, [fixture.target, fixture.common])
+        self.assertEqual(seen, ["RecursionError"])
+        self.assertEqual(file["status"], "verified", file)
+        self.assertTrue(file["restore_verified"])
+        self.assertEqual(admin, {"status": "verified", "reasons": []})
+        self.assertIsNone(file["current_match"])
+        self.assertIn("file_current_unavailable", file["reasons"])
+        self.assertEqual(basis["current"]["current"]["status"], "unavailable")
+        self.assertEqual(fixture.row(), row)
+
+    def test_restored_walk_recursion_still_invalidates_integrity(self):
+        with patch.object(files, "_walk", side_effect=RecursionError("fixture restored walk unavailable")):
+            file, admin, _ = self.fixture.verify()
+        self.assertEqual(file["status"], "held")
+        self.assertFalse(file["restore_verified"])
+        self.assertEqual(admin["status"], "held")
+        self.assertIn("file_archive_unavailable", file["reasons"])
+
+    def test_post_current_retention_recursion_keeps_integrity_and_holds_production_data(self):
+        original, calls = files._retained, 0
+        def retained(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RecursionError("fixture current recheck unavailable")
+            return original(*args, **kwargs)
+        with patch.object(files, "_retained", side_effect=retained):
+            row = self.entry()["resources"][0]
+        record = row["reversible_eligibility"]
+        self.assertTrue(record["archive_verified"], record)
+        self.assertTrue(record["file_recovery"]["restore_verified"])
+        self.assertEqual(record["admin_recovery"], {"status": "verified", "reasons": []})
+        self.assertIsNone(record["file_recovery"]["current_match"])
+        self.assertEqual(record["status"], "held")
+        self.assertIn("file_current_unavailable", record["reasons"])
+        self.assertIsNone(row["delete_argv"])
+
     def test_unreadable_current_file_keeps_verified_artifacts_and_holds_data(self):
         fixture = self.fixture
         row = fixture.row()
@@ -154,50 +214,53 @@ class CurrentComparisonEntryTests(EntryFixture):
         self.assertIn("file_archive_changed", record["reasons"])
 
 
-class SiblingScopeFixture(unittest.TestCase):
-    inside = None
-
+class SiblingPlacementTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.fixture = FileFixture()
         cls.addClassCleanup(cls.fixture.close)
         fixture = cls.fixture
-        if cls.inside:
-            destination = fixture.live / "ignored/artifacts"
-            destination.mkdir(mode=0o700, parents=True)
-            if cls.inside == "git":
-                fixture.bundle.rename(destination / fixture.bundle.name)
-                fixture.bundle = destination / fixture.bundle.name
-            else:
-                fixture.archive.rename(destination / fixture.archive.name)
-                fixture.archive = destination / fixture.archive.name
-        fixture.capture()
-        cls.first_row = fixture.row()
+        destination = fixture.live / "ignored/artifacts"
+        destination.mkdir(mode=0o700, parents=True)
+        fixture.bundle.rename(destination / fixture.bundle.name)
+        fixture.bundle = destination / fixture.bundle.name
+        cls.paths = {"git_inside": fixture.target, "carrier": fixture.live,
+                     "file_inside": fixture.root / "file-target", "outside": fixture.root / "outside-target"}
+        for label in ("file_inside", "outside"):
+            path = cls.paths[label]
+            git(fixture.project, "worktree", "add", "--quiet", "-b", path.name, str(path))
+        cls.rows = {"git_inside": fixture.row()}
         attributes = {key: getattr(fixture, key) for key in
                       ("target", "admin", "ref", "bundle", "archive", "recovery_refs")}
         try:
-            fixture.target, fixture.ref = fixture.live, "refs/heads/live"
-            fixture.admin = Path(git(fixture.live, "rev-parse", "--absolute-git-dir"))
-            fixture.bundle, fixture.archive = fixture.artifacts / "live.bundle", fixture.artifacts / "live.tar"
-            git(fixture.live, "bundle", "create", str(fixture.bundle), fixture.ref)
-            fixture.bundle.chmod(0o600)
-            fixture.recovery_refs = {name: oid for oid, name in (line.split() for line in
-                git(fixture.project, "bundle", "list-heads", str(fixture.bundle)).splitlines())}
-            fixture.capture()
-            cls.second_row = fixture.row()
+            # Capture the carrier last, after both independently misplaced artifacts exist.
+            for label in ("file_inside", "outside", "carrier"):
+                fixture.target = cls.paths[label]
+                fixture.ref = "refs/heads/" + fixture.target.name
+                fixture.admin = Path(git(fixture.target, "rev-parse", "--absolute-git-dir"))
+                fixture.bundle = fixture.artifacts / (label + ".bundle")
+                fixture.archive = (destination if label == "file_inside" else fixture.artifacts) / (label + ".tar")
+                git(fixture.target, "bundle", "create", str(fixture.bundle), fixture.ref)
+                fixture.bundle.chmod(0o600)
+                fixture.recovery_refs = {name: oid for oid, name in (line.split() for line in
+                    git(fixture.project, "bundle", "list-heads", str(fixture.bundle)).splitlines())}
+                fixture.capture()
+                cls.rows[label] = fixture.row()
         finally:
             for key, value in attributes.items():
                 setattr(fixture, key, value)
         cls.state = {"checkpoint": {"worktree": {"path": str(fixture.target), "branch": "target"},
                                     "governance": {"base_ref": "refs/heads/main"}},
-                     "admissions": {"sibling": {"admission_id": "sibling", "recovery": {
-                         "placement_binding": {"path": str(fixture.live), "branch": "live"}}}}}
-        # One complete immutable two-resource observation is shared by assertions.
+                     "admissions": {label: {"admission_id": label, "recovery": {
+                         "placement_binding": {"path": str(path), "branch": path.name}}}
+                         for label, path in cls.paths.items() if path != fixture.target}}
+        # One real ordinary plan serves all four methods: isolated Git/file negatives
+        # and two independently archived worktrees with both artifacts outside scope.
         # The real production plan's setup duration is recorded separately by the runner.
         cls.placements = []
         original = archives._outside
-        artifact_paths = {Path(row["path"]) for row in (cls.first_row, cls.second_row)}
-        artifact_paths.update(Path(row["worktree_archive"]["path"]) for row in (cls.first_row, cls.second_row))
+        artifact_paths = {Path(row["path"]) for row in cls.rows.values()}
+        artifact_paths.update(Path(row["worktree_archive"]["path"]) for row in cls.rows.values())
         def placement(path, excluded):
             if path in artifact_paths:
                 cls.placements.append((path, set(excluded)))
@@ -217,57 +280,163 @@ class SiblingScopeFixture(unittest.TestCase):
                 patch.object(cleanup, "_read_journal", return_value={"actions": [], "units": {}}), \
                 patch("pod.evidence_closure.closed_older_state", return_value=None):
             return cleanup.plan(self.fixture.project, "fixture-objective",
-                archives=[self.first_row, self.second_row], orca_reader=reader, native_port=object(), **options)
+                archives=list(self.rows.values()), orca_reader=reader, native_port=object(), **options)
 
     def worktree(self, result, path):
         return next(row for row in result["resources"] if row["id"] == "worktree:" + str(path))
 
 
-class SiblingGitPlacementTests(SiblingScopeFixture):
-    inside = "git"
-
     def test_ordinary_git_artifact_inside_other_removable_worktree_holds(self):
         result = self.result
-        row = self.worktree(result, self.fixture.target)
+        row = self.worktree(result, self.paths["git_inside"])
         record = row["reversible_eligibility"]
         self.assertFalse(row["archive_verified"])
         self.assertFalse(record["git_recovery"]["verified_covering"])
+        self.assertEqual(record["file_recovery"]["status"], "verified")
         self.assertEqual(record["status"], "held")
         self.assertEqual(self.worktree(result, self.fixture.live)["reversible_eligibility"]["status"], "data_eligible")
         self.assertIsNone(row["delete_argv"])
 
 
-class SiblingFilePlacementTests(SiblingScopeFixture):
-    inside = "file"
-
     def test_ordinary_file_artifact_inside_other_removable_worktree_holds(self):
         result = self.result
-        row = self.worktree(result, self.fixture.target)
+        row = self.worktree(result, self.paths["file_inside"])
         record = row["reversible_eligibility"]
         self.assertEqual(record["status"], "held")
         self.assertFalse(record["archive_verified"])
+        self.assertTrue(record["git_recovery"]["verified_covering"])
         self.assertNotEqual(record["file_recovery"]["status"], "verified")
         self.assertEqual(self.worktree(result, self.fixture.live)["reversible_eligibility"]["status"], "data_eligible")
         self.assertIsNone(row["delete_argv"])
 
 
-class OutsideSiblingPlacementTests(SiblingScopeFixture):
     def test_two_resources_with_both_artifacts_outside_full_scope_keep_positive_data(self):
         result = self.result
-        for path in (self.fixture.target, self.fixture.live):
+        for path in (self.paths["outside"], self.paths["carrier"]):
             row = self.worktree(result, path)
             self.assertEqual(row["reversible_eligibility"]["status"], "data_eligible", row)
             self.assertIsNone(row["delete_argv"])
 
     def test_both_artifact_freshness_checks_keep_every_known_objective_boundary(self):
         fixture = self.fixture
-        expected = {fixture.target, fixture.live, fixture.common, fixture.admin,
-                    Path(git(fixture.live, "rev-parse", "--absolute-git-dir"))}
+        expected = {fixture.common, *self.paths.values(), *(Path(git(path, "rev-parse", "--absolute-git-dir"))
+                    for path in self.paths.values())}
         for path, excluded in self.placements:
             self.assertLessEqual(expected, excluded, path)
         paths = {path for path, _ in self.placements}
-        self.assertEqual(len(paths), 4)
-        self.assertTrue(all(sum(current == path for current, _ in self.placements) >= 2 for path in paths))
+        self.assertEqual(len(paths), 8)
+        positive_paths = {Path(self.rows[label]["path"]) for label in ("outside", "carrier")}
+        positive_paths.update(Path(self.rows[label]["worktree_archive"]["path"]) for label in ("outside", "carrier"))
+        self.assertTrue(all(sum(current == path for current, _ in self.placements) >= 2 for path in positive_paths))
+
+
+class LegacySelectedPlacementTests(EntryFixture):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        fixture = cls.fixture
+        git(fixture.live, "stash", "clear")
+        cls.selected_path = fixture.root / "outside-selected"
+        git(fixture.project, "worktree", "add", "--quiet", "-b", cls.selected_path.name, str(cls.selected_path))
+        inside = fixture.target / "ignored/artifacts"
+        inside.mkdir(mode=0o700)
+        cls.rows, cls.ordinary_rows = {}, {}
+        for path, rows in ((cls.selected_path, cls.rows), (fixture.live, cls.ordinary_rows)):
+            ref = "refs/heads/" + path.name
+            outside = fixture.artifacts / (path.name + ".bundle")
+            git(path, "bundle", "create", str(outside), ref)
+            outside.chmod(0o600)
+            nested = inside / outside.name
+            nested.write_bytes(outside.read_bytes())
+            nested.chmod(0o600)
+            for label, bundle in (("inside", nested), ("outside", outside)):
+                rows[label] = {"path": str(bundle), "ref": ref, "tip": fixture.tip}
+        cls.state = {"checkpoint": {"worktree": {"path": str(fixture.live), "branch": "live"},
+                                    "governance": {"base_ref": "refs/heads/main"}},
+                     "admissions": {"known": {"admission_id": "known", "recovery": {
+                         "placement_binding": {"path": str(fixture.target), "branch": "target"}}}}}
+        # This one accepted current-scope baseline is shared by the coverage and
+        # changed-scope fingerprint methods. No unrelated worktree is inferred.
+        cls.before = cls().selected(include_target=False)
+
+    def setUp(self):
+        pass
+
+    def observed(self, *, label="inside", include_target=True, ordinary=False, **options):
+        state = deepcopy(self.state)
+        if not include_target:
+            state["admissions"] = {}
+        original = cleanup._objective_plan
+        def objective(*args, **kwargs):
+            result = original(*args, **kwargs)
+            self.ordinary_ids = {row["id"] for row in result["resources"]}
+            return result
+        with patch.object(cleanup, "read", return_value=state), \
+                patch.object(cleanup, "_read_journal", return_value={"actions": [], "units": {}}), \
+                patch("pod.evidence_closure.closed_older_state", return_value=None), \
+                patch.object(cleanup, "_objective_plan", side_effect=objective):
+            rows = self.ordinary_rows if ordinary else self.rows
+            return self.entry(kind=None if ordinary else "worktree", name=str(self.selected_path),
+                              objective="fixture-objective", archives_input=[rows[label]], **options)
+
+    def selected(self, **options):
+        return self.observed(**options)
+
+    def selected_row(self, result):
+        self.assertEqual(len(result["resources"]), 1)
+        row = result["resources"][0]
+        self.assertEqual(row["id"], "worktree:" + str(self.selected_path))
+        self.assertNotIn("reversible_eligibility", row)
+        self.assertIsNone(row["delete_argv"])
+        self.assertIsNone(row["archive_argv"])
+        self.assertEqual(row["archives"][0]["mode"], "branch_only")
+        return row
+
+    def test_legacy_selected_outside_ordinary_list_holds_bundle_inside_known_objective(self):
+        row = self.selected_row(self.selected())
+        self.assertNotIn(row["id"], self.ordinary_ids)
+        self.assertIn("worktree:" + str(self.fixture.target), self.ordinary_ids)
+        self.assertFalse(row["archive_verified"])
+        self.assertIn("Archive is inside a removable resource or administrative directory", row["archives"][0]["holds"])
+
+    def test_legacy_selected_outside_known_scope_keeps_original_narrow_coverage_and_shape(self):
+        row = self.selected_row(self.selected(label="outside"))
+        self.assertTrue(row["archive_verified"], row)
+        self.assertTrue(row["archives"][0]["verified"])
+        self.assertTrue(row["archives"][0]["covers_resource"])
+        self.assertEqual(set(row), {"id", "kind", "class", "reasons", "identity", "delete_argv", "archive_argv",
+                                   "archive_verified", "archives", "stash_observation", "fingerprint"})
+
+    def test_legacy_selected_known_scope_does_not_infer_unlisted_worktree_boundaries(self):
+        row = self.selected_row(self.before)
+        self.assertTrue(row["archive_verified"], row)
+        self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
+        self.assertEqual(row["identity"]["observation_scope"]["mode"], "objective")
+
+    def test_new_known_objective_boundary_invalidates_same_selected_legacy_expect(self):
+        with self.assertRaises(PodError) as changed:
+            self.selected(expect=self.before["expect"])
+        self.assertEqual(changed.exception.code, "cleanup_changed")
+
+    def test_ordinary_legacy_bundle_inside_known_sibling_holds(self):
+        result = self.observed(ordinary=True)
+        row = next(row for row in result["resources"] if row["id"] == "worktree:" + str(self.fixture.live))
+        self.assertNotIn("reversible_eligibility", row)
+        self.assertFalse(row["archive_verified"])
+        self.assertIn("Archive is inside a removable resource or administrative directory", row["archives"][0]["holds"])
+
+    def test_ordinary_legacy_bundle_outside_known_scope_keeps_positive_git_evidence(self):
+        result = self.observed(ordinary=True, label="outside")
+        row = next(row for row in result["resources"] if row["id"] == "worktree:" + str(self.fixture.live))
+        self.assertNotIn("reversible_eligibility", row)
+        self.assertTrue(row["archive_verified"], row)
+        self.assertEqual(row["archives"][0]["mode"], "branch_only")
+
+    def test_project_only_legacy_placement_keeps_only_its_observed_boundary(self):
+        row = self.selected_row(self.entry(name=str(self.selected_path), archives_input=[self.rows["inside"]]))
+        self.assertTrue(row["archive_verified"], row)
+        self.assertEqual(row["identity"]["observation_scope"]["mode"], "project_only")
+        self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
 
 
 class RetainedStashLogEntryTests(EntryFixture):
@@ -408,6 +577,27 @@ class SelectedRefLogFixture(EntryFixture):
         return self.entry(kind="local_branch", name=self.fixture.ref,
                           archives_input=[self.rows[label]], **options)
 
+    def assert_file_admin_held(self, file, admin):
+        self.assertEqual(file["status"], "held", file)
+        self.assertFalse(file["restore_verified"])
+        self.assertIsNone(file["current_match"])
+        self.assertEqual(admin["status"], "held", admin)
+        self.assertIn("admin_recovery_missing", admin["reasons"])
+
+    def assert_incomplete_reference_held(self, record):
+        self.assertEqual(record["status"], "held")
+        self.assertFalse(record["archive_verified"])
+        self.assertFalse(record["git_recovery"]["verified_covering"])
+        self.assert_file_admin_held(record["file_recovery"], record["admin_recovery"])
+
+    def reference_facts(self):
+        fixture = self.fixture
+        repository = archives.repository_observation(fixture.project)
+        return archives.reference_observation(fixture.project, fixture.ref, fixture.tip, repository, known_phases=True)
+
+    def verify_files(self, facts):
+        return files.verify(self.fixture.project, self.rows["full"], [], resource=facts)
+
 
 class SelectedRefLogEntryTests(SelectedRefLogFixture):
     @classmethod
@@ -441,6 +631,45 @@ class SelectedRefLogEntryTests(SelectedRefLogFixture):
         self.assertEqual(before, (self.log.read_bytes(), git(self.fixture.project, "show-ref")))
         self.assertIsNone(row["delete_argv"])
 
+    def test_direct_file_verification_requires_complete_reference_material(self):
+        facts = self.reference_facts()
+        self.assertTrue(facts["complete"])
+        facts["complete"] = False
+        file, admin, _ = self.verify_files(facts)
+        self.assert_file_admin_held(file, admin)
+
+    def test_direct_file_verification_requires_an_actual_selected_log_fact(self):
+        facts = self.reference_facts()
+        self.assertTrue(facts["complete"])
+        for value in ("missing", None, {}):
+            current = deepcopy(facts)
+            if value == "missing":
+                current.pop("selected_ref_log")
+            else:
+                current["selected_ref_log"] = value
+            with self.subTest(selected_log=value):
+                file, admin, _ = self.verify_files(current)
+                self.assert_file_admin_held(file, admin)
+
+    def test_unknown_retained_closure_cannot_verify_file_or_admin_recovery(self):
+        with patch.object(archives, "retained_material", side_effect=archives.Unavailable("fixture closure unavailable")):
+            facts = self.reference_facts()
+        self.assertFalse(facts["complete"])
+        self.assertNotIn("selected_ref_log", facts)
+        file, admin, _ = self.verify_files(facts)
+        self.assert_file_admin_held(file, admin)
+
+    def test_unknown_reference_closure_holds_nested_production_recovery_fields(self):
+        original = archives.reference_observation
+        def observed(*args, **kwargs):
+            if kwargs.get("known_phases"):
+                with patch.object(archives, "retained_material", side_effect=archives.Unavailable("fixture closure unavailable")):
+                    return original(*args, **kwargs)
+            return original(*args, **kwargs)
+        with patch.object(archives, "reference_observation", side_effect=observed):
+            record = self.remaining()["resources"][0]["reversible_eligibility"]
+        self.assert_incomplete_reference_held(record)
+
     def test_source_blob_and_root_coverage_without_restored_log_bytes_hold(self):
         self.assertEqual(git(self.fixture.project, "cat-file", "-t", self.blob), "blob")
         record = self.remaining("root_only")["resources"][0]["reversible_eligibility"]
@@ -473,16 +702,18 @@ class SelectedRefLogEntryTests(SelectedRefLogFixture):
             self.log.write_bytes(raw)
         self.addCleanup(restore)
         record = self.remaining()["resources"][0]["reversible_eligibility"]
-        self.assertEqual(record["status"], "held")
-        self.assertFalse(record["git_recovery"]["verified_covering"])
+        self.assert_incomplete_reference_held(record)
 
     def test_malformed_selected_log_never_becomes_empty_coverage(self):
         raw = self.log.read_bytes()
         self.addCleanup(self.log.write_bytes, raw)
         self.log.write_bytes(raw.rstrip(b"\n"))
         record = self.remaining()["resources"][0]["reversible_eligibility"]
-        self.assertEqual(record["status"], "held")
-        self.assertFalse(record["git_recovery"]["verified_covering"])
+        self.assert_incomplete_reference_held(record)
+        facts = self.reference_facts()
+        self.assertFalse(facts["complete"])
+        file, admin, _ = self.verify_files(facts)
+        self.assert_file_admin_held(file, admin)
 
 
 class SelectedRefSHA256LogTests(SelectedRefLogFixture):
@@ -515,8 +746,11 @@ class SelectedRefLogBoundTests(SelectedRefLogFixture):
         self.addCleanup(self.log.write_bytes, raw)
         self.log.write_bytes(raw + raw.splitlines(keepends=True)[-1])
         record = self.remaining()["resources"][0]["reversible_eligibility"]
-        self.assertEqual(record["status"], "held")
-        self.assertFalse(record["git_recovery"]["verified_covering"])
+        self.assert_incomplete_reference_held(record)
+        facts = self.reference_facts()
+        self.assertFalse(facts["complete"])
+        file, admin, _ = self.verify_files(facts)
+        self.assert_file_admin_held(file, admin)
 
 
 if __name__ == "__main__":
