@@ -9046,6 +9046,108 @@
         "tests.test_suite_lanes.ManifestTests.test_the_checked_in_manifest_is_valid_and_owner_capped"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A594",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_rounds.ReviewRoundsTests.test_linked_required_group_and_reuse_statement_are_retained",
+        "tests.test_review_rounds.ReviewRoundsTests.test_missing_link_refuses_with_action_then_unlinked_advisory_is_a_proposal",
+        "tests.test_review_rounds.ReviewRoundsTests.test_safety_and_privacy_links_stay_required",
+        "tests.test_review_rounds.ReviewRoundsTests.test_advisory_link_and_unbounded_link_refuse_atomically"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A595",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue41.ReleasedWriterTests.test_genuine_full_id_071_proof_survives_checkpoint_and_report",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_genuine_previous_reader_refuses_33_records_without_rewriting",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_genuine_previous_reader_refuses_goal_links_without_rewriting"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A596",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_rounds.ReviewRoundsTests.test_third_finished_round_blocks_fourth_and_checkpoints_one_owner_question",
+        "tests.test_review_rounds.ReviewRoundsTests.test_public_status_is_read_only_and_caller_cannot_answer_by_editing_a_row"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A597",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_rounds.ReviewRoundsTests.test_repaired_correction_without_reverification_still_asks",
+        "tests.test_review_rounds.ReviewRoundsTests.test_running_third_round_has_no_question_and_no_fourth_admission",
+        "tests.test_review_rounds.ReviewRoundsTests.test_clean_third_round_finishes_without_question",
+        "tests.test_review_rounds.ReviewRoundsTests.test_consumed_failed_third_round_is_finished_without_passing_assurance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A598",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_rounds.ReviewRoundsTests.test_continue_expires_and_asks_with_the_new_granted_number",
+        "tests.test_review_rounds.ReviewRoundsTests.test_continue_after_five_earlier_rounds_grants_two_further_rounds",
+        "tests.test_review_rounds.ReviewRoundsTests.test_continuation_bounds_and_answer_replay_cannot_grant_twice"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A599",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_rounds.ReviewRoundsTests.test_simplify_requires_a_named_change_and_grants_exactly_one_round",
+        "tests.test_review_rounds.ReviewRoundsTests.test_simplify_after_five_earlier_rounds_grants_one_verification_round",
+        "tests.test_review_rounds.ReviewRoundsTests.test_simplified_verification_can_finish_cleanly"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A600",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_rounds.ReviewRoundsTests.test_stop_reports_every_unfinished_obligation_and_prevents_review"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A601",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_rounds.ReviewRoundsTests.test_relayed_allowance_answers_refuse_without_verifier_or_effect",
+        "tests.test_review_rounds.ReviewRoundsTests.test_responder_cannot_answer_owner_allowance_even_under_yolo"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

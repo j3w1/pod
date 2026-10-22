@@ -32,6 +32,15 @@ class ReviewRoundsTests(unittest.TestCase):
         cls.save("due", seed.pending)
         seed.repair()
         cls.save("repaired", seed.pending)
+        seed.restore("one")
+        # Synthetic earlier-admission control: 0.21.9 admitted reviews without an allowance.
+        with patch("pod.obligations.review_allowance", return_value={"state": "open", "rounds": 0, "granted": 99}):
+            seed.finish(finding=seed.finding())
+            for _ in range(4):
+                seed.begin()
+                seed.finish()
+        case.write()
+        cls.save("earlier-five", seed.pending)
 
     @classmethod
     def save(cls, key, pending):
@@ -129,7 +138,11 @@ class ReviewRoundsTests(unittest.TestCase):
         result = self.finish(finding=self.finding(findings=[{"finding": "F", "severity": "major"},
                                                           {"finding": "F2", "severity": "minor"}]))
         finding = result["report"]["review_findings"][0]
-        self.assertEqual((finding["blocks"], finding["findings"], finding["correction"]), ("R1", ["F", "F2"], "K"))
+        self.assertEqual(finding, {"obligation": "A", "finding": "F", "severity": "major",
+                                   "triage": "required_correction", "blocks": "R1", "correction": "K"})
+        retained = next(row for row in self.facts()["checkpoint"]["obligations"] if row["id"] == "A")["findings"][0]
+        self.assertEqual(retained["findings"], ["F", "F2"])
+        self.assertIn("summary", retained)
         admission, packet = self.pending
         stored = self.facts()["admissions"][admission["admission_id"]]["report"]["observation"]
         self.assertIn("R1: small glue", stored["evidence"][0])
@@ -203,6 +216,10 @@ class ReviewRoundsTests(unittest.TestCase):
         before = self.facts()
         observed = status(self.case.project, "run", objective="objective")
         self.assertEqual(observed["report"]["review_allowance"]["state"], "due")
+        projection = observed["recorded_questions"]
+        self.assertEqual(projection["status"], "complete")
+        self.assertTrue(projection["items"][0]["owner_only"])
+        self.assertEqual(projection["items"][0]["resolution"], {"resolved": False})
         self.assertEqual(self.facts(), before)
         self.case.write(questions=[{**self.questions()[0], "resolved": True, "status": "answered", "answer": "continue"}])
         self.assertNotIn("answer", self.questions()[0])
@@ -226,6 +243,40 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in self.questions()], ["review-allowance-3", "review-allowance-5"])
         self.assertEqual(self.questions()[0]["answer"], {"choice": "continue", "rounds": 2})
         self.assertEqual((self.questions()[0]["resolved"], self.questions()[0]["status"]), (True, "answered"))
+        self.unchanged_refusal("review_allowance_reached", self.begin, "due")
+
+    def test_continue_after_five_earlier_rounds_grants_two_further_rounds(self):
+        self.restore("earlier-five")
+        allowance = self.case.write()["report"]["review_allowance"]
+        self.assertEqual((allowance["rounds"], allowance["granted"], allowance["question"]),
+                         (5, 3, "review-allowance-5"))
+        question = self.questions()[0]
+        self.assertIn("5 review rounds", question["text"])
+        self.assertIn("3 granted", question["text"])
+        error = self.unchanged_refusal("review_allowance_reached", self.begin, "due")
+        self.assertEqual(error.detail["referent"]["question"], question)
+        result = self.answer("continue", rounds=2)["report"]["review_allowance"]
+        self.assertEqual((result["rounds"], result["granted"], result["state"]), (5, 7, "open"))
+        self.assertEqual(self.questions()[0]["text"], question["text"])
+        for _ in range(2):
+            self.begin()
+            self.finish()
+        self.case.write()
+        self.assertEqual([row["id"] for row in self.questions()], ["review-allowance-5", "review-allowance-7"])
+        self.unchanged_refusal("review_allowance_reached", self.begin, "due")
+        self.answer("continue", rounds=1)
+        self.assertEqual(self.case.write()["report"]["review_allowance"]["granted"], 8)
+
+    def test_simplify_after_five_earlier_rounds_grants_one_verification_round(self):
+        self.restore("earlier-five")
+        rows = self.case.stored()
+        next(row for row in rows if row["id"] == "K")["check"] = "repair the simplified result"
+        result = self.answer("simplify", rows=rows)["report"]["review_allowance"]
+        self.assertEqual((result["rounds"], result["granted"], result["state"]), (5, 6, "open"))
+        self.begin()
+        self.finish()
+        self.case.write()
+        self.assertEqual([row["id"] for row in self.questions()], ["review-allowance-5", "review-allowance-6"])
         self.unchanged_refusal("review_allowance_reached", self.begin, "due")
 
     def test_simplify_requires_a_named_change_and_grants_exactly_one_round(self):

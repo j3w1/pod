@@ -424,23 +424,26 @@ def review_allowance(state: dict, ctx: dict) -> dict:
     """R150: derive the allowance from admissions and accepted owner decisions only."""
     from .display import review_rounds
     reviews = review_rounds(ctx)
-    decisions = [row["allowance"] for row in state.get("revision_decisions", []) if "allowance" in row]
-    granted = 3 + sum(row.get("rounds", 1) for row in decisions if row["choice"] != "stop")
+    decisions = [row for row in state.get("revision_decisions", []) if "allowance" in row]
+    granted = 3
+    for row in decisions:
+        if row["allowance"]["choice"] != "stop":
+            granted = int(row["question"].removeprefix("review-allowance-")) + row["allowance"].get("rounds", 1)
     finished = bool(reviews and reviews[-1].get("report")
                     and reviews[-1]["admission_id"] not in ctx.get("outstanding", []))
     open_assurance = any(ob["kind"] in ("assurance", "correction") and ob["state"] not in ("satisfied", "withdrawn")
                          for ob in state.get("obligations", []))
-    status = ("stopped" if any(row["choice"] == "stop" for row in decisions) else
+    status = ("stopped" if any(row["allowance"]["choice"] == "stop" for row in decisions) else
               "clear" if not open_assurance else "open" if len(reviews) < granted else
               "running" if not finished else "due")
     return {"state": status, "rounds": len(reviews), "granted": granted, "finished": finished,
             "open_assurance": open_assurance,
-            "question": f"review-allowance-{granted}" if status == "due" else None}
+            "question": f"review-allowance-{len(reviews)}" if status == "due" else None}
 
 
-def allowance_question(granted: int) -> dict:
-    return {"id": f"review-allowance-{granted}", "owner_only": True, "kind": "review_allowance",
-            "text": f"The {granted} granted review rounds are used and assurance is unfinished. "
+def allowance_question(rounds: int, granted: int) -> dict:
+    return {"id": f"review-allowance-{rounds}", "owner_only": True, "kind": "review_allowance", "resolved": False,
+            "text": f"{rounds} review rounds have been used, against {granted} granted, and assurance is unfinished. "
                     "Stop as incomplete, simplify named obligations for one verification round, "
                     "or continue for a stated 1..8 rounds. Type the answer in the coordinator's own tab."}
 
@@ -455,13 +458,16 @@ def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
     result = [row for row in questions if not (
         isinstance(row, dict) and str(row.get("id", "")).startswith("review-allowance-")
         or isinstance(row, str) and row.startswith("review-allowance-"))]
+    granted = 3
     for decision in state.get("revision_decisions", []):
         if "allowance" in decision:
-            granted = int(decision["question"].removeprefix("review-allowance-"))
-            result.append({**allowance_question(granted), "resolved": True, "status": "answered",
+            rounds = int(decision["question"].removeprefix("review-allowance-"))
+            result.append({**allowance_question(rounds, granted), "resolved": True, "status": "answered",
                            "answer": deepcopy(decision["allowance"])})
+            if decision["allowance"]["choice"] != "stop":
+                granted = rounds + decision["allowance"].get("rounds", 1)
     if allowance["state"] == "due":
-        result.append(allowance_question(allowance["granted"]))
+        result.append(allowance_question(allowance["rounds"], allowance["granted"]))
     return result
 
 

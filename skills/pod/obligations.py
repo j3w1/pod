@@ -1999,11 +1999,13 @@ def validate_map_record(state: dict) -> None:
             owner_decision(row, kind=row["kind"], stored=True)
             if "allowance" in row or str(row.get("question", "")).startswith("review-allowance-"):
                 _authority({key: item for key, item in row.items() if key not in ("seq", "kind")}, kind="question", stored=True)
-                if row["kind"] != "question" or stopped or row["question"] != f"review-allowance-{granted}":
+                question = re.fullmatch(r"review-allowance-([1-9][0-9]*)", row["question"])
+                rounds = int(question[1]) if question else 0
+                if row["kind"] != "question" or stopped or rounds < granted:
                     raise refuse("obligation_invalid", "malformed", "allowance history retains each successive owner answer once", record="revision decision")
                 stopped = row["allowance"]["choice"] == "stop"
                 if not stopped:
-                    granted += row["allowance"].get("rounds", 1)
+                    granted = rounds + row["allowance"].get("rounds", 1)
     governance = _exact(value["governance"], {"base_ref", "selection", "exclude", "base", "proof_base"},
                         {"base_ref", "selection", "exclude", "base"}, "persisted governance")
     if governance["base_ref"] is not None:
@@ -2332,7 +2334,7 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
                       "finish normally; assurance is clear")
             raise refuse("review_allowance_reached", allowance["state"], "the objective's granted review rounds are used",
                          rounds=allowance["rounds"], granted=allowance["granted"], state=allowance["state"], next_action=action,
-                         **({"question": allowance_question(allowance["granted"])} if allowance["state"] == "due" else {}))
+                         **({"question": allowance_question(allowance["rounds"], allowance["granted"])} if allowance["state"] == "due" else {}))
     rows = {ob["id"]: ob for ob in state["obligations"]}
     proposals = {row["id"] for row in state.get("proposals", [])}
     lineage = Lineage(rows)
@@ -2544,7 +2546,9 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
     if any(ob["state"] == "renewed" for ob in rows):
         result["renewed"] = [{"obligation": ob["id"], **ob["renewal"]} for ob in rows if ob["state"] == "renewed"]
     # R150 projections appear once review has happened, so earlier report shapes stay unchanged.
-    findings = [{"obligation": ob["id"], **deepcopy(finding)} for ob in rows for finding in ob.get("findings", [])]
+    findings = [{"obligation": ob["id"], **{key: deepcopy(finding[key]) for key in
+                 ("finding", "severity", "triage", "blocks", "correction") if key in finding}}
+                for ob in rows for finding in ob.get("findings", [])]
     allowance = review_allowance(state, ctx)
     if findings or allowance["rounds"] or any("allowance" in row for row in state.get("revision_decisions", [])):
         result.update(review_findings=findings, review_allowance=allowance)

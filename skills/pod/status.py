@@ -84,6 +84,8 @@ def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavaila
         row = {"index": index, "id": text(source.get("id"), 512), "reference": text(source.get("reference"), 512),
                "text": text(source.get("text", source.get("question")), 4096),
                "choices": None, "resolution": None, "missing": []}
+        if type(source.get("owner_only")) is bool:
+            row["owner_only"] = source["owner_only"]
         if row["id"] is None and row["reference"] is None:
             row["missing"].append("identity")
         if row["text"] is None:
@@ -91,7 +93,7 @@ def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavaila
         choices, valid = fact(source.get("choices"))
         if "choices" in source and valid:
             row["choices"] = choices
-        else:
+        elif "choices" in source or row.get("owner_only") is not True:
             row["missing"].append("choices")
         resolution = {key: source[key] for key in ("resolution", "resolved", "answer", "status") if key in source}
         resolution, valid = fact(resolution)
