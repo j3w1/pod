@@ -7244,6 +7244,33 @@
         "tests.test_issue_revision.IssueRevisionLegacyTests.test_genuine_admission_records_source_and_definition_but_not_criterion_report_join"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A491",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_all_allowed_outcomes_and_both_dispositions_move_at_trigger_exactly",
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_unaccounted_current_and_unsettled_results_stay_inline",
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_active_failures_and_unknown_or_mismatched_routes_stay_inline",
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_review_and_investigation_still_require_success",
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_native_governor_and_ambiguous_joins_preserve_vetoes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A492",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_outcomes.ImplementationCapacityTests.test_genuine_prechange_writer_refuses_same_valid_report_without_writing",
+        "tests.test_history_outcomes.ImplementationCapacityTests.test_same_report_write_fits_and_hydrates_every_field_exactly"
+      ],
+      "status": "NOT_RUN"
     }
   ]
 }
