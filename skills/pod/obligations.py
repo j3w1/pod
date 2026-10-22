@@ -2532,9 +2532,6 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
                              **(decision_channel(ob["withdrawal"]) if not legacy_report and ob["withdrawal"]["by"] in ("user_direct", "agent_decision") else ob["withdrawal"])}
                             for ob in rows if ob["state"] == "withdrawn"],
               "triage_downgrades": downgrades,
-              "review_findings": [{"obligation": ob["id"], **deepcopy(finding)} for ob in rows
-                                  for finding in ob.get("findings", [])],
-              "review_allowance": review_allowance(state, ctx),
               "boundary_exceeded": [{"admission": key, "paths": row["boundary_exceeded"],
                                      "disposition": row.get("disposition")}
                                     for key, row in sorted(admissions.items()) if row.get("boundary_exceeded")],
@@ -2546,6 +2543,11 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
               "label": label_qualification(state, ctx, ctx.get("candidate"))}
     if any(ob["state"] == "renewed" for ob in rows):
         result["renewed"] = [{"obligation": ob["id"], **ob["renewal"]} for ob in rows if ob["state"] == "renewed"]
+    # R150 projections appear once review has happened, so earlier report shapes stay unchanged.
+    findings = [{"obligation": ob["id"], **deepcopy(finding)} for ob in rows for finding in ob.get("findings", [])]
+    allowance = review_allowance(state, ctx)
+    if findings or allowance["rounds"] or any("allowance" in row for row in state.get("revision_decisions", [])):
+        result.update(review_findings=findings, review_allowance=allowance)
     if any(ob["kind"] == "delivery" for ob in rows):
         delivery_status = ctx.get("governor_delivery") or {}
         result["delivery_authorization"] = delivery_status.get("units") or {
