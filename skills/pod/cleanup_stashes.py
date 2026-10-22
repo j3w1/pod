@@ -48,6 +48,59 @@ def worktree_argv(project: Path, path: str, *, completed: bool = False) -> list[
             "worktree", "remove", *(["--force"] if completed else []), path]
 
 
+HELPER_VARIABLES = frozenset({"clean", "smudge", "process"})
+
+
+def helper_facts(path: Path, *, deadline: float | None = None) -> dict:
+    """Current config and attribute facts for the unforced worktree removal's clean check.
+
+    Git's clean check runs status in the selected checkout, which may start an attribute
+    filter driver's external helper for a tracked path. Configured drivers that no
+    tracked path selects are inactive. Nothing here runs a helper; check-attr and
+    ls-files only read names. Incomplete, malformed or over-budget facts raise.
+    """
+    deadline = min(time.monotonic() + 30, deadline) if deadline is not None else time.monotonic() + 30
+    names = archives._run(path, ["config", "--name-only", "-z", "--get-regexp", r"^filter\."],
+                          missing=True, deadline=deadline)
+    if names and not names.endswith(b"\0"):
+        raise archives.Unavailable("Filter configuration names are incomplete")
+    drivers = set()
+    for name in names.split(b"\0")[:-1]:
+        parts = name.decode("utf-8").split(".")
+        if len(parts) < 3 or parts[0] != "filter" or not all(parts):
+            raise archives.Unavailable("Filter configuration name is unsupported")
+        if parts[-1] in HELPER_VARIABLES:
+            drivers.add(".".join(parts[1:-1]))
+    result = {"path": "unforced_worktree_clean_check", "configured": sorted(drivers), "applicable": [],
+              "tracked_paths": None, "attributes_sha256": None, "names_sha256": hashlib.sha256(names).hexdigest()}
+    if not drivers:
+        return result
+    listed = archives._run(path, ["ls-files", "-z"], deadline=deadline)
+    if listed and not listed.endswith(b"\0"):
+        raise archives.Unavailable("Tracked path inventory is incomplete")
+    tracked = listed.split(b"\0")[:-1]
+    applicable, hashed = set(), hashlib.sha256()
+    for start in range(0, len(tracked), archives.TYPE_QUERY_OBJECTS):
+        chunk = tracked[start:start + archives.TYPE_QUERY_OBJECTS]
+        output = archives._run(path, ["check-attr", "-z", "--stdin", "filter"],
+                               data=b"\0".join(chunk) + b"\0", deadline=deadline)
+        fields = output.split(b"\0")
+        if fields[-1] != b"" or len(fields) - 1 != 3 * len(chunk):
+            raise archives.Unavailable("Filter attribute observation is incomplete")
+        for index, name in enumerate(chunk):
+            observed, attribute, value = fields[3 * index:3 * index + 3]
+            if observed != name or attribute != b"filter":
+                raise archives.Unavailable("Filter attribute observation is out of order")
+            hashed.update(name + b"\0" + value + b"\0")
+            driver = value.decode("utf-8")
+            # unspecified/unset/set name no driver; an undefined driver runs nothing.
+            if driver not in {"unspecified", "unset", "set"} and driver in drivers:
+                applicable.add(driver)
+    result.update(applicable=sorted(applicable), tracked_paths=len(tracked),
+                  attributes_sha256=hashed.hexdigest())
+    return result
+
+
 def _retaining(project: Path, repository: dict, *, deadline=None) -> tuple[dict, list[str], dict]:
     storage, raw = observations.storage_once(project, "refs/stash", repository, deadline=deadline)
     result = {"status": "unavailable", "ref": storage["current"], "entries": None,

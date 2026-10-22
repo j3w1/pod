@@ -1096,6 +1096,97 @@ class CleanupWorkerTests(KernelCase):
         self.assertFalse(self.child.exists())
         self.assertFalse(marker.exists())
 
+    def filter_driver(self, driver, variables=("clean",), *, worktree=False):
+        """Configure a disposable helper that only records that it ran; never run on purpose."""
+        marker = self.root / (driver + "-filter-marker")
+        marker.unlink(missing_ok=True)
+        target, scope = (self.child, ["--worktree"]) if worktree else (self.project, [])
+        def quiet(*argv):
+            subprocess.run(["git", *argv], capture_output=True)
+        if worktree:
+            git(self.project, "config", "extensions.worktreeConfig", "true")
+            self.addCleanup(quiet, "-C", str(self.project), "config", "--unset", "extensions.worktreeConfig")
+        for variable in variables:
+            git(target, "config", *scope, f"filter.{driver}.{variable}", f"sh -c 'echo ran >> {marker}; cat'")
+        self.addCleanup(quiet, "-C", str(target), "config", *scope, "--remove-section", "filter." + driver)
+        return marker
+
+    def attributes(self, text):
+        path = self.project / ".git" / "info" / "attributes"
+        path.write_text(text)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+    def test_applicable_filter_helper_holds_the_unforced_worker_before_any_effect(self):
+        self.stash()
+        before, tip = self.stash_state(), git(self.project, "rev-parse", "refs/heads/worker")
+        self.filter_driver("probe")
+        self.attributes("* filter=probe\n")
+        exact = "Git's clean check in this unforced removal could run configured attribute filter helpers: probe"
+        selected = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(selected["delete_argv"])
+        self.assertEqual(selected["class"], "protected")
+        self.assertIn(exact, selected["reasons"])
+        # No removal ran: checkout, branch and stash bytes are unchanged.
+        self.assertTrue(self.child.is_dir())
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), tip)
+        self.assertEqual(self.stash_state(), before)
+
+    def test_worktree_scoped_applicable_filter_holds_the_ordinary_worker_plan(self):
+        self.filter_driver("probe", worktree=True)  # the selected checkout's own current config
+        self.attributes("* filter=probe\n")
+        ordinary = self.resource(self.observed(), "worktree")
+        self.assertIsNone(ordinary["delete_argv"])
+        self.assertIn("Git's clean check in this unforced removal could run configured attribute filter helpers: probe",
+                      ordinary["reasons"])
+        self.assertTrue(self.child.is_dir())
+
+    def test_inactive_unrelated_filter_helpers_do_not_veto_the_unforced_worker(self):
+        self.stash()
+        before = self.stash_state()
+        marker = self.filter_driver("unrelated", ("clean", "smudge", "process"))
+        self.attributes("*.never-present filter=unrelated\nREADME.md filter=undefined-driver\n")
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.stash_state(), before)
+
+    def test_unavailable_selected_helper_facts_hold_the_unforced_worker(self):
+        self.filter_driver("unrelated")
+        original = cleanup_archives._run
+        def unavailable(root, argv, **kwargs):
+            if argv[:1] == ["check-attr"]:
+                raise cleanup_archives.Unavailable("Filter attribute observation exceeded its bound")
+            return original(root, argv, **kwargs)
+        with patch.object(cleanup_archives, "_run", side_effect=unavailable):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("selected removal helper relevance is unavailable: Filter attribute observation exceeded "
+                      "its bound", row["reasons"])
+
+    def test_unstable_selected_helper_facts_refuse_the_worker_observation(self):
+        self.filter_driver("unrelated")
+        from pod import cleanup
+        original, calls = cleanup._helper_state, []
+        def changing(path):
+            calls.append(path)
+            state = original(path)
+            return state if len(calls) == 1 else {**state, "attributes_sha256": "0" * 64}
+        with patch.object(cleanup, "_helper_state", side_effect=changing), self.assertRaises(PodError) as unstable:
+            self.selected_entry()
+        self.assertEqual(unstable.exception.code, "cleanup_changed")
+        self.assertEqual(len(calls), 2)
+
+    def test_changed_selected_helper_facts_refuse_a_stale_worker_expect(self):
+        self.filter_driver("unrelated")
+        first = self.selected_entry()
+        self.assertIsNotNone(self.resource(first, "worktree")["delete_argv"])
+        self.attributes("* filter=unrelated\n")
+        with self.assertRaises(PodError) as stale:
+            self.selected_entry(expect=first["expect"])
+        self.assertEqual(stale.exception.code, "cleanup_changed")
+
     def test_unknown_worktree_effect_stays_held_even_with_verified_empty_stash(self):
         original = cleanup_stashes._worktree_footprint
         def unsupported(*args):

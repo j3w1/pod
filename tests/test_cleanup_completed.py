@@ -158,6 +158,21 @@ class CompletedCleanupTests(_CompletedFixture):
         self.assertFalse(self.child.exists())
         self.assertFalse(marker.exists())
 
+    def test_applicable_filter_keeps_the_completed_force_form_whose_effect_starts_no_helper(self):
+        self.unique()
+        self.closed()
+        marker = self.root / "filter-marker"
+        git(self.project, "config", "filter.probe.clean", f"sh -c 'echo ran >> {marker}; cat'")
+        (self.project / ".git" / "info" / "attributes").write_text("* filter=probe\n")
+        row = self.row(self.observed())
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child), completed=True))
+        # Pod's unchanged general status inspection may itself run the helper for the
+        # dirty file (pre-existing advisory); the forced effect runs no clean check.
+        inspected = marker.read_text() if marker.exists() else ""
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertEqual(marker.read_text() if marker.exists() else "", inspected)
+
     def test_current_dirty_bytes_bind_expect_even_with_unchanged_status_and_tip(self):
         self.unique()
         self.closed()

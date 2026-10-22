@@ -191,9 +191,21 @@ after `-c core.hooksPath=/dev/null`, so no configured fsmonitor program starts:
 git --no-optional-locks --no-replace-objects -c core.hooksPath=/dev/null -c core.fsmonitor=false -c maintenance.auto=false -c gc.auto=0 -C PROJECT worktree remove [--force] EXACT_PATH
 ```
 
-Git's clean check inside the unforced form, like Pod's own status inspection, can still
-run configured attribute filter programs. Their effects are outside this profile and
-remain unclaimed. A clean integrated exact worker, with its recorded
+The unforced form runs Git's clean check (`git status`) in the selected checkout, which
+can start an attribute filter driver's external helper for a tracked path. Before
+returning that command, Pod reads the selected checkout's current configured driver
+names (`filter.<driver>.clean`, `.smudge` or `.process`) and, when any exist, the
+`filter` attribute of every tracked path, within the generic output bound, 4096-path
+query batches and one 30-second deadline. A driver that a tracked path selects holds
+the effect with the exact driver names; unreadable, malformed or over-budget facts hold
+with their reason. A configured driver that no tracked path selects, or an attribute
+naming an undefined driver, is inactive and holds nothing. The facts bind `expect` and
+are read again before the response; a change refuses `cleanup_changed`. No helper is
+run to test it. The forced completed form and the local-ref form run no clean check or
+conversion, so attribute helpers are outside their path. Pod's general status
+inspection is unchanged: it can itself run a configured helper for a stat-dirty tracked
+path. That pre-existing advisory is not covered or fixed by this guard.
+A clean integrated exact worker, with its recorded
 report, fresh exact native settlement, positive release, exited liveness and empty
 current attachment inventory, uses `worktree remove EXACT_PATH` without force.
 Its native worktree/runtime must match the admission, and report/release/placement

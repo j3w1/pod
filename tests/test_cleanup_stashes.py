@@ -235,6 +235,25 @@ class StashSourceTests(unittest.TestCase):
         self.assertEqual(unreadable["status"], "unavailable")
         self.assertIn("inspection_error", unreadable["reasons"])
 
+    def test_selected_helper_facts_name_only_applicable_drivers_without_running_them(self):
+        case = self.source.case
+        marker = case.root / "helper-facts-marker"
+        for name in ("filter.a.b.clean", "filter.unused.process", "filter.smudged.smudge"):
+            plans.git(case.project, "config", name, f"sh -c 'echo ran >> {marker}; cat'")
+            self.addCleanup(plans.git, case.project, "config", "--unset", name)
+        attributes = self.source.common / "info" / "attributes"
+        self.preserve(attributes)
+        attributes.parent.mkdir(exist_ok=True)
+        attributes.write_text("[attr]dotted filter=a.b\n* dotted\nnot-tracked.txt filter=smudged\n*.none filter=unused\n")
+        facts = stashes.helper_facts(case.child)
+        # Host-level drivers such as an installed LFS filter may also be configured; inactive ones never apply.
+        self.assertTrue({"a.b", "smudged", "unused"} <= set(facts["configured"]), facts)
+        self.assertEqual(facts["applicable"], ["a.b"])
+        self.assertGreater(facts["tracked_paths"], 0)
+        self.assertFalse(marker.exists())
+        attributes.write_text("*.none filter=unused\n")
+        self.assertEqual(stashes.helper_facts(case.child)["applicable"], [])
+
     def test_shared_base_without_complete_effect_binding_is_unknown(self):
         record = self.complete_material()
         self.assertEqual({row["relation"] for row in record["relations"]}, {"unrelated"})

@@ -461,12 +461,22 @@ def _resource(kind: str, name: str, identity: dict, classification: str, reasons
 def _compact_material(resources: list[dict]) -> None:
     for row in resources:
         identity = row["identity"]
+        guard = (identity.get("git") or {}).get("helper_guard")
+        # Selected-effect helper facts must be unchanged since they were read.
+        if guard is not None and _helper_state(identity["path"]) != guard:
+            raise PodError("cleanup_changed", "Selected removal helper facts changed during observation")
         if identity.get("git") is not None:
             identity["git"] = cleanup_archives.material_diagnostic(identity["git"])
 
 
 def _guard_remaining_ref(project: Path, row: dict) -> None:
-    """An empty stash is no exemption from the remaining ref's exact known Git effect."""
+    """Final known-effect guards on an observed row, shared by ordinary and selected plans.
+
+    An unforced worktree removal not yet guarded gets the selected-effect helper guard.
+    An empty stash is no exemption from the remaining ref's exact known Git effect.
+    """
+    if "helper_guard" not in (row["identity"].get("git") or {}):
+        _guard_helpers(project, row)
     identity = row["identity"]
     if "recorded_association" not in (identity.get("git") or {}) or row["delete_argv"] is None:
         return
@@ -484,6 +494,43 @@ def _guard_remaining_ref(project: Path, row: dict) -> None:
             or footprint["sha256"] != digest({key: footprint[key] for key in ("paths", "refs", "config", "native", "opaque")})):
         row["delete_argv"] = None
         row["reasons"] = sorted(set(row["reasons"] + ["current local-ref Git primitive is unavailable"]))
+
+
+def _helper_state(path: str) -> dict:
+    from .cleanup_stashes import helper_facts
+    try:
+        return {"status": "observed", **helper_facts(Path(path))}
+    except (cleanup_archives.Unavailable, OSError, UnicodeError, ValueError) as exc:
+        return {"status": "unavailable", "reason": str(exc) if isinstance(exc, cleanup_archives.Unavailable)
+                else "Filter configuration or attributes are unreadable"}
+
+
+def _guard_helpers(project: Path, row: dict) -> dict | None:
+    """Root66: hold a NEW unforced worktree removal whose clean check could start a helper.
+
+    Only the selected checkout's current config and filter attributes decide; an inactive,
+    unrelated configured driver does not hold. Forced and local-ref forms run no clean check.
+    Pod's general status inspection is unchanged and is not covered by this guard.
+    """
+    from .cleanup_stashes import worktree_argv
+    path, facts = row["identity"].get("path"), row["identity"].get("git")
+    if (row["kind"] != "worktree" or not isinstance(path, str) or not isinstance(facts, dict)
+            or row["delete_argv"] != worktree_argv(project, path)):
+        return None
+    state = _helper_state(path)
+    facts["helper_guard"] = state
+    if state["status"] != "observed":
+        reason = "selected removal helper relevance is unavailable: " + state["reason"]
+    elif state["applicable"]:
+        reason = ("Git's clean check in this unforced removal could run configured attribute filter helpers: "
+                  + ", ".join(state["applicable"][:8]))
+    else:
+        return state
+    row["delete_argv"] = None
+    if row["class"] == "integrated":
+        row["class"] = "protected"
+    row["reasons"] = sorted(set(row["reasons"] + [reason]))
+    return state
 
 
 def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple[str, dict]:
@@ -825,6 +872,10 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                                                 if deletable else None),
                                    archive_argv=archive_argv, archive_verified=archive_complete,
                                    archive_observations=observed_archives))
+        if stash_observations:
+            # Read before the stash observation; compaction rechecks it. A selected
+            # projection guards its own current row through _guard_remaining_ref.
+            _guard_helpers(project, resources[-1])
     remaining_refs = {}
     for ref in sorted(local_branches):
         branch = ref.removeprefix("refs/heads/")
