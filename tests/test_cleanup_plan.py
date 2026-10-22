@@ -691,6 +691,34 @@ class CleanupReflogScaleTests(unittest.TestCase):
         self.unsupported_admin("AUTO_MERGE")
 
 
+
+    def test_4097_head_entries_stay_held(self):
+        self.log(4097)
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertEqual(row["class"], "protected")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Reflog exceeds its bound", row["reasons"])
+
+    def test_4097_private_entries_stay_held_independently_of_head_entries(self):
+        git(self.case.child, "update-ref", "refs/worktree/fixture", self.case.base)
+        self.addCleanup(git, self.case.child, "update-ref", "-d", "refs/worktree/fixture")
+        self.log(4097, relative="refs/worktree/fixture")
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+
+    def test_more_entries_do_not_expand_the_distinct_root_domain(self):
+        file = self.admin / "logs" / "HEAD"
+        self.addCleanup(file.write_bytes, file.read_bytes())
+        file.write_text("".join(f"{index:040x} {self.case.base} Fixture <fixture@example.invalid> 1 +0000\tx\n"
+                                for index in range(1, 1025)))
+        row = self.row()
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Resource roots exceed the archive observation bound", row["reasons"])
+
+
 class CleanupInventoryTests(unittest.TestCase):
     def inventory(self, text):
         from contextlib import contextmanager
